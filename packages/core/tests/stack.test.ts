@@ -1,0 +1,513 @@
+import { describe, test, expect, beforeEach } from 'vitest';
+import { Stack, StackValidationError, StackMigrationError } from '../src/stack.js';
+import type {
+  StackAdapter,
+  StackRecord,
+  StackType,
+  TypeId,
+  RecordVersion,
+  StackQuery,
+  QueryResult,
+  Association,
+  AdapterCapabilities,
+} from '../src/types.js';
+
+// -------------------------------------------------------
+// Mock adapter
+// -------------------------------------------------------
+
+class MockAdapter implements StackAdapter {
+  readonly capabilities: AdapterCapabilities = {
+    fullTextSearch: false,
+    contentFieldQuery: false,
+    sortableFields: ['createdAt', 'updatedAt', 'version'],
+  };
+
+  readonly records = new Map<string, StackRecord>();
+  readonly versions = new Map<string, RecordVersion[]>();
+  readonly types = new Map<string, StackType>();
+  readonly config = new Map<string, string>([
+    ['entity_id', 'owner-123'],
+    ['timezone', 'UTC'],
+  ]);
+
+  async getConfig(key: string) {
+    return this.config.get(key) ?? null;
+  }
+  async setConfig(key: string, value: string) {
+    this.config.set(key, value);
+  }
+
+  async createRecord(record: StackRecord) {
+    this.records.set(record.id, { ...record });
+    return record;
+  }
+
+  async getRecord(id: string) {
+    return this.records.get(id) ?? null;
+  }
+
+  async updateRecord(id: string, changes: Partial<StackRecord>) {
+    const existing = this.records.get(id);
+    if (!existing) throw new Error(`Not found: ${id}`);
+    const updated = { ...existing, ...changes };
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async deleteRecord(id: string, opts: { hard?: boolean } = {}) {
+    if (opts.hard) {
+      this.records.delete(id);
+      this.versions.delete(id);
+    } else {
+      const record = this.records.get(id);
+      if (record) this.records.set(id, { ...record, deletedAt: new Date() });
+    }
+  }
+
+  async queryRecords(query: StackQuery): Promise<QueryResult> {
+    const f = query.filter ?? {};
+    let results = [...this.records.values()];
+    if (!f.includeDeleted) results = results.filter((r) => !r.deletedAt);
+    if (f.typeId) {
+      const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
+      results = results.filter((r) => ids.includes(r.typeId));
+    }
+    if (f.parentId !== undefined) {
+      results =
+        f.parentId === null
+          ? results.filter((r) => !r.parentId)
+          : results.filter((r) => r.parentId === f.parentId);
+    }
+    return { records: results, cursor: null, total: results.length };
+  }
+
+  async associate(id: string, association: Association) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    const assocs = record.associations ?? [];
+    this.records.set(id, { ...record, associations: [...assocs, association] });
+  }
+
+  async dissociate(id: string, association: Association) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    const assocs = (record.associations ?? []).filter(
+      (a) => !(a.kind === association.kind && a.label === association.label),
+    );
+    this.records.set(id, { ...record, associations: assocs });
+  }
+
+  async getVersions(id: string) {
+    return this.versions.get(id) ?? [];
+  }
+  async getVersion(id: string, version: number) {
+    return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
+  }
+  async saveVersion(id: string, version: RecordVersion) {
+    const existing = this.versions.get(id) ?? [];
+    this.versions.set(id, [...existing, version]);
+  }
+
+  async saveType(type: StackType) {
+    this.types.set(type.id, type);
+  }
+  async getType(id: TypeId) {
+    return this.types.get(id) ?? null;
+  }
+  async listTypes() {
+    return [...this.types.values()];
+  }
+
+  async putAttachment(_data: Blob | Buffer, _mimeType: string) {
+    return 'file-123';
+  }
+  async getAttachment(_fileId: string): Promise<Buffer> {
+    return Buffer.from('');
+  }
+  async deleteAttachment(_fileId: string) {}
+}
+
+// -------------------------------------------------------
+// Test setup
+// -------------------------------------------------------
+
+const NOTE_V1 = 'com.example.test/note@1';
+const NOTE_V2 = 'com.example.test/note@2';
+const NOTE_V3 = 'com.example.test/note@3';
+
+let adapter: MockAdapter;
+let stack: Stack;
+
+beforeEach(async () => {
+  adapter = new MockAdapter();
+  stack = await Stack.create(adapter);
+
+  await stack.defineType(NOTE_V1, 'Note', {
+    text: { kind: 'text', required: true },
+  });
+});
+
+// -------------------------------------------------------
+// Stack.create
+// -------------------------------------------------------
+
+describe('Stack.create', () => {
+  test('reads ownerEntityId from adapter config', async () => {
+    expect(stack.ownerEntityId).toBe('owner-123');
+  });
+
+  test('reads timezone from adapter config', async () => {
+    expect(stack.timezone).toBe('UTC');
+  });
+
+  test('ownerEntityId is null if not set in config', async () => {
+    const emptyAdapter = new MockAdapter();
+    emptyAdapter.config.delete('entity_id');
+    const s = await Stack.create(emptyAdapter);
+    expect(s.ownerEntityId).toBeNull();
+  });
+
+  test('timezone defaults to UTC if not set in config', async () => {
+    const emptyAdapter = new MockAdapter();
+    emptyAdapter.config.delete('timezone');
+    const s = await Stack.create(emptyAdapter);
+    expect(s.timezone).toBe('UTC');
+  });
+});
+
+// -------------------------------------------------------
+// defineType
+// -------------------------------------------------------
+
+describe('defineType', () => {
+  test('saves the type to the adapter', async () => {
+    const type = await stack.getType(NOTE_V1);
+    expect(type).not.toBeNull();
+    expect(type?.name).toBe('Note');
+  });
+
+  test('computes and stores a schemaHash', async () => {
+    const type = await stack.getType(NOTE_V1);
+    expect(type?.schemaHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('throws for invalid TypeId format', async () => {
+    await expect(stack.defineType('no-version', 'Bad', {})).rejects.toThrow();
+  });
+
+  test('stores migratesFrom when provided', async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+    const type = await stack.getType(NOTE_V2);
+    expect(type?.migratesFrom).toBe(NOTE_V1);
+  });
+});
+
+// -------------------------------------------------------
+// create
+// -------------------------------------------------------
+
+describe('create', () => {
+  test('creates a record with correct fields', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    expect(record.id).toBeTruthy();
+    expect(record.typeId).toBe(NOTE_V1);
+    expect(record.content).toEqual({ text: 'hello' });
+    expect(record.version).toBe(1);
+  });
+
+  test('sets entityId from stack ownerEntityId', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    expect(record.entityId).toBe('owner-123');
+  });
+
+  test('allows overriding entityId via options', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { entityId: 'other-456' });
+    expect(record.entityId).toBe('other-456');
+  });
+
+  test('sets parentId when provided', async () => {
+    const parent = await stack.create(NOTE_V1, { text: 'parent' });
+    const child = await stack.create(NOTE_V1, { text: 'child' }, { parentId: parent.id });
+    expect(child.parentId).toBe(parent.id);
+  });
+
+  test('throws StackValidationError for invalid content', async () => {
+    await expect(stack.create(NOTE_V1, { text: 42 as unknown as string })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('throws for missing required field', async () => {
+    await expect(stack.create(NOTE_V1, {} as { text: string })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('throws for unknown typeId', async () => {
+    await expect(stack.create('com.example.test/unknown@1', { text: 'hello' })).rejects.toThrow();
+  });
+});
+
+// -------------------------------------------------------
+// update — merge patch
+// -------------------------------------------------------
+
+describe('update', () => {
+  test('merges partial content with existing', async () => {
+    await stack.defineType(NOTE_V2, 'Note', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
+    const updated = await stack.update(record.id, { title: 'Updated' });
+    expect(updated.content).toEqual({ text: 'hello', title: 'Updated' });
+  });
+
+  test('null value removes an optional field', async () => {
+    await stack.defineType(NOTE_V2, 'Note', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
+    const updated = await stack.update(record.id, { title: null });
+    expect((updated.content as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  test('null on required field fails validation', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(stack.update(record.id, { text: null })).rejects.toThrow(StackValidationError);
+  });
+
+  test('increments version number', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const updated = await stack.update(record.id, { text: 'world' });
+    expect(updated.version).toBe(2);
+  });
+
+  test('snapshots previous content to version history', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.update(record.id, { text: 'world' });
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(1);
+    expect(versions[0].content).toEqual({ text: 'hello' });
+    expect(versions[0].version).toBe(1);
+  });
+
+  test('throws for unknown record', async () => {
+    await expect(stack.update('nonexistent', { text: 'hello' })).rejects.toThrow();
+  });
+});
+
+// -------------------------------------------------------
+// Lazy migration
+// -------------------------------------------------------
+
+describe('lazy migration', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+
+    stack.registerMigration({
+      from: NOTE_V1,
+      to: NOTE_V2,
+      migrate: (content) => ({ ...content, title: '' }),
+    });
+  });
+
+  test('get() returns migrated content in memory', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const fetched = await stack.get(record.id);
+    expect(fetched?.typeId).toBe(NOTE_V2);
+    expect((fetched?.content as Record<string, unknown>).title).toBe('');
+  });
+
+  test('get() does not write migrated content to disk', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.get(record.id);
+    const raw = await adapter.getRecord(record.id);
+    expect(raw?.typeId).toBe(NOTE_V1); // still v1 on disk
+  });
+
+  test('get({ migrate: false }) returns raw stored record', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const raw = await stack.get(record.id, { migrate: false });
+    expect(raw?.typeId).toBe(NOTE_V1);
+    expect((raw?.content as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  test('update() commits migration to disk', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.update(record.id, { title: 'My Title' });
+    const raw = await adapter.getRecord(record.id);
+    expect(raw?.typeId).toBe(NOTE_V2);
+    expect((raw?.content as Record<string, unknown>).title).toBe('My Title');
+  });
+
+  test('update() merges patch against migrated content', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.update(record.id, {}); // empty patch, just commits migration
+    const raw = await adapter.getRecord(record.id);
+    expect((raw?.content as Record<string, unknown>).title).toBe(''); // migration default
+  });
+
+  test('warns when no migration path exists', async () => {
+    const unmigratableType = 'com.example.test/other@1';
+    await stack.defineType(unmigratableType, 'Other', {
+      text: { kind: 'text', required: true },
+    });
+    const record = await stack.create(unmigratableType, { text: 'hello' });
+    // Should not throw — just warn and return raw
+    const fetched = await stack.get(record.id);
+    expect(fetched?.typeId).toBe(unmigratableType);
+  });
+
+  test('chained migration: v1 → v2 → v3', async () => {
+    await stack.defineType(
+      NOTE_V3,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+        pinned: { kind: 'boolean' },
+      },
+      { migratesFrom: NOTE_V2 },
+    );
+
+    stack.registerMigration({
+      from: NOTE_V2,
+      to: NOTE_V3,
+      migrate: (content) => ({ ...content, pinned: false }),
+    });
+
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const fetched = await stack.get(record.id);
+    expect(fetched?.typeId).toBe(NOTE_V3);
+    expect((fetched?.content as Record<string, unknown>).title).toBe('');
+    expect((fetched?.content as Record<string, unknown>).pinned).toBe(false);
+  });
+});
+
+// -------------------------------------------------------
+// registerMigration
+// -------------------------------------------------------
+
+describe('registerMigration', () => {
+  test('throws if a migration from the same typeId is already registered', async () => {
+    stack.registerMigration({ from: NOTE_V1, to: NOTE_V2, migrate: (c) => c });
+    expect(() =>
+      stack.registerMigration({ from: NOTE_V1, to: NOTE_V2, migrate: (c) => c }),
+    ).toThrow(StackMigrationError);
+  });
+});
+
+// -------------------------------------------------------
+// Versions
+// -------------------------------------------------------
+
+describe('versions', () => {
+  test('getVersions returns empty array for new record', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    expect(await stack.getVersions(record.id)).toEqual([]);
+  });
+
+  test('getVersions returns history after updates', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'v1' });
+    await stack.update(record.id, { text: 'v2' });
+    await stack.update(record.id, { text: 'v3' });
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(2);
+  });
+
+  test('restoreVersion creates a new version with old content', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.update(record.id, { text: 'changed' });
+    const restored = await stack.restoreVersion(record.id, 1);
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.version).toBe(3); // v1 original, v2 changed, v3 restored
+  });
+
+  test('restoreVersion does not rewrite history', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.update(record.id, { text: 'changed' });
+    await stack.restoreVersion(record.id, 1);
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(2); // v1 and v2 snapshots preserved
+  });
+
+  test('restoreVersion throws for unknown version', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(stack.restoreVersion(record.id, 99)).rejects.toThrow();
+  });
+});
+
+// -------------------------------------------------------
+// delete
+// -------------------------------------------------------
+
+describe('delete', () => {
+  test('soft delete sets deletedAt', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    const deleted = await adapter.getRecord(record.id);
+    expect(deleted?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('soft-deleted records are excluded from queries by default', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    const result = await stack.query({ filter: { typeId: NOTE_V1 } });
+    expect(result.records.find((r) => r.id === record.id)).toBeUndefined();
+  });
+
+  test('soft-deleted records appear with includeDeleted', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    const result = await stack.query({ filter: { typeId: NOTE_V1, includeDeleted: true } });
+    expect(result.records.find((r) => r.id === record.id)).toBeDefined();
+  });
+
+  test('hard delete removes the record entirely', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id, { hard: true });
+    expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+});
+
+// -------------------------------------------------------
+// associate / dissociate
+// -------------------------------------------------------
+
+describe('associate / dissociate', () => {
+  test('associate adds a tag', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.associations?.some((a) => a.kind === 'tag' && a.label === 'favourite')).toBe(
+      true,
+    );
+  });
+
+  test('dissociate removes a tag', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.associations?.some((a) => a.label === 'favourite')).toBe(false);
+  });
+});

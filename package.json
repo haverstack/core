@@ -1,0 +1,24 @@
+{
+  "name": "haverstack",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Haverstack monorepo — portable personal data stack",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.3",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.59.1",
+    "vitest": "^2.0.0"
+  }
+}
