@@ -46,9 +46,6 @@ export type CreateRecordOptions = {
   associations?: Association[];
 };
 
-export type SetPermissionsOptions = {
-  permissions: Permission[];
-};
 
 export type GetRecordOptions = {
   /** If false, return the raw stored record without auto-migrating. Default: true */
