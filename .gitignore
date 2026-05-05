@@ -13,6 +13,7 @@ attachments/
 
 # pnpm
 .pnpm-store/
+package-lock.json
 
 # TypeScript
 *.tsbuildinfo
