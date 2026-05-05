@@ -417,6 +417,67 @@ describe('registerMigration', () => {
 });
 
 // -------------------------------------------------------
+// migrateAll
+// -------------------------------------------------------
+
+describe('migrateAll', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+
+    stack.registerMigration({
+      from: NOTE_V1,
+      to: NOTE_V2,
+      migrate: (content) => ({ ...content, title: '' }),
+    });
+  });
+
+  test('throws StackMigrationError for an unknown baseTypeId', async () => {
+    await expect(stack.migrateAll('com.example.test/noot')).rejects.toThrow(StackMigrationError);
+  });
+
+  test('throws with a message that includes the bad baseTypeId', async () => {
+    await expect(stack.migrateAll('com.example.test/noot')).rejects.toThrow(
+      'com.example.test/noot',
+    );
+  });
+
+  test('migrates all outdated records and returns the count', async () => {
+    const r1 = await stack.create(NOTE_V1, { text: 'alpha' });
+    const r2 = await stack.create(NOTE_V1, { text: 'beta' });
+
+    const result = await stack.migrateAll('com.example.test/note');
+
+    expect(result.migrated).toBe(2);
+    expect((await adapter.getRecord(r1.id))?.typeId).toBe(NOTE_V2);
+    expect((await adapter.getRecord(r2.id))?.typeId).toBe(NOTE_V2);
+  });
+
+  test('returns migrated: 0 when all records are already at the latest version', async () => {
+    await stack.create(NOTE_V2, { text: 'already current', title: 'hi' });
+
+    const result = await stack.migrateAll('com.example.test/note');
+
+    expect(result.migrated).toBe(0);
+  });
+
+  test('snapshots previous content to version history before migrating', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.migrateAll('com.example.test/note');
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(1);
+    expect(versions[0].content).toEqual({ text: 'original' });
+  });
+});
+
+// -------------------------------------------------------
 // Versions
 // -------------------------------------------------------
 
