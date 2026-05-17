@@ -227,6 +227,12 @@ export class Stack {
     const types = await this.adapter.listTypes();
     const familyTypeIds = types.filter((t) => t.baseId === baseTypeId).map((t) => t.id);
 
+    if (familyTypeIds.length === 0) {
+      throw new StackMigrationError(
+        `migrateAll: no registered types found for baseTypeId "${baseTypeId}"`,
+      );
+    }
+
     let migrated = 0;
 
     for (const typeId of familyTypeIds) {
