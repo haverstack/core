@@ -169,6 +169,8 @@ pnpm build
 ### Project structure
 
 ```
+docs/
+  spec.md                 # Design spec — data model, wire format, adapter contract
 packages/
   core/                   # @haverstack/core
     src/
@@ -187,9 +189,14 @@ packages/
 
 ---
 
+## Spec
+
+The design spec lives in [`docs/spec.md`](./docs/spec.md). It covers the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
+
+---
+
 ## Related
 
-- [`haverstack/spec`](https://github.com/haverstack/spec) — design spec and RFCs _(coming soon)_
 - [`haverstack/server`](https://github.com/haverstack/server) — reference server implementation _(coming soon)_
 
 ---
