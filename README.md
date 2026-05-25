@@ -185,6 +185,10 @@ packages/
     src/
       index.ts            # SQLiteAdapter
     tests/
+  adapter-api/            # @haverstack/adapter-api
+    src/
+      index.ts            # APIAdapter
+    tests/
 ```
 
 ---
