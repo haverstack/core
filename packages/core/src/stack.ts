@@ -507,10 +507,22 @@ export class Stack {
   // Lifecycle
   // -------------------------------------------------------
 
+  /**
+   * Flush any pending writes to the underlying storage.
+   * For adapters that write immediately (SQLite, JSON), this is a no-op.
+   * For the API adapter, this commits the offline write queue to the server.
+   * Safe to call at any time — always resolves, never rejects on its own.
+   */
   async flush(): Promise<void> {
     await this.adapter.flush?.();
   }
 
+  /**
+   * Release any resources held by the adapter (connections, file handles, timers).
+   * Call this when the stack is no longer needed — especially important for the
+   * API adapter, which holds an open connection and retry timers.
+   * Safe to call even if the adapter has no resources to release.
+   */
   async close(): Promise<void> {
     await this.adapter.close?.();
   }

@@ -75,6 +75,10 @@ const notes = await stack.query({
   filter: { typeId: 'com.example.myapp/note@1', tags: ['favourite'] },
   sort: { field: 'createdAt', direction: 'desc' },
 });
+
+// Tear down when done (flushes pending writes and releases resources)
+await stack.flush();
+await stack.close();
 ```
 
 ---
