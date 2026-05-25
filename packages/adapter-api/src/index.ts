@@ -298,7 +298,7 @@ export class APIAdapter implements StackAdapter {
   }
 
   async setConfig(_key: string, _value: string): Promise<void> {
-    // Server owns its config; writes are not forwarded
+    throw new APIAdapterError('setConfig is not supported: server configuration is managed server-side');
   }
 
   // -------------------------------------------------------

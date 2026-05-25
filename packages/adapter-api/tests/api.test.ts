@@ -170,11 +170,9 @@ describe('getConfig', () => {
 // -------------------------------------------------------
 
 describe('setConfig', () => {
-  test('is a no-op — does not throw and makes no requests', async () => {
+  test('throws APIAdapterError — server owns its config', async () => {
     const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    await expect(adapter.setConfig('timezone', 'UTC')).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
+    await expect(adapter.setConfig('timezone', 'UTC')).rejects.toThrow(APIAdapterError);
   });
 });
 
