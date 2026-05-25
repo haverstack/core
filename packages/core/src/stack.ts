@@ -495,11 +495,11 @@ export class Stack {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Blob | Buffer, mimeType: string): Promise<string> {
+  async putAttachment(data: Uint8Array, mimeType: string): Promise<string> {
     return this.adapter.putAttachment(data, mimeType);
   }
 
-  async getAttachment(fileId: string): Promise<Blob | Buffer> {
+  async getAttachment(fileId: string): Promise<Uint8Array> {
     return this.adapter.getAttachment(fileId);
   }
 

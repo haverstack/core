@@ -300,7 +300,7 @@ export interface StackAdapter {
   listTypes(): Promise<StackType[]>;
 
   // Attachments
-  putAttachment(data: Blob | Buffer, mimeType: string): Promise<FileId>;
-  getAttachment(fileId: FileId): Promise<Blob | Buffer>;
+  putAttachment(data: Uint8Array, mimeType: string): Promise<FileId>;
+  getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
 }

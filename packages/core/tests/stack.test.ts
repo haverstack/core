@@ -119,11 +119,11 @@ class MockAdapter implements StackAdapter {
     return [...this.types.values()];
   }
 
-  async putAttachment(_data: Blob | Buffer, _mimeType: string) {
+  async putAttachment(_data: Uint8Array, _mimeType: string) {
     return 'file-123';
   }
-  async getAttachment(_fileId: string): Promise<Buffer> {
-    return Buffer.from('');
+  async getAttachment(_fileId: string): Promise<Uint8Array> {
+    return new Uint8Array();
   }
   async deleteAttachment(_fileId: string) {}
 }
