@@ -644,15 +644,13 @@ export class SQLiteAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Blob | Buffer, mimeType: string): Promise<string> {
+  async putAttachment(data: Uint8Array, mimeType: string): Promise<string> {
     const fileId = generateId();
     const ext = mimeType.split('/')[1] ?? 'bin';
     const filename = `${fileId}.${ext}`;
     const filePath = join(this.attachmentsDir, filename);
 
-    const buffer = data instanceof Blob ? Buffer.from(await data.arrayBuffer()) : data;
-
-    await writeFile(filePath, buffer);
+    await writeFile(filePath, data);
 
     this.db.run(
       'INSERT INTO attachments (file_id, mime_type, created_at, path) VALUES (?, ?, ?, ?)',
@@ -662,7 +660,7 @@ export class SQLiteAdapter implements StackAdapter {
     return fileId;
   }
 
-  async getAttachment(fileId: string): Promise<Blob | Buffer> {
+  async getAttachment(fileId: string): Promise<Uint8Array> {
     const rows = this.execQuery<{ path: string }>(
       'SELECT path FROM attachments WHERE file_id = ?',
       [fileId],
