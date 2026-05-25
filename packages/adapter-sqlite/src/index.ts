@@ -677,6 +677,14 @@ export class SQLiteAdapter implements StackAdapter {
     this.persist();
   }
 
+  async getAttachmentMeta(fileId: string): Promise<{ mimeType: string } | null> {
+    const rows = this.execQuery<{ mime_type: string }>(
+      'SELECT mime_type FROM attachments WHERE file_id = ?',
+      [fileId],
+    );
+    return rows.length ? { mimeType: rows[0].mime_type } : null;
+  }
+
   // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------

@@ -303,6 +303,12 @@ export interface StackAdapter {
   putAttachment(data: Uint8Array, mimeType: string): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
+  /**
+   * Return metadata for a stored attachment without reading its binary data.
+   * Optional — adapters that do not persist attachment metadata (e.g. the API
+   * adapter, which delegates to the server) may omit this method.
+   */
+  getAttachmentMeta?(fileId: FileId): Promise<{ mimeType: string } | null>;
 
   // Lifecycle
   flush?(): Promise<void>;
