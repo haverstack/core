@@ -303,4 +303,8 @@ export interface StackAdapter {
   putAttachment(data: Uint8Array, mimeType: string): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
+
+  // Lifecycle
+  flush?(): Promise<void>;
+  close?(): Promise<void>;
 }

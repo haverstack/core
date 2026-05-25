@@ -551,6 +551,34 @@ describe('delete', () => {
 });
 
 // -------------------------------------------------------
+// flush / close lifecycle
+// -------------------------------------------------------
+
+describe('flush / close', () => {
+  test('flush() delegates to adapter.flush() when implemented', async () => {
+    let flushed = false;
+    adapter.flush = async () => { flushed = true; };
+    await stack.flush();
+    expect(flushed).toBe(true);
+  });
+
+  test('flush() is a no-op when adapter does not implement flush', async () => {
+    await expect(stack.flush()).resolves.toBeUndefined();
+  });
+
+  test('close() delegates to adapter.close() when implemented', async () => {
+    let closed = false;
+    adapter.close = async () => { closed = true; };
+    await stack.close();
+    expect(closed).toBe(true);
+  });
+
+  test('close() is a no-op when adapter does not implement close', async () => {
+    await expect(stack.close()).resolves.toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
 // associate / dissociate
 // -------------------------------------------------------
 
