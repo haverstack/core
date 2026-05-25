@@ -14,6 +14,19 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haverstack/core",
+    "directory": "packages/adapter-sqlite"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "sqlite",
+    "adapter",
+    "personal data",
+    "storage"
+  ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
     "build": "tsc -p tsconfig.build.json",

@@ -14,6 +14,20 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haverstack/core",
+    "directory": "packages/core"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "personal data",
+    "data stack",
+    "structured data",
+    "records",
+    "portable"
+  ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
     "build": "tsc -p tsconfig.build.json",
