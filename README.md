@@ -24,13 +24,13 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | --------------------------------------------------------- | ----------------------------------------------------- |
 | [`@haverstack/core`](./packages/core)                     | Stack class, types, schema, validation, ID generation |
 | [`@haverstack/adapter-sqlite`](./packages/adapter-sqlite) | SQLite storage adapter                                |
+| [`@haverstack/adapter-api`](./packages/adapter-api)       | HTTP adapter for remote stack servers                 |
 
 Planned:
 
 | Package                    | Description               |
 | -------------------------- | ------------------------- |
 | `@haverstack/adapter-json` | JSON file storage adapter |
-| `@haverstack/adapter-api`  | Remote server adapter     |
 
 ---
 
@@ -143,8 +143,8 @@ Migration is **lazy** — records are migrated in memory on read, and committed 
 | Adapter    | Use case                                                  |
 | ---------- | --------------------------------------------------------- |
 | SQLite     | Local app storage, full query support, FTS                |
+| Server API | Hosted/shared stacks, permissions enforcement             |
 | JSON files | Portable, human-readable, backup/export _(planned)_       |
-| Server API | Hosted/shared stacks, permissions enforcement _(planned)_ |
 
 ---
 
@@ -201,7 +201,7 @@ The design spec lives in [`docs/spec.md`](./docs/spec.md). It covers the full da
 
 ## Related
 
-- [`haverstack/server`](https://github.com/haverstack/server) — reference server implementation _(coming soon)_
+- [`haverstack/server`](https://github.com/haverstack/server) — reference server implementation
 
 ---
 
