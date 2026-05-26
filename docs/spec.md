@@ -314,14 +314,28 @@ All adapters support the full Record API. Performance guarantees differ; correct
 
 ## Attachments
 
-Binary files are stored and retrieved through the library, abstracted away from the adapter:
+Binary files are stored and retrieved through the library using **content-addressed storage**. A file's ID is the SHA-256 hash of its bytes, so uploading identical content twice returns the same `fileId` without writing a second copy.
 
 ```ts
-stack.putAttachment(data: Blob | Buffer, mimeType: string): Promise<string>  // returns fileId
-stack.getAttachment(fileId: string): Promise<Blob | Buffer>
+// Upload a file; returns a stable SHA-256 hex ID
+const fileId = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>
+
+// Read metadata without fetching the binary
+const meta: AttachmentMeta | null = await stack.getAttachmentMeta(fileId)
+// AttachmentMeta = {
+//   mimeType: string;
+//   size: number;      // bytes
+//   createdAt: Date;
+//   filename?: string; // original filename if provided at upload
+// }
+
+// Fetch the binary
+const data: Uint8Array = await stack.getAttachment(fileId)
 ```
 
-A `fileId` is then referenced in an `Association` of kind `"attachment"`.
+A `fileId` is referenced in an `Association` of kind `"attachment"`. `getAttachmentMeta` is useful for checking existence and reading metadata without incurring the cost of reading the binary from disk or over the network.
+
+**Deduplication:** if the same bytes are uploaded with a different `mimeType` or `filename`, the existing entry is returned unchanged — the new metadata is ignored. Content is the identity; metadata is a property of the first upload.
 
 ---
 
@@ -560,15 +574,22 @@ DELETE /attachments/:fileId   — delete a file
 
 Attachments are uploaded first to get a `fileId`, then referenced in an Association when creating or updating a Record. This keeps all Record endpoints JSON-only.
 
-**Upload format:** Send the binary data as the request body with `Content-Type` set to the file's MIME type. The server infers the MIME type from this header and stores it alongside the file.
+File IDs are SHA-256 hashes of the content. Uploading identical bytes twice returns the same `fileId` without writing a second copy.
+
+**Upload:** Send the raw binary as the request body. `Content-Type` must be set to the file's MIME type. `Content-Disposition` may optionally carry an original filename.
 
 ```
 POST /attachments
-Content-Type: image/png
+Content-Type: image/svg+xml
+Content-Disposition: attachment; filename="logo.svg"
 Authorization: Bearer <token>
 
 <binary data>
 ```
+
+Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`).
+
+**Download:** Responds with the stored `Content-Type`. If a filename was provided at upload time, the response also includes `Content-Disposition: attachment; filename="..."` so browsers can save the file with its original name.
 
 **Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible.
 
