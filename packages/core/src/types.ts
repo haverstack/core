@@ -264,6 +264,17 @@ export type AdapterCapabilities = {
 };
 
 // -------------------------------------------------------
+// Attachment metadata
+// -------------------------------------------------------
+
+export type AttachmentMeta = {
+  mimeType: string;
+  size: number; // bytes
+  createdAt: Date;
+  filename?: string; // original filename if provided at upload time
+};
+
+// -------------------------------------------------------
 // Adapter interface
 // -------------------------------------------------------
 
@@ -300,11 +311,10 @@ export interface StackAdapter {
   listTypes(): Promise<StackType[]>;
 
   // Attachments
-  putAttachment(data: Uint8Array, mimeType: string): Promise<FileId>;
+  putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
-  /** Return metadata for a stored attachment without reading its binary data. */
-  getAttachmentMeta(fileId: FileId): Promise<{ mimeType: string } | null>;
+  getAttachmentMeta(fileId: FileId): Promise<AttachmentMeta | null>;
 
   // Lifecycle
   flush?(): Promise<void>;

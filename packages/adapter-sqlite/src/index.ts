@@ -6,8 +6,10 @@
  * without native compilation.
  *
  * The database is held in memory and flushed to disk on every
- * write. Attachments are stored as files in an `attachments/`
- * subdirectory next to the database file.
+ * write. Attachments are stored as extension-less files in an
+ * `attachments/` subdirectory next to the database file.
+ * File IDs are SHA-256 hashes of the content, enabling
+ * automatic deduplication.
  *
  * Stack config (timezone, entity_id, etc.) is stored in a
  * `stack_config` key/value table.
@@ -15,10 +17,10 @@
 
 import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
-import { generateId } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
@@ -29,6 +31,7 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
+  AttachmentMeta,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -106,8 +109,9 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS attachments (
     file_id    TEXT PRIMARY KEY,
     mime_type  TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    path       TEXT NOT NULL
+    size       INTEGER NOT NULL,
+    filename   TEXT,
+    created_at INTEGER NOT NULL
   ) STRICT;
 
   -- Indexes
@@ -359,6 +363,7 @@ export class SQLiteAdapter implements StackAdapter {
     const adapter = new SQLiteAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
     adapter.db.run(SCHEMA_SQL);
+    adapter.runMigrations();
     mkdirSync(adapter.attachmentsDir, { recursive: true });
     adapter.db.run(
       `INSERT INTO stack_config (key, value) VALUES
@@ -385,6 +390,7 @@ export class SQLiteAdapter implements StackAdapter {
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
     adapter.db.run(SCHEMA_SQL); // safe — all statements use CREATE IF NOT EXISTS
+    adapter.runMigrations();
     mkdirSync(adapter.attachmentsDir, { recursive: true });
     return adapter;
   }
@@ -418,6 +424,34 @@ export class SQLiteAdapter implements StackAdapter {
   private persist(): void {
     const data = this.db.export();
     writeFileSync(this.path, Buffer.from(data));
+  }
+
+  // -------------------------------------------------------
+  // Schema migrations
+  // -------------------------------------------------------
+
+  /**
+   * Runs after SCHEMA_SQL to handle databases created before breaking schema
+   * changes. Safe to call on both fresh and existing databases.
+   */
+  private runMigrations(): void {
+    const cols = this.execQuery<{ name: string }>('PRAGMA table_info(attachments)');
+    if (!cols.length) return; // Table doesn't exist yet — SCHEMA_SQL will create it.
+    const hasPath = cols.some((c) => c.name === 'path');
+    if (hasPath) {
+      // Pre-content-addressed-storage schema. File IDs and paths are incompatible;
+      // drop and recreate. Any existing attachment rows are unreadable anyway.
+      this.db.run('DROP TABLE attachments');
+      this.db.run(`
+        CREATE TABLE attachments (
+          file_id    TEXT PRIMARY KEY,
+          mime_type  TEXT NOT NULL,
+          size       INTEGER NOT NULL,
+          filename   TEXT,
+          created_at INTEGER NOT NULL
+        ) STRICT
+      `);
+    }
   }
 
   // -------------------------------------------------------
@@ -644,49 +678,58 @@ export class SQLiteAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array, mimeType: string): Promise<string> {
-    const fileId = generateId();
-    const ext = mimeType.split('/')[1] ?? 'bin';
-    const filename = `${fileId}.${ext}`;
-    const filePath = join(this.attachmentsDir, filename);
+  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    const fileId = createHash('sha256').update(data).digest('hex');
 
-    await writeFile(filePath, data);
+    // Dedup: same bytes already stored — return existing ID without re-writing.
+    const existing = await this.getAttachmentMeta(fileId);
+    if (existing) return fileId;
+
+    await writeFile(join(this.attachmentsDir, fileId), data);
 
     this.db.run(
-      'INSERT INTO attachments (file_id, mime_type, created_at, path) VALUES (?, ?, ?, ?)',
-      [fileId, mimeType, toMs(new Date()), filename],
+      'INSERT INTO attachments (file_id, mime_type, size, filename, created_at) VALUES (?, ?, ?, ?, ?)',
+      [fileId, mimeType, data.byteLength, filename ?? null, toMs(new Date())],
     );
     this.persist();
     return fileId;
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
-    const rows = this.execQuery<{ path: string }>(
-      'SELECT path FROM attachments WHERE file_id = ?',
-      [fileId],
-    );
-    if (!rows.length) {
-      throw new Error(`Attachment not found: "${fileId}"`);
-    }
-    const filePath = join(this.attachmentsDir, rows[0].path);
-    return readFile(filePath);
+    const meta = await this.getAttachmentMeta(fileId);
+    if (!meta) throw new Error(`Attachment not found: "${fileId}"`);
+    return readFile(join(this.attachmentsDir, fileId));
   }
 
   async deleteAttachment(fileId: string): Promise<void> {
     this.db.run('DELETE FROM attachments WHERE file_id = ?', [fileId]);
     this.persist();
+    try {
+      await unlink(join(this.attachmentsDir, fileId));
+    } catch {
+      // Non-fatal — file may already be gone.
+    }
   }
 
-  async getAttachmentMeta(fileId: string): Promise<{ mimeType: string } | null> {
-    const rows = this.execQuery<{ mime_type: string }>(
-      'SELECT mime_type FROM attachments WHERE file_id = ?',
-      [fileId],
-    );
-    return rows.length ? { mimeType: rows[0].mime_type } : null;
+  async getAttachmentMeta(fileId: string): Promise<AttachmentMeta | null> {
+    const rows = this.execQuery<{
+      mime_type: string;
+      size: number;
+      created_at: number;
+      filename: string | null;
+    }>('SELECT mime_type, size, created_at, filename FROM attachments WHERE file_id = ?', [fileId]);
+    if (!rows.length) return null;
+    const row = rows[0];
+    return {
+      mimeType: row.mime_type,
+      size: row.size,
+      createdAt: fromMs(row.created_at),
+      ...(row.filename && { filename: row.filename }),
+    };
   }
 
   // -------------------------------------------------------
-  // Private helpers
+  // Associations
   // -------------------------------------------------------
 
   async associate(recordId: string, association: Association): Promise<void> {
@@ -760,5 +803,17 @@ export class SQLiteAdapter implements StackAdapter {
     }
     stmt.free();
     return results;
+  }
+
+  // -------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------
+
+  async flush(): Promise<void> {
+    this.persist();
+  }
+
+  async close(): Promise<void> {
+    this.db.close();
   }
 }
