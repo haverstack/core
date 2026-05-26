@@ -424,6 +424,11 @@ export class APIAdapter implements StackAdapter {
     await this.request<void>('DELETE', `/attachments/${fileId}`);
   }
 
+  async getAttachmentMeta(_fileId: FileId): Promise<{ mimeType: string } | null> {
+    // Attachment metadata lives on the server; this client-side adapter does not cache it.
+    return null;
+  }
+
   // -------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------
