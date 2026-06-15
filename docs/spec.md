@@ -359,6 +359,7 @@ type Filter = {
   tags?: string[];                   // records that have ALL of these tags
   hasAttachment?: string;            // records with an attachment of this label
   relatedTo?: { recordId: string; label?: string };
+  attachmentFileId?: string;         // records that reference a specific attachment file ID
 
   // Content fields (exact match on top-level keys)
   content?: { [key: string]: unknown };
@@ -492,6 +493,7 @@ DELETE /records/:id?hard=true — hard delete
 ?updatedAfter=
 ?tag=                (repeatable: ?tag=starred&tag=important)
 ?hasAttachment=
+?attachmentFileId=
 ?relatedTo=
 ?search=
 ?sort=createdAt|updatedAt|version

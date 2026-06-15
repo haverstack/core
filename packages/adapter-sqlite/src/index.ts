@@ -124,6 +124,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at);
   CREATE INDEX IF NOT EXISTS idx_assoc_record_id    ON associations(record_id);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
+  CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
 
   -- Full-text search (FTS4 — compatible with sql.js)
@@ -217,7 +218,7 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
 
   if (f.typeId !== undefined) {
     const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`);
+    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`)
     params.push(...ids);
   }
 
@@ -232,13 +233,13 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
 
   if (f.appId !== undefined) {
     const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
-    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`);
+    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`)
     params.push(...ids);
   }
 
   if (f.entityId !== undefined) {
     const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`);
+    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`)
     params.push(...ids);
   }
 
@@ -275,6 +276,14 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
       `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.label = ?)`,
     );
     params.push(f.hasAttachment);
+  }
+
+  // Attachment file ID filter — find records that reference a specific file
+  if (f.attachmentFileId) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)`,
+    );
+    params.push(f.attachmentFileId);
   }
 
   // Relationship filter
