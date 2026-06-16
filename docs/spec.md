@@ -469,6 +469,8 @@ Bearer token in the `Authorization` header. Token issuance is out of scope for t
 Authorization: Bearer <token>
 ```
 
+(As a non-normative example, `SQLiteAdapter` ships an optional hashed-token store — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — for servers that want DB-backed bearer tokens without rolling their own storage. This is adapter-specific tooling, not part of the wire protocol; other adapters are free to manage tokens however they like, or not at all.)
+
 ### Records
 
 ```
@@ -608,5 +610,4 @@ A convenience alias for the owner entity rather than requiring clients to look i
 
 ## Open Questions
 
-- **Token issuance** — authentication mechanism for the API adapter is server-defined and out of scope for v1
 - **Multi-stack patterns** — apps managing multiple stacks (personal + group stacks) will likely repeat common fan-out and merge patterns; a `StackWorkspace` abstraction is a likely future addition once real usage patterns emerge
