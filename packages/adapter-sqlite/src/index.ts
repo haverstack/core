@@ -17,7 +17,7 @@
 
 import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
@@ -50,6 +50,14 @@ export type SQLiteInitializeOptions = {
 export type SQLiteOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
+};
+
+export type TokenInfo = {
+  id: string;
+  entityId: string;
+  label?: string;
+  createdAt: Date;
+  expiresAt?: Date;
 };
 
 // -------------------------------------------------------
@@ -114,6 +122,15 @@ const SCHEMA_SQL = `
     created_at INTEGER NOT NULL
   ) STRICT;
 
+  CREATE TABLE IF NOT EXISTS tokens (
+    id          TEXT PRIMARY KEY,
+    token_hash  TEXT NOT NULL UNIQUE,
+    entity_id   TEXT NOT NULL,
+    label       TEXT,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER
+  ) STRICT;
+
   -- Indexes
   CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
@@ -126,6 +143,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
+  CREATE INDEX IF NOT EXISTS idx_tokens_hash        ON tokens(token_hash);
 
   -- Full-text search (FTS4 — compatible with sql.js)
   CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts4(
@@ -218,7 +236,7 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
 
   if (f.typeId !== undefined) {
     const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`)
+    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`);
     params.push(...ids);
   }
 
@@ -233,13 +251,13 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
 
   if (f.appId !== undefined) {
     const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
-    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`)
+    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`);
     params.push(...ids);
   }
 
   if (f.entityId !== undefined) {
     const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`)
+    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`);
     params.push(...ids);
   }
 
@@ -735,6 +753,68 @@ export class SQLiteAdapter implements StackAdapter {
       createdAt: fromMs(row.created_at),
       ...(row.filename && { filename: row.filename }),
     };
+  }
+
+  // -------------------------------------------------------
+  // Tokens
+  // -------------------------------------------------------
+
+  async createToken(
+    entityId: string,
+    opts: { label?: string; expiresAt?: Date } = {},
+  ): Promise<{ id: string; token: string }> {
+    const id = randomBytes(8).toString('hex');
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    this.db.run(
+      'INSERT INTO tokens (id, token_hash, entity_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        tokenHash,
+        entityId,
+        opts.label ?? null,
+        toMs(new Date()),
+        opts.expiresAt ? toMs(opts.expiresAt) : null,
+      ],
+    );
+    this.persist();
+    return { id, token };
+  }
+
+  async lookupToken(token: string): Promise<{ entityId: string } | null> {
+    const hash = createHash('sha256').update(token).digest('hex');
+    const rows = this.execQuery<{ entity_id: string; expires_at: number | null }>(
+      'SELECT entity_id, expires_at FROM tokens WHERE token_hash = ?',
+      [hash],
+    );
+    if (!rows.length) return null;
+    const row = rows[0];
+    if (row.expires_at !== null && Date.now() > row.expires_at) return null;
+    return { entityId: row.entity_id };
+  }
+
+  async listTokens(): Promise<TokenInfo[]> {
+    const rows = this.execQuery<{
+      id: string;
+      entity_id: string;
+      label: string | null;
+      created_at: number;
+      expires_at: number | null;
+    }>(
+      'SELECT id, entity_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC',
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      entityId: row.entity_id,
+      ...(row.label && { label: row.label }),
+      createdAt: fromMs(row.created_at),
+      ...(row.expires_at !== null && { expiresAt: fromMs(row.expires_at) }),
+    }));
+  }
+
+  async revokeToken(id: string): Promise<void> {
+    this.db.run('DELETE FROM tokens WHERE id = ?', [id]);
+    this.persist();
   }
 
   // -------------------------------------------------------
