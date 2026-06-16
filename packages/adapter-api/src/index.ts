@@ -302,7 +302,9 @@ export class APIAdapter implements StackAdapter {
   }
 
   async setConfig(_key: string, _value: string): Promise<void> {
-    throw new APIAdapterError('setConfig is not supported: server configuration is managed server-side');
+    throw new APIAdapterError(
+      'setConfig is not supported: server configuration is managed server-side',
+    );
   }
 
   // -------------------------------------------------------
@@ -315,9 +317,14 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
-    const raw = await this.request<Record<string, unknown> | null>('GET', `/records/${id}`, undefined, {
-      nullOn404: true,
-    });
+    const raw = await this.request<Record<string, unknown> | null>(
+      'GET',
+      `/records/${id}`,
+      undefined,
+      {
+        nullOn404: true,
+      },
+    );
     return raw ? parseRecord(raw) : null;
   }
 

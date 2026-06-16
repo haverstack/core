@@ -140,11 +140,11 @@ Migration is **lazy** — records are migrated in memory on read, and committed 
 
 ### Adapters
 
-| Adapter    | Use case                                                  |
-| ---------- | --------------------------------------------------------- |
-| SQLite     | Local app storage, full query support, FTS                |
-| Server API | Hosted/shared stacks, permissions enforcement             |
-| JSON files | Portable, human-readable, backup/export _(planned)_       |
+| Adapter    | Use case                                            |
+| ---------- | --------------------------------------------------- |
+| SQLite     | Local app storage, full query support, FTS          |
+| Server API | Hosted/shared stacks, permissions enforcement       |
+| JSON files | Portable, human-readable, backup/export _(planned)_ |
 
 ---
 

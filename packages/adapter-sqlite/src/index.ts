@@ -800,9 +800,7 @@ export class SQLiteAdapter implements StackAdapter {
       label: string | null;
       created_at: number;
       expires_at: number | null;
-    }>(
-      'SELECT id, entity_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC',
-    );
+    }>('SELECT id, entity_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC');
     return rows.map((row) => ({
       id: row.id,
       entityId: row.entity_id,
