@@ -840,3 +840,99 @@ describe('attachments', () => {
     expect(await adapter.getAttachmentMeta(fileId)).toBeNull();
   });
 });
+
+// -------------------------------------------------------
+// Tokens
+// -------------------------------------------------------
+
+describe('tokens', () => {
+  test('createToken returns id and plaintext token', async () => {
+    const adapter = await initAdapter();
+    const { id, token } = await adapter.createToken('entity-abc');
+    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
+    expect(typeof token).toBe('string');
+    expect(token.length).toBeGreaterThan(0);
+  });
+
+  test('lookupToken returns entityId for valid token', async () => {
+    const adapter = await initAdapter();
+    const { token } = await adapter.createToken('entity-abc');
+    const result = await adapter.lookupToken(token);
+    expect(result).not.toBeNull();
+    expect(result?.entityId).toBe('entity-abc');
+  });
+
+  test('lookupToken returns null for invalid token', async () => {
+    const adapter = await initAdapter();
+    const result = await adapter.lookupToken('not-a-real-token');
+    expect(result).toBeNull();
+  });
+
+  test('lookupToken returns null for expired token', async () => {
+    const adapter = await initAdapter();
+    const { token } = await adapter.createToken('entity-abc', {
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const result = await adapter.lookupToken(token);
+    expect(result).toBeNull();
+  });
+
+  test('lookupToken returns entityId for non-expired token', async () => {
+    const adapter = await initAdapter();
+    const { token } = await adapter.createToken('entity-abc', {
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const result = await adapter.lookupToken(token);
+    expect(result?.entityId).toBe('entity-abc');
+  });
+
+  test('listTokens returns all created tokens', async () => {
+    const adapter = await initAdapter();
+    await adapter.createToken('entity-a', { label: 'Token A' });
+    await adapter.createToken('entity-b', { label: 'Token B' });
+    const tokens = await adapter.listTokens();
+    expect(tokens.length).toBe(2);
+    const labels = tokens.map((t) => t.label);
+    expect(labels).toContain('Token A');
+    expect(labels).toContain('Token B');
+  });
+
+  test('listTokens does not expose plaintext token values', async () => {
+    const adapter = await initAdapter();
+    await adapter.createToken('entity-abc', { label: 'my-token' });
+    const tokens = await adapter.listTokens();
+    for (const t of tokens) {
+      expect(Object.keys(t)).not.toContain('token');
+    }
+  });
+
+  test('revokeToken removes the token', async () => {
+    const adapter = await initAdapter();
+    const { id, token } = await adapter.createToken('entity-abc');
+    await adapter.revokeToken(id);
+    expect(await adapter.lookupToken(token)).toBeNull();
+  });
+
+  test('listTokens returns empty after all tokens revoked', async () => {
+    const adapter = await initAdapter();
+    const { id } = await adapter.createToken('entity-abc');
+    await adapter.revokeToken(id);
+    expect(await adapter.listTokens()).toEqual([]);
+  });
+
+  test('createToken label is present in listTokens', async () => {
+    const adapter = await initAdapter();
+    await adapter.createToken('entity-abc', { label: 'my-token' });
+    const [t] = await adapter.listTokens();
+    expect(t.label).toBe('my-token');
+  });
+
+  test('createToken expiresAt is present in listTokens', async () => {
+    const adapter = await initAdapter();
+    const expiresAt = new Date(Date.now() + 3600_000);
+    await adapter.createToken('entity-abc', { expiresAt });
+    const [t] = await adapter.listTokens();
+    expect(t.expiresAt?.getTime()).toBeCloseTo(expiresAt.getTime(), -2);
+  });
+});
