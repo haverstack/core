@@ -17,6 +17,7 @@ export type {
   RecordId,
   TypeId,
   FileId,
+  AttachmentMeta,
   StackRecord,
   RecordVersion,
   StackType,

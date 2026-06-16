@@ -10,6 +10,7 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
+  AttachmentMeta,
 } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -125,7 +126,13 @@ class MockAdapter implements StackAdapter {
   async getAttachment(_fileId: string): Promise<Uint8Array> {
     return new Uint8Array();
   }
+  async getAttachmentMeta(_fileId: string): Promise<AttachmentMeta | null> {
+    return null;
+  }
   async deleteAttachment(_fileId: string) {}
+
+  flush?: () => Promise<void>;
+  close?: () => Promise<void>;
 }
 
 // -------------------------------------------------------
@@ -557,7 +564,9 @@ describe('delete', () => {
 describe('flush / close', () => {
   test('flush() delegates to adapter.flush() when implemented', async () => {
     let flushed = false;
-    adapter.flush = async () => { flushed = true; };
+    adapter.flush = async () => {
+      flushed = true;
+    };
     await stack.flush();
     expect(flushed).toBe(true);
   });
@@ -568,7 +577,9 @@ describe('flush / close', () => {
 
   test('close() delegates to adapter.close() when implemented', async () => {
     let closed = false;
-    adapter.close = async () => { closed = true; };
+    adapter.close = async () => {
+      closed = true;
+    };
     await stack.close();
     expect(closed).toBe(true);
   });
