@@ -156,6 +156,7 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.updatedAt?.after) p.set('updatedAfter', f.updatedAt.after.toISOString());
   if (f.tags) for (const tag of f.tags) p.append('tag', tag);
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
+  if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
   if (f.relatedTo) p.set('relatedTo', f.relatedTo.recordId);
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');

@@ -212,6 +212,7 @@ export type RecordFilter = {
     recordId: RecordId;
     label?: string;
   };
+  attachmentFileId?: FileId; // Records that reference this attachment file ID
 
   // Content fields — exact match on top-level keys (POST /query only)
   content?: Record<string, unknown>;
