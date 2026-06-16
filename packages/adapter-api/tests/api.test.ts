@@ -90,17 +90,16 @@ describe('open', () => {
     await APIAdapter.open({ url: BASE_URL, token: TOKEN });
     expect(mockFetch).toHaveBeenCalledWith(
       `${BASE_URL}/.well-known/stack`,
-      expect.objectContaining({ headers: expect.objectContaining({ Authorization: `Bearer ${TOKEN}` }) }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: `Bearer ${TOKEN}` }),
+      }),
     );
   });
 
   test('strips trailing slash from url', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
     await APIAdapter.open({ url: `${BASE_URL}/`, token: TOKEN });
-    expect(mockFetch).toHaveBeenCalledWith(
-      `${BASE_URL}/.well-known/stack`,
-      expect.anything(),
-    );
+    expect(mockFetch).toHaveBeenCalledWith(`${BASE_URL}/.well-known/stack`, expect.anything());
   });
 
   test('populates capabilities from discovery response', async () => {
@@ -133,9 +132,7 @@ describe('open', () => {
 
   test('throws APIAdapterError on non-401 error status', async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
-    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(
-      APIAdapterError,
-    );
+    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(APIAdapterError);
   });
 });
 

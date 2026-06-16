@@ -18,7 +18,7 @@ A Stack is created via an async factory that reads config from the adapter — t
 // First run — create a new database with initial config
 const adapter = await SQLiteAdapter.initialize({
   path: './my-stack.db',
-  entityId: 'abc123',          // required — owner entity ID
+  entityId: 'abc123', // required — owner entity ID
   timezone: 'America/New_York', // required — IANA timezone string
 });
 
@@ -27,19 +27,19 @@ const adapter = await SQLiteAdapter.open({ path: './my-stack.db' });
 
 // Always the same — reads config from the adapter
 const stack = await Stack.create(adapter);
-stack.ownerEntityId  // read from adapter config
-stack.timezone       // read from adapter config
+stack.ownerEntityId; // read from adapter config
+stack.timezone; // read from adapter config
 ```
 
 `SQLiteAdapter.initialize()` fails if the file already exists. `SQLiteAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
 **Stack config** is stored in a `stack_config` key/value table in the adapter. Current keys:
 
-| Key | Description |
-|---|---|
-| `entity_id` | The owner Entity's record ID |
-| `timezone` | IANA timezone string e.g. `"America/New_York"` |
-| `version` | Stack schema version |
+| Key         | Description                                    |
+| ----------- | ---------------------------------------------- |
+| `entity_id` | The owner Entity's record ID                   |
+| `timezone`  | IANA timezone string e.g. `"America/New_York"` |
+| `version`   | Stack schema version                           |
 
 The `timezone` field is a property of the stack owner, not the app — an app running against two different stacks should display dates in each stack's configured timezone.
 
@@ -54,10 +54,11 @@ An Entity represents the owner or author of a Stack — a person or organization
 The Stack has a designated owner Entity, stored as a config value pointing to an `_entity` Record's ID.
 
 **Content fields:**
+
 ```ts
 type EntityContent = {
-  name: string;      // Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith"
-  handle?: string;   // Short unique identifier — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities.
+  name: string; // Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith"
+  handle?: string; // Short unique identifier — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities.
 };
 ```
 
@@ -70,12 +71,13 @@ An Entity record's `entityId` may point to itself (the owner Entity authored its
 Apps that write to a Stack are also modeled as Records, using the built-in system type `_app`. This allows querying all Records created by a specific app, and provides a foundation for future enforcement in the API adapter.
 
 **Content fields:**
+
 ```ts
 type AppContent = {
-  name: string;      // Display name of the app e.g. "My Notes App"
-  version?: string;  // Semver string e.g. "1.0.0". The app's unique machine-readable identity
-                     // is captured by the _app record's appId (e.g. "com.example.myapp"),
-                     // so no handle is needed.
+  name: string; // Display name of the app e.g. "My Notes App"
+  version?: string; // Semver string e.g. "1.0.0". The app's unique machine-readable identity
+  // is captured by the _app record's appId (e.g. "com.example.myapp"),
+  // so no handle is needed.
 };
 ```
 
@@ -91,15 +93,17 @@ A Group is a set of Entities, modeled as a Record of the built-in system type `_
 A permission group can be promoted to a collaborative group at any time by adding a `stackUrl` — no migration, no restructuring.
 
 **Content fields:**
+
 ```ts
 type GroupContent = {
-  name: string;       // Display name — human-friendly, not necessarily unique. e.g. "Jane's Book Club"
-  handle?: string;    // Short unique identifier — URL-safe, no spaces. e.g. "janes-book-club". Optional for private groups.
-  stackUrl?: string;  // If present, this group owns a shared collaborative stack at this URL. Absent = permission-only group.
+  name: string; // Display name — human-friendly, not necessarily unique. e.g. "Jane's Book Club"
+  handle?: string; // Short unique identifier — URL-safe, no spaces. e.g. "janes-book-club". Optional for private groups.
+  stackUrl?: string; // If present, this group owns a shared collaborative stack at this URL. Absent = permission-only group.
 };
 ```
 
 **Membership** is expressed via associations on the `_group` Record, using the existing Association model:
+
 ```ts
 { kind: "relationship", label: "member", recordId: "<entity record id>" }
 { kind: "relationship", label: "admin",  recordId: "<entity record id>" }
@@ -117,30 +121,30 @@ A **Type** defines the schema for the `content` field of a Record. Types are ide
 
 ```ts
 type ScalarFieldKind =
-  | "string"
-  | "number"
-  | "boolean"
-  | "date"
-  | "text"        // Long-form string (e.g. markdown body)
-  | "record-ref"; // Reference to another record by ID
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'text' // Long-form string (e.g. markdown body)
+  | 'record-ref'; // Reference to another record by ID
 
 type FieldDef =
   | { kind: ScalarFieldKind; required?: boolean }
-  | { kind: "array";  items: FieldDef;        required?: boolean }  // recursive
-  | { kind: "object"; properties: TypeSchema; required?: boolean }; // recursive
+  | { kind: 'array'; items: FieldDef; required?: boolean } // recursive
+  | { kind: 'object'; properties: TypeSchema; required?: boolean }; // recursive
 
 type TypeSchema = {
   [fieldName: string]: FieldDef;
 };
 
 type StackType = {
-  id: string;              // Versioned identifier, e.g. "com.example.myapp/note@2"
-  baseId: string;          // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
-  version: number;         // Incrementing integer
-  name: string;            // Human-readable label, e.g. "Note"
+  id: string; // Versioned identifier, e.g. "com.example.myapp/note@2"
+  baseId: string; // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
+  version: number; // Incrementing integer
+  name: string; // Human-readable label, e.g. "Note"
   schema: TypeSchema;
-  schemaHash: string;      // SHA-256 of canonical (minified, alpha-sorted) schema
-  migratesFrom?: string;   // e.g. "com.example.myapp/note@1" — documents lineage
+  schemaHash: string; // SHA-256 of canonical (minified, alpha-sorted) schema
+  migratesFrom?: string; // e.g. "com.example.myapp/note@1" — documents lineage
   createdAt: Date;
 };
 ```
@@ -155,8 +159,8 @@ type StackType = {
 
 ```ts
 function isCompatible(
-  candidateSchema: TypeSchema,   // the Record's actual Type
-  requiredSchema: TypeSchema     // minimum fields the app needs
+  candidateSchema: TypeSchema, // the Record's actual Type
+  requiredSchema: TypeSchema, // minimum fields the app needs
 ): boolean {
   return Object.entries(requiredSchema).every(([key, def]) => {
     if (!def.required) return true;
@@ -176,15 +180,15 @@ Apps register migration functions between adjacent Type versions at startup. The
 
 ```ts
 stack.registerMigration({
-  from: "com.example.myapp/note@1",
-  to:   "com.example.myapp/note@2",
-  migrate: (content) => ({ ...content, title: "" })
+  from: 'com.example.myapp/note@1',
+  to: 'com.example.myapp/note@2',
+  migrate: (content) => ({ ...content, title: '' }),
 });
 
 stack.registerMigration({
-  from: "com.example.myapp/note@2",
-  to:   "com.example.myapp/note@3",
-  migrate: (content) => ({ ...content, pinned: false })
+  from: 'com.example.myapp/note@2',
+  to: 'com.example.myapp/note@3',
+  migrate: (content) => ({ ...content, pinned: false }),
 });
 ```
 
@@ -209,19 +213,19 @@ A **Record** is the fundamental unit of data in a Stack.
 ```ts
 type StackRecord = {
   // --- Core (always present) ---
-  id: string;                  // Crockford base-32, time-sortable, unique within a stack
-  typeId: string;              // Versioned Type ID e.g. "com.example.myapp/note@2"
+  id: string; // Crockford base-32, time-sortable, unique within a stack
+  typeId: string; // Versioned Type ID e.g. "com.example.myapp/note@2"
   createdAt: Date;
   updatedAt: Date;
-  content: Record<string, unknown>;  // Validated against the Type's schema
-  version: number;             // Increments on each write (for conflict detection)
+  content: Record<string, unknown>; // Validated against the Type's schema
+  version: number; // Increments on each write (for conflict detection)
 
   // --- Optional native fields ---
-  parentId?: string;           // ID of a parent Record (for hierarchy/folders)
-  entityId?: string;           // Author Entity, if different from stack owner
-  appId?: string;              // App that created this Record
-  deletedAt?: Date;            // Present if soft-deleted
-  permissions?: Permission[];  // Access control (see Permissions)
+  parentId?: string; // ID of a parent Record (for hierarchy/folders)
+  entityId?: string; // Author Entity, if different from stack owner
+  appId?: string; // App that created this Record
+  deletedAt?: Date; // Present if soft-deleted
+  permissions?: Permission[]; // Access control (see Permissions)
   associations?: Association[]; // Tags, attachments, relationships
 };
 ```
@@ -236,12 +240,13 @@ Tags, attachments, and relationships are unified under a single **Association** 
 
 ```ts
 type Association =
-  | { kind: "tag";          label: string }
-  | { kind: "attachment";   label: string; fileId: string; mimeType: string }
-  | { kind: "relationship"; label: string; recordId: string };
+  | { kind: 'tag'; label: string }
+  | { kind: 'attachment'; label: string; fileId: string; mimeType: string }
+  | { kind: 'relationship'; label: string; recordId: string };
 ```
 
 **Examples:**
+
 - A `contact` type uses `{ kind: "attachment", label: "avatar", fileId: "..." }` as a profile picture.
 - A `tweet` type uses `{ kind: "relationship", label: "reply-to", recordId: "..." }` to reference another tweet.
 - Any record can use `{ kind: "tag", label: "starred" }` for user-defined labels.
@@ -252,19 +257,20 @@ type Association =
 
 ## Permissions
 
-All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent *grants* of access, not restrictions. Enforcement is the responsibility of the API adapter. The JSON and SQLite adapters ignore the permissions field.
+All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement is the responsibility of the API adapter. The JSON and SQLite adapters ignore the permissions field.
 
 ```ts
 // Absence of permissions (empty or undefined) = private, owner only.
 type Permission =
-  | { access: "public" }
-  | { access: "entity"; entityId: string; read: boolean; write: boolean }
-  | { access: "group";  groupId: string;  read: boolean; write: boolean };
+  | { access: 'public' }
+  | { access: 'entity'; entityId: string; read: boolean; write: boolean }
+  | { access: 'group'; groupId: string; read: boolean; write: boolean };
 ```
 
 Group permissions reference a `_group` Record by ID. The group may be a simple permission group (living in the stack owner's personal stack) or a collaborative group with its own stack — the permission model is the same either way.
 
 **Permission resolution for the API adapter:**
+
 - `private` — owner only
 - `public` — any requester can read
 - `entity` — check the requester's entityId directly
@@ -283,15 +289,17 @@ type RecordVersion = {
   version: number;
   content: object;
   updatedAt: Date;
-  entityId?: string;   // Who made this change
+  entityId?: string; // Who made this change
 };
 ```
 
 **API surface:**
+
 - `stack.getVersions(recordId)` — retrieve version history
 - `stack.restoreVersion(recordId, version)` — revert to a prior version
 
 **Storage per adapter:**
+
 - JSON: sibling file `{id}.versions.json`
 - SQLite: `versions` table
 - API: server snapshots automatically on every `PATCH /records/:id`; history is read via `/records/:id/versions`
@@ -302,11 +310,11 @@ type RecordVersion = {
 
 The library exposes a single interface regardless of backend. Three adapters are planned:
 
-| Adapter | Use case | Notes |
-|---|---|---|
+| Adapter        | Use case                                | Notes                                                   |
+| -------------- | --------------------------------------- | ------------------------------------------------------- |
 | **JSON files** | Portable, human-readable, backup/export | Slow queries (O(n) scan); may maintain an `_index.json` |
-| **SQLite** | Local app storage, fast queries | Indexes associations, parentId, appId, etc. |
-| **Server API** | Hosted/shared stacks | Enforces permissions and app identity |
+| **SQLite**     | Local app storage, fast queries         | Indexes associations, parentId, appId, etc.             |
+| **Server API** | Hosted/shared stacks                    | Enforces permissions and app identity                   |
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
@@ -349,17 +357,17 @@ Queries are expressed as a `Query` object passed to `stack.query()`. All adapter
 type Filter = {
   // Native fields
   typeId?: string | string[];
-  parentId?: string | null;          // null = root records only
+  parentId?: string | null; // null = root records only
   appId?: string | string[];
   entityId?: string | string[];
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
   // Association filters
-  tags?: string[];                   // records that have ALL of these tags
-  hasAttachment?: string;            // records with an attachment of this label
+  tags?: string[]; // records that have ALL of these tags
+  hasAttachment?: string; // records with an attachment of this label
   relatedTo?: { recordId: string; label?: string };
-  attachmentFileId?: string;         // records that reference a specific attachment file ID
+  attachmentFileId?: string; // records that reference a specific attachment file ID
 
   // Content fields (exact match on top-level keys)
   content?: { [key: string]: unknown };
@@ -380,11 +388,11 @@ type DateRange = {
 type Query = {
   filter?: Filter;
   sort?: {
-    field: "createdAt" | "updatedAt" | "version";
-    direction?: "asc" | "desc";
+    field: 'createdAt' | 'updatedAt' | 'version';
+    direction?: 'asc' | 'desc';
   };
   limit?: number;
-  cursor?: string;    // Opaque cursor for page-based pagination
+  cursor?: string; // Opaque cursor for page-based pagination
 };
 ```
 
@@ -403,6 +411,7 @@ type AdapterCapabilities = {
 ```
 
 **Per-adapter notes:**
+
 - **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1
 - **SQLite adapter** — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint
@@ -418,20 +427,20 @@ Records are never hard-deleted by default. Two levels of deletion are supported:
 **Hard delete** — permanent and explicit. Removes the Record and all its version history. Requires deliberate intent via a flag. The escape hatch for sensitive, secret, or harmful content.
 
 ```ts
-stack.delete(recordId)                  // soft delete — reversible
-stack.delete(recordId, { hard: true })  // hard delete — permanent
+stack.delete(recordId); // soft delete — reversible
+stack.delete(recordId, { hard: true }); // hard delete — permanent
 ```
 
 Queries exclude soft-deleted Records by default. Opt in with:
 
 ```ts
-stack.query({ filter: { includeDeleted: true } })
+stack.query({ filter: { includeDeleted: true } });
 ```
 
 **Restore** always creates a new version with the old content — it never rewrites history. The act of restoring is itself part of the version history.
 
 ```ts
-stack.restoreVersion(recordId, version)  // creates a new version, doesn't rewrite history
+stack.restoreVersion(recordId, version); // creates a new version, doesn't rewrite history
 ```
 
 ---
@@ -484,6 +493,7 @@ DELETE /records/:id?hard=true — hard delete
 ```
 
 **`GET /records` query params:**
+
 ```
 ?typeId=
 ?parentId=           (use "null" for root records)
@@ -517,6 +527,7 @@ PUT  /records/:id/permissions        — replace all permissions (empty array = 
 ```
 
 **Response envelope:**
+
 ```json
 {
   "records": [...],
@@ -550,6 +561,7 @@ DELETE /records/:id/associations               — remove an association (by bod
 ```
 
 Response shape is consistent regardless of kind:
+
 ```json
 {
   "associations": [

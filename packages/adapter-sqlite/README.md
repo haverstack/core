@@ -42,10 +42,10 @@ await stack.close();
 
 Creates a new database at `opts.path`. Throws if the file already exists.
 
-| Option     | Type     | Description                            |
-| ---------- | -------- | -------------------------------------- |
-| `path`     | `string` | Absolute path to the `.db` file        |
-| `entityId` | `string` | Entity ID of the stack owner           |
+| Option     | Type     | Description                                    |
+| ---------- | -------- | ---------------------------------------------- |
+| `path`     | `string` | Absolute path to the `.db` file                |
+| `entityId` | `string` | Entity ID of the stack owner                   |
 | `timezone` | `string` | IANA timezone string (e.g. `America/New_York`) |
 
 ### `SQLiteAdapter.open(opts)`
@@ -62,11 +62,11 @@ Given a database at `./my-stack.db`, attachments are stored in `./attachments/`.
 
 ## Capabilities
 
-| Feature            | Supported |
-| ------------------ | --------- |
-| Full-text search   | Yes (FTS4) |
-| Content field query | Yes       |
-| Sortable fields    | `createdAt`, `updatedAt`, `version` |
+| Feature             | Supported                           |
+| ------------------- | ----------------------------------- |
+| Full-text search    | Yes (FTS4)                          |
+| Content field query | Yes                                 |
+| Sortable fields     | `createdAt`, `updatedAt`, `version` |
 
 ## License
 
