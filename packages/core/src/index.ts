@@ -14,7 +14,7 @@ export {
   ScopedStack,
   StackValidationError,
   StackMigrationError,
-  PermissionError,
+  StackPermissionError,
 } from './stack.js';
 export type { CreateRecordOptions, GetRecordOptions, DeleteRecordOptions } from './stack.js';
 

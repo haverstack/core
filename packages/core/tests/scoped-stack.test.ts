@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack, PermissionError } from '../src/stack.js';
+import { Stack, StackPermissionError } from '../src/stack.js';
 import { generateId } from '../src/id.js';
 import type {
   StackAdapter,
@@ -184,7 +184,7 @@ describe('ScopedStack — read access', () => {
   test('anonymous requester cannot read a private record', async () => {
     const record = await adapter.createRecord(makeRecord());
     const view = stack.asEntity(null);
-    await expect(view.get(record.id)).rejects.toThrow(PermissionError);
+    await expect(view.get(record.id)).rejects.toThrow(StackPermissionError);
   });
 
   test('anonymous requester can read a public record', async () => {
@@ -208,7 +208,7 @@ describe('ScopedStack — read access', () => {
         permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
       }),
     );
-    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(PermissionError);
+    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(StackPermissionError);
   });
 
   test('group member can read via a group read grant', async () => {
@@ -238,10 +238,10 @@ describe('ScopedStack — read access', () => {
         permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
       }),
     );
-    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(PermissionError);
+    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(StackPermissionError);
   });
 
-  test('get() returns null, not PermissionError, for a record that does not exist', async () => {
+  test('get() returns null, not StackPermissionError, for a record that does not exist', async () => {
     expect(await stack.asEntity(OWNER).get('nonexistent')).toBeNull();
     expect(await stack.asEntity(null).get('nonexistent')).toBeNull();
   });
@@ -261,7 +261,7 @@ describe('ScopedStack — write access', () => {
   test('public access does not grant write', async () => {
     const record = await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
     await expect(stack.asEntity(STRANGER).update(record.id, { text: 'hi' })).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
   });
 
@@ -282,13 +282,13 @@ describe('ScopedStack — write access', () => {
       }),
     );
     await expect(stack.asEntity(MEMBER).update(record.id, { text: 'hi' })).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
   });
 
   test('delete enforces write access', async () => {
     const record = await adapter.createRecord(makeRecord());
-    await expect(stack.asEntity(STRANGER).delete(record.id)).rejects.toThrow(PermissionError);
+    await expect(stack.asEntity(STRANGER).delete(record.id)).rejects.toThrow(StackPermissionError);
     await stack.asEntity(OWNER).delete(record.id);
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
@@ -299,22 +299,22 @@ describe('ScopedStack — write access', () => {
     const perms: Permission[] = [{ access: 'public' }];
 
     await expect(stack.asEntity(STRANGER).associate(record.id, tag)).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
     await expect(stack.asEntity(STRANGER).dissociate(record.id, tag)).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
     await expect(stack.asEntity(STRANGER).setPermissions(record.id, perms)).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
 
     await stack.asEntity(OWNER).associate(record.id, tag);
     expect((await adapter.getRecord(record.id))?.associations).toContainEqual(tag);
   });
 
-  test('write methods throw a plain Error (not PermissionError) for a missing record', async () => {
+  test('write methods throw a plain Error (not StackPermissionError) for a missing record', async () => {
     await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.not.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
     await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.toThrow(
       'Record not found',
@@ -335,7 +335,7 @@ describe('ScopedStack — versions', () => {
       updatedAt: new Date(),
     });
     await expect(stack.asEntity(STRANGER).restoreVersion(record.id, 1)).rejects.toThrow(
-      PermissionError,
+      StackPermissionError,
     );
     const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
     expect(restored.content.text).toBe('old');
@@ -344,7 +344,9 @@ describe('ScopedStack — versions', () => {
   test('getVersions/getVersion enforce read access', async () => {
     const record = await adapter.createRecord(makeRecord());
     await adapter.saveVersion(record.id, { version: 1, content: {}, updatedAt: new Date() });
-    await expect(stack.asEntity(STRANGER).getVersions(record.id)).rejects.toThrow(PermissionError);
+    await expect(stack.asEntity(STRANGER).getVersions(record.id)).rejects.toThrow(
+      StackPermissionError,
+    );
     await expect(stack.asEntity(OWNER).getVersions(record.id)).resolves.toHaveLength(1);
   });
 });

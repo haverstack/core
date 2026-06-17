@@ -280,7 +280,7 @@ Cross-stack group resolution (where the `_group` Record lives in a different sta
 
 **Enforcement: `Stack.asEntity()`**
 
-The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same read/write/query/version surface as `Stack`, but every operation is checked against the rules above. The owner always has full access. Reading or writing a Record that exists but isn't visible throws `PermissionError`; a missing Record still throws a plain `Error`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
+The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same read/write/query/version surface as `Stack`, but every operation is checked against the rules above. The owner always has full access. Reading or writing a Record that exists but isn't visible throws `StackPermissionError`; a missing Record still throws a plain `Error`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
 
 Plain `Stack` methods remain unscoped and perform no permission checks — correct for single-entity embedded use, where there's no requester distinct from the app itself. Use `asEntity()` when one `Stack` instance serves requests from multiple, possibly untrusted, entities, e.g. a server adapter.
 

@@ -78,10 +78,10 @@ export class StackMigrationError extends Error {
 }
 
 /** Thrown by ScopedStack when a requester lacks permission for the operation. */
-export class PermissionError extends Error {
+export class StackPermissionError extends Error {
   constructor(message = 'Permission denied') {
     super(message);
-    this.name = 'PermissionError';
+    this.name = 'StackPermissionError';
   }
 }
 
@@ -578,8 +578,8 @@ const DEFAULT_QUERY_LIMIT = 50;
  * via `stack.asEntity(entityId)` — see there for when to use it.
  *
  * Read methods return null for a Record that doesn't exist, and throw
- * PermissionError for one that exists but isn't readable by the requester.
- * Write methods throw PermissionError for a Record that exists but isn't
+ * StackPermissionError for one that exists but isn't readable by the requester.
+ * Write methods throw StackPermissionError for a Record that exists but isn't
  * writable. This lets callers distinguish "not found" from "forbidden".
  */
 export class ScopedStack {
@@ -615,14 +615,14 @@ export class ScopedStack {
   private async requireWritable(id: string): Promise<StackRecord> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new Error(`Record not found: "${id}"`);
-    if (!(await this.checkWrite(existing))) throw new PermissionError();
+    if (!(await this.checkWrite(existing))) throw new StackPermissionError();
     return existing;
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.checkRead(record))) throw new PermissionError();
+    if (!(await this.checkRead(record))) throw new StackPermissionError();
     return record;
   }
 
@@ -680,14 +680,14 @@ export class ScopedStack {
   async getVersions(id: string): Promise<RecordVersion[]> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new Error(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new PermissionError();
+    if (!(await this.checkRead(existing))) throw new StackPermissionError();
     return this.stack.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new Error(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new PermissionError();
+    if (!(await this.checkRead(existing))) throw new StackPermissionError();
     return this.stack.getVersion(id, version);
   }
 
