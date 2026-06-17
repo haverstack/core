@@ -339,7 +339,11 @@ export class APIAdapter implements StackAdapter {
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
-    type Envelope = { records: Record<string, unknown>[]; cursor: string | null; total: number };
+    type Envelope = {
+      records: Record<string, unknown>[];
+      cursor: string | null;
+      total: number | null;
+    };
 
     let raw: Envelope;
     if (this.capabilities.contentFieldQuery) {

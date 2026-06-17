@@ -17,6 +17,7 @@
 import { generateId } from './id.js';
 import { hashSchema, isCompatible, parseTypeId } from './schema.js';
 import { validateContent } from './validate.js';
+import { checkAccess } from './access.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -76,6 +77,14 @@ export class StackMigrationError extends Error {
   }
 }
 
+/** Thrown by ScopedStack when a requester lacks permission for the operation. */
+export class StackPermissionError extends Error {
+  constructor(message = 'Permission denied') {
+    super(message);
+    this.name = 'StackPermissionError';
+  }
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -102,6 +111,22 @@ export class Stack {
 
   get capabilities(): AdapterCapabilities {
     return this.adapter.capabilities;
+  }
+
+  /**
+   * Get a permission-scoped view of this Stack, as if the request came from
+   * the given entity. Pass null for an anonymous/unauthenticated requester.
+   * Reads and writes are checked against each Record's `permissions`; the
+   * owner always has full access.
+   *
+   * Plain Stack methods are unscoped and skip permission checks entirely —
+   * correct for single-entity embedded use, where there's no requester
+   * distinct from the app itself. Use asEntity() when one Stack instance
+   * serves requests from multiple, possibly untrusted, entities (e.g. a
+   * multi-tenant API server).
+   */
+  asEntity(entityId: string | null): ScopedStack {
+    return new ScopedStack(this, entityId);
   }
 
   // -------------------------------------------------------
@@ -538,5 +563,136 @@ export class Stack {
       ...(record.entityId && { entityId: record.entityId }),
     };
     await this.adapter.saveVersion(record.id, version);
+  }
+}
+
+// -------------------------------------------------------
+// ScopedStack
+// -------------------------------------------------------
+
+/** Default page size used to fill a permission-filtered query result. */
+const DEFAULT_QUERY_LIMIT = 50;
+
+/**
+ * A permission-enforcing view of a Stack for a single requester. Obtained
+ * via `stack.asEntity(entityId)` — see there for when to use it.
+ *
+ * Read methods return null for a Record that doesn't exist, and throw
+ * StackPermissionError for one that exists but isn't readable by the requester.
+ * Write methods throw StackPermissionError for a Record that exists but isn't
+ * writable. This lets callers distinguish "not found" from "forbidden".
+ */
+export class ScopedStack {
+  constructor(
+    private readonly stack: Stack,
+    private readonly requesterEntityId: string | null,
+  ) {}
+
+  private resolveRecord = (id: string): Promise<StackRecord | null> =>
+    this.stack.get(id, { migrate: false });
+
+  private checkRead(record: StackRecord): Promise<boolean> {
+    return checkAccess(
+      record,
+      this.requesterEntityId,
+      this.stack.ownerEntityId,
+      'read',
+      this.resolveRecord,
+    );
+  }
+
+  private checkWrite(record: StackRecord): Promise<boolean> {
+    return checkAccess(
+      record,
+      this.requesterEntityId,
+      this.stack.ownerEntityId,
+      'write',
+      this.resolveRecord,
+    );
+  }
+
+  /** Fetch a Record the requester has write access to, or throw. */
+  private async requireWritable(id: string): Promise<StackRecord> {
+    const existing = await this.stack.get(id, { migrate: false });
+    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!(await this.checkWrite(existing))) throw new StackPermissionError();
+    return existing;
+  }
+
+  async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
+    const record = await this.stack.get(id, opts);
+    if (!record) return null;
+    if (!(await this.checkRead(record))) throw new StackPermissionError();
+    return record;
+  }
+
+  /**
+   * Query records, filtered to only those the requester can read.
+   *
+   * Pagination is filtered-then-refilled: each adapter page is fetched in
+   * full and entirely evaluated before deciding whether to fetch another,
+   * so the returned page may overshoot `limit` slightly, but never skips a
+   * record that shared a page with the one that crossed the threshold (the
+   * adapter's cursor can't address a position mid-page).
+   *
+   * `total` is always null — see the QueryResult.total doc comment.
+   */
+  async query(query: StackQuery = {}): Promise<QueryResult> {
+    const limit = query.limit ?? DEFAULT_QUERY_LIMIT;
+    const records: StackRecord[] = [];
+    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
+
+    do {
+      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
+      for (const record of page.records) {
+        if (await this.checkRead(record)) records.push(record);
+      }
+    } while (records.length < limit && page.cursor);
+
+    return { records, cursor: page.cursor, total: null };
+  }
+
+  async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
+    await this.requireWritable(id);
+    return this.stack.update(id, content);
+  }
+
+  async associate(id: string, association: Association): Promise<void> {
+    await this.requireWritable(id);
+    return this.stack.associate(id, association);
+  }
+
+  async dissociate(id: string, association: Association): Promise<void> {
+    await this.requireWritable(id);
+    return this.stack.dissociate(id, association);
+  }
+
+  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
+    await this.requireWritable(id);
+    return this.stack.setPermissions(id, permissions);
+  }
+
+  async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
+    await this.requireWritable(id);
+    return this.stack.delete(id, opts);
+  }
+
+  async getVersions(id: string): Promise<RecordVersion[]> {
+    const existing = await this.stack.get(id, { migrate: false });
+    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    return this.stack.getVersions(id);
+  }
+
+  async getVersion(id: string, version: number): Promise<RecordVersion | null> {
+    const existing = await this.stack.get(id, { migrate: false });
+    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    return this.stack.getVersion(id, version);
+  }
+
+  async restoreVersion(id: string, version: number): Promise<StackRecord> {
+    await this.requireWritable(id);
+    return this.stack.restoreVersion(id, version);
   }
 }

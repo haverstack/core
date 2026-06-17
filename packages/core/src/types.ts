@@ -239,7 +239,14 @@ export type StackQuery = {
 export type QueryResult = {
   records: StackRecord[];
   cursor: string | null;
-  total: number;
+  /**
+   * Total count of matching records, ignoring pagination. `null` when the
+   * count cannot be reported without leaking information across a
+   * permission boundary — e.g. a permission-scoped query (see
+   * `Stack.asEntity()`) never reports an unfiltered total, since that would
+   * reveal the existence/cardinality of records the requester can't read.
+   */
+  total: number | null;
 };
 
 // -------------------------------------------------------

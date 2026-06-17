@@ -278,6 +278,16 @@ Group permissions reference a `_group` Record by ID. The group may be a simple p
 
 Cross-stack group resolution (where the `_group` Record lives in a different stack than the Record being accessed) requires the server to have read access to that stack.
 
+**Enforcement: `Stack.asEntity()`**
+
+The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same read/write/query/version surface as `Stack`, but every operation is checked against the rules above. The owner always has full access. Reading or writing a Record that exists but isn't visible throws `StackPermissionError`; a missing Record still throws a plain `Error`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
+
+Plain `Stack` methods remain unscoped and perform no permission checks — correct for single-entity embedded use, where there's no requester distinct from the app itself. Use `asEntity()` when one `Stack` instance serves requests from multiple, possibly untrusted, entities, e.g. a server adapter.
+
+`ScopedStack.query()`'s `total` is always `null`. The adapter's unfiltered count would otherwise leak the existence and cardinality of Records the requester can't read, even when the returned `records` array comes back empty. Computing an exact filtered count would require evaluating every match rather than just the returned page, so it's intentionally not attempted.
+
+`ScopedStack`'s group-membership check only resolves `_group` Records living in the same stack as the Record being accessed — it does not yet implement the cross-stack case described above. A server relying on cross-stack groups must still handle that case itself.
+
 ---
 
 ## Versions

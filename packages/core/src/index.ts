@@ -9,8 +9,18 @@
  */
 
 // Core class
-export { Stack, StackValidationError, StackMigrationError } from './stack.js';
+export {
+  Stack,
+  ScopedStack,
+  StackValidationError,
+  StackMigrationError,
+  StackPermissionError,
+} from './stack.js';
 export type { CreateRecordOptions, GetRecordOptions, DeleteRecordOptions } from './stack.js';
+
+// Permissions
+export { checkAccess } from './access.js';
+export type { AccessMode, RecordResolver } from './access.js';
 
 // Types
 export type {
