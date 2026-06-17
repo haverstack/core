@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack, StackPermissionError } from '../src/stack.js';
+import { Stack, StackPermissionError, StackNotFoundError } from '../src/stack.js';
 import { generateId } from '../src/id.js';
 import type {
   StackAdapter,
@@ -312,12 +312,12 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.associations).toContainEqual(tag);
   });
 
-  test('write methods throw a plain Error (not StackPermissionError) for a missing record', async () => {
+  test('write methods throw StackNotFoundError (not StackPermissionError) for a missing record', async () => {
+    await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.toThrow(
+      StackNotFoundError,
+    );
     await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.not.toThrow(
       StackPermissionError,
-    );
-    await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.toThrow(
-      'Record not found',
     );
   });
 });

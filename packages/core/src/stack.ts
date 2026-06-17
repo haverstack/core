@@ -85,6 +85,14 @@ export class StackPermissionError extends Error {
   }
 }
 
+/** Thrown when a record (or specific version) does not exist. */
+export class StackNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackNotFoundError';
+  }
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -392,7 +400,7 @@ export class Stack {
   async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
-      throw new Error(`Record not found: "${id}"`);
+      throw new StackNotFoundError(`Record not found: "${id}"`);
     }
 
     // Resolve the latest type version and migrate existing content
@@ -457,7 +465,7 @@ export class Stack {
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
-      throw new Error(`Record not found: "${id}"`);
+      throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     await this.adapter.updateRecord(id, { permissions });
   }
@@ -497,12 +505,12 @@ export class Stack {
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
-      throw new Error(`Record not found: "${id}"`);
+      throw new StackNotFoundError(`Record not found: "${id}"`);
     }
 
     const target = await this.adapter.getVersion(id, version);
     if (!target) {
-      throw new Error(`Version ${version} not found for record "${id}"`);
+      throw new StackNotFoundError(`Version ${version} not found for record "${id}"`);
     }
 
     // Snapshot current state before restoring
@@ -579,8 +587,9 @@ const DEFAULT_QUERY_LIMIT = 50;
  *
  * Read methods return null for a Record that doesn't exist, and throw
  * StackPermissionError for one that exists but isn't readable by the requester.
- * Write methods throw StackPermissionError for a Record that exists but isn't
- * writable. This lets callers distinguish "not found" from "forbidden".
+ * Write methods throw StackNotFoundError for a missing Record and
+ * StackPermissionError for one that exists but isn't writable. This lets
+ * callers distinguish "not found" from "forbidden".
  */
 export class ScopedStack {
   constructor(
@@ -614,7 +623,7 @@ export class ScopedStack {
   /** Fetch a Record the requester has write access to, or throw. */
   private async requireWritable(id: string): Promise<StackRecord> {
     const existing = await this.stack.get(id, { migrate: false });
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.checkWrite(existing))) throw new StackPermissionError();
     return existing;
   }
@@ -679,14 +688,14 @@ export class ScopedStack {
 
   async getVersions(id: string): Promise<RecordVersion[]> {
     const existing = await this.stack.get(id, { migrate: false });
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.checkRead(existing))) throw new StackPermissionError();
     return this.stack.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
     const existing = await this.stack.get(id, { migrate: false });
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.checkRead(existing))) throw new StackPermissionError();
     return this.stack.getVersion(id, version);
   }

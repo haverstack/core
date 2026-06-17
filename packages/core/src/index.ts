@@ -15,6 +15,7 @@ export {
   StackValidationError,
   StackMigrationError,
   StackPermissionError,
+  StackNotFoundError,
 } from './stack.js';
 export type { CreateRecordOptions, GetRecordOptions, DeleteRecordOptions } from './stack.js';
 
