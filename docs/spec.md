@@ -494,14 +494,14 @@ Authorization: Bearer <token>
 
 Standard HTTP status codes are used throughout:
 
-| Status | Meaning | When |
-| ------ | ------- | ---- |
-| **400** | Bad request | Structurally malformed request — missing a required field, unparseable query parameter, invalid JSON |
-| **401** | Unauthorized | Missing or invalid bearer token |
-| **403** | Forbidden | `StackPermissionError` — record exists but the requester lacks access |
-| **404** | Not found | `StackNotFoundError` — record or version does not exist |
-| **413** | Request entity too large | Attachment upload exceeds the server's size limit |
-| **422** | Unprocessable entity | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type) |
+| Status  | Meaning                  | When                                                                                                                                   |
+| ------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **400** | Bad request              | Structurally malformed request — missing a required field, unparseable query parameter, invalid JSON                                   |
+| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                        |
+| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                  |
+| **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                |
+| **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                      |
+| **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type) |
 
 The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
 
