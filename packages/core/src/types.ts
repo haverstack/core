@@ -180,11 +180,31 @@ export type GroupContent = {
   stackUrl?: string;
 };
 
+/** Actions that can be granted via a _grant record. */
+export type GrantAction =
+  | 'create'
+  | 'read-own'
+  | 'read-any'
+  | 'update-own'
+  | 'update-any'
+  | 'delete-own'
+  | 'delete-any';
+
+/** Content for _grant records */
+export type GrantContent = {
+  /** Which record type the grant applies to. */
+  typeId: TypeId;
+  /** Which actions are permitted. */
+  actions: GrantAction[];
+};
+
 /** Reserved system type IDs */
 export const SYSTEM_TYPES = {
   ENTITY: '_entity',
   APP: '_app',
   GROUP: '_group',
+  /** Creation-permission grants. See GrantContent. */
+  GRANT: '_grant',
 } as const;
 
 // -------------------------------------------------------
@@ -262,7 +282,7 @@ export type Migration = {
 };
 
 // -------------------------------------------------------
-// Adapter capabilities
+// Adapter capabilities / Stack features
 // -------------------------------------------------------
 
 export type AdapterCapabilities = {
@@ -270,6 +290,9 @@ export type AdapterCapabilities = {
   contentFieldQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
 };
+
+/** What a Stack can do, as seen by app and plugin code. */
+export type StackFeatures = AdapterCapabilities;
 
 // -------------------------------------------------------
 // Attachment metadata

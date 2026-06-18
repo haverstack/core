@@ -18,6 +18,7 @@ import { generateId } from './id.js';
 import { hashSchema, isCompatible, parseTypeId } from './schema.js';
 import { validateContent } from './validate.js';
 import { checkAccess } from './access.js';
+import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -32,7 +33,9 @@ import type {
   Migration,
   MigrationFn,
   RecordVersion,
-  AdapterCapabilities,
+  StackFeatures,
+  GrantAction,
+  GrantContent,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -94,10 +97,38 @@ export class StackNotFoundError extends Error {
 }
 
 // -------------------------------------------------------
+// StackClient interface
+// -------------------------------------------------------
+
+/**
+ * The app-facing record API, implemented by both Stack and ScopedStack.
+ * Accept this type in plugin or extension code to remain adapter-agnostic
+ * and work equally well with a full Stack or a permission-scoped view.
+ */
+export interface StackClient {
+  readonly features: StackFeatures;
+  create<T extends Record<string, unknown> = Record<string, unknown>>(
+    typeId: TypeId,
+    content: T,
+    opts?: CreateRecordOptions,
+  ): Promise<StackRecord & { content: T }>;
+  get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  query(query?: StackQuery): Promise<QueryResult>;
+  update(id: string, content: Record<string, unknown | null>): Promise<StackRecord>;
+  associate(id: string, association: Association): Promise<void>;
+  dissociate(id: string, association: Association): Promise<void>;
+  setPermissions(id: string, permissions: Permission[]): Promise<void>;
+  delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
+  getVersions(id: string): Promise<RecordVersion[]>;
+  getVersion(id: string, version: number): Promise<RecordVersion | null>;
+  restoreVersion(id: string, version: number): Promise<StackRecord>;
+}
+
+// -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
 
-export class Stack {
+export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
 
   private constructor(
@@ -114,10 +145,12 @@ export class Stack {
   static async create(adapter: StackAdapter): Promise<Stack> {
     const entityId = await adapter.getConfig('entity_id');
     const timezone = (await adapter.getConfig('timezone')) ?? 'UTC';
-    return new Stack(adapter, entityId, timezone);
+    const stack = new Stack(adapter, entityId, timezone);
+    await stack.seedSystemTypes();
+    return stack;
   }
 
-  get capabilities(): AdapterCapabilities {
+  get features(): StackFeatures {
     return this.adapter.capabilities;
   }
 
@@ -332,9 +365,7 @@ export class Stack {
       content,
       version: 1,
       ...(opts.parentId && { parentId: opts.parentId }),
-      ...(opts.entityId
-        ? { entityId: opts.entityId }
-        : this.ownerEntityId && { entityId: this.ownerEntityId }),
+      ...(opts.entityId && { entityId: opts.entityId }),
       ...(opts.appId && { appId: opts.appId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(opts.associations?.length && { associations: opts.associations }),
@@ -560,8 +591,56 @@ export class Stack {
   }
 
   // -------------------------------------------------------
+  // Grants
+  // -------------------------------------------------------
+
+  /**
+   * Create _grant records that allow entities to call ScopedStack.create()
+   * for specific record types. Pass null as entityId for a default grant
+   * that applies to any authenticated entity.
+   *
+   * The _grant@1 type is defined automatically on first use.
+   */
+  async grant(
+    entityId: string | null,
+    grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
+  ): Promise<StackRecord[]> {
+    const records: StackRecord[] = [];
+    for (const g of grants) {
+      records.push(
+        await this.create(
+          `${SYSTEM_TYPES.GRANT}@1`,
+          { typeId: g.typeId, actions: g.actions },
+          entityId ? { entityId } : {},
+        ),
+      );
+    }
+    return records;
+  }
+
+  // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
+
+  private async seedSystemTypes(): Promise<void> {
+    await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.APP}@1`, 'App', {
+      name: { kind: 'string', required: true },
+      version: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.GROUP}@1`, 'Group', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+      stackUrl: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
+      typeId: { kind: 'string', required: true },
+      actions: { kind: 'array', items: { kind: 'string' }, required: true },
+    });
+  }
 
   private async saveVersion(record: StackRecord): Promise<void> {
     const version: RecordVersion = {
@@ -591,11 +670,15 @@ const DEFAULT_QUERY_LIMIT = 50;
  * StackPermissionError for one that exists but isn't writable. This lets
  * callers distinguish "not found" from "forbidden".
  */
-export class ScopedStack {
+export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: string | null,
   ) {}
+
+  get features(): StackFeatures {
+    return this.stack.features;
+  }
 
   private resolveRecord = (id: string): Promise<StackRecord | null> =>
     this.stack.get(id, { migrate: false });
@@ -620,18 +703,102 @@ export class ScopedStack {
     );
   }
 
-  /** Fetch a Record the requester has write access to, or throw. */
-  private async requireWritable(id: string): Promise<StackRecord> {
-    const existing = await this.stack.get(id, { migrate: false });
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkWrite(existing))) throw new StackPermissionError();
-    return existing;
+  /**
+   * Check whether the requester holds a _grant record covering at least one
+   * of the given actions for the given type. For -own actions, additionally
+   * requires that `record.entityId` matches the requester (authorship check).
+   * Anonymous requesters always return false.
+   */
+  private async hasGrant(
+    typeId: TypeId,
+    actions: GrantAction[],
+    record?: StackRecord,
+    prefetchedGrants?: StackRecord[],
+  ): Promise<boolean> {
+    if (!this.requesterEntityId) return false;
+
+    let grantRecords: StackRecord[];
+    if (prefetchedGrants !== undefined) {
+      grantRecords = prefetchedGrants;
+    } else {
+      const result = await this.stack.query({
+        filter: {
+          typeId: `${SYSTEM_TYPES.GRANT}@1`,
+          ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
+        },
+      });
+      grantRecords = result.records;
+    }
+
+    return grantRecords.some((r) => {
+      const c = r.content as GrantContent;
+      if (c.typeId !== typeId) return false;
+      if (r.entityId && r.entityId !== this.requesterEntityId) return false;
+      return actions.some((action) => {
+        if (!(c.actions as string[]).includes(action)) return false;
+        if (action.endsWith('-own')) return record?.entityId === this.requesterEntityId;
+        return true;
+      });
+    });
+  }
+
+  private async canRead(record: StackRecord, prefetchedGrants?: StackRecord[]): Promise<boolean> {
+    return (
+      (await this.checkRead(record)) ||
+      (await this.hasGrant(record.typeId, ['read-own', 'read-any'], record, prefetchedGrants))
+    );
+  }
+
+  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
+    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+    return this.hasGrant(typeId, ['create']);
+  }
+
+  /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
+  private async requireUpdatable(id: string): Promise<StackRecord> {
+    const record = await this.stack.get(id, { migrate: false });
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    const allowed =
+      (await this.checkWrite(record)) ||
+      (await this.hasGrant(record.typeId, ['update-own', 'update-any'], record));
+    if (!allowed) throw new StackPermissionError();
+    return record;
+  }
+
+  /** Fetch a record the requester can delete (via permissions or a delete grant), or throw. */
+  private async requireDeletable(id: string): Promise<StackRecord> {
+    const record = await this.stack.get(id, { migrate: false });
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    const allowed =
+      (await this.checkWrite(record)) ||
+      (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], record));
+    if (!allowed) throw new StackPermissionError();
+    return record;
+  }
+
+  /**
+   * Create a new record on behalf of the authenticated requester.
+   * Requires either an entity-specific _grant or a default _grant for
+   * the target type. Anonymous requesters (null entityId) are always denied.
+   * The created record's entityId is always set to the requester.
+   */
+  async create<T extends Record<string, unknown> = Record<string, unknown>>(
+    typeId: TypeId,
+    content: T,
+    opts: CreateRecordOptions = {},
+  ): Promise<StackRecord & { content: T }> {
+    const requester = this.requesterEntityId;
+    if (!requester) throw new StackPermissionError('Anonymous requesters cannot create records');
+    if (!(await this.checkCreateGrant(typeId))) {
+      throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
+    return this.stack.create(typeId, content, { ...opts, entityId: requester });
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.checkRead(record))) throw new StackPermissionError();
+    if (!(await this.canRead(record))) throw new StackPermissionError();
     return record;
   }
 
@@ -645,16 +812,23 @@ export class ScopedStack {
    * adapter's cursor can't address a position mid-page).
    *
    * `total` is always null — see the QueryResult.total doc comment.
+   *
+   * Grant records are pre-fetched once before the pagination loop so read
+   * grants don't trigger a separate _grant@1 query per record.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const limit = query.limit ?? DEFAULT_QUERY_LIMIT;
     const records: StackRecord[] = [];
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
 
+    const prefetchedGrants = this.requesterEntityId
+      ? (await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } })).records
+      : undefined;
+
+    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       for (const record of page.records) {
-        if (await this.checkRead(record)) records.push(record);
+        if (await this.canRead(record, prefetchedGrants)) records.push(record);
       }
     } while (records.length < limit && page.cursor);
 
@@ -662,46 +836,46 @@ export class ScopedStack {
   }
 
   async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.update(id, content);
   }
 
   async associate(id: string, association: Association): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.associate(id, association);
   }
 
   async dissociate(id: string, association: Association): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.dissociate(id, association);
   }
 
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.setPermissions(id, permissions);
   }
 
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireDeletable(id);
     return this.stack.delete(id, opts);
   }
 
   async getVersions(id: string): Promise<RecordVersion[]> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersion(id, version);
   }
 
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.restoreVersion(id, version);
   }
 }

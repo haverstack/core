@@ -231,9 +231,9 @@ describe('create', () => {
     expect(record.version).toBe(1);
   });
 
-  test('sets entityId from stack ownerEntityId', async () => {
+  test('does not set entityId when none is supplied (owner-created records are implicitly owner-owned)', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    expect(record.entityId).toBe('owner-123');
+    expect(record.entityId).toBeUndefined();
   });
 
   test('allows overriding entityId via options', async () => {
@@ -586,6 +586,40 @@ describe('flush / close', () => {
 
   test('close() is a no-op when adapter does not implement close', async () => {
     await expect(stack.close()).resolves.toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// grant
+// -------------------------------------------------------
+
+describe('grant', () => {
+  test('creates a grant record for the given entity and type', async () => {
+    const records = await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(records).toHaveLength(1);
+    expect(records[0].entityId).toBe('entity-abc');
+    expect(records[0].content).toEqual({ typeId: NOTE_V1, actions: ['create'] });
+  });
+
+  test('null entityId creates a default grant (no entityId on the record)', async () => {
+    const records = await stack.grant(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(records[0].entityId).toBeUndefined();
+  });
+
+  test('creates multiple grant records in one call', async () => {
+    await stack.defineType(NOTE_V2, 'Note v2', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    const records = await stack.grant('entity-abc', [
+      { actions: ['create'], typeId: NOTE_V1 },
+      { actions: ['create'], typeId: NOTE_V2 },
+    ]);
+    expect(records).toHaveLength(2);
+  });
+
+  test('_grant@1 type is available immediately after Stack.create()', async () => {
+    expect(await stack.getType('_grant@1')).not.toBeNull();
   });
 });
 

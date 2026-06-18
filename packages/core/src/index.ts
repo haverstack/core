@@ -8,7 +8,7 @@
  *   @haverstack/adapter-sqlite
  */
 
-// Core class
+// Core class and client interface
 export {
   Stack,
   ScopedStack,
@@ -17,7 +17,12 @@ export {
   StackPermissionError,
   StackNotFoundError,
 } from './stack.js';
-export type { CreateRecordOptions, GetRecordOptions, DeleteRecordOptions } from './stack.js';
+export type {
+  StackClient,
+  CreateRecordOptions,
+  GetRecordOptions,
+  DeleteRecordOptions,
+} from './stack.js';
 
 // Permissions
 export { checkAccess } from './access.js';
@@ -51,10 +56,13 @@ export type {
   Migration,
   MigrationFn,
   AdapterCapabilities,
+  StackFeatures,
   StackAdapter,
   EntityContent,
   AppContent,
   GroupContent,
+  GrantAction,
+  GrantContent,
 } from './types.js';
 
 export { SYSTEM_TYPES } from './types.js';
