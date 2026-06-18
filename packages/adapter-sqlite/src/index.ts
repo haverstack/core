@@ -365,9 +365,11 @@ const buildOrderClause = (query: StackQuery): string => {
 
 const makeCursor = (record: StackRecord, field: SortField): string => {
   const value =
-    field === 'updatedAt' ? toMs(record.updatedAt)
-    : field === 'version' ? record.version
-    : toMs(record.createdAt);
+    field === 'updatedAt'
+      ? toMs(record.updatedAt)
+      : field === 'version'
+        ? record.version
+        : toMs(record.createdAt);
   return Buffer.from(`${field}|${value}|${record.id}`).toString('base64');
 };
 

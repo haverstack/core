@@ -60,11 +60,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/cache@v4
         with:
-          name: dist
           path: packages/*/dist
+          key: dist-${{ github.sha }}
+      - run: pnpm run build
 
   typecheck:
     needs: build
@@ -79,7 +79,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          name: dist
+          path: packages/*/dist
+          key: dist-${{ github.sha }}
+          fail-on-cache-miss: true
       - run: pnpm run typecheck
