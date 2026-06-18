@@ -1,139 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack, StackValidationError, StackMigrationError } from '../src/stack.js';
-import type {
-  StackAdapter,
-  StackRecord,
-  StackType,
-  TypeId,
-  RecordVersion,
-  StackQuery,
-  QueryResult,
-  Association,
-  AdapterCapabilities,
-  AttachmentMeta,
-} from '../src/types.js';
-
-// -------------------------------------------------------
-// Mock adapter
-// -------------------------------------------------------
-
-class MockAdapter implements StackAdapter {
-  readonly capabilities: AdapterCapabilities = {
-    fullTextSearch: false,
-    contentFieldQuery: false,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-  };
-
-  readonly records = new Map<string, StackRecord>();
-  readonly versions = new Map<string, RecordVersion[]>();
-  readonly types = new Map<string, StackType>();
-  readonly config = new Map<string, string>([
-    ['entity_id', 'owner-123'],
-    ['timezone', 'UTC'],
-  ]);
-
-  async getConfig(key: string) {
-    return this.config.get(key) ?? null;
-  }
-  async setConfig(key: string, value: string) {
-    this.config.set(key, value);
-  }
-
-  async createRecord(record: StackRecord) {
-    this.records.set(record.id, { ...record });
-    return record;
-  }
-
-  async getRecord(id: string) {
-    return this.records.get(id) ?? null;
-  }
-
-  async updateRecord(id: string, changes: Partial<StackRecord>) {
-    const existing = this.records.get(id);
-    if (!existing) throw new Error(`Not found: ${id}`);
-    const updated = { ...existing, ...changes };
-    this.records.set(id, updated);
-    return updated;
-  }
-
-  async deleteRecord(id: string, opts: { hard?: boolean } = {}) {
-    if (opts.hard) {
-      this.records.delete(id);
-      this.versions.delete(id);
-    } else {
-      const record = this.records.get(id);
-      if (record) this.records.set(id, { ...record, deletedAt: new Date() });
-    }
-  }
-
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
-    const f = query.filter ?? {};
-    let results = [...this.records.values()];
-    if (!f.includeDeleted) results = results.filter((r) => !r.deletedAt);
-    if (f.typeId) {
-      const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-      results = results.filter((r) => ids.includes(r.typeId));
-    }
-    if (f.parentId !== undefined) {
-      results =
-        f.parentId === null
-          ? results.filter((r) => !r.parentId)
-          : results.filter((r) => r.parentId === f.parentId);
-    }
-    return { records: results, cursor: null, total: results.length };
-  }
-
-  async associate(id: string, association: Association) {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
-    const assocs = record.associations ?? [];
-    this.records.set(id, { ...record, associations: [...assocs, association] });
-  }
-
-  async dissociate(id: string, association: Association) {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
-    const assocs = (record.associations ?? []).filter(
-      (a) => !(a.kind === association.kind && a.label === association.label),
-    );
-    this.records.set(id, { ...record, associations: assocs });
-  }
-
-  async getVersions(id: string) {
-    return this.versions.get(id) ?? [];
-  }
-  async getVersion(id: string, version: number) {
-    return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
-  }
-  async saveVersion(id: string, version: RecordVersion) {
-    const existing = this.versions.get(id) ?? [];
-    this.versions.set(id, [...existing, version]);
-  }
-
-  async saveType(type: StackType) {
-    this.types.set(type.id, type);
-  }
-  async getType(id: TypeId) {
-    return this.types.get(id) ?? null;
-  }
-  async listTypes() {
-    return [...this.types.values()];
-  }
-
-  async putAttachment(_data: Uint8Array, _mimeType: string) {
-    return 'file-123';
-  }
-  async getAttachment(_fileId: string): Promise<Uint8Array> {
-    return new Uint8Array();
-  }
-  async getAttachmentMeta(_fileId: string): Promise<AttachmentMeta | null> {
-    return null;
-  }
-  async deleteAttachment(_fileId: string) {}
-
-  flush?: () => Promise<void>;
-  close?: () => Promise<void>;
-}
+import { MemoryAdapter } from '../src/testing.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -143,11 +10,11 @@ const NOTE_V1 = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';
 const NOTE_V3 = 'com.example.test/note@3';
 
-let adapter: MockAdapter;
+let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new MockAdapter();
+  adapter = new MemoryAdapter({ entity_id: 'owner-123', timezone: 'UTC' });
   stack = await Stack.create(adapter);
 
   await stack.defineType(NOTE_V1, 'Note', {
@@ -169,15 +36,13 @@ describe('Stack.create', () => {
   });
 
   test('ownerEntityId is null if not set in config', async () => {
-    const emptyAdapter = new MockAdapter();
-    emptyAdapter.config.delete('entity_id');
+    const emptyAdapter = new MemoryAdapter();
     const s = await Stack.create(emptyAdapter);
     expect(s.ownerEntityId).toBeNull();
   });
 
   test('timezone defaults to UTC if not set in config', async () => {
-    const emptyAdapter = new MockAdapter();
-    emptyAdapter.config.delete('timezone');
+    const emptyAdapter = new MemoryAdapter();
     const s = await Stack.create(emptyAdapter);
     expect(s.timezone).toBe('UTC');
   });
