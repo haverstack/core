@@ -231,9 +231,9 @@ describe('create', () => {
     expect(record.version).toBe(1);
   });
 
-  test('sets entityId from stack ownerEntityId', async () => {
+  test('does not set entityId when none is supplied (owner-created records are implicitly owner-owned)', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    expect(record.entityId).toBe('owner-123');
+    expect(record.entityId).toBeUndefined();
   });
 
   test('allows overriding entityId via options', async () => {

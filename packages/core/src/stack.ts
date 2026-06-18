@@ -44,8 +44,7 @@ import type {
 
 export type CreateRecordOptions = {
   parentId?: string;
-  /** Explicit null means no entityId — skips the ownerEntityId fallback. */
-  entityId?: string | null;
+  entityId?: string;
   appId?: string;
   permissions?: Permission[];
   associations?: Association[];
@@ -358,7 +357,6 @@ export class Stack implements StackClient {
     }
 
     const now = new Date();
-    const resolvedEntityId = opts.entityId !== undefined ? opts.entityId : this.ownerEntityId;
     const record: StackRecord = {
       id: generateId(),
       typeId,
@@ -367,7 +365,7 @@ export class Stack implements StackClient {
       content,
       version: 1,
       ...(opts.parentId && { parentId: opts.parentId }),
-      ...(resolvedEntityId != null ? { entityId: resolvedEntityId } : {}),
+      ...(opts.entityId && { entityId: opts.entityId }),
       ...(opts.appId && { appId: opts.appId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(opts.associations?.length && { associations: opts.associations }),
@@ -613,7 +611,7 @@ export class Stack implements StackClient {
         await this.create(
           `${SYSTEM_TYPES.GRANT}@1`,
           { typeId: g.typeId, actions: g.actions },
-          { entityId },
+          entityId ? { entityId } : {},
         ),
       );
     }
