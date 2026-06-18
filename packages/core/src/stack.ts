@@ -33,7 +33,6 @@ import type {
   Migration,
   MigrationFn,
   RecordVersion,
-  AdapterCapabilities,
   StackFeatures,
   GrantAction,
   GrantContent,
