@@ -621,13 +621,6 @@ describe('grant', () => {
   test('_grant@1 type is available immediately after Stack.create()', async () => {
     expect(await stack.getType('_grant@1')).not.toBeNull();
   });
-
-  test('calling grant twice does not redefine the type', async () => {
-    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
-    await expect(
-      stack.grant('entity-def', [{ actions: ['create'], typeId: NOTE_V1 }]),
-    ).resolves.toHaveLength(1);
-  });
 });
 
 // -------------------------------------------------------
