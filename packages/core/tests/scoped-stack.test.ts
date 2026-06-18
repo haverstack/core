@@ -1,5 +1,10 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack, StackPermissionError, StackNotFoundError, StackValidationError } from '../src/stack.js';
+import {
+  Stack,
+  StackPermissionError,
+  StackNotFoundError,
+  StackValidationError,
+} from '../src/stack.js';
 import { generateId } from '../src/id.js';
 import type {
   StackAdapter,
@@ -478,8 +483,8 @@ describe('ScopedStack.create', () => {
 
   test('content validation still runs after grant check', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
-    await expect(
-      stack.asEntity(MEMBER).create(COMMENT, {} as { text: string }),
-    ).rejects.toThrow(StackValidationError);
+    await expect(stack.asEntity(MEMBER).create(COMMENT, {} as { text: string })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 });
