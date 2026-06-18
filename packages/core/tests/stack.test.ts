@@ -618,8 +618,7 @@ describe('grant', () => {
     expect(records).toHaveLength(2);
   });
 
-  test('auto-defines the _grant@1 type on first use', async () => {
-    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+  test('_grant@1 type is available immediately after Stack.create()', async () => {
     expect(await stack.getType('_grant@1')).not.toBeNull();
   });
 

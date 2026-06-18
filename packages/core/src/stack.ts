@@ -44,7 +44,8 @@ import type {
 
 export type CreateRecordOptions = {
   parentId?: string;
-  entityId?: string;
+  /** Explicit null means no entityId — skips the ownerEntityId fallback. */
+  entityId?: string | null;
   appId?: string;
   permissions?: Permission[];
   associations?: Association[];
@@ -145,7 +146,9 @@ export class Stack implements StackClient {
   static async create(adapter: StackAdapter): Promise<Stack> {
     const entityId = await adapter.getConfig('entity_id');
     const timezone = (await adapter.getConfig('timezone')) ?? 'UTC';
-    return new Stack(adapter, entityId, timezone);
+    const stack = new Stack(adapter, entityId, timezone);
+    await stack.seedSystemTypes();
+    return stack;
   }
 
   get features(): StackFeatures {
@@ -355,6 +358,7 @@ export class Stack implements StackClient {
     }
 
     const now = new Date();
+    const resolvedEntityId = opts.entityId !== undefined ? opts.entityId : this.ownerEntityId;
     const record: StackRecord = {
       id: generateId(),
       typeId,
@@ -363,9 +367,7 @@ export class Stack implements StackClient {
       content,
       version: 1,
       ...(opts.parentId && { parentId: opts.parentId }),
-      ...(opts.entityId
-        ? { entityId: opts.entityId }
-        : this.ownerEntityId && { entityId: this.ownerEntityId }),
+      ...(resolvedEntityId != null ? { entityId: resolvedEntityId } : {}),
       ...(opts.appId && { appId: opts.appId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(opts.associations?.length && { associations: opts.associations }),
@@ -605,30 +607,15 @@ export class Stack implements StackClient {
     entityId: string | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
-    const grantTypeId = `${SYSTEM_TYPES.GRANT}@1`;
-    if (!(await this.adapter.getType(grantTypeId))) {
-      await this.defineType(grantTypeId, 'Grant', {
-        typeId: { kind: 'string', required: true },
-        actions: { kind: 'array', items: { kind: 'string' }, required: true },
-      });
-    }
     const records: StackRecord[] = [];
     for (const g of grants) {
-      const now = new Date();
-      // Build the record directly rather than going through this.create() so
-      // that a null entityId produces a record with no entityId field — the
-      // signal that the grant is a default (applies to any authenticated entity).
-      // this.create() always falls back to ownerEntityId when entityId is absent.
-      const record: StackRecord = {
-        id: generateId(),
-        typeId: grantTypeId,
-        createdAt: now,
-        updatedAt: now,
-        content: { typeId: g.typeId, actions: g.actions },
-        version: 1,
-        ...(entityId ? { entityId } : {}),
-      };
-      records.push(await this.adapter.createRecord(record));
+      records.push(
+        await this.create(
+          `${SYSTEM_TYPES.GRANT}@1`,
+          { typeId: g.typeId, actions: g.actions },
+          { entityId },
+        ),
+      );
     }
     return records;
   }
@@ -636,6 +623,26 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
+
+  private async seedSystemTypes(): Promise<void> {
+    await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.APP}@1`, 'App', {
+      name: { kind: 'string', required: true },
+      version: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.GROUP}@1`, 'Group', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+      stackUrl: { kind: 'string' },
+    });
+    await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
+      typeId: { kind: 'string', required: true },
+      actions: { kind: 'array', items: { kind: 'string' }, required: true },
+    });
+  }
 
   private async saveVersion(record: StackRecord): Promise<void> {
     const version: RecordVersion = {
