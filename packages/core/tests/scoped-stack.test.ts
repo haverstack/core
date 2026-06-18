@@ -488,3 +488,76 @@ describe('ScopedStack.create', () => {
     );
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack — grant-based update/delete
+// -------------------------------------------------------
+
+describe('ScopedStack — grant-based update/delete', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+  });
+
+  test('update-own: entity can update a record they authored', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: MEMBER });
+    const updated = await stack.asEntity(MEMBER).update(record.id, { text: 'edited' });
+    expect(updated.content.text).toBe('edited');
+  });
+
+  test('update-own: entity cannot update a record authored by someone else', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('update-any: entity can update records regardless of authorship', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    const updated = await stack.asEntity(MEMBER).update(record.id, { text: 'edited' });
+    expect(updated.content.text).toBe('edited');
+  });
+
+  test('delete-own: entity can delete a record they authored', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    await stack.asEntity(MEMBER).delete(record.id);
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('delete-own: entity cannot delete a record authored by someone else', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    await expect(stack.asEntity(MEMBER).delete(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('delete-any: entity can delete records regardless of authorship', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    await stack.asEntity(MEMBER).delete(record.id);
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('update grant does not allow delete', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    await expect(stack.asEntity(MEMBER).delete(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('delete grant does not allow update', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('default grant (null entityId) applies update-own to any authenticated entity', async () => {
+    await stack.grant(null, [{ actions: ['update-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    const updated = await stack.asEntity(STRANGER).update(record.id, { text: 'edited' });
+    expect(updated.content.text).toBe('edited');
+  });
+});

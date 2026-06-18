@@ -705,26 +705,22 @@ export class ScopedStack implements StackClient {
     );
   }
 
-  /** Fetch a Record the requester has write access to, or throw. */
-  private async requireWritable(id: string): Promise<StackRecord> {
-    const existing = await this.stack.get(id, { migrate: false });
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkWrite(existing))) throw new StackPermissionError();
-    return existing;
-  }
-
   /**
-   * Check whether the requester has a _grant record permitting them to
-   * create records of the given type. The owner always passes. Any
-   * authenticated entity passes if a default grant (no entityId) exists.
+   * Check whether the requester holds a _grant record covering at least one
+   * of the given actions for the given type. For -own actions, additionally
+   * requires that `record.entityId` matches the requester (authorship check).
+   * Anonymous requesters always return false.
    */
-  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+  private async hasGrant(
+    typeId: TypeId,
+    actions: GrantAction[],
+    record?: StackRecord,
+  ): Promise<boolean> {
+    if (!this.requesterEntityId) return false;
 
-    const grantTypeId = `${SYSTEM_TYPES.GRANT}@1`;
     const result = await this.stack.query({
       filter: {
-        typeId: grantTypeId,
+        typeId: `${SYSTEM_TYPES.GRANT}@1`,
         ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
       },
     });
@@ -732,9 +728,40 @@ export class ScopedStack implements StackClient {
     return result.records.some((r) => {
       const c = r.content as GrantContent;
       if (c.typeId !== typeId) return false;
-      if (!(c.actions as string[]).includes('create')) return false;
-      return !r.entityId || r.entityId === this.requesterEntityId;
+      if (r.entityId && r.entityId !== this.requesterEntityId) return false;
+      return actions.some((action) => {
+        if (!(c.actions as string[]).includes(action)) return false;
+        if (action.endsWith('-own')) return record?.entityId === this.requesterEntityId;
+        return true;
+      });
     });
+  }
+
+  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
+    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+    return this.hasGrant(typeId, ['create']);
+  }
+
+  /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
+  private async requireUpdatable(id: string): Promise<StackRecord> {
+    const record = await this.stack.get(id, { migrate: false });
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    const allowed =
+      (await this.checkWrite(record)) ||
+      (await this.hasGrant(record.typeId, ['update-own', 'update-any'], record));
+    if (!allowed) throw new StackPermissionError();
+    return record;
+  }
+
+  /** Fetch a record the requester can delete (via permissions or a delete grant), or throw. */
+  private async requireDeletable(id: string): Promise<StackRecord> {
+    const record = await this.stack.get(id, { migrate: false });
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    const allowed =
+      (await this.checkWrite(record)) ||
+      (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], record));
+    if (!allowed) throw new StackPermissionError();
+    return record;
   }
 
   /**
@@ -790,27 +817,27 @@ export class ScopedStack implements StackClient {
   }
 
   async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.update(id, content);
   }
 
   async associate(id: string, association: Association): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.associate(id, association);
   }
 
   async dissociate(id: string, association: Association): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.dissociate(id, association);
   }
 
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.setPermissions(id, permissions);
   }
 
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
-    await this.requireWritable(id);
+    await this.requireDeletable(id);
     return this.stack.delete(id, opts);
   }
 
@@ -829,7 +856,7 @@ export class ScopedStack implements StackClient {
   }
 
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
-    await this.requireWritable(id);
+    await this.requireUpdatable(id);
     return this.stack.restoreVersion(id, version);
   }
 }
