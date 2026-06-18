@@ -181,7 +181,14 @@ export type GroupContent = {
 };
 
 /** Actions that can be granted via a _grant record. */
-export type GrantAction = 'create' | 'update-own' | 'update-any' | 'delete-own' | 'delete-any';
+export type GrantAction =
+  | 'create'
+  | 'read-own'
+  | 'read-any'
+  | 'update-own'
+  | 'update-any'
+  | 'delete-own'
+  | 'delete-any';
 
 /** Content for _grant records */
 export type GrantContent = {

@@ -490,6 +490,70 @@ describe('ScopedStack.create', () => {
 });
 
 // -------------------------------------------------------
+// ScopedStack — grant-based read
+// -------------------------------------------------------
+
+describe('ScopedStack — grant-based read', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+  });
+
+  test('read-any: entity can read private records of the granted type', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+  });
+
+  test('read-any: does not grant access to other types', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const note = await stack.create(NOTE, { text: 'private note' });
+    await expect(stack.asEntity(MEMBER).get(note.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('read-own: entity can read records they authored', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+  });
+
+  test('read-own: entity cannot read records authored by someone else', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-own'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    await expect(stack.asEntity(MEMBER).get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('default read-any grant allows any authenticated entity to read', async () => {
+    await stack.grant(null, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    expect((await stack.asEntity(STRANGER).get(record.id))?.id).toBe(record.id);
+  });
+
+  test('read grant is visible in query() results', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    await stack.create(COMMENT, { text: 'a' });
+    await stack.create(COMMENT, { text: 'b' });
+    const result = await stack.asEntity(MEMBER).query({ filter: { typeId: COMMENT } });
+    expect(result.records).toHaveLength(2);
+  });
+
+  test('query() filters out types not covered by the read grant', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    await stack.create(COMMENT, { text: 'visible' });
+    await stack.create(NOTE, { text: 'hidden' });
+    const result = await stack.asEntity(MEMBER).query();
+    expect(result.records.every((r) => r.typeId === COMMENT)).toBe(true);
+  });
+
+  test('read grant does not grant write access', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+});
+
+// -------------------------------------------------------
 // ScopedStack — grant-based update/delete
 // -------------------------------------------------------
 

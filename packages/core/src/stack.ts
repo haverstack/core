@@ -715,17 +715,24 @@ export class ScopedStack implements StackClient {
     typeId: TypeId,
     actions: GrantAction[],
     record?: StackRecord,
+    prefetchedGrants?: StackRecord[],
   ): Promise<boolean> {
     if (!this.requesterEntityId) return false;
 
-    const result = await this.stack.query({
-      filter: {
-        typeId: `${SYSTEM_TYPES.GRANT}@1`,
-        ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
-      },
-    });
+    let grantRecords: StackRecord[];
+    if (prefetchedGrants !== undefined) {
+      grantRecords = prefetchedGrants;
+    } else {
+      const result = await this.stack.query({
+        filter: {
+          typeId: `${SYSTEM_TYPES.GRANT}@1`,
+          ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
+        },
+      });
+      grantRecords = result.records;
+    }
 
-    return result.records.some((r) => {
+    return grantRecords.some((r) => {
       const c = r.content as GrantContent;
       if (c.typeId !== typeId) return false;
       if (r.entityId && r.entityId !== this.requesterEntityId) return false;
@@ -735,6 +742,13 @@ export class ScopedStack implements StackClient {
         return true;
       });
     });
+  }
+
+  private async canRead(record: StackRecord, prefetchedGrants?: StackRecord[]): Promise<boolean> {
+    return (
+      (await this.checkRead(record)) ||
+      (await this.hasGrant(record.typeId, ['read-own', 'read-any'], record, prefetchedGrants))
+    );
   }
 
   private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
@@ -786,7 +800,7 @@ export class ScopedStack implements StackClient {
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.checkRead(record))) throw new StackPermissionError();
+    if (!(await this.canRead(record))) throw new StackPermissionError();
     return record;
   }
 
@@ -800,16 +814,23 @@ export class ScopedStack implements StackClient {
    * adapter's cursor can't address a position mid-page).
    *
    * `total` is always null — see the QueryResult.total doc comment.
+   *
+   * Grant records are pre-fetched once before the pagination loop so read
+   * grants don't trigger a separate _grant@1 query per record.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const limit = query.limit ?? DEFAULT_QUERY_LIMIT;
     const records: StackRecord[] = [];
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
 
+    const prefetchedGrants = this.requesterEntityId
+      ? (await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } })).records
+      : undefined;
+
+    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       for (const record of page.records) {
-        if (await this.checkRead(record)) records.push(record);
+        if (await this.canRead(record, prefetchedGrants)) records.push(record);
       }
     } while (records.length < limit && page.cursor);
 
@@ -844,14 +865,14 @@ export class ScopedStack implements StackClient {
   async getVersions(id: string): Promise<RecordVersion[]> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
     const existing = await this.stack.get(id, { migrate: false });
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.checkRead(existing))) throw new StackPermissionError();
+    if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersion(id, version);
   }
 
