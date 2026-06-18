@@ -225,6 +225,13 @@ const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
 // Query building
 // -------------------------------------------------------
 
+type SortField = 'createdAt' | 'updatedAt' | 'version';
+
+const getSortField = (query: StackQuery): SortField => query.sort?.field ?? 'createdAt';
+
+const getSortColumn = (field: SortField): string =>
+  field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
+
 const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -329,13 +336,19 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
     params.push(f.search);
   }
 
-  // Cursor (created_at + id for stable pagination)
+  // Cursor (sort-field value + id for stable pagination)
   if (query.cursor) {
-    const [cursorTs, cursorId] = Buffer.from(query.cursor, 'base64').toString().split('|');
+    const parts = Buffer.from(query.cursor, 'base64').toString().split('|');
+    // New format: field|value|id (3 parts). Legacy format: value|id (2 parts, implies createdAt).
+    const [cursorField, cursorValue, cursorId] =
+      parts.length === 3
+        ? (parts as [string, string, string])
+        : (['createdAt', parts[0], parts[1]] as [string, string, string]);
+    const col = getSortColumn(cursorField as SortField);
     const sortDir = query.sort?.direction ?? 'desc';
     const op = sortDir === 'asc' ? '>' : '<';
-    conditions.push(`(r.created_at ${op} ? OR (r.created_at = ? AND r.id ${op} ?))`);
-    params.push(Number(cursorTs), Number(cursorTs), cursorId);
+    conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
+    params.push(Number(cursorValue), Number(cursorValue), cursorId);
   }
 
   return {
@@ -345,14 +358,20 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
 };
 
 const buildOrderClause = (query: StackQuery): string => {
-  const field = query.sort?.field ?? 'created_at';
+  const field = getSortField(query);
   const dir = (query.sort?.direction ?? 'desc').toUpperCase();
-  const col = field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : field;
-  return `ORDER BY r.${col} ${dir}, r.id ${dir}`;
+  return `ORDER BY r.${getSortColumn(field)} ${dir}, r.id ${dir}`;
 };
 
-const makeCursor = (record: StackRecord): string =>
-  Buffer.from(`${toMs(record.createdAt)}|${record.id}`).toString('base64');
+const makeCursor = (record: StackRecord, field: SortField): string => {
+  const value =
+    field === 'updatedAt'
+      ? toMs(record.updatedAt)
+      : field === 'version'
+        ? record.version
+        : toMs(record.createdAt);
+  return Buffer.from(`${field}|${value}|${record.id}`).toString('base64');
+};
 
 // -------------------------------------------------------
 // SQLite adapter
@@ -626,7 +645,7 @@ export class SQLiteAdapter implements StackAdapter {
     const total = countRows[0]?.total ?? 0;
 
     const lastRecord = records[records.length - 1];
-    const cursor = hasMore && lastRecord ? makeCursor(lastRecord) : null;
+    const cursor = hasMore && lastRecord ? makeCursor(lastRecord, getSortField(query)) : null;
 
     return { records, cursor, total };
   }
