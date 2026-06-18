@@ -560,6 +560,78 @@ describe('records — queries', () => {
     expect([...page1Ids].filter((id) => page2Ids.has(id)).length).toBe(0);
   });
 
+  test('cursor pagination works correctly when sorted by updatedAt', async () => {
+    const adapter = await initAdapter();
+    // createdAt and updatedAt are in opposite order so a cursor keyed on the
+    // wrong field would return the wrong page.
+    // updatedAt asc order: r5(1000), r4(2000), r3(3000), r2(4000), r1(5000)
+    // createdAt asc order: r1(1000), r2(2000), r3(3000), r4(4000), r5(5000)
+    for (let i = 1; i <= 5; i++) {
+      await adapter.createRecord(
+        makeRecord({
+          id: `r${i}`,
+          createdAt: new Date(i * 1000),
+          updatedAt: new Date((6 - i) * 1000),
+        }),
+      );
+    }
+
+    const page1 = await adapter.queryRecords({
+      sort: { field: 'updatedAt', direction: 'asc' },
+      limit: 3,
+    });
+    expect(page1.records.length).toBe(3);
+    expect(page1.cursor).not.toBeNull();
+
+    const page2 = await adapter.queryRecords({
+      sort: { field: 'updatedAt', direction: 'asc' },
+      limit: 3,
+      cursor: page1.cursor!,
+    });
+    expect(page2.records.length).toBe(2);
+    expect(page2.cursor).toBeNull();
+
+    // Together they must cover all 5 records with no overlap or gap.
+    const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
+    expect(allIds.size).toBe(5);
+  });
+
+  test('cursor pagination works correctly when sorted by version', async () => {
+    const adapter = await initAdapter();
+    // version and createdAt are in opposite order so a cursor keyed on the
+    // wrong field would return the wrong page.
+    // version asc order: r5(v1), r4(v2), r3(v3), r2(v4), r1(v5)
+    // createdAt asc order: r1, r2, r3, r4, r5
+    for (let i = 1; i <= 5; i++) {
+      await adapter.createRecord(
+        makeRecord({
+          id: `r${i}`,
+          createdAt: new Date(i * 1000),
+          version: 6 - i,
+        }),
+      );
+    }
+
+    const page1 = await adapter.queryRecords({
+      sort: { field: 'version', direction: 'asc' },
+      limit: 3,
+    });
+    expect(page1.records.length).toBe(3);
+    expect(page1.cursor).not.toBeNull();
+
+    const page2 = await adapter.queryRecords({
+      sort: { field: 'version', direction: 'asc' },
+      limit: 3,
+      cursor: page1.cursor!,
+    });
+    expect(page2.records.length).toBe(2);
+    expect(page2.cursor).toBeNull();
+
+    // Together they must cover all 5 records with no overlap or gap.
+    const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
+    expect(allIds.size).toBe(5);
+  });
+
   test('sort by createdAt descending (default)', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', createdAt: new Date(1000) }));
