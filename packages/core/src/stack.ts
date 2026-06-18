@@ -18,6 +18,7 @@ import { generateId } from './id.js';
 import { hashSchema, isCompatible, parseTypeId } from './schema.js';
 import { validateContent } from './validate.js';
 import { checkAccess } from './access.js';
+import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -33,6 +34,8 @@ import type {
   MigrationFn,
   RecordVersion,
   AdapterCapabilities,
+  GrantAction,
+  GrantContent,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -94,10 +97,37 @@ export class StackNotFoundError extends Error {
 }
 
 // -------------------------------------------------------
+// StackClient interface
+// -------------------------------------------------------
+
+/**
+ * The app-facing record API, implemented by both Stack and ScopedStack.
+ * Accept this type in plugin or extension code to remain adapter-agnostic
+ * and work equally well with a full Stack or a permission-scoped view.
+ */
+export interface StackClient {
+  create<T extends Record<string, unknown> = Record<string, unknown>>(
+    typeId: TypeId,
+    content: T,
+    opts?: CreateRecordOptions,
+  ): Promise<StackRecord & { content: T }>;
+  get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  query(query?: StackQuery): Promise<QueryResult>;
+  update(id: string, content: Record<string, unknown | null>): Promise<StackRecord>;
+  associate(id: string, association: Association): Promise<void>;
+  dissociate(id: string, association: Association): Promise<void>;
+  setPermissions(id: string, permissions: Permission[]): Promise<void>;
+  delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
+  getVersions(id: string): Promise<RecordVersion[]>;
+  getVersion(id: string, version: number): Promise<RecordVersion | null>;
+  restoreVersion(id: string, version: number): Promise<StackRecord>;
+}
+
+// -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
 
-export class Stack {
+export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
 
   private constructor(
@@ -560,6 +590,49 @@ export class Stack {
   }
 
   // -------------------------------------------------------
+  // Grants
+  // -------------------------------------------------------
+
+  /**
+   * Create _grant records that allow entities to call ScopedStack.create()
+   * for specific record types. Pass null as entityId for a default grant
+   * that applies to any authenticated entity.
+   *
+   * The _grant@1 type is defined automatically on first use.
+   */
+  async grant(
+    entityId: string | null,
+    grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
+  ): Promise<StackRecord[]> {
+    const grantTypeId = `${SYSTEM_TYPES.GRANT}@1`;
+    if (!(await this.adapter.getType(grantTypeId))) {
+      await this.defineType(grantTypeId, 'Grant', {
+        typeId: { kind: 'string', required: true },
+        actions: { kind: 'array', items: { kind: 'string' }, required: true },
+      });
+    }
+    const records: StackRecord[] = [];
+    for (const g of grants) {
+      const now = new Date();
+      // Build the record directly rather than going through this.create() so
+      // that a null entityId produces a record with no entityId field — the
+      // signal that the grant is a default (applies to any authenticated entity).
+      // this.create() always falls back to ownerEntityId when entityId is absent.
+      const record: StackRecord = {
+        id: generateId(),
+        typeId: grantTypeId,
+        createdAt: now,
+        updatedAt: now,
+        content: { typeId: g.typeId, actions: g.actions },
+        version: 1,
+        ...(entityId ? { entityId } : {}),
+      };
+      records.push(await this.adapter.createRecord(record));
+    }
+    return records;
+  }
+
+  // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
 
@@ -591,7 +664,7 @@ const DEFAULT_QUERY_LIMIT = 50;
  * StackPermissionError for one that exists but isn't writable. This lets
  * callers distinguish "not found" from "forbidden".
  */
-export class ScopedStack {
+export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: string | null,
@@ -626,6 +699,49 @@ export class ScopedStack {
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.checkWrite(existing))) throw new StackPermissionError();
     return existing;
+  }
+
+  /**
+   * Check whether the requester has a _grant record permitting them to
+   * create records of the given type. The owner always passes. Any
+   * authenticated entity passes if a default grant (no entityId) exists.
+   */
+  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
+    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+
+    const grantTypeId = `${SYSTEM_TYPES.GRANT}@1`;
+    const result = await this.stack.query({
+      filter: {
+        typeId: grantTypeId,
+        ...(this.stack.capabilities.contentFieldQuery && { content: { typeId } }),
+      },
+    });
+
+    return result.records.some((r) => {
+      const c = r.content as GrantContent;
+      if (c.typeId !== typeId) return false;
+      if (!(c.actions as string[]).includes('create')) return false;
+      return !r.entityId || r.entityId === this.requesterEntityId;
+    });
+  }
+
+  /**
+   * Create a new record on behalf of the authenticated requester.
+   * Requires either an entity-specific _grant or a default _grant for
+   * the target type. Anonymous requesters (null entityId) are always denied.
+   * The created record's entityId is always set to the requester.
+   */
+  async create<T extends Record<string, unknown> = Record<string, unknown>>(
+    typeId: TypeId,
+    content: T,
+    opts: CreateRecordOptions = {},
+  ): Promise<StackRecord & { content: T }> {
+    const requester = this.requesterEntityId;
+    if (!requester) throw new StackPermissionError('Anonymous requesters cannot create records');
+    if (!(await this.checkCreateGrant(typeId))) {
+      throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
+    return this.stack.create(typeId, content, { ...opts, entityId: requester });
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {

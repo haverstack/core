@@ -590,6 +590,48 @@ describe('flush / close', () => {
 });
 
 // -------------------------------------------------------
+// grant
+// -------------------------------------------------------
+
+describe('grant', () => {
+  test('creates a grant record for the given entity and type', async () => {
+    const records = await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(records).toHaveLength(1);
+    expect(records[0].entityId).toBe('entity-abc');
+    expect(records[0].content).toEqual({ typeId: NOTE_V1, actions: ['create'] });
+  });
+
+  test('null entityId creates a default grant (no entityId on the record)', async () => {
+    const records = await stack.grant(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(records[0].entityId).toBeUndefined();
+  });
+
+  test('creates multiple grant records in one call', async () => {
+    await stack.defineType(NOTE_V2, 'Note v2', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    const records = await stack.grant('entity-abc', [
+      { actions: ['create'], typeId: NOTE_V1 },
+      { actions: ['create'], typeId: NOTE_V2 },
+    ]);
+    expect(records).toHaveLength(2);
+  });
+
+  test('auto-defines the _grant@1 type on first use', async () => {
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.getType('_grant@1')).not.toBeNull();
+  });
+
+  test('calling grant twice does not redefine the type', async () => {
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await expect(
+      stack.grant('entity-def', [{ actions: ['create'], typeId: NOTE_V1 }]),
+    ).resolves.toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
 // associate / dissociate
 // -------------------------------------------------------
 

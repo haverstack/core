@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack, StackPermissionError, StackNotFoundError } from '../src/stack.js';
+import { Stack, StackPermissionError, StackNotFoundError, StackValidationError } from '../src/stack.js';
 import { generateId } from '../src/id.js';
 import type {
   StackAdapter,
@@ -169,6 +169,8 @@ beforeEach(async () => {
   stack = await Stack.create(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text' } });
 });
+
+const COMMENT = 'com.example.test/comment@1';
 
 // -------------------------------------------------------
 // Read access
@@ -404,5 +406,80 @@ describe('ScopedStack.query', () => {
     const result = await stack.asEntity(null).query({ limit: 2 });
     expect(result.records).toHaveLength(3);
     expect(result.cursor).toBeNull();
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack.create — grant-based creation
+// -------------------------------------------------------
+
+describe('ScopedStack.create', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+  });
+
+  test('owner can always create records via ScopedStack', async () => {
+    const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
+    expect(record.typeId).toBe(COMMENT);
+    expect(record.entityId).toBe(OWNER);
+  });
+
+  test('anonymous requester cannot create records', async () => {
+    await expect(stack.asEntity(null).create(COMMENT, { text: 'hello' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('authenticated entity without a grant cannot create records', async () => {
+    await expect(stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('entity with an entity-specific grant can create the granted type', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
+    expect(record.typeId).toBe(COMMENT);
+    expect(record.entityId).toBe(MEMBER);
+  });
+
+  test('entity cannot create a type other than the one granted', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(stack.asEntity(MEMBER).create(NOTE, { text: 'sneaky' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('default grant (null entityId) allows any authenticated entity to create', async () => {
+    await stack.grant(null, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack.asEntity(STRANGER).create(COMMENT, { text: 'hello' });
+    expect(record.entityId).toBe(STRANGER);
+  });
+
+  test('default grant does not apply to anonymous requesters', async () => {
+    await stack.grant(null, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(stack.asEntity(null).create(COMMENT, { text: 'hello' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('entity without a specific grant is not helped by a grant for a different entity', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(stack.asEntity(STRANGER).create(COMMENT, { text: 'hello' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('created record always carries the requester entityId', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
+    expect(record.entityId).toBe(MEMBER);
+  });
+
+  test('content validation still runs after grant check', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(
+      stack.asEntity(MEMBER).create(COMMENT, {} as { text: string }),
+    ).rejects.toThrow(StackValidationError);
   });
 });
