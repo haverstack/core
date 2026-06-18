@@ -125,17 +125,17 @@ A Grant authorises one or more Entities to perform specific actions on Records o
 
 ```ts
 type GrantContent = {
-  typeId: TypeId;         // Which record type this grant covers
+  typeId: TypeId; // Which record type this grant covers
   actions: GrantAction[]; // Which actions are permitted
 };
 
 type GrantAction =
-  | 'create'      // Create new records of this type
-  | 'read-own'    // Read records where record.entityId === requester
-  | 'read-any'    // Read all records of this type
-  | 'update-own'  // Update records where record.entityId === requester
-  | 'update-any'  // Update all records of this type
-  | 'delete-own'  // Delete records where record.entityId === requester
+  | 'create' // Create new records of this type
+  | 'read-own' // Read records where record.entityId === requester
+  | 'read-any' // Read all records of this type
+  | 'update-own' // Update records where record.entityId === requester
+  | 'update-any' // Update all records of this type
+  | 'delete-own' // Delete records where record.entityId === requester
   | 'delete-any'; // Delete all records of this type
 ```
 
@@ -148,9 +148,7 @@ await stack.grant('bob-entity-id', [
 ]);
 
 // Default grant — applies to any authenticated entity (null entityId on the grant record)
-await stack.grant(null, [
-  { typeId: 'com.example/comment@1', actions: ['create', 'read-own'] },
-]);
+await stack.grant(null, [{ typeId: 'com.example/comment@1', actions: ['create', 'read-own'] }]);
 ```
 
 **Design decisions:**
