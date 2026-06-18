@@ -177,9 +177,11 @@ packages/
       index.ts            # Public exports
       types.ts            # All type definitions
       stack.ts            # Stack class
+      access.ts           # Permission and grant checking
       id.ts               # Crockford base-32 ID generation
       schema.ts           # Schema hashing and type compatibility
       validate.ts         # Content validation
+      testing.ts          # MemoryAdapter test helper (@haverstack/core/testing)
     tests/
   adapter-sqlite/         # @haverstack/adapter-sqlite
     src/
