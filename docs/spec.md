@@ -33,6 +33,8 @@ stack.timezone; // read from adapter config
 
 `SQLiteAdapter.initialize()` fails if the file already exists. `SQLiteAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
+Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+
 **Stack config** is stored in a `stack_config` key/value table in the adapter. Current keys:
 
 | Key         | Description                                    |
@@ -115,6 +117,51 @@ This gives roles (member vs. admin) for free via association labels, and members
 
 ---
 
+### Grant
+
+A Grant authorises one or more Entities to perform specific actions on Records of a given Type. Grants are modeled as Records of the built-in system type `_grant`, making them queryable, versioned, and subject to the same lifecycle as any other Record.
+
+**Content fields:**
+
+```ts
+type GrantContent = {
+  typeId: TypeId;         // Which record type this grant covers
+  actions: GrantAction[]; // Which actions are permitted
+};
+
+type GrantAction =
+  | 'create'      // Create new records of this type
+  | 'read-own'    // Read records where record.entityId === requester
+  | 'read-any'    // Read all records of this type
+  | 'update-own'  // Update records where record.entityId === requester
+  | 'update-any'  // Update all records of this type
+  | 'delete-own'  // Delete records where record.entityId === requester
+  | 'delete-any'; // Delete all records of this type
+```
+
+`Stack.grant()` is the owner-facing helper for creating grant records:
+
+```ts
+// Grant a specific entity permission to create comments and manage their own
+await stack.grant('bob-entity-id', [
+  { typeId: 'com.example/comment@1', actions: ['create', 'read-own', 'update-own', 'delete-own'] },
+]);
+
+// Default grant — applies to any authenticated entity (null entityId on the grant record)
+await stack.grant(null, [
+  { typeId: 'com.example/comment@1', actions: ['create', 'read-own'] },
+]);
+```
+
+**Design decisions:**
+
+- **No wildcard `typeId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
+- **Default grants** (grant record has no `entityId`): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
+- **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. The combination `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
+- **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester — Records the entity authored. Records with no `entityId` (owner-created) do not satisfy any `-own` check.
+
+---
+
 ## Types
 
 A **Type** defines the schema for the `content` field of a Record. Types are identified by a **namespaced, versioned string ID** controlled by the app author — the app is the real coordination mechanism between stacks, so Type identity is scoped to the app that defined it.
@@ -172,7 +219,7 @@ function isCompatible(
 
 Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()`.
 
-**System types** (reserved, library-defined): `_entity@1`, `_app@1`, `_group@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism.
+**System types** (reserved, library-defined): `_entity@1`, `_app@1`, `_group@1`, `_grant@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All four are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
 
 ### Type migrations
 
@@ -222,7 +269,7 @@ type StackRecord = {
 
   // --- Optional native fields ---
   parentId?: string; // ID of a parent Record (for hierarchy/folders)
-  entityId?: string; // Author Entity, if different from stack owner
+  entityId?: string; // Author Entity. Absent means owner-created — Records written directly by the stack owner carry no entityId.
   appId?: string; // App that created this Record
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[]; // Access control (see Permissions)
@@ -257,6 +304,10 @@ type Association =
 
 ## Permissions
 
+Access control in a Stack has two complementary layers. `ScopedStack` (see below) enforces both.
+
+### Layer 1: Record-level permissions
+
 All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement is the responsibility of the API adapter. The JSON and SQLite adapters ignore the permissions field.
 
 ```ts
@@ -269,7 +320,7 @@ type Permission =
 
 Group permissions reference a `_group` Record by ID. The group may be a simple permission group (living in the stack owner's personal stack) or a collaborative group with its own stack — the permission model is the same either way.
 
-**Permission resolution for the API adapter:**
+**Permission resolution:**
 
 - `private` — owner only
 - `public` — any requester can read
@@ -278,9 +329,19 @@ Group permissions reference a `_group` Record by ID. The group may be a simple p
 
 Cross-stack group resolution (where the `_group` Record lives in a different stack than the Record being accessed) requires the server to have read access to that stack.
 
-**Enforcement: `Stack.asEntity()`**
+### Layer 2: Type-level grants
 
-The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same read/write/query/version surface as `Stack`, but every operation is checked against the rules above. The owner always has full access. Reading or writing a Record that exists but isn't visible throws `StackPermissionError`; a missing Record throws `StackNotFoundError`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
+`_grant` records (see [Grant](#grant)) authorise Entities to perform actions across all Records of a given Type, without touching individual records. A read-any grant on `comment@1`, for example, makes all comments of that type readable by the grantee without setting `permissions` on each one.
+
+`ScopedStack` checks both layers on every operation: if either the Record's own `permissions` or a matching `_grant` record permits the action, access is granted. The owner always has full access and bypasses both checks.
+
+### Enforcement: `Stack.asEntity()`
+
+The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same surface as `Stack`, but every operation is checked against both permission layers.
+
+**`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the requester, so `-own` grants apply to it immediately.
+
+Reading or writing a Record that exists but isn't accessible throws `StackPermissionError`; a missing Record throws `StackNotFoundError`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
 
 Plain `Stack` methods remain unscoped and perform no permission checks — correct for single-entity embedded use, where there's no requester distinct from the app itself. Use `asEntity()` when one `Stack` instance serves requests from multiple, possibly untrusted, entities, e.g. a server adapter.
 
@@ -419,6 +480,8 @@ type AdapterCapabilities = {
   sortableFields: string[];
 };
 ```
+
+`AdapterCapabilities` is the adapter-implementer-facing name. On the `StackClient` interface it is exposed as `features: StackFeatures` (`StackFeatures` is a type alias for `AdapterCapabilities`). App and plugin code should read `stack.features` rather than going through the adapter directly.
 
 **Per-adapter notes:**
 
