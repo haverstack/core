@@ -56,6 +56,7 @@ export type {
   Migration,
   MigrationFn,
   AdapterCapabilities,
+  StackFeatures,
   StackAdapter,
   EntityContent,
   AppContent,

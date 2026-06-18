@@ -34,6 +34,7 @@ import type {
   MigrationFn,
   RecordVersion,
   AdapterCapabilities,
+  StackFeatures,
   GrantAction,
   GrantContent,
 } from './types.js';
@@ -106,6 +107,7 @@ export class StackNotFoundError extends Error {
  * and work equally well with a full Stack or a permission-scoped view.
  */
 export interface StackClient {
+  readonly features: StackFeatures;
   create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
@@ -147,7 +149,7 @@ export class Stack implements StackClient {
     return new Stack(adapter, entityId, timezone);
   }
 
-  get capabilities(): AdapterCapabilities {
+  get features(): StackFeatures {
     return this.adapter.capabilities;
   }
 
@@ -670,6 +672,10 @@ export class ScopedStack implements StackClient {
     private readonly requesterEntityId: string | null,
   ) {}
 
+  get features(): StackFeatures {
+    return this.stack.features;
+  }
+
   private resolveRecord = (id: string): Promise<StackRecord | null> =>
     this.stack.get(id, { migrate: false });
 
@@ -713,7 +719,7 @@ export class ScopedStack implements StackClient {
     const result = await this.stack.query({
       filter: {
         typeId: grantTypeId,
-        ...(this.stack.capabilities.contentFieldQuery && { content: { typeId } }),
+        ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
       },
     });
 

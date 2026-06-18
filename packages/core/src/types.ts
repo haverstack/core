@@ -275,7 +275,7 @@ export type Migration = {
 };
 
 // -------------------------------------------------------
-// Adapter capabilities
+// Adapter capabilities / Stack features
 // -------------------------------------------------------
 
 export type AdapterCapabilities = {
@@ -283,6 +283,9 @@ export type AdapterCapabilities = {
   contentFieldQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
 };
+
+/** What a Stack can do, as seen by app and plugin code. */
+export type StackFeatures = AdapterCapabilities;
 
 // -------------------------------------------------------
 // Attachment metadata
