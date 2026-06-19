@@ -586,7 +586,9 @@ describe('putAttachment', () => {
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/attachments`);
     expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/octet-stream');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/octet-stream',
+    );
   });
 });
 

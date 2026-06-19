@@ -168,9 +168,9 @@ An Attachment record stores the metadata for an uploaded file. Attachment metada
 
 ```ts
 type AttachmentContent = {
-  fileId: string;    // SHA-256 hex hash of the file bytes — content-addressed ID
-  mimeType: string;  // MIME type declared at upload e.g. "image/png"
-  size: number;      // File size in bytes
+  fileId: string; // SHA-256 hex hash of the file bytes — content-addressed ID
+  mimeType: string; // MIME type declared at upload e.g. "image/png"
+  size: number; // File size in bytes
   filename?: string; // Original filename if provided at upload
 };
 ```
