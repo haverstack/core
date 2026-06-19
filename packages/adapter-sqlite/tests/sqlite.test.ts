@@ -562,10 +562,6 @@ describe('records — queries', () => {
 
   test('cursor pagination works correctly when sorted by updatedAt', async () => {
     const adapter = await initAdapter();
-    // createdAt and updatedAt are in opposite order so a cursor keyed on the
-    // wrong field would return the wrong page.
-    // updatedAt asc order: r5(1000), r4(2000), r3(3000), r2(4000), r1(5000)
-    // createdAt asc order: r1(1000), r2(2000), r3(3000), r4(4000), r5(5000)
     for (let i = 1; i <= 5; i++) {
       await adapter.createRecord(
         makeRecord({
@@ -591,17 +587,12 @@ describe('records — queries', () => {
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
 
-    // Together they must cover all 5 records with no overlap or gap.
     const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
     expect(allIds.size).toBe(5);
   });
 
   test('cursor pagination works correctly when sorted by version', async () => {
     const adapter = await initAdapter();
-    // version and createdAt are in opposite order so a cursor keyed on the
-    // wrong field would return the wrong page.
-    // version asc order: r5(v1), r4(v2), r3(v3), r2(v4), r1(v5)
-    // createdAt asc order: r1, r2, r3, r4, r5
     for (let i = 1; i <= 5; i++) {
       await adapter.createRecord(
         makeRecord({
@@ -627,7 +618,6 @@ describe('records — queries', () => {
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
 
-    // Together they must cover all 5 records with no overlap or gap.
     const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
     expect(allIds.size).toBe(5);
   });
@@ -809,28 +799,28 @@ describe('versions', () => {
 describe('attachments', () => {
   test('putAttachment returns a fileId', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello'), 'text/plain');
+    const fileId = await adapter.putAttachment(Buffer.from('hello'));
     expect(typeof fileId).toBe('string');
     expect(fileId.length).toBeGreaterThan(0);
   });
 
   test('putAttachment returns SHA-256 hex string', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello'), 'text/plain');
+    const fileId = await adapter.putAttachment(Buffer.from('hello'));
     expect(fileId).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test('getAttachment returns the stored data', async () => {
     const adapter = await initAdapter();
     const data = Buffer.from('hello attachment');
-    const fileId = await adapter.putAttachment(data, 'text/plain');
+    const fileId = await adapter.putAttachment(data);
     const retrieved = await adapter.getAttachment(fileId);
     expect((retrieved as Buffer).toString()).toBe('hello attachment');
   });
 
   test('attachment file exists on disk without extension', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('test'), 'text/plain');
+    const fileId = await adapter.putAttachment(Buffer.from('test'));
     const attachmentsDir = join(testDir, 'attachments');
     const files = readdirSync(attachmentsDir);
     expect(files).toContain(fileId);
@@ -844,7 +834,7 @@ describe('attachments', () => {
   test('putAttachment stores binary data correctly', async () => {
     const adapter = await initAdapter();
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
-    const fileId = await adapter.putAttachment(binary, 'image/png');
+    const fileId = await adapter.putAttachment(binary);
     const retrieved = await adapter.getAttachment(fileId);
     expect(retrieved as Buffer).toEqual(binary);
   });
@@ -852,64 +842,25 @@ describe('attachments', () => {
   test('putAttachment deduplicates identical content', async () => {
     const adapter = await initAdapter();
     const data = Buffer.from('same content');
-    const id1 = await adapter.putAttachment(data, 'text/plain');
-    const id2 = await adapter.putAttachment(data, 'text/plain');
+    const id1 = await adapter.putAttachment(data);
+    const id2 = await adapter.putAttachment(data);
     expect(id1).toBe(id2);
     const files = readdirSync(join(testDir, 'attachments'));
     expect(files.filter((f) => f === id1).length).toBe(1);
   });
 
-  test('putAttachment returns same fileId for identical bytes regardless of mimeType', async () => {
+  test('getAttachment throws after deleteAttachment', async () => {
     const adapter = await initAdapter();
-    const data = Buffer.from('same bytes');
-    const id1 = await adapter.putAttachment(data, 'text/plain');
-    const id2 = await adapter.putAttachment(data, 'application/octet-stream');
-    expect(id1).toBe(id2);
-  });
-
-  test('getAttachmentMeta returns metadata for stored attachment', async () => {
-    const adapter = await initAdapter();
-    const data = Buffer.from('meta test');
-    const fileId = await adapter.putAttachment(data, 'text/plain');
-    const meta = await adapter.getAttachmentMeta(fileId);
-    expect(meta).not.toBeNull();
-    expect(meta?.mimeType).toBe('text/plain');
-    expect(meta?.size).toBe(data.byteLength);
-    expect(meta?.createdAt).toBeInstanceOf(Date);
-    expect(meta?.filename).toBeUndefined();
-  });
-
-  test('getAttachmentMeta returns filename when provided at upload', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('data'), 'text/plain', 'readme.txt');
-    const meta = await adapter.getAttachmentMeta(fileId);
-    expect(meta?.filename).toBe('readme.txt');
-  });
-
-  test('getAttachmentMeta returns null for unknown fileId', async () => {
-    const adapter = await initAdapter();
-    expect(await adapter.getAttachmentMeta('nonexistent')).toBeNull();
-  });
-
-  test('deleteAttachment removes metadata', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('bye'), 'text/plain');
+    const fileId = await adapter.putAttachment(Buffer.from('bye'));
     await adapter.deleteAttachment(fileId);
     await expect(adapter.getAttachment(fileId)).rejects.toThrow();
   });
 
   test('deleteAttachment removes file from disk', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('gone'), 'text/plain');
+    const fileId = await adapter.putAttachment(Buffer.from('gone'));
     await adapter.deleteAttachment(fileId);
     expect(existsSync(join(testDir, 'attachments', fileId))).toBe(false);
-  });
-
-  test('getAttachmentMeta returns null after deleteAttachment', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('temp'), 'text/plain');
-    await adapter.deleteAttachment(fileId);
-    expect(await adapter.getAttachmentMeta(fileId)).toBeNull();
   });
 });
 
