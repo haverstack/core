@@ -36,6 +36,7 @@ import type {
   StackFeatures,
   GrantAction,
   GrantContent,
+  AttachmentContent,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -122,6 +123,7 @@ export interface StackClient {
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number): Promise<StackRecord>;
+  putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
 }
 
 // -------------------------------------------------------
@@ -558,8 +560,29 @@ export class Stack implements StackClient {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array, mimeType: string): Promise<string> {
-    return this.adapter.putAttachment(data, mimeType);
+  /**
+   * Store raw bytes and return the content-addressed file ID.
+   * Does not create an _attachment@1 record — use putAttachment() or
+   * ScopedStack.putAttachment() for the full upload flow.
+   */
+  async putAttachmentBytes(data: Uint8Array): Promise<string> {
+    return this.adapter.putAttachment(data);
+  }
+
+  /**
+   * Store bytes and create an _attachment@1 metadata record (owner-attributed,
+   * no entityId). Use ScopedStack.putAttachment() when the uploader is a
+   * specific entity rather than the stack owner.
+   */
+  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    const fileId = await this.putAttachmentBytes(data);
+    await this.create(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
+      fileId,
+      mimeType,
+      size: data.byteLength,
+      ...(filename && { filename }),
+    } satisfies AttachmentContent);
+    return fileId;
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
@@ -639,6 +662,12 @@ export class Stack implements StackClient {
     await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
       typeId: { kind: 'string', required: true },
       actions: { kind: 'array', items: { kind: 'string' }, required: true },
+    });
+    await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
+      fileId: { kind: 'string', required: true },
+      mimeType: { kind: 'string', required: true },
+      size: { kind: 'number', required: true },
+      filename: { kind: 'string' },
     });
   }
 
@@ -877,5 +906,32 @@ export class ScopedStack implements StackClient {
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
     await this.requireUpdatable(id);
     return this.stack.restoreVersion(id, version);
+  }
+
+  /**
+   * Store bytes and create an _attachment@1 metadata record owned by the
+   * requester. Requires a `create` grant on `_attachment@1`.
+   * Anonymous requesters are always denied.
+   */
+  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    const requester = this.requesterEntityId;
+    if (!requester) {
+      throw new StackPermissionError('Anonymous requesters cannot upload attachments');
+    }
+    if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
+      throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
+    }
+    const fileId = await this.stack.putAttachmentBytes(data);
+    await this.stack.create(
+      `${SYSTEM_TYPES.ATTACHMENT}@1`,
+      {
+        fileId,
+        mimeType,
+        size: data.byteLength,
+        ...(filename && { filename }),
+      } satisfies AttachmentContent,
+      { entityId: requester },
+    );
+    return fileId;
   }
 }

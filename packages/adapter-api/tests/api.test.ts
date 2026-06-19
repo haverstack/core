@@ -577,16 +577,18 @@ describe('listTypes', () => {
 // -------------------------------------------------------
 
 describe('putAttachment', () => {
-  test('sends POST /attachments with binary body and Content-Type', async () => {
+  test('sends POST /attachments with binary body and Content-Type: application/octet-stream', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ fileId: 'file-xyz' }));
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const fileId = await adapter.putAttachment(data, 'image/png');
+    const fileId = await adapter.putAttachment(data);
     expect(fileId).toBe('file-xyz');
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/attachments`);
     expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/png');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/octet-stream',
+    );
   });
 });
 

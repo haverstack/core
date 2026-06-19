@@ -33,7 +33,7 @@ stack.timezone; // read from adapter config
 
 `SQLiteAdapter.initialize()` fails if the file already exists. `SQLiteAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `putAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 **Stack config** is stored in a `stack_config` key/value table in the adapter. Current keys:
 
@@ -160,6 +160,27 @@ await stack.grant(null, [{ typeId: 'com.example/comment@1', actions: ['create', 
 
 ---
 
+### Attachment
+
+An Attachment record stores the metadata for an uploaded file. Attachment metadata is modeled as a Record of the built-in system type `_attachment`, separate from the binary content which is stored by the adapter.
+
+**Content fields:**
+
+```ts
+type AttachmentContent = {
+  fileId: string; // SHA-256 hex hash of the file bytes — content-addressed ID
+  mimeType: string; // MIME type declared at upload e.g. "image/png"
+  size: number; // File size in bytes
+  filename?: string; // Original filename if provided at upload
+};
+```
+
+An `_attachment@1` record is created each time `stack.putAttachment()` or `scopedStack.putAttachment()` is called — even if the same bytes were previously uploaded. Multiple `_attachment@1` records may therefore exist for the same `fileId`, each with its own `mimeType` and `filename`. The binary is stored only once (content-addressed deduplication), but each upload gets its own metadata record.
+
+When uploaded via `Stack.putAttachment()` (owner-level), the record carries no `entityId`. When uploaded via `ScopedStack.putAttachment()`, the `entityId` is set to the uploading entity.
+
+---
+
 ## Types
 
 A **Type** defines the schema for the `content` field of a Record. Types are identified by a **namespaced, versioned string ID** controlled by the app author — the app is the real coordination mechanism between stacks, so Type identity is scoped to the app that defined it.
@@ -217,7 +238,7 @@ function isCompatible(
 
 Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()`.
 
-**System types** (reserved, library-defined): `_entity@1`, `_app@1`, `_group@1`, `_grant@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All four are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
+**System types** (reserved, library-defined): `_entity@1`, `_app@1`, `_group@1`, `_grant@1`, `_attachment@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All five are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
 
 ### Type migrations
 
@@ -391,28 +412,35 @@ All adapters support the full Record API. Performance guarantees differ; correct
 
 ## Attachments
 
-Binary files are stored and retrieved through the library using **content-addressed storage**. A file's ID is the SHA-256 hash of its bytes, so uploading identical content twice returns the same `fileId` without writing a second copy.
+Binary files are stored and retrieved through the library using **content-addressed storage**. A file's ID is the SHA-256 hash of its bytes, so uploading identical bytes twice returns the same `fileId` without writing a second binary copy. Each upload creates a new `_attachment@1` record (see [Attachment](#attachment)) regardless of deduplication, so metadata (mimeType, size, filename) is tracked per upload.
 
 ```ts
-// Upload a file; returns a stable SHA-256 hex ID
+// Upload a file — returns a stable SHA-256 hex ID and creates an _attachment@1 record
 const fileId = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>
-
-// Read metadata without fetching the binary
-const meta: AttachmentMeta | null = await stack.getAttachmentMeta(fileId)
-// AttachmentMeta = {
-//   mimeType: string;
-//   size: number;      // bytes
-//   createdAt: Date;
-//   filename?: string; // original filename if provided at upload
-// }
 
 // Fetch the binary
 const data: Uint8Array = await stack.getAttachment(fileId)
 ```
 
-A `fileId` is referenced in an `Association` of kind `"attachment"`. `getAttachmentMeta` is useful for checking existence and reading metadata without incurring the cost of reading the binary from disk or over the network.
+A `fileId` is referenced in an `Association` of kind `"attachment"`. To read metadata for a given `fileId`, query `_attachment@1` records:
 
-**Deduplication:** if the same bytes are uploaded with a different `mimeType` or `filename`, the existing entry is returned unchanged — the new metadata is ignored. Content is the identity; metadata is a property of the first upload.
+```ts
+const results = await stack.query({
+  filter: {
+    typeId: '_attachment@1',
+    content: { fileId },
+  },
+  limit: 1,
+});
+const meta = results.records[0]?.content as AttachmentContent | undefined;
+```
+
+**`Stack.putAttachment()` vs `ScopedStack.putAttachment()`:**
+
+- `Stack.putAttachment(data, mimeType, filename?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
+- `ScopedStack.putAttachment(data, mimeType, filename?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is set to the uploading entity.
+
+**Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record with its own `mimeType` and `filename`. The same `fileId` may have multiple `_attachment@1` records from separate uploads.
 
 ---
 
@@ -693,7 +721,7 @@ Returns `413 Request Entity Too Large` if the payload exceeds the server's confi
 
 **Download:** Responds with the stored `Content-Type`. If a filename was provided at upload time, the response also includes `Content-Disposition: attachment; filename="..."` so browsers can save the file with its original name.
 
-**Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible.
+**Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. Additionally, the uploader can always access their own attachment before it has been associated with any Record, via the `_attachment@1` record created at upload time.
 
 ### Entity
 

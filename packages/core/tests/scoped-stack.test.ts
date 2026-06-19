@@ -490,3 +490,59 @@ describe('ScopedStack — grant-based update/delete', () => {
     expect(updated.content.text).toBe('edited');
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack.putAttachment — grant-based upload
+// -------------------------------------------------------
+
+describe('ScopedStack.putAttachment', () => {
+  const data = new Uint8Array([1, 2, 3]);
+
+  test('owner can always upload without a grant', async () => {
+    const fileId = await stack.asEntity(OWNER).putAttachment(data, 'image/png');
+    expect(typeof fileId).toBe('string');
+  });
+
+  test('anonymous requester cannot upload', async () => {
+    await expect(stack.asEntity(null).putAttachment(data, 'image/png')).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('authenticated entity without a grant cannot upload', async () => {
+    await expect(stack.asEntity(MEMBER).putAttachment(data, 'image/png')).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('entity with create grant on _attachment@1 can upload', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
+    expect(typeof fileId).toBe('string');
+  });
+
+  test('upload creates _attachment@1 record owned by the uploader', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
+    const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].entityId).toBe(MEMBER);
+    const content = result.records[0].content as Record<string, unknown>;
+    expect(content.mimeType).toBe('image/png');
+    expect(content.size).toBe(3);
+    expect(content.filename).toBe('photo.png');
+  });
+
+  test('upload without filename omits filename from record content', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
+    const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
+    expect(result.records[0].content).not.toHaveProperty('filename');
+  });
+
+  test('default grant allows any authenticated entity to upload', async () => {
+    await stack.grant(null, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(STRANGER).putAttachment(data, 'image/png');
+    expect(typeof fileId).toBe('string');
+  });
+});

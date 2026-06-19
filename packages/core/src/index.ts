@@ -33,7 +33,7 @@ export type {
   RecordId,
   TypeId,
   FileId,
-  AttachmentMeta,
+  AttachmentContent,
   StackRecord,
   RecordVersion,
   StackType,

@@ -27,7 +27,6 @@ import type {
   RecordId,
   FileId,
   Permission,
-  AttachmentMeta,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -426,8 +425,8 @@ export class APIAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<FileId> {
-    const result = await this.uploadBinary('/attachments', data, mimeType, filename);
+  async putAttachment(data: Uint8Array): Promise<FileId> {
+    const result = await this.uploadBinary('/attachments', data, 'application/octet-stream');
     return result.fileId as string;
   }
 
@@ -437,11 +436,6 @@ export class APIAdapter implements StackAdapter {
 
   async deleteAttachment(fileId: FileId): Promise<void> {
     await this.request<void>('DELETE', `/attachments/${fileId}`);
-  }
-
-  async getAttachmentMeta(_fileId: FileId): Promise<AttachmentMeta | null> {
-    // Attachment metadata lives on the server; this client-side adapter does not cache it.
-    return null;
   }
 
   // -------------------------------------------------------

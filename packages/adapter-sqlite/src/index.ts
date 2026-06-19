@@ -31,7 +31,6 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
-  AttachmentMeta,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -115,11 +114,7 @@ const SCHEMA_SQL = `
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS attachments (
-    file_id    TEXT PRIMARY KEY,
-    mime_type  TEXT NOT NULL,
-    size       INTEGER NOT NULL,
-    filename   TEXT,
-    created_at INTEGER NOT NULL
+    file_id TEXT PRIMARY KEY
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS tokens (
@@ -485,18 +480,18 @@ export class SQLiteAdapter implements StackAdapter {
     if (!cols.length) return; // Table doesn't exist yet — SCHEMA_SQL will create it.
     const hasPath = cols.some((c) => c.name === 'path');
     if (hasPath) {
-      // Pre-content-addressed-storage schema. File IDs and paths are incompatible;
-      // drop and recreate. Any existing attachment rows are unreadable anyway.
+      // Pre-content-addressed-storage schema: drop and recreate as minimal schema.
       this.db.run('DROP TABLE attachments');
-      this.db.run(`
-        CREATE TABLE attachments (
-          file_id    TEXT PRIMARY KEY,
-          mime_type  TEXT NOT NULL,
-          size       INTEGER NOT NULL,
-          filename   TEXT,
-          created_at INTEGER NOT NULL
-        ) STRICT
-      `);
+      this.db.run('CREATE TABLE attachments (file_id TEXT PRIMARY KEY) STRICT');
+      return;
+    }
+    const hasMimeType = cols.some((c) => c.name === 'mime_type');
+    if (hasMimeType) {
+      // Metadata columns moved to _attachment@1 records: migrate to minimal schema.
+      this.db.run('ALTER TABLE attachments RENAME TO attachments_old');
+      this.db.run('CREATE TABLE attachments (file_id TEXT PRIMARY KEY) STRICT');
+      this.db.run('INSERT INTO attachments (file_id) SELECT file_id FROM attachments_old');
+      this.db.run('DROP TABLE attachments_old');
     }
   }
 
@@ -724,26 +719,28 @@ export class SQLiteAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+  async putAttachment(data: Uint8Array): Promise<string> {
     const fileId = createHash('sha256').update(data).digest('hex');
 
     // Dedup: same bytes already stored — return existing ID without re-writing.
-    const existing = await this.getAttachmentMeta(fileId);
-    if (existing) return fileId;
+    const exists = this.execQuery<Record<string, unknown>>(
+      'SELECT 1 FROM attachments WHERE file_id = ?',
+      [fileId],
+    );
+    if (exists.length > 0) return fileId;
 
     await writeFile(join(this.attachmentsDir, fileId), data);
-
-    this.db.run(
-      'INSERT INTO attachments (file_id, mime_type, size, filename, created_at) VALUES (?, ?, ?, ?, ?)',
-      [fileId, mimeType, data.byteLength, filename ?? null, toMs(new Date())],
-    );
+    this.db.run('INSERT INTO attachments (file_id) VALUES (?)', [fileId]);
     this.persist();
     return fileId;
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
-    const meta = await this.getAttachmentMeta(fileId);
-    if (!meta) throw new Error(`Attachment not found: "${fileId}"`);
+    const exists = this.execQuery<Record<string, unknown>>(
+      'SELECT 1 FROM attachments WHERE file_id = ?',
+      [fileId],
+    );
+    if (!exists.length) throw new Error(`Attachment not found: "${fileId}"`);
     return readFile(join(this.attachmentsDir, fileId));
   }
 
@@ -755,23 +752,6 @@ export class SQLiteAdapter implements StackAdapter {
     } catch {
       // Non-fatal — file may already be gone.
     }
-  }
-
-  async getAttachmentMeta(fileId: string): Promise<AttachmentMeta | null> {
-    const rows = this.execQuery<{
-      mime_type: string;
-      size: number;
-      created_at: number;
-      filename: string | null;
-    }>('SELECT mime_type, size, created_at, filename FROM attachments WHERE file_id = ?', [fileId]);
-    if (!rows.length) return null;
-    const row = rows[0];
-    return {
-      mimeType: row.mime_type,
-      size: row.size,
-      createdAt: fromMs(row.created_at),
-      ...(row.filename && { filename: row.filename }),
-    };
   }
 
   // -------------------------------------------------------

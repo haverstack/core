@@ -8,7 +8,6 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
-  AttachmentMeta,
 } from './types.js';
 
 /**
@@ -82,6 +81,10 @@ export class MemoryAdapter implements StackAdapter {
           ? results.filter((r) => !r.parentId)
           : results.filter((r) => r.parentId === f.parentId);
     }
+    if (f.entityId !== undefined) {
+      const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
+      results = results.filter((r) => r.entityId !== undefined && ids.includes(r.entityId));
+    }
 
     const limit = query.limit ?? 50;
     const start = query.cursor ? Number(query.cursor) : 0;
@@ -129,14 +132,11 @@ export class MemoryAdapter implements StackAdapter {
     return [...this.types.values()];
   }
 
-  async putAttachment(_data: Uint8Array, _mimeType: string) {
+  async putAttachment(_data: Uint8Array): Promise<string> {
     return 'file-123';
   }
   async getAttachment(_fileId: string): Promise<Uint8Array> {
     return new Uint8Array();
-  }
-  async getAttachmentMeta(_fileId: string): Promise<AttachmentMeta | null> {
-    return null;
   }
   async deleteAttachment(_fileId: string) {}
 
