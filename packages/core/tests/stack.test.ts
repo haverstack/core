@@ -486,6 +486,10 @@ describe('grant', () => {
   test('_grant@1 type is available immediately after Stack.create()', async () => {
     expect(await stack.getType('_grant@1')).not.toBeNull();
   });
+
+  test('_attachment@1 type is available immediately after Stack.create()', async () => {
+    expect(await stack.getType('_attachment@1')).not.toBeNull();
+  });
 });
 
 // -------------------------------------------------------
@@ -508,5 +512,35 @@ describe('associate / dissociate', () => {
     await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations?.some((a) => a.label === 'favourite')).toBe(false);
+  });
+});
+
+// -------------------------------------------------------
+// putAttachment
+// -------------------------------------------------------
+
+describe('putAttachment', () => {
+  test('stores bytes and returns fileId', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    expect(typeof fileId).toBe('string');
+  });
+
+  test('creates _attachment@1 record with metadata', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png', 'photo.png');
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records).toHaveLength(1);
+    const content = result.records[0].content as Record<string, unknown>;
+    expect(content.mimeType).toBe('image/png');
+    expect(content.size).toBe(3);
+    expect(content.filename).toBe('photo.png');
+  });
+
+  test('attachment record has no entityId (owner-attributed)', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png');
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records[0].entityId).toBeUndefined();
   });
 });

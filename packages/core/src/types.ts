@@ -198,6 +198,18 @@ export type GrantContent = {
   actions: GrantAction[];
 };
 
+/** Content for _attachment records — one per upload, tracks file metadata. */
+export type AttachmentContent = {
+  /** Content-addressed file identifier (SHA-256 hex). */
+  fileId: FileId;
+  /** MIME type of the file. */
+  mimeType: string;
+  /** File size in bytes. */
+  size: number;
+  /** Original filename, if provided at upload time. */
+  filename?: string;
+};
+
 /** Reserved system type IDs */
 export const SYSTEM_TYPES = {
   ENTITY: '_entity',
@@ -205,6 +217,8 @@ export const SYSTEM_TYPES = {
   GROUP: '_group',
   /** Creation-permission grants. See GrantContent. */
   GRANT: '_grant',
+  /** Attachment metadata records. See AttachmentContent. */
+  ATTACHMENT: '_attachment',
 } as const;
 
 // -------------------------------------------------------
@@ -295,17 +309,6 @@ export type AdapterCapabilities = {
 export type StackFeatures = AdapterCapabilities;
 
 // -------------------------------------------------------
-// Attachment metadata
-// -------------------------------------------------------
-
-export type AttachmentMeta = {
-  mimeType: string;
-  size: number; // bytes
-  createdAt: Date;
-  filename?: string; // original filename if provided at upload time
-};
-
-// -------------------------------------------------------
 // Adapter interface
 // -------------------------------------------------------
 
@@ -341,11 +344,10 @@ export interface StackAdapter {
   getType(id: TypeId): Promise<StackType | null>;
   listTypes(): Promise<StackType[]>;
 
-  // Attachments
-  putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<FileId>;
+  // Attachments — bytes storage only; metadata lives on _attachment@1 records
+  putAttachment(data: Uint8Array): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
-  getAttachmentMeta(fileId: FileId): Promise<AttachmentMeta | null>;
 
   // Lifecycle
   flush?(): Promise<void>;
