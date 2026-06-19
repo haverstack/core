@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/adapter-sqlite",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "SQLite storage adapter for Haverstack",
   "type": "module",
   "exports": {
