@@ -148,6 +148,18 @@ const SCHEMA_SQL = `
 `;
 
 // -------------------------------------------------------
+// Helpers
+// -------------------------------------------------------
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+const assertFileId = (fileId: string): void => {
+  if (!SHA256_HEX_RE.test(fileId)) {
+    throw new Error(`Invalid fileId: expected 64-character lowercase hex string`);
+  }
+};
+
+// -------------------------------------------------------
 // Row <-> domain object mapping
 // -------------------------------------------------------
 
@@ -214,6 +226,69 @@ const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   };
   if (row.entity_id) v.entityId = row.entity_id as string;
   return v;
+};
+
+// -------------------------------------------------------
+// FTS4 query sanitization
+// -------------------------------------------------------
+
+/**
+ * Sanitizes user input for safe use in an FTS4 MATCH clause.
+ *
+ * FTS4's query language supports operators (AND/OR/NOT, phrases, NEAR, wildcards)
+ * that can be expensive or cause parse errors with untrusted input.
+ * This function removes the dangerous operators while preserving useful ones:
+ *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
+ *   removed: wildcards (*), NEAR/N, bare NOT (no left operand)
+ *   capped:  parenthesis nesting depth (default: 2)
+ *
+ * A query timeout is not implementable here: sql.js runs SQLite as synchronous
+ * WASM that blocks the JS event loop, and db.interrupt() is not exposed. Moving
+ * sql.js into a Worker thread would enable a timeout via interrupt() but is out
+ * of scope for this change.
+ */
+const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
+  if (!query) return '';
+
+  // Remove wildcards
+  let clean = query.replace(/\*/g, '');
+
+  // Remove NEAR operator (handles NEAR and NEAR/N variants)
+  clean = clean.replace(/\bNEAR(?:\/\d+)?\b/gi, '');
+
+  // Strip bare NOT with no left operand — FTS4 requires "term NOT term", not "NOT term"
+  clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
+
+  // Enforce max nesting depth; replace excess ( with a space and discard unmatched )
+  let currentDepth = 0;
+  let result = '';
+  for (const char of clean) {
+    if (char === '(') {
+      if (currentDepth < maxDepth) {
+        currentDepth++;
+        result += char;
+      } else result += ' ';
+    } else if (char === ')') {
+      if (currentDepth > 0) {
+        currentDepth--;
+        result += char;
+      } else result += ' ';
+    } else {
+      result += char;
+    }
+  }
+
+  // Auto-close any unclosed parens
+  if (currentDepth > 0) result += ')'.repeat(currentDepth);
+
+  // Iteratively remove empty paren pairs left behind by NEAR/NOT stripping
+  let prev: string;
+  do {
+    prev = result;
+    result = result.replace(/\(\s*\)/g, ' ');
+  } while (result !== prev);
+
+  return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
 };
 
 // -------------------------------------------------------
@@ -325,10 +400,12 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
     }
   }
 
-  // Full-text search
   if (f.search) {
-    conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
-    params.push(f.search);
+    const sanitized = sanitizeFts4Query(f.search);
+    if (sanitized) {
+      conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
+      params.push(sanitized);
+    }
   }
 
   // Cursor (sort-field value + id for stable pagination)
@@ -339,11 +416,19 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
       parts.length === 3
         ? (parts as [string, string, string])
         : (['createdAt', parts[0], parts[1]] as [string, string, string]);
+    const validSortFields: SortField[] = ['createdAt', 'updatedAt', 'version'];
+    if (!validSortFields.includes(cursorField as SortField)) {
+      throw new Error(`Invalid cursor: unknown sort field "${cursorField}"`);
+    }
+    const numericValue = Number(cursorValue);
+    if (!isFinite(numericValue)) {
+      throw new Error(`Invalid cursor: non-numeric sort value`);
+    }
     const col = getSortColumn(cursorField as SortField);
     const sortDir = query.sort?.direction ?? 'desc';
     const op = sortDir === 'asc' ? '>' : '<';
     conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-    params.push(Number(cursorValue), Number(cursorValue), cursorId);
+    params.push(numericValue, numericValue, cursorId);
   }
 
   return {
@@ -736,6 +821,7 @@ export class SQLiteAdapter implements StackAdapter {
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
+    assertFileId(fileId);
     const exists = this.execQuery<Record<string, unknown>>(
       'SELECT 1 FROM attachments WHERE file_id = ?',
       [fileId],
@@ -745,6 +831,7 @@ export class SQLiteAdapter implements StackAdapter {
   }
 
   async deleteAttachment(fileId: string): Promise<void> {
+    assertFileId(fileId);
     this.db.run('DELETE FROM attachments WHERE file_id = ?', [fileId]);
     this.persist();
     try {

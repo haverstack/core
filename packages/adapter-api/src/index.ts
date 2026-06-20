@@ -278,7 +278,9 @@ export class APIAdapter implements StackAdapter {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
-    if (filename) headers['Content-Disposition'] = `attachment; filename="${filename}"`;
+    if (filename)
+      headers['Content-Disposition'] =
+        `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
 
     let res: Response;
     try {

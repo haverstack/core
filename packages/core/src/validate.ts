@@ -10,6 +10,8 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 
+const MAX_VALIDATION_DEPTH = 32;
+
 // -------------------------------------------------------
 // Validation errors
 // -------------------------------------------------------
@@ -43,13 +45,22 @@ const validateField = (
   def: FieldDef,
   path: string,
   errors: ValidationError[],
+  depth = 0,
 ): void => {
+  if (depth > MAX_VALIDATION_DEPTH) {
+    errors.push({
+      path,
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
+    return;
+  }
+
   if (def.kind === 'array') {
     if (!Array.isArray(value)) {
       errors.push({ path, message: `Expected array, got ${typeof value}` });
       return;
     }
-    value.forEach((item, i) => validateField(item, def.items, `${path}[${i}]`, errors));
+    value.forEach((item, i) => validateField(item, def.items, `${path}[${i}]`, errors, depth + 1));
     return;
   }
 
@@ -58,7 +69,7 @@ const validateField = (
       errors.push({ path, message: `Expected object, got ${typeof value}` });
       return;
     }
-    validateContent(value as Record<string, unknown>, def.properties, path, errors);
+    validateContent(value as Record<string, unknown>, def.properties, path, errors, depth + 1);
     return;
   }
 
@@ -98,7 +109,16 @@ export const validateContent = (
   schema: TypeSchema,
   prefix = '',
   errors: ValidationError[] = [],
+  depth = 0,
 ): ValidationError[] => {
+  if (depth > MAX_VALIDATION_DEPTH) {
+    errors.push({
+      path: prefix || '(root)',
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
+    return errors;
+  }
+
   // Check all schema fields
   for (const [key, def] of Object.entries(schema)) {
     const path = prefix ? `${prefix}.${key}` : key;
@@ -111,7 +131,7 @@ export const validateContent = (
       continue;
     }
 
-    validateField(value, def, path, errors);
+    validateField(value, def, path, errors, depth);
   }
 
   return errors;

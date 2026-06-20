@@ -256,8 +256,13 @@ export class Stack implements StackClient {
 
     const fns: MigrationFn[] = [];
     let current = fromId;
+    const visited = new Set<TypeId>();
 
     while (current !== toId) {
+      if (visited.has(current)) {
+        throw new StackMigrationError(`Migration cycle detected at "${current}"`);
+      }
+      visited.add(current);
       const migration = this.migrations.get(current);
       if (!migration) return null;
       fns.push(migration.migrate);
@@ -273,7 +278,12 @@ export class Stack implements StackClient {
    */
   private latestTypeId(fromId: TypeId): TypeId {
     let current = fromId;
+    const visited = new Set<TypeId>();
     while (this.migrations.has(current)) {
+      if (visited.has(current)) {
+        throw new StackMigrationError(`Migration cycle detected at "${current}"`);
+      }
+      visited.add(current);
       current = this.migrations.get(current)!.to;
     }
     return current;
@@ -848,6 +858,8 @@ export class ScopedStack implements StackClient {
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const limit = query.limit ?? DEFAULT_QUERY_LIMIT;
     const records: StackRecord[] = [];
+    const maxFetched = limit * 10;
+    let totalFetched = 0;
 
     const prefetchedGrants = this.requesterEntityId
       ? (await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } })).records
@@ -856,10 +868,11 @@ export class ScopedStack implements StackClient {
     let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
+      totalFetched += page.records.length;
       for (const record of page.records) {
         if (await this.canRead(record, prefetchedGrants)) records.push(record);
       }
-    } while (records.length < limit && page.cursor);
+    } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
     return { records, cursor: page.cursor, total: null };
   }
