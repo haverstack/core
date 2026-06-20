@@ -229,6 +229,66 @@ const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
 };
 
 // -------------------------------------------------------
+// FTS4 query sanitization
+// -------------------------------------------------------
+
+/**
+ * Sanitizes user input for safe use in an FTS4 MATCH clause.
+ *
+ * FTS4's query language supports operators (AND/OR/NOT, phrases, NEAR, wildcards)
+ * that can be expensive or cause parse errors with untrusted input.
+ * This function removes the dangerous operators while preserving useful ones:
+ *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
+ *   removed: wildcards (*), NEAR/N, bare NOT (no left operand)
+ *   capped:  parenthesis nesting depth (default: 2)
+ *
+ * A query timeout is not implementable here: sql.js runs SQLite as synchronous
+ * WASM that blocks the JS event loop, and db.interrupt() is not exposed. Moving
+ * sql.js into a Worker thread would enable a timeout via interrupt() but is out
+ * of scope for this change.
+ */
+const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
+  if (!query) return '';
+
+  // Remove wildcards
+  let clean = query.replace(/\*/g, '');
+
+  // Remove NEAR operator (handles NEAR and NEAR/N variants)
+  clean = clean.replace(/\bNEAR(?:\/\d+)?\b/gi, '');
+
+  // Strip bare NOT with no left operand — FTS4 requires "term NOT term", not "NOT term"
+  clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
+
+  // Enforce max nesting depth; replace excess ( with a space and discard unmatched )
+  let currentDepth = 0;
+  let result = '';
+  for (const char of clean) {
+    if (char === '(') {
+      if (currentDepth < maxDepth) { currentDepth++; result += char; }
+      else result += ' ';
+    } else if (char === ')') {
+      if (currentDepth > 0) { currentDepth--; result += char; }
+      else result += ' ';
+    } else {
+      result += char;
+    }
+  }
+
+  // Auto-close any unclosed parens
+  if (currentDepth > 0) result += ')'.repeat(currentDepth);
+
+  // Iteratively remove empty paren pairs left behind by NEAR/NOT stripping
+  let prev: string;
+  do { prev = result; result = result.replace(/\(\s*\)/g, ' '); } while (result !== prev);
+
+  return result
+    .replace(/\s+/g, ' ')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .trim();
+};
+
+// -------------------------------------------------------
 // Query building
 // -------------------------------------------------------
 
@@ -337,10 +397,12 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
     }
   }
 
-  // Full-text search — wrap in double-quotes for literal matching to prevent FTS operator injection
   if (f.search) {
-    conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
-    params.push(`"${f.search.replace(/"/g, '""')}"`);
+    const sanitized = sanitizeFts4Query(f.search);
+    if (sanitized) {
+      conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
+      params.push(sanitized);
+    }
   }
 
   // Cursor (sort-field value + id for stable pagination)
