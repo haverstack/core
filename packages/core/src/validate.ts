@@ -48,7 +48,10 @@ const validateField = (
   depth = 0,
 ): void => {
   if (depth > MAX_VALIDATION_DEPTH) {
-    errors.push({ path, message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}` });
+    errors.push({
+      path,
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
     return;
   }
 
@@ -109,7 +112,10 @@ export const validateContent = (
   depth = 0,
 ): ValidationError[] => {
   if (depth > MAX_VALIDATION_DEPTH) {
-    errors.push({ path: prefix || '(root)', message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}` });
+    errors.push({
+      path: prefix || '(root)',
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
     return errors;
   }
 

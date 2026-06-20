@@ -264,11 +264,15 @@ const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
   let result = '';
   for (const char of clean) {
     if (char === '(') {
-      if (currentDepth < maxDepth) { currentDepth++; result += char; }
-      else result += ' ';
+      if (currentDepth < maxDepth) {
+        currentDepth++;
+        result += char;
+      } else result += ' ';
     } else if (char === ')') {
-      if (currentDepth > 0) { currentDepth--; result += char; }
-      else result += ' ';
+      if (currentDepth > 0) {
+        currentDepth--;
+        result += char;
+      } else result += ' ';
     } else {
       result += char;
     }
@@ -279,13 +283,12 @@ const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
 
   // Iteratively remove empty paren pairs left behind by NEAR/NOT stripping
   let prev: string;
-  do { prev = result; result = result.replace(/\(\s*\)/g, ' '); } while (result !== prev);
+  do {
+    prev = result;
+    result = result.replace(/\(\s*\)/g, ' ');
+  } while (result !== prev);
 
-  return result
-    .replace(/\s+/g, ' ')
-    .replace(/\(\s+/g, '(')
-    .replace(/\s+\)/g, ')')
-    .trim();
+  return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
 };
 
 // -------------------------------------------------------
