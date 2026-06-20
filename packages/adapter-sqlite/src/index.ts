@@ -148,6 +148,18 @@ const SCHEMA_SQL = `
 `;
 
 // -------------------------------------------------------
+// Helpers
+// -------------------------------------------------------
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+const assertFileId = (fileId: string): void => {
+  if (!SHA256_HEX_RE.test(fileId)) {
+    throw new Error(`Invalid fileId: expected 64-character lowercase hex string`);
+  }
+};
+
+// -------------------------------------------------------
 // Row <-> domain object mapping
 // -------------------------------------------------------
 
@@ -325,10 +337,10 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
     }
   }
 
-  // Full-text search
+  // Full-text search — wrap in double-quotes for literal matching to prevent FTS operator injection
   if (f.search) {
     conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
-    params.push(f.search);
+    params.push(`"${f.search.replace(/"/g, '""')}"`);
   }
 
   // Cursor (sort-field value + id for stable pagination)
@@ -339,11 +351,19 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
       parts.length === 3
         ? (parts as [string, string, string])
         : (['createdAt', parts[0], parts[1]] as [string, string, string]);
+    const validSortFields: SortField[] = ['createdAt', 'updatedAt', 'version'];
+    if (!validSortFields.includes(cursorField as SortField)) {
+      throw new Error(`Invalid cursor: unknown sort field "${cursorField}"`);
+    }
+    const numericValue = Number(cursorValue);
+    if (!isFinite(numericValue)) {
+      throw new Error(`Invalid cursor: non-numeric sort value`);
+    }
     const col = getSortColumn(cursorField as SortField);
     const sortDir = query.sort?.direction ?? 'desc';
     const op = sortDir === 'asc' ? '>' : '<';
     conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-    params.push(Number(cursorValue), Number(cursorValue), cursorId);
+    params.push(numericValue, numericValue, cursorId);
   }
 
   return {
@@ -736,6 +756,7 @@ export class SQLiteAdapter implements StackAdapter {
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
+    assertFileId(fileId);
     const exists = this.execQuery<Record<string, unknown>>(
       'SELECT 1 FROM attachments WHERE file_id = ?',
       [fileId],
@@ -745,6 +766,7 @@ export class SQLiteAdapter implements StackAdapter {
   }
 
   async deleteAttachment(fileId: string): Promise<void> {
+    assertFileId(fileId);
     this.db.run('DELETE FROM attachments WHERE file_id = ?', [fileId]);
     this.persist();
     try {
