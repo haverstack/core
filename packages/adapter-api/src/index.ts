@@ -26,7 +26,6 @@ import type {
   AdapterCapabilities,
   RecordId,
   FileId,
-  Permission,
 } from '@haverstack/core';
 import type { WireRecord, WireType, WireVersion } from '@haverstack/wire-types';
 
