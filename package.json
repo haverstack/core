@@ -12,7 +12,8 @@
     "format:check": "prettier --check .",
     "publish:core": "pnpm --filter @haverstack/core publish --access public",
     "publish:sqlite": "pnpm --filter @haverstack/adapter-sqlite publish --access public",
-    "publish:api": "pnpm --filter @haverstack/adapter-api publish --access public"
+    "publish:api": "pnpm --filter @haverstack/adapter-api publish --access public",
+    "publish:wire-types": "pnpm --filter @haverstack/wire-types publish --access public"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
