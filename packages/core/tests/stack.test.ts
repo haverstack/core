@@ -35,15 +35,17 @@ describe('Stack.create', () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('ownerEntityId is null if not set in config', async () => {
+  test('throws if adapter has no entity_id', async () => {
     const emptyAdapter = new MemoryAdapter();
-    const s = await Stack.create(emptyAdapter);
-    expect(s.ownerEntityId).toBeNull();
+    await expect(Stack.create(emptyAdapter)).rejects.toThrow(
+      'Stack misconfiguration: adapter has no entity_id',
+    );
   });
 
   test('timezone defaults to UTC if not set in config', async () => {
-    const emptyAdapter = new MemoryAdapter();
-    const s = await Stack.create(emptyAdapter);
+    const adapterWithEntity = new MemoryAdapter();
+    await adapterWithEntity.setConfig('entity_id', 'entity-without-timezone');
+    const s = await Stack.create(adapterWithEntity);
     expect(s.timezone).toBe('UTC');
   });
 });
