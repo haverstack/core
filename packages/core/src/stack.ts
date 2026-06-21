@@ -532,7 +532,8 @@ export class Stack implements StackClient {
    * Query records. See StackQuery for filter, sort, and pagination options.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    return this.adapter.queryRecords(query);
+    const limit = query.limit !== undefined ? Math.min(query.limit, MAX_QUERY_LIMIT) : undefined;
+    return this.adapter.queryRecords(limit !== undefined ? { ...query, limit } : query);
   }
 
   // -------------------------------------------------------
@@ -704,6 +705,7 @@ export class Stack implements StackClient {
 
 /** Default page size used to fill a permission-filtered query result. */
 const DEFAULT_QUERY_LIMIT = 50;
+const MAX_QUERY_LIMIT = 1000;
 
 /**
  * A permission-enforcing view of a Stack for a single requester. Obtained
@@ -862,7 +864,7 @@ export class ScopedStack implements StackClient {
    * grants don't trigger a separate _grant@1 query per record.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    const limit = query.limit ?? DEFAULT_QUERY_LIMIT;
+    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
     const records: StackRecord[] = [];
     const maxFetched = limit * 10;
     let totalFetched = 0;
