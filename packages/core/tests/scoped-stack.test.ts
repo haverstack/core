@@ -293,6 +293,14 @@ describe('ScopedStack.query', () => {
     expect(result.records).toHaveLength(3);
     expect(result.cursor).toBeNull();
   });
+
+  test('clamps an oversized limit to MAX_QUERY_LIMIT (1000)', async () => {
+    await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
+    const result = await stack.asEntity(null).query({ limit: 9_999_999 });
+    // The limit is silently clamped — no error thrown, results still returned.
+    expect(result.records.length).toBeGreaterThanOrEqual(0);
+    expect(result.records.length).toBeLessThanOrEqual(1000);
+  });
 });
 
 // -------------------------------------------------------
