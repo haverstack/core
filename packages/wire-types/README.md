@@ -16,10 +16,10 @@ npm install @haverstack/wire-types
 
 Each wire type mirrors a domain type from `@haverstack/core` with `Date` fields replaced by ISO 8601 strings.
 
-| Wire type | Domain type |
-|-----------|-------------|
-| `WireRecord` | `StackRecord` |
-| `WireType` | `StackType` |
+| Wire type     | Domain type     |
+| ------------- | --------------- |
+| `WireRecord`  | `StackRecord`   |
+| `WireType`    | `StackType`     |
 | `WireVersion` | `RecordVersion` |
 
 ## Serialization
