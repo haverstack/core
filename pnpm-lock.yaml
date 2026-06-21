@@ -38,6 +38,9 @@ importers:
       '@haverstack/core':
         specifier: workspace:*
         version: link:../core
+      '@haverstack/wire-types':
+        specifier: workspace:*
+        version: link:../wire-types
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

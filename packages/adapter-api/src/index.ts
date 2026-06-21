@@ -28,6 +28,7 @@ import type {
   FileId,
   Permission,
 } from '@haverstack/core';
+import type { WireRecord, WireType, WireVersion } from '@haverstack/wire-types';
 
 // -------------------------------------------------------
 // Public option types
@@ -84,47 +85,45 @@ type DiscoveryResponse = {
 // Domain object parsers (wire JSON → typed domain objects)
 // -------------------------------------------------------
 
-const fromISO = (s: string): Date => new Date(s);
-
-const parseRecord = (raw: Record<string, unknown>): StackRecord => {
+const parseRecord = (raw: WireRecord): StackRecord => {
   const record: StackRecord = {
-    id: raw.id as string,
-    typeId: raw.typeId as string,
-    createdAt: fromISO(raw.createdAt as string),
-    updatedAt: fromISO(raw.updatedAt as string),
-    content: raw.content as Record<string, unknown>,
-    version: raw.version as number,
+    id: raw.id,
+    typeId: raw.typeId,
+    createdAt: new Date(raw.createdAt),
+    updatedAt: new Date(raw.updatedAt),
+    content: raw.content,
+    version: raw.version,
   };
-  if (raw.parentId != null) record.parentId = raw.parentId as string;
-  if (raw.entityId != null) record.entityId = raw.entityId as string;
-  if (raw.appId != null) record.appId = raw.appId as string;
-  if (raw.deletedAt != null) record.deletedAt = fromISO(raw.deletedAt as string);
-  if (raw.permissions != null) record.permissions = raw.permissions as Permission[];
-  if (raw.associations != null) record.associations = raw.associations as Association[];
+  if (raw.parentId != null) record.parentId = raw.parentId;
+  if (raw.entityId != null) record.entityId = raw.entityId;
+  if (raw.appId != null) record.appId = raw.appId;
+  if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
+  if (raw.permissions != null) record.permissions = raw.permissions;
+  if (raw.associations != null) record.associations = raw.associations;
   return record;
 };
 
-const parseType = (raw: Record<string, unknown>): StackType => {
+const parseType = (raw: WireType): StackType => {
   const t: StackType = {
-    id: raw.id as string,
-    baseId: raw.baseId as string,
-    version: raw.version as number,
-    name: raw.name as string,
+    id: raw.id,
+    baseId: raw.baseId,
+    version: raw.version,
+    name: raw.name,
     schema: raw.schema as TypeSchema,
-    schemaHash: raw.schemaHash as string,
-    createdAt: fromISO(raw.createdAt as string),
+    schemaHash: raw.schemaHash,
+    createdAt: new Date(raw.createdAt),
   };
-  if (raw.migratesFrom != null) t.migratesFrom = raw.migratesFrom as string;
+  if (raw.migratesFrom != null) t.migratesFrom = raw.migratesFrom;
   return t;
 };
 
-const parseVersion = (raw: Record<string, unknown>): RecordVersion => {
+const parseVersion = (raw: WireVersion): RecordVersion => {
   const v: RecordVersion = {
-    version: raw.version as number,
-    content: raw.content as Record<string, unknown>,
-    updatedAt: fromISO(raw.updatedAt as string),
+    version: raw.version,
+    content: raw.content,
+    updatedAt: new Date(raw.updatedAt),
   };
-  if (raw.entityId != null) v.entityId = raw.entityId as string;
+  if (raw.entityId != null) v.entityId = raw.entityId;
   return v;
 };
 
@@ -313,24 +312,19 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async createRecord(record: StackRecord): Promise<StackRecord> {
-    const raw = await this.request<Record<string, unknown>>('POST', '/records', record);
+    const raw = await this.request<WireRecord>('POST', '/records', record);
     return parseRecord(raw);
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
-    const raw = await this.request<Record<string, unknown> | null>(
-      'GET',
-      `/records/${id}`,
-      undefined,
-      {
-        nullOn404: true,
-      },
-    );
+    const raw = await this.request<WireRecord | null>('GET', `/records/${id}`, undefined, {
+      nullOn404: true,
+    });
     return raw ? parseRecord(raw) : null;
   }
 
   async updateRecord(id: RecordId, changes: Partial<StackRecord>): Promise<StackRecord> {
-    const raw = await this.request<Record<string, unknown>>('PATCH', `/records/${id}`, changes);
+    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, changes);
     return parseRecord(raw);
   }
 
@@ -341,7 +335,7 @@ export class APIAdapter implements StackAdapter {
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     type Envelope = {
-      records: Record<string, unknown>[];
+      records: WireRecord[];
       cursor: string | null;
       total: number | null;
     };
@@ -381,12 +375,12 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
-    const raw = await this.request<Record<string, unknown>[]>('GET', `/records/${id}/versions`);
+    const raw = await this.request<WireVersion[]>('GET', `/records/${id}/versions`);
     return raw.map(parseVersion);
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
-    const raw = await this.request<Record<string, unknown> | null>(
+    const raw = await this.request<WireVersion | null>(
       'GET',
       `/records/${id}/versions/${version}`,
       undefined,
@@ -409,7 +403,7 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
-    const raw = await this.request<Record<string, unknown> | null>(
+    const raw = await this.request<WireType | null>(
       'GET',
       `/types/${encodeURIComponent(id)}`,
       undefined,
@@ -419,7 +413,7 @@ export class APIAdapter implements StackAdapter {
   }
 
   async listTypes(): Promise<StackType[]> {
-    const raw = await this.request<Record<string, unknown>[]>('GET', '/types');
+    const raw = await this.request<WireType[]>('GET', '/types');
     return raw.map(parseType);
   }
 

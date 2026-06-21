@@ -22,7 +22,8 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*"
+    "@haverstack/core": "workspace:*",
+    "@haverstack/wire-types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
