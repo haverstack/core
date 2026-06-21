@@ -135,7 +135,7 @@ export class Stack implements StackClient {
 
   private constructor(
     private readonly adapter: StackAdapter,
-    readonly ownerEntityId: string | null,
+    readonly ownerEntityId: string,
     readonly timezone: string,
   ) {}
 
@@ -146,6 +146,12 @@ export class Stack implements StackClient {
    */
   static async create(adapter: StackAdapter): Promise<Stack> {
     const entityId = await adapter.getConfig('entity_id');
+    if (!entityId) {
+      throw new Error(
+        'Stack misconfiguration: adapter has no entity_id. ' +
+          'Initialise the adapter with an entityId before calling Stack.create().',
+      );
+    }
     const timezone = (await adapter.getConfig('timezone')) ?? 'UTC';
     const stack = new Stack(adapter, entityId, timezone);
     await stack.seedSystemTypes();
