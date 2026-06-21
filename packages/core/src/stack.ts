@@ -899,7 +899,13 @@ export class ScopedStack implements StackClient {
   }
 
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    await this.requireUpdatable(id);
+    const record = await this.stack.get(id, { migrate: false });
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+
+    const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
+    const isCreator = this.requesterEntityId === record.entityId;
+    if (!isOwner && !isCreator) throw new StackPermissionError();
+
     return this.stack.setPermissions(id, permissions);
   }
 

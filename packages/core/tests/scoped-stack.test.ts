@@ -184,6 +184,22 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.associations).toContainEqual(tag);
   });
 
+  test('setPermissions rejects write-access holder that is not creator or stack owner', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        entityId: OWNER,
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    const perms: Permission[] = [{ access: 'public' }];
+    await expect(stack.asEntity(MEMBER).setPermissions(record.id, perms)).rejects.toThrow(
+      StackPermissionError,
+    );
+    // Stack owner and record creator can still manage permissions.
+    await stack.asEntity(OWNER).setPermissions(record.id, perms);
+    expect((await adapter.getRecord(record.id))?.permissions).toEqual(perms);
+  });
+
   test('write methods throw StackNotFoundError (not StackPermissionError) for a missing record', async () => {
     await expect(stack.asEntity(OWNER).update('nonexistent', {})).rejects.toThrow(
       StackNotFoundError,
