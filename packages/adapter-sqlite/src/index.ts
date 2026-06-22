@@ -8,8 +8,8 @@
  * The database is held in memory and flushed to disk on every
  * write. Attachments are stored as extension-less files in an
  * `attachments/` subdirectory next to the database file.
- * File IDs are SHA-256 hashes of the content, enabling
- * automatic deduplication.
+ * File IDs are SHA-256 hashes of the content; the filesystem
+ * is the authoritative store — no separate DB table is needed.
  *
  * Stack config (timezone, entity_id, etc.) is stored in a
  * `stack_config` key/value table.
@@ -111,10 +111,6 @@ const SCHEMA_SQL = `
     schema_hash   TEXT NOT NULL,
     migrates_from TEXT,
     created_at    INTEGER NOT NULL
-  ) STRICT;
-
-  CREATE TABLE IF NOT EXISTS attachments (
-    file_id TEXT PRIMARY KEY
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS tokens (
@@ -561,23 +557,11 @@ export class SQLiteAdapter implements StackAdapter {
    * changes. Safe to call on both fresh and existing databases.
    */
   private runMigrations(): void {
+    // The attachments table is obsolete — binary files are content-addressed on
+    // disk and the filesystem is the authoritative source of truth. Drop it if
+    // an older database still has it.
     const cols = this.execQuery<{ name: string }>('PRAGMA table_info(attachments)');
-    if (!cols.length) return; // Table doesn't exist yet — SCHEMA_SQL will create it.
-    const hasPath = cols.some((c) => c.name === 'path');
-    if (hasPath) {
-      // Pre-content-addressed-storage schema: drop and recreate as minimal schema.
-      this.db.run('DROP TABLE attachments');
-      this.db.run('CREATE TABLE attachments (file_id TEXT PRIMARY KEY) STRICT');
-      return;
-    }
-    const hasMimeType = cols.some((c) => c.name === 'mime_type');
-    if (hasMimeType) {
-      // Metadata columns moved to _attachment@1 records: migrate to minimal schema.
-      this.db.run('ALTER TABLE attachments RENAME TO attachments_old');
-      this.db.run('CREATE TABLE attachments (file_id TEXT PRIMARY KEY) STRICT');
-      this.db.run('INSERT INTO attachments (file_id) SELECT file_id FROM attachments_old');
-      this.db.run('DROP TABLE attachments_old');
-    }
+    if (cols.length) this.db.run('DROP TABLE attachments');
   }
 
   // -------------------------------------------------------
@@ -806,34 +790,21 @@ export class SQLiteAdapter implements StackAdapter {
 
   async putAttachment(data: Uint8Array, _mimeType?: string, _filename?: string): Promise<string> {
     const fileId = createHash('sha256').update(data).digest('hex');
-
-    // Dedup: same bytes already stored — return existing ID without re-writing.
-    const exists = this.execQuery<Record<string, unknown>>(
-      'SELECT 1 FROM attachments WHERE file_id = ?',
-      [fileId],
-    );
-    if (exists.length > 0) return fileId;
-
-    await writeFile(join(this.attachmentsDir, fileId), data);
-    this.db.run('INSERT INTO attachments (file_id) VALUES (?)', [fileId]);
-    this.persist();
+    if (!existsSync(join(this.attachmentsDir, fileId))) {
+      await writeFile(join(this.attachmentsDir, fileId), data);
+    }
     return fileId;
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
     assertFileId(fileId);
-    const exists = this.execQuery<Record<string, unknown>>(
-      'SELECT 1 FROM attachments WHERE file_id = ?',
-      [fileId],
-    );
-    if (!exists.length) throw new Error(`Attachment not found: "${fileId}"`);
+    if (!existsSync(join(this.attachmentsDir, fileId)))
+      throw new Error(`Attachment not found: "${fileId}"`);
     return readFile(join(this.attachmentsDir, fileId));
   }
 
   async deleteAttachment(fileId: string): Promise<void> {
     assertFileId(fileId);
-    this.db.run('DELETE FROM attachments WHERE file_id = ?', [fileId]);
-    this.persist();
     try {
       await unlink(join(this.attachmentsDir, fileId));
     } catch {
