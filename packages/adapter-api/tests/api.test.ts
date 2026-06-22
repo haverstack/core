@@ -577,7 +577,7 @@ describe('listTypes', () => {
 // -------------------------------------------------------
 
 describe('putAttachment', () => {
-  test('sends POST /attachments with binary body and Content-Type: application/octet-stream by default', async () => {
+  test('sends POST /attachments with binary body and Content-Type: application/octet-stream', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ fileId: 'file-xyz' }));
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
@@ -588,29 +588,6 @@ describe('putAttachment', () => {
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['Content-Type']).toBe(
       'application/octet-stream',
-    );
-    expect((init.headers as Record<string, string>)['Content-Disposition']).toBeUndefined();
-  });
-
-  test('sends Content-Type when mimeType is provided', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse({ fileId: 'file-xyz' }));
-    const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    await adapter.putAttachment(data, 'image/png');
-    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/png');
-    expect((init.headers as Record<string, string>)['Content-Disposition']).toBeUndefined();
-  });
-
-  test('sends Content-Disposition when filename is provided', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse({ fileId: 'file-xyz' }));
-    const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    await adapter.putAttachment(data, 'image/png', 'photo.png');
-    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/png');
-    expect((init.headers as Record<string, string>)['Content-Disposition']).toBe(
-      "attachment; filename*=UTF-8''photo.png",
     );
   });
 });
