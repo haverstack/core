@@ -582,8 +582,8 @@ export class Stack implements StackClient {
    * Does not create an _attachment@1 record — use putAttachment() or
    * ScopedStack.putAttachment() for the full upload flow.
    */
-  async putAttachmentBytes(data: Uint8Array): Promise<string> {
-    return this.adapter.putAttachment(data);
+  async putAttachmentBytes(data: Uint8Array, mimeType?: string, filename?: string): Promise<string> {
+    return this.adapter.putAttachment(data, mimeType, filename);
   }
 
   /**
@@ -592,7 +592,7 @@ export class Stack implements StackClient {
    * specific entity rather than the stack owner.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
-    const fileId = await this.putAttachmentBytes(data);
+    const fileId = await this.putAttachmentBytes(data, mimeType, filename);
     await this.create(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
       fileId,
       mimeType,
@@ -948,7 +948,7 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
-    const fileId = await this.stack.putAttachmentBytes(data);
+    const fileId = await this.stack.putAttachmentBytes(data, mimeType, filename);
     await this.stack.create(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {

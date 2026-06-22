@@ -132,7 +132,7 @@ export class MemoryAdapter implements StackAdapter {
     return [...this.types.values()];
   }
 
-  async putAttachment(_data: Uint8Array): Promise<string> {
+  async putAttachment(_data: Uint8Array, _mimeType?: string, _filename?: string): Promise<string> {
     return 'file-123';
   }
   async getAttachment(_fileId: string): Promise<Uint8Array> {

@@ -804,7 +804,7 @@ export class SQLiteAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array): Promise<string> {
+  async putAttachment(data: Uint8Array, _mimeType?: string, _filename?: string): Promise<string> {
     const fileId = createHash('sha256').update(data).digest('hex');
 
     // Dedup: same bytes already stored — return existing ID without re-writing.

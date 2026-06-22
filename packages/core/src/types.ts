@@ -345,7 +345,7 @@ export interface StackAdapter {
   listTypes(): Promise<StackType[]>;
 
   // Attachments — bytes storage only; metadata lives on _attachment@1 records
-  putAttachment(data: Uint8Array): Promise<FileId>;
+  putAttachment(data: Uint8Array, mimeType?: string, filename?: string): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
 

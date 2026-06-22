@@ -420,8 +420,13 @@ export class APIAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    const result = await this.uploadBinary('/attachments', data, 'application/octet-stream');
+  async putAttachment(data: Uint8Array, mimeType?: string, filename?: string): Promise<FileId> {
+    const result = await this.uploadBinary(
+      '/attachments',
+      data,
+      mimeType ?? 'application/octet-stream',
+      filename,
+    );
     return result.fileId as string;
   }
 
