@@ -57,6 +57,8 @@ export type {
   MigrationFn,
   AdapterCapabilities,
   StackFeatures,
+  StackRecordAdapter,
+  StackBlobAdapter,
   StackAdapter,
   EntityContent,
   AppContent,
@@ -67,6 +69,9 @@ export type {
 } from './types.js';
 
 export { SYSTEM_TYPES } from './types.js';
+
+// Adapter composition
+export { combineAdapters } from './combine.js';
 
 // Utilities
 export { generateId, crockford32Encode, crockford32Decode } from './id.js';

@@ -319,14 +319,14 @@ export type AdapterCapabilities = {
 export type StackFeatures = AdapterCapabilities;
 
 // -------------------------------------------------------
-// Adapter interface
+// Adapter interfaces
 // -------------------------------------------------------
 
 /**
- * Every storage backend implements this interface.
- * The Stack class is a thin orchestration layer on top.
+ * The record-storage half of an adapter. Handles structured data, queries,
+ * associations, versioning, type definitions, and stack identity.
  */
-export interface StackAdapter {
+export interface StackRecordAdapter {
   readonly capabilities: AdapterCapabilities;
 
   /** Entity ID of the stack owner. Set during adapter initialization. */
@@ -355,6 +355,16 @@ export interface StackAdapter {
   getType(id: TypeId): Promise<StackType | null>;
   listTypes(): Promise<StackType[]>;
 
+  // Lifecycle
+  flush?(): Promise<void>;
+  close?(): Promise<void>;
+}
+
+/**
+ * The blob-storage half of an adapter. Handles raw binary data only;
+ * attachment metadata lives on _attachment@1 records in the record adapter.
+ */
+export interface StackBlobAdapter {
   // Attachments — bytes storage only; metadata lives on _attachment@1 records
   putAttachment(data: Uint8Array): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
@@ -364,3 +374,10 @@ export interface StackAdapter {
   flush?(): Promise<void>;
   close?(): Promise<void>;
 }
+
+/**
+ * A complete adapter: record storage and blob storage combined.
+ * Pass this to Stack.create(). Build one with combineAdapters() when you
+ * want different backends for records and blobs (e.g. SQLite + S3).
+ */
+export type StackAdapter = StackRecordAdapter & StackBlobAdapter;

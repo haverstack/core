@@ -106,12 +106,12 @@ describe('open', () => {
   });
 });
 
-  test('preserves ownerEntityId and timezone across reopen', async () => {
-    await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
-    const adapter = await SQLiteAdapter.open({ path: dbPath });
-    expect(adapter.ownerEntityId).toBe('owner-abc');
-    expect(adapter.timezone).toBe('Europe/London');
-  });
+test('preserves ownerEntityId and timezone across reopen', async () => {
+  await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
+  const adapter = await SQLiteAdapter.open({ path: dbPath });
+  expect(adapter.ownerEntityId).toBe('owner-abc');
+  expect(adapter.timezone).toBe('Europe/London');
+});
 
 // -------------------------------------------------------
 // Types

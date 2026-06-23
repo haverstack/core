@@ -23,6 +23,7 @@ import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import type {
   StackAdapter,
+  StackBlobAdapter,
   StackRecord,
   StackType,
   TypeId,
@@ -31,6 +32,7 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
+  FileId,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -149,6 +151,44 @@ const assertFileId = (fileId: string): void => {
     throw new Error(`Invalid fileId: expected 64-character lowercase hex string`);
   }
 };
+
+// -------------------------------------------------------
+// DiskBlobAdapter
+// -------------------------------------------------------
+
+/**
+ * StackBlobAdapter that stores content-addressed blobs on the local filesystem.
+ * File IDs are SHA-256 hashes of the content; if a file with that hash already
+ * exists it is not overwritten (content-addressed deduplication).
+ */
+export class DiskBlobAdapter implements StackBlobAdapter {
+  constructor(private readonly dir: string) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  async putAttachment(data: Uint8Array): Promise<FileId> {
+    const fileId = createHash('sha256').update(data).digest('hex');
+    if (!existsSync(join(this.dir, fileId))) {
+      await writeFile(join(this.dir, fileId), data);
+    }
+    return fileId;
+  }
+
+  async getAttachment(fileId: FileId): Promise<Uint8Array> {
+    assertFileId(fileId);
+    if (!existsSync(join(this.dir, fileId))) throw new Error(`Attachment not found: "${fileId}"`);
+    return readFile(join(this.dir, fileId));
+  }
+
+  async deleteAttachment(fileId: FileId): Promise<void> {
+    assertFileId(fileId);
+    try {
+      await unlink(join(this.dir, fileId));
+    } catch {
+      // Non-fatal — file may already be gone.
+    }
+  }
+}
 
 // -------------------------------------------------------
 // Row <-> domain object mapping
@@ -459,14 +499,12 @@ export class SQLiteAdapter implements StackAdapter {
   timezone!: string;
 
   private db!: Database;
-  private readonly attachmentsDir: string;
+  private blob!: DiskBlobAdapter;
 
   private constructor(
     private readonly SQL: SqlJsStatic,
     private readonly path: string,
-  ) {
-    this.attachmentsDir = join(dirname(path), 'attachments');
-  }
+  ) {}
 
   /**
    * Initialize a new stack database. Fails if the file already exists —
@@ -481,9 +519,9 @@ export class SQLiteAdapter implements StackAdapter {
     }
     const SQL = await initSqlJs();
     const adapter = new SQLiteAdapter(SQL, opts.path);
+    adapter.blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     adapter.db = new SQL.Database();
     adapter.db.run(SCHEMA_SQL);
-    mkdirSync(adapter.attachmentsDir, { recursive: true });
     const now = Date.now();
     adapter.db.run(
       `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
@@ -509,10 +547,10 @@ export class SQLiteAdapter implements StackAdapter {
     }
     const SQL = await initSqlJs();
     const adapter = new SQLiteAdapter(SQL, opts.path);
+    adapter.blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
     adapter.db.run(SCHEMA_SQL);
-    mkdirSync(adapter.attachmentsDir, { recursive: true });
     adapter.readConfig();
     return adapter;
   }
@@ -758,31 +796,19 @@ export class SQLiteAdapter implements StackAdapter {
   }
 
   // -------------------------------------------------------
-  // Attachments
+  // Attachments — delegated to DiskBlobAdapter
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array): Promise<string> {
-    const fileId = createHash('sha256').update(data).digest('hex');
-    if (!existsSync(join(this.attachmentsDir, fileId))) {
-      await writeFile(join(this.attachmentsDir, fileId), data);
-    }
-    return fileId;
+  async putAttachment(data: Uint8Array): Promise<FileId> {
+    return this.blob.putAttachment(data);
   }
 
-  async getAttachment(fileId: string): Promise<Uint8Array> {
-    assertFileId(fileId);
-    if (!existsSync(join(this.attachmentsDir, fileId)))
-      throw new Error(`Attachment not found: "${fileId}"`);
-    return readFile(join(this.attachmentsDir, fileId));
+  async getAttachment(fileId: FileId): Promise<Uint8Array> {
+    return this.blob.getAttachment(fileId);
   }
 
-  async deleteAttachment(fileId: string): Promise<void> {
-    assertFileId(fileId);
-    try {
-      await unlink(join(this.attachmentsDir, fileId));
-    } catch {
-      // Non-fatal — file may already be gone.
-    }
+  async deleteAttachment(fileId: FileId): Promise<void> {
+    return this.blob.deleteAttachment(fileId);
   }
 
   // -------------------------------------------------------

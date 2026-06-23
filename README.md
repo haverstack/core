@@ -146,6 +146,8 @@ Migration is **lazy** — records are migrated in memory on read, and committed 
 | Server API | Hosted/shared stacks, permissions enforcement       |
 | JSON files | Portable, human-readable, backup/export _(planned)_ |
 
+The adapter interface is split into `StackRecordAdapter` (structured data) and `StackBlobAdapter` (binary files). Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose different backends — for example, SQLite records with S3 blobs. `SQLiteAdapter` covers both out of the box for the common case.
+
 ---
 
 ## Development
@@ -175,8 +177,9 @@ packages/
   core/                   # @haverstack/core
     src/
       index.ts            # Public exports
-      types.ts            # All type definitions
+      types.ts            # All type definitions (StackRecordAdapter, StackBlobAdapter, StackAdapter, …)
       stack.ts            # Stack class
+      combine.ts          # combineAdapters() — compose record + blob adapters
       access.ts           # Permission and grant checking
       id.ts               # Crockford base-32 ID generation
       schema.ts           # Schema hashing and type compatibility
@@ -185,7 +188,7 @@ packages/
     tests/
   adapter-sqlite/         # @haverstack/adapter-sqlite
     src/
-      index.ts            # SQLiteAdapter
+      index.ts            # SQLiteAdapter (StackAdapter) + DiskBlobAdapter (StackBlobAdapter)
     tests/
   adapter-api/            # @haverstack/adapter-api
     src/
