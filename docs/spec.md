@@ -719,7 +719,18 @@ Returns `413 Request Entity Too Large` if the payload exceeds the server's confi
 
 The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both steps automatically. Direct HTTP callers must create the `_attachment@1` record separately if metadata is needed.
 
-**Download:** If an `_attachment@1` record exists for the `fileId`, the response uses the stored `mimeType` as `Content-Type`. If the requester owns an `_attachment@1` record with a `filename`, the response includes `Content-Disposition: attachment; filename="..."`. When no metadata record exists (e.g. immediately after a raw upload before the caller has created one), the response falls back to `Content-Type: application/octet-stream`.
+**Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
+
+| Parameter      | Effect                                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------------------- |
+| `?contentType` | Sets `Content-Type` on the response. Dangerous types (HTML, SVG, JS, XML) are forced to `application/octet-stream` regardless. |
+| `?filename`    | Sets the filename in `Content-Disposition`. Also infers `Content-Type` from the file extension when `?contentType` is omitted. |
+
+```
+GET /attachments/<fileId>?contentType=image/png&filename=photo.png
+```
+
+When neither parameter is provided the server queries the `_attachment@1` record: the stored `mimeType` becomes `Content-Type`, and the filename is taken from the requester's own `_attachment@1` record (if one exists). Falls back to `Content-Type: application/octet-stream` when no metadata record is found.
 
 **Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
 
