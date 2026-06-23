@@ -11,8 +11,8 @@
  * File IDs are SHA-256 hashes of the content; the filesystem
  * is the authoritative store — no separate DB table is needed.
  *
- * Stack config (timezone, entity_id, etc.) is stored in a
- * `stack_config` key/value table.
+ * Stack config (ownerEntityId, timezone) is stored as a singleton
+ * _config@1 record with id='_config' in the records table.
  */
 
 import initSqlJs from 'sql.js';
@@ -483,7 +483,6 @@ export class SQLiteAdapter implements StackAdapter {
     const adapter = new SQLiteAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
     adapter.db.run(SCHEMA_SQL);
-    adapter.runMigrations();
     mkdirSync(adapter.attachmentsDir, { recursive: true });
     const now = Date.now();
     adapter.db.run(
@@ -512,8 +511,7 @@ export class SQLiteAdapter implements StackAdapter {
     const adapter = new SQLiteAdapter(SQL, opts.path);
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
-    adapter.db.run(SCHEMA_SQL); // safe — all statements use CREATE IF NOT EXISTS
-    adapter.runMigrations();
+    adapter.db.run(SCHEMA_SQL);
     mkdirSync(adapter.attachmentsDir, { recursive: true });
     adapter.readConfig();
     return adapter;
@@ -527,46 +525,6 @@ export class SQLiteAdapter implements StackAdapter {
   private persist(): void {
     const data = this.db.export();
     writeFileSync(this.path, Buffer.from(data));
-  }
-
-  // -------------------------------------------------------
-  // Schema migrations
-  // -------------------------------------------------------
-
-  /**
-   * Runs after SCHEMA_SQL to handle databases created before breaking schema
-   * changes. Safe to call on both fresh and existing databases.
-   */
-  private runMigrations(): void {
-    // The attachments table is obsolete — binary files are content-addressed on
-    // disk and the filesystem is the authoritative source of truth. Drop it if
-    // an older database still has it.
-    const attachmentCols = this.execQuery<{ name: string }>('PRAGMA table_info(attachments)');
-    if (attachmentCols.length) this.db.run('DROP TABLE attachments');
-
-    // stack_config is obsolete — config is now a _config@1 record in the records
-    // table. Migrate the data and drop the table if it still exists.
-    const configCols = this.execQuery<{ name: string }>('PRAGMA table_info(stack_config)');
-    if (configCols.length) {
-      const configRows = this.execQuery<{ key: string; value: string }>(
-        'SELECT key, value FROM stack_config',
-      );
-      const cfg: Record<string, string> = {};
-      for (const row of configRows) cfg[row.key] = row.value;
-
-      const existing = this.execQuery<{ id: string }>(
-        `SELECT id FROM records WHERE id = '_config'`,
-      );
-      if (!existing.length) {
-        const now = Date.now();
-        this.db.run(
-          `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
-           VALUES ('_config', '_config@1', ?, ?, ?, 1)`,
-          [now, now, JSON.stringify({ entityId: cfg['entity_id'], timezone: cfg['timezone'] ?? 'UTC' })],
-        );
-      }
-      this.db.run('DROP TABLE stack_config');
-    }
   }
 
   private readConfig(): void {
