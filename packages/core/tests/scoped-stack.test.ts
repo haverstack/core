@@ -35,7 +35,7 @@ function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
 }
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ entity_id: OWNER, timezone: 'UTC' });
+  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.create(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text' } });
 });

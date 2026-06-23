@@ -63,6 +63,7 @@ export type {
   GroupContent,
   GrantAction,
   GrantContent,
+  ConfigContent,
 } from './types.js';
 
 export { SYSTEM_TYPES } from './types.js';

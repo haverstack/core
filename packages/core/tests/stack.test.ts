@@ -14,7 +14,7 @@ let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ entity_id: 'owner-123', timezone: 'UTC' });
+  adapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
   stack = await Stack.create(adapter);
 
   await stack.defineType(NOTE_V1, 'Note', {
@@ -27,25 +27,24 @@ beforeEach(async () => {
 // -------------------------------------------------------
 
 describe('Stack.create', () => {
-  test('reads ownerEntityId from adapter config', async () => {
+  test('reads ownerEntityId from adapter', async () => {
     expect(stack.ownerEntityId).toBe('owner-123');
   });
 
-  test('reads timezone from adapter config', async () => {
+  test('reads timezone from adapter', async () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('throws if adapter has no entity_id', async () => {
+  test('throws if adapter has no ownerEntityId', async () => {
     const emptyAdapter = new MemoryAdapter();
     await expect(Stack.create(emptyAdapter)).rejects.toThrow(
-      'Stack misconfiguration: adapter has no entity_id',
+      'Stack misconfiguration: adapter has no ownerEntityId',
     );
   });
 
-  test('timezone defaults to UTC if not set in config', async () => {
-    const adapterWithEntity = new MemoryAdapter();
-    await adapterWithEntity.setConfig('entity_id', 'entity-without-timezone');
-    const s = await Stack.create(adapterWithEntity);
+  test('timezone defaults to UTC when not specified', async () => {
+    const adapter = new MemoryAdapter({ ownerEntityId: 'entity-without-timezone' });
+    const s = await Stack.create(adapter);
     expect(s.timezone).toBe('UTC');
   });
 });

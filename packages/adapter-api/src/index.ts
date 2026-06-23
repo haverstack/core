@@ -171,14 +171,19 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
 
 export class APIAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities;
+  readonly ownerEntityId: string;
+  readonly timezone: string;
 
   private constructor(
     private readonly baseUrl: string,
     private readonly token: string | undefined,
-    private readonly config: Map<string, string>,
+    ownerEntityId: string,
+    timezone: string,
     capabilities: AdapterCapabilities,
   ) {
     this.capabilities = capabilities;
+    this.ownerEntityId = ownerEntityId;
+    this.timezone = timezone;
   }
 
   /**
@@ -208,13 +213,13 @@ export class APIAdapter implements StackAdapter {
 
     const discovery = (await res.json()) as DiscoveryResponse;
 
-    const config = new Map<string, string>([
-      ['entity_id', discovery.entityId],
-      ['version', discovery.version],
-    ]);
-    if (discovery.timezone) config.set('timezone', discovery.timezone);
-
-    return new APIAdapter(baseUrl, opts.token, config, discovery.capabilities);
+    return new APIAdapter(
+      baseUrl,
+      opts.token,
+      discovery.entityId,
+      discovery.timezone ?? 'UTC',
+      discovery.capabilities,
+    );
   }
 
   // -------------------------------------------------------
@@ -290,20 +295,6 @@ export class APIAdapter implements StackAdapter {
     if (res.status === 401) throw new APIAdapterAuthError();
     if (!res.ok) throw new APIAdapterError(`HTTP ${res.status}: POST ${path}`, res.status);
     return res.json() as Promise<Record<string, unknown>>;
-  }
-
-  // -------------------------------------------------------
-  // Config
-  // -------------------------------------------------------
-
-  async getConfig(key: string): Promise<string | null> {
-    return this.config.get(key) ?? null;
-  }
-
-  async setConfig(_key: string, _value: string): Promise<void> {
-    throw new APIAdapterError(
-      'setConfig is not supported: server configuration is managed server-side',
-    );
   }
 
   // -------------------------------------------------------

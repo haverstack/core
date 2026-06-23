@@ -21,21 +21,20 @@ export class MemoryAdapter implements StackAdapter {
     sortableFields: ['createdAt', 'updatedAt', 'version'],
   };
 
+  readonly ownerEntityId: string;
+  readonly timezone: string;
+
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
   readonly versions = new Map<string, RecordVersion[]>();
   readonly types = new Map<string, StackType>();
-  readonly config: Map<string, string>;
 
-  constructor(initialConfig: Record<string, string> = {}) {
-    this.config = new Map(Object.entries(initialConfig));
-  }
-
-  async getConfig(key: string) {
-    return this.config.get(key) ?? null;
-  }
-  async setConfig(key: string, value: string) {
-    this.config.set(key, value);
+  constructor({
+    ownerEntityId = '',
+    timezone = 'UTC',
+  }: { ownerEntityId?: string; timezone?: string } = {}) {
+    this.ownerEntityId = ownerEntityId;
+    this.timezone = timezone;
   }
 
   async createRecord(record: StackRecord) {
