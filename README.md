@@ -20,11 +20,13 @@ The key idea: apps only talk to the Haverstack library. They don't know or care 
 
 This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 
-| Package                                                   | Description                                           |
-| --------------------------------------------------------- | ----------------------------------------------------- |
-| [`@haverstack/core`](./packages/core)                     | Stack class, types, schema, validation, ID generation |
-| [`@haverstack/adapter-sqlite`](./packages/adapter-sqlite) | SQLite storage adapter                                |
-| [`@haverstack/adapter-api`](./packages/adapter-api)       | HTTP adapter for remote stack servers                 |
+| Package                                                                 | Description                                           |
+| ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| [`@haverstack/core`](./packages/core)                                   | Stack class, types, schema, validation, ID generation |
+| [`@haverstack/adapter-local`](./packages/adapter-local)                 | Local adapter (SQLite + disk) — the common case       |
+| [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | SQLite `StackRecordAdapter`                           |
+| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                    |
+| [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                 |
 
 Planned:
 
@@ -38,17 +40,17 @@ Planned:
 
 ```ts
 import { Stack } from '@haverstack/core';
-import { SQLiteAdapter } from '@haverstack/adapter-sqlite';
+import { LocalAdapter } from '@haverstack/adapter-local';
 
 // First run — initialize a new stack
-const adapter = await SQLiteAdapter.initialize({
+const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
   entityId: 'my-entity-id',
   timezone: 'America/New_York',
 });
 
 // Subsequent runs — open the existing stack
-// const adapter = await SQLiteAdapter.open({ path: './my-stack.db' });
+// const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
 const stack = await Stack.create(adapter);
 
@@ -140,13 +142,21 @@ Migration is **lazy** — records are migrated in memory on read, and committed 
 
 ### Adapters
 
-| Adapter    | Use case                                            |
-| ---------- | --------------------------------------------------- |
-| SQLite     | Local app storage, full query support, FTS          |
-| Server API | Hosted/shared stacks, permissions enforcement       |
-| JSON files | Portable, human-readable, backup/export _(planned)_ |
+The adapter interface is split into `StackRecordAdapter` (structured records) and `StackBlobAdapter` (binary files). Packages follow a naming convention that makes the type clear:
 
-The adapter interface is split into `StackRecordAdapter` (structured data) and `StackBlobAdapter` (binary files). Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose different backends — for example, SQLite records with S3 blobs. `SQLiteAdapter` covers both out of the box for the common case.
+- **`adapter-*`** — full `StackAdapter` (convenience packages that cover both halves)
+- **`record-adapter-*`** — `StackRecordAdapter` only
+- **`blob-adapter-*`** — `StackBlobAdapter` only
+
+| Package                 | Type   | Use case                                        |
+| ----------------------- | ------ | ----------------------------------------------- |
+| `adapter-local`         | full   | Local app storage — SQLite records + disk blobs |
+| `record-adapter-sqlite` | record | SQLite records, full query support, FTS         |
+| `blob-adapter-disk`     | blob   | Content-addressed blobs on the local filesystem |
+| `adapter-api`           | full   | Hosted/shared stacks via HTTP                   |
+| `adapter-json`          | full   | Portable JSON files _(planned)_                 |
+
+Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `SQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
 ---
 
@@ -186,13 +196,21 @@ packages/
       validate.ts         # Content validation
       testing.ts          # MemoryAdapter test helper (@haverstack/core/testing)
     tests/
-  adapter-sqlite/         # @haverstack/adapter-sqlite
+  adapter-local/          # @haverstack/adapter-local
     src/
-      index.ts            # SQLiteAdapter (StackAdapter) + DiskBlobAdapter (StackBlobAdapter)
+      index.ts            # LocalAdapter (StackAdapter) — wraps record + blob adapters below
+    tests/
+  record-adapter-sqlite/  # @haverstack/record-adapter-sqlite
+    src/
+      index.ts            # SQLiteRecordAdapter (StackRecordAdapter) + token management
+    tests/
+  blob-adapter-disk/      # @haverstack/blob-adapter-disk
+    src/
+      index.ts            # DiskBlobAdapter (StackBlobAdapter)
     tests/
   adapter-api/            # @haverstack/adapter-api
     src/
-      index.ts            # APIAdapter
+      index.ts            # APIAdapter (StackAdapter)
     tests/
 ```
 

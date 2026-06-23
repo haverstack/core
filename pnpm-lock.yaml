@@ -52,6 +52,28 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.19.17)
 
+  packages/adapter-local:
+    dependencies:
+      '@haverstack/blob-adapter-disk':
+        specifier: workspace:*
+        version: link:../blob-adapter-disk
+      '@haverstack/core':
+        specifier: workspace:*
+        version: link:../core
+      '@haverstack/record-adapter-sqlite':
+        specifier: workspace:*
+        version: link:../record-adapter-sqlite
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/adapter-sqlite:
     dependencies:
       '@haverstack/core':
@@ -74,11 +96,49 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.19.17)
 
+  packages/blob-adapter-disk:
+    dependencies:
+      '@haverstack/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/core:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.17)
+
+  packages/record-adapter-sqlite:
+    dependencies:
+      '@haverstack/core':
+        specifier: workspace:*
+        version: link:../core
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/sql.js':
+        specifier: ^1.4.9
+        version: 1.4.11
       typescript:
         specifier: ^5.5.0
         version: 5.9.3

@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
+import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { SQLiteAdapter } from '../src/index.js';
+import { SQLiteRecordAdapter } from '../src/index.js';
 import type { StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 const initAdapter = (opts?: { timezone?: string; entityId?: string }) =>
-  SQLiteAdapter.initialize({
+  SQLiteRecordAdapter.initialize({
     path: dbPath,
     entityId: opts?.entityId ?? 'entity-123',
     timezone: opts?.timezone ?? 'America/New_York',
@@ -59,11 +59,6 @@ describe('initialize', () => {
     expect(existsSync(dbPath)).toBe(true);
   });
 
-  test('creates an attachments directory', async () => {
-    await initAdapter();
-    expect(existsSync(join(testDir, 'attachments'))).toBe(true);
-  });
-
   test('sets ownerEntityId', async () => {
     const adapter = await initAdapter({ entityId: 'owner-abc' });
     expect(adapter.ownerEntityId).toBe('owner-abc');
@@ -83,14 +78,14 @@ describe('initialize', () => {
 describe('open', () => {
   test('opens an existing database', async () => {
     await initAdapter();
-    const adapter = await SQLiteAdapter.open({ path: dbPath });
+    const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
     expect(adapter.ownerEntityId).toBe('entity-123');
   });
 
   test('throws if database does not exist', async () => {
-    await expect(SQLiteAdapter.open({ path: join(testDir, 'nonexistent.db') })).rejects.toThrow(
-      /no database found/,
-    );
+    await expect(
+      SQLiteRecordAdapter.open({ path: join(testDir, 'nonexistent.db') }),
+    ).rejects.toThrow(/no database found/);
   });
 
   test('data persists across adapter instances', async () => {
@@ -99,8 +94,7 @@ describe('open', () => {
     const record = makeRecord();
     await adapter1.createRecord(record);
 
-    // Open fresh instance — data should still be there
-    const adapter2 = await SQLiteAdapter.open({ path: dbPath });
+    const adapter2 = await SQLiteRecordAdapter.open({ path: dbPath });
     expect(await adapter2.getType(NOTE_TYPE.id)).not.toBeNull();
     expect(await adapter2.getRecord(record.id)).not.toBeNull();
   });
@@ -108,7 +102,7 @@ describe('open', () => {
 
 test('preserves ownerEntityId and timezone across reopen', async () => {
   await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
-  const adapter = await SQLiteAdapter.open({ path: dbPath });
+  const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
   expect(adapter.timezone).toBe('Europe/London');
 });
@@ -279,7 +273,7 @@ describe('records — queries', () => {
     await adapter.createRecord(r1);
     await adapter.createRecord(r2);
     await adapter.createRecord(r3);
-    await adapter.deleteRecord(r3.id); // soft delete
+    await adapter.deleteRecord(r3.id);
     const result = await adapter.queryRecords({});
     expect(result.records.length).toBe(2);
     expect(result.total).toBe(2);
@@ -533,7 +527,6 @@ describe('records — queries', () => {
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
 
-    // No overlap
     const page1Ids = new Set(page1.records.map((r) => r.id));
     const page2Ids = new Set(page2.records.map((r) => r.id));
     expect([...page1Ids].filter((id) => page2Ids.has(id)).length).toBe(0);
@@ -765,81 +758,9 @@ describe('versions', () => {
     await adapter.createRecord(record);
     const v = { version: 1, content: { text: 'original' }, updatedAt: new Date() };
     await adapter.saveVersion(record.id, v);
-    await adapter.saveVersion(record.id, v); // should not throw or duplicate
+    await adapter.saveVersion(record.id, v);
     const versions = await adapter.getVersions(record.id);
     expect(versions.length).toBe(1);
-  });
-});
-
-// -------------------------------------------------------
-// Attachments
-// -------------------------------------------------------
-
-describe('attachments', () => {
-  test('putAttachment returns a fileId', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello'));
-    expect(typeof fileId).toBe('string');
-    expect(fileId.length).toBeGreaterThan(0);
-  });
-
-  test('putAttachment returns SHA-256 hex string', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello'));
-    expect(fileId).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  test('getAttachment returns the stored data', async () => {
-    const adapter = await initAdapter();
-    const data = Buffer.from('hello attachment');
-    const fileId = await adapter.putAttachment(data);
-    const retrieved = await adapter.getAttachment(fileId);
-    expect((retrieved as Buffer).toString()).toBe('hello attachment');
-  });
-
-  test('attachment file exists on disk without extension', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('test'));
-    const attachmentsDir = join(testDir, 'attachments');
-    const files = readdirSync(attachmentsDir);
-    expect(files).toContain(fileId);
-  });
-
-  test('getAttachment throws for unknown fileId', async () => {
-    const adapter = await initAdapter();
-    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow();
-  });
-
-  test('putAttachment stores binary data correctly', async () => {
-    const adapter = await initAdapter();
-    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
-    const fileId = await adapter.putAttachment(binary);
-    const retrieved = await adapter.getAttachment(fileId);
-    expect(retrieved as Buffer).toEqual(binary);
-  });
-
-  test('putAttachment deduplicates identical content', async () => {
-    const adapter = await initAdapter();
-    const data = Buffer.from('same content');
-    const id1 = await adapter.putAttachment(data);
-    const id2 = await adapter.putAttachment(data);
-    expect(id1).toBe(id2);
-    const files = readdirSync(join(testDir, 'attachments'));
-    expect(files.filter((f) => f === id1).length).toBe(1);
-  });
-
-  test('getAttachment throws after deleteAttachment', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('bye'));
-    await adapter.deleteAttachment(fileId);
-    await expect(adapter.getAttachment(fileId)).rejects.toThrow();
-  });
-
-  test('deleteAttachment removes file from disk', async () => {
-    const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('gone'));
-    await adapter.deleteAttachment(fileId);
-    expect(existsSync(join(testDir, 'attachments', fileId))).toBe(false);
   });
 });
 

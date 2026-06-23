@@ -1,7 +1,7 @@
 {
-  "name": "@haverstack/adapter-sqlite",
+  "name": "@haverstack/record-adapter-sqlite",
   "version": "0.5.0",
-  "description": "SQLite storage adapter for Haverstack",
+  "description": "SQLite record adapter for Haverstack",
   "type": "module",
   "exports": {
     ".": {
@@ -17,12 +17,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/adapter-sqlite"
+    "directory": "packages/record-adapter-sqlite"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
     "sqlite",
+    "record",
     "adapter",
     "personal data",
     "storage"
