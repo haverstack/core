@@ -64,19 +64,14 @@ describe('initialize', () => {
     expect(existsSync(join(testDir, 'attachments'))).toBe(true);
   });
 
-  test('stores entity_id in config', async () => {
+  test('sets ownerEntityId', async () => {
     const adapter = await initAdapter({ entityId: 'owner-abc' });
-    expect(await adapter.getConfig('entity_id')).toBe('owner-abc');
+    expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
-  test('stores timezone in config', async () => {
+  test('sets timezone', async () => {
     const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect(await adapter.getConfig('timezone')).toBe('Europe/London');
-  });
-
-  test('stores version in config', async () => {
-    const adapter = await initAdapter();
-    expect(await adapter.getConfig('version')).toBe('1');
+    expect(adapter.timezone).toBe('Europe/London');
   });
 
   test('throws if database already exists', async () => {
@@ -89,7 +84,7 @@ describe('open', () => {
   test('opens an existing database', async () => {
     await initAdapter();
     const adapter = await SQLiteAdapter.open({ path: dbPath });
-    expect(await adapter.getConfig('entity_id')).toBe('entity-123');
+    expect(adapter.ownerEntityId).toBe('entity-123');
   });
 
   test('throws if database does not exist', async () => {
@@ -111,28 +106,12 @@ describe('open', () => {
   });
 });
 
-// -------------------------------------------------------
-// Config
-// -------------------------------------------------------
-
-describe('config', () => {
-  test('setConfig stores a value', async () => {
-    const adapter = await initAdapter();
-    await adapter.setConfig('custom_key', 'custom_value');
-    expect(await adapter.getConfig('custom_key')).toBe('custom_value');
+  test('preserves ownerEntityId and timezone across reopen', async () => {
+    await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
+    const adapter = await SQLiteAdapter.open({ path: dbPath });
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+    expect(adapter.timezone).toBe('Europe/London');
   });
-
-  test('setConfig overwrites existing value', async () => {
-    const adapter = await initAdapter({ timezone: 'UTC' });
-    await adapter.setConfig('timezone', 'Asia/Tokyo');
-    expect(await adapter.getConfig('timezone')).toBe('Asia/Tokyo');
-  });
-
-  test('getConfig returns null for missing key', async () => {
-    const adapter = await initAdapter();
-    expect(await adapter.getConfig('nonexistent')).toBeNull();
-  });
-});
 
 // -------------------------------------------------------
 // Types

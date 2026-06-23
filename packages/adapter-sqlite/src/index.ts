@@ -11,8 +11,8 @@
  * File IDs are SHA-256 hashes of the content; the filesystem
  * is the authoritative store — no separate DB table is needed.
  *
- * Stack config (timezone, entity_id, etc.) is stored in a
- * `stack_config` key/value table.
+ * Stack config (ownerEntityId, timezone) is stored as a singleton
+ * _config@1 record with id='_config' in the records table.
  */
 
 import initSqlJs from 'sql.js';
@@ -64,11 +64,6 @@ export type TokenInfo = {
 // -------------------------------------------------------
 
 const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS stack_config (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  ) STRICT;
-
   CREATE TABLE IF NOT EXISTS records (
     id          TEXT PRIMARY KEY,
     type_id     TEXT NOT NULL,
@@ -299,7 +294,7 @@ const getSortColumn = (field: SortField): string =>
   field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
 
 const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
-  const conditions: string[] = [];
+  const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
 
@@ -460,6 +455,9 @@ export class SQLiteAdapter implements StackAdapter {
     sortableFields: ['createdAt', 'updatedAt', 'version'],
   };
 
+  ownerEntityId!: string;
+  timezone!: string;
+
   private db!: Database;
   private readonly attachmentsDir: string;
 
@@ -485,13 +483,15 @@ export class SQLiteAdapter implements StackAdapter {
     const adapter = new SQLiteAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
     adapter.db.run(SCHEMA_SQL);
-    adapter.runMigrations();
     mkdirSync(adapter.attachmentsDir, { recursive: true });
+    const now = Date.now();
     adapter.db.run(
-      `INSERT INTO stack_config (key, value) VALUES
-        ('entity_id', ?), ('timezone', ?), ('version', '1')`,
-      [opts.entityId, opts.timezone],
+      `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
+       VALUES ('_config', '_config@1', ?, ?, ?, 1)`,
+      [now, now, JSON.stringify({ entityId: opts.entityId, timezone: opts.timezone })],
     );
+    adapter.ownerEntityId = opts.entityId;
+    adapter.timezone = opts.timezone;
     adapter.persist();
     return adapter;
   }
@@ -511,31 +511,10 @@ export class SQLiteAdapter implements StackAdapter {
     const adapter = new SQLiteAdapter(SQL, opts.path);
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
-    adapter.db.run(SCHEMA_SQL); // safe — all statements use CREATE IF NOT EXISTS
-    adapter.runMigrations();
+    adapter.db.run(SCHEMA_SQL);
     mkdirSync(adapter.attachmentsDir, { recursive: true });
+    adapter.readConfig();
     return adapter;
-  }
-
-  // -------------------------------------------------------
-  // Config
-  // -------------------------------------------------------
-
-  async getConfig(key: string): Promise<string | null> {
-    const stmt = this.db.prepare('SELECT value FROM stack_config WHERE key = ?');
-    stmt.bind([key]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
-      stmt.free();
-      return row.value as string;
-    }
-    stmt.free();
-    return null;
-  }
-
-  async setConfig(key: string, value: string): Promise<void> {
-    this.db.run('INSERT OR REPLACE INTO stack_config (key, value) VALUES (?, ?)', [key, value]);
-    this.persist();
   }
 
   // -------------------------------------------------------
@@ -548,20 +527,14 @@ export class SQLiteAdapter implements StackAdapter {
     writeFileSync(this.path, Buffer.from(data));
   }
 
-  // -------------------------------------------------------
-  // Schema migrations
-  // -------------------------------------------------------
-
-  /**
-   * Runs after SCHEMA_SQL to handle databases created before breaking schema
-   * changes. Safe to call on both fresh and existing databases.
-   */
-  private runMigrations(): void {
-    // The attachments table is obsolete — binary files are content-addressed on
-    // disk and the filesystem is the authoritative source of truth. Drop it if
-    // an older database still has it.
-    const cols = this.execQuery<{ name: string }>('PRAGMA table_info(attachments)');
-    if (cols.length) this.db.run('DROP TABLE attachments');
+  private readConfig(): void {
+    const rows = this.execQuery<{ content: string }>(
+      `SELECT content FROM records WHERE id = '_config'`,
+    );
+    if (!rows.length) throw new Error('Stack database is missing its config record.');
+    const content = JSON.parse(rows[0].content) as { entityId: string; timezone?: string };
+    this.ownerEntityId = content.entityId;
+    this.timezone = content.timezone ?? 'UTC';
   }
 
   // -------------------------------------------------------

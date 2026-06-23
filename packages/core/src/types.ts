@@ -210,6 +210,14 @@ export type AttachmentContent = {
   filename?: string;
 };
 
+/** Content for _config records — one singleton per stack, created on initialization. */
+export type ConfigContent = {
+  /** Entity ID of the stack owner. */
+  entityId: string;
+  /** IANA timezone string e.g. "America/New_York". */
+  timezone: string;
+};
+
 /** Reserved system type IDs */
 export const SYSTEM_TYPES = {
   ENTITY: '_entity',
@@ -219,6 +227,8 @@ export const SYSTEM_TYPES = {
   GRANT: '_grant',
   /** Attachment metadata records. See AttachmentContent. */
   ATTACHMENT: '_attachment',
+  /** Stack-level configuration singleton. See ConfigContent. */
+  CONFIG: '_config',
 } as const;
 
 // -------------------------------------------------------
@@ -319,9 +329,10 @@ export type StackFeatures = AdapterCapabilities;
 export interface StackAdapter {
   readonly capabilities: AdapterCapabilities;
 
-  // Config
-  getConfig(key: string): Promise<string | null>;
-  setConfig(key: string, value: string): Promise<void>;
+  /** Entity ID of the stack owner. Set during adapter initialization. */
+  readonly ownerEntityId: string;
+  /** IANA timezone string for this stack e.g. "America/New_York". */
+  readonly timezone: string;
 
   // Records
   createRecord(record: StackRecord): Promise<StackRecord>;

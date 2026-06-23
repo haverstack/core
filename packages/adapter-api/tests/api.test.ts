@@ -109,6 +109,21 @@ describe('open', () => {
     expect(adapter.capabilities.sortableFields).toEqual(['createdAt', 'updatedAt', 'version']);
   });
 
+  test('populates ownerEntityId from discovery response', async () => {
+    const adapter = await openAdapter();
+    expect(adapter.ownerEntityId).toBe('entity-owner-123');
+  });
+
+  test('populates timezone from discovery response', async () => {
+    const adapter = await openAdapter();
+    expect(adapter.timezone).toBe('America/New_York');
+  });
+
+  test('defaults timezone to UTC when not in discovery response', async () => {
+    const adapter = await openAdapter({ ...DISCOVERY, timezone: undefined });
+    expect(adapter.timezone).toBe('UTC');
+  });
+
   test('omits Authorization header when no token provided', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
     await APIAdapter.open({ url: BASE_URL });
@@ -133,43 +148,6 @@ describe('open', () => {
   test('throws APIAdapterError on non-401 error status', async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
     await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(APIAdapterError);
-  });
-});
-
-// -------------------------------------------------------
-// getConfig
-// -------------------------------------------------------
-
-describe('getConfig', () => {
-  test('returns entity_id from discovery', async () => {
-    const adapter = await openAdapter();
-    expect(await adapter.getConfig('entity_id')).toBe('entity-owner-123');
-  });
-
-  test('returns timezone from discovery', async () => {
-    const adapter = await openAdapter();
-    expect(await adapter.getConfig('timezone')).toBe('America/New_York');
-  });
-
-  test('returns version from discovery', async () => {
-    const adapter = await openAdapter();
-    expect(await adapter.getConfig('version')).toBe('1.0');
-  });
-
-  test('returns null for unknown keys', async () => {
-    const adapter = await openAdapter();
-    expect(await adapter.getConfig('nonexistent')).toBeNull();
-  });
-});
-
-// -------------------------------------------------------
-// setConfig
-// -------------------------------------------------------
-
-describe('setConfig', () => {
-  test('throws APIAdapterError — server owns its config', async () => {
-    const adapter = await openAdapter();
-    await expect(adapter.setConfig('timezone', 'UTC')).rejects.toThrow(APIAdapterError);
   });
 });
 

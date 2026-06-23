@@ -133,29 +133,29 @@ export interface StackClient {
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
 
-  private constructor(
-    private readonly adapter: StackAdapter,
-    readonly ownerEntityId: string,
-    readonly timezone: string,
-  ) {}
+  private constructor(private readonly adapter: StackAdapter) {}
 
   /**
-   * Create a Stack instance. Reads ownerEntityId and timezone from the
-   * adapter's config — the adapter is the single source of truth for
-   * stack-level configuration.
+   * Create a Stack instance. Reads ownerEntityId and timezone from the adapter.
    */
   static async create(adapter: StackAdapter): Promise<Stack> {
-    const entityId = await adapter.getConfig('entity_id');
-    if (!entityId) {
+    if (!adapter.ownerEntityId) {
       throw new Error(
-        'Stack misconfiguration: adapter has no entity_id. ' +
+        'Stack misconfiguration: adapter has no ownerEntityId. ' +
           'Initialise the adapter with an entityId before calling Stack.create().',
       );
     }
-    const timezone = (await adapter.getConfig('timezone')) ?? 'UTC';
-    const stack = new Stack(adapter, entityId, timezone);
+    const stack = new Stack(adapter);
     await stack.seedSystemTypes();
     return stack;
+  }
+
+  get ownerEntityId(): string {
+    return this.adapter.ownerEntityId;
+  }
+
+  get timezone(): string {
+    return this.adapter.timezone;
   }
 
   get features(): StackFeatures {
@@ -663,6 +663,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   private async seedSystemTypes(): Promise<void> {
+    await this.defineType(`${SYSTEM_TYPES.CONFIG}@1`, 'Config', {
+      entityId: { kind: 'string', required: true },
+      timezone: { kind: 'string', required: true },
+    });
     await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
       name: { kind: 'string', required: true },
       handle: { kind: 'string' },
