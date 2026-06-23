@@ -176,8 +176,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
     assertFileId(fileId);
-    if (!existsSync(join(this.dir, fileId)))
-      throw new Error(`Attachment not found: "${fileId}"`);
+    if (!existsSync(join(this.dir, fileId))) throw new Error(`Attachment not found: "${fileId}"`);
     return readFile(join(this.dir, fileId));
   }
 
@@ -506,7 +505,6 @@ export class SQLiteAdapter implements StackAdapter {
     private readonly SQL: SqlJsStatic,
     private readonly path: string,
   ) {}
-
 
   /**
    * Initialize a new stack database. Fails if the file already exists —

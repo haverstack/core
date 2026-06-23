@@ -12,7 +12,7 @@ A **Stack** is a structured, portable personal or organizational data store. It 
 
 ## Stack initialization
 
-A Stack is created via an async factory that reads config from the adapter — the adapter is the single source of truth for stack-level configuration.
+A Stack is created via an async factory that reads identity and timezone from the adapter.
 
 ```ts
 // First run — create a new database with initial config
@@ -25,27 +25,19 @@ const adapter = await SQLiteAdapter.initialize({
 // Subsequent runs — open an existing database
 const adapter = await SQLiteAdapter.open({ path: './my-stack.db' });
 
-// Always the same — reads config from the adapter
+// Always the same — reads identity and timezone from the adapter
 const stack = await Stack.create(adapter);
-stack.ownerEntityId; // read from adapter config
-stack.timezone; // read from adapter config
+stack.ownerEntityId; // from adapter.ownerEntityId
+stack.timezone; // from adapter.timezone
 ```
 
 `SQLiteAdapter.initialize()` fails if the file already exists. `SQLiteAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
 Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `putAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
-**Stack config** is stored in a `stack_config` key/value table in the adapter. Current keys:
+**Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store.
 
-| Key         | Description                                    |
-| ----------- | ---------------------------------------------- |
-| `entity_id` | The owner Entity's record ID                   |
-| `timezone`  | IANA timezone string e.g. `"America/New_York"` |
-| `version`   | Stack schema version                           |
-
-The `timezone` field is a property of the stack owner, not the app — an app running against two different stacks should display dates in each stack's configured timezone.
-
-**For the API adapter**, config is not stored locally. The values are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session. `setConfig` is not supported and will throw — server configuration is managed server-side.
+**For the API adapter**, identity values are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session as adapter properties.
 
 ---
 
@@ -238,7 +230,7 @@ function isCompatible(
 
 Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()`.
 
-**System types** (reserved, library-defined): `_entity@1`, `_app@1`, `_group@1`, `_grant@1`, `_attachment@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All five are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
+**System types** (reserved, library-defined): `_config@1`, `_entity@1`, `_app@1`, `_group@1`, `_grant@1`, `_attachment@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
 
 ### Type migrations
 
@@ -398,7 +390,40 @@ type RecordVersion = {
 
 ## Adapters
 
-The library exposes a single interface regardless of backend. Three adapters are planned:
+### Interface split
+
+The adapter contract is split into two focused interfaces that are composed into a single `StackAdapter`:
+
+**`StackRecordAdapter`** — structured storage: capabilities, stack identity (`ownerEntityId`, `timezone`), all record/association/version/type methods, and optional lifecycle hooks (`flush`, `close`).
+
+**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, and optional lifecycle hooks.
+
+```ts
+type StackAdapter = StackRecordAdapter & StackBlobAdapter;
+```
+
+Use `combineAdapters()` from `@haverstack/core` when you want different backends for records and blobs — for example, SQLite records with S3 blob storage:
+
+```ts
+import { combineAdapters } from '@haverstack/core';
+import { SQLiteAdapter, DiskBlobAdapter } from '@haverstack/adapter-sqlite';
+
+const record = await SQLiteAdapter.initialize({ path, entityId, timezone });
+const blob = new S3BlobAdapter(bucketConfig); // hypothetical
+const adapter = combineAdapters({ record, blob });
+const stack = await Stack.create(adapter);
+```
+
+When you don't need to mix backends, just use the adapter directly — `SQLiteAdapter` already implements the full `StackAdapter` and internally delegates blob storage to a `DiskBlobAdapter`:
+
+```ts
+const adapter = await SQLiteAdapter.initialize({ path, entityId, timezone });
+const stack = await Stack.create(adapter); // no combineAdapters needed
+```
+
+`DiskBlobAdapter` is exported from `@haverstack/adapter-sqlite` for use in custom compositions.
+
+### Adapter backends
 
 | Adapter        | Use case                                | Notes                                                   |
 | -------------- | --------------------------------------- | ------------------------------------------------------- |
@@ -550,7 +575,7 @@ The API adapter speaks REST over HTTP with JSON bodies and standard status codes
 
 ### Discovery
 
-A client hits this endpoint first to understand the server's identity and capabilities. The response also supplies the stack config values (`entity_id`, `timezone`, `version`) that `Stack.create()` reads from the adapter — these are cached locally for the session rather than stored on the client.
+A client hits this endpoint first to understand the server's identity and capabilities. The response supplies `entityId` and `timezone`, which the `APIAdapter` caches as `ownerEntityId` and `timezone` properties for the session.
 
 ```
 GET /.well-known/stack
@@ -721,8 +746,8 @@ The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both
 
 **Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
 
-| Parameter      | Effect                                                                                               |
-| -------------- | ---------------------------------------------------------------------------------------------------- |
+| Parameter      | Effect                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `?contentType` | Sets `Content-Type` on the response. Dangerous types (HTML, SVG, JS, XML) are forced to `application/octet-stream` regardless. |
 | `?filename`    | Sets the filename in `Content-Disposition`. Also infers `Content-Type` from the file extension when `?contentType` is omitted. |
 

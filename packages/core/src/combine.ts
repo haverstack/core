@@ -12,9 +12,15 @@ export function combineAdapters(parts: {
   blob: StackBlobAdapter;
 }): StackAdapter {
   return {
-    get capabilities() { return parts.record.capabilities; },
-    get ownerEntityId() { return parts.record.ownerEntityId; },
-    get timezone() { return parts.record.timezone; },
+    get capabilities() {
+      return parts.record.capabilities;
+    },
+    get ownerEntityId() {
+      return parts.record.ownerEntityId;
+    },
+    get timezone() {
+      return parts.record.timezone;
+    },
 
     createRecord: (r) => parts.record.createRecord(r),
     getRecord: (id) => parts.record.getRecord(id),
