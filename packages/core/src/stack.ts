@@ -133,11 +133,7 @@ export interface StackClient {
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
 
-  private constructor(
-    private readonly adapter: StackAdapter,
-    readonly ownerEntityId: string,
-    readonly timezone: string,
-  ) {}
+  private constructor(private readonly adapter: StackAdapter) {}
 
   /**
    * Create a Stack instance. Reads ownerEntityId and timezone from the adapter.
@@ -149,9 +145,17 @@ export class Stack implements StackClient {
           'Initialise the adapter with an entityId before calling Stack.create().',
       );
     }
-    const stack = new Stack(adapter, adapter.ownerEntityId, adapter.timezone);
+    const stack = new Stack(adapter);
     await stack.seedSystemTypes();
     return stack;
+  }
+
+  get ownerEntityId(): string {
+    return this.adapter.ownerEntityId;
+  }
+
+  get timezone(): string {
+    return this.adapter.timezone;
   }
 
   get features(): StackFeatures {
