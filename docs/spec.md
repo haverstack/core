@@ -697,7 +697,7 @@ POST /types        — register or replace a type
 ### Attachments
 
 ```
-POST   /attachments           — upload a file, returns { fileId }
+POST   /attachments           — store raw file bytes, returns { fileId }
 GET    /attachments/:fileId   — download a file
 DELETE /attachments/:fileId   — delete a file
 ```
@@ -706,12 +706,10 @@ Attachments are uploaded first to get a `fileId`, then referenced in an Associat
 
 File IDs are SHA-256 hashes of the content. Uploading identical bytes twice returns the same `fileId` without writing a second copy.
 
-**Upload:** Send the raw binary as the request body. `Content-Type` must be set to the file's MIME type. `Content-Disposition` may optionally carry an original filename.
+**Upload:** Send the raw binary as the request body. `Content-Type` and `Content-Disposition` headers are ignored — `POST /attachments` stores bytes only and does **not** create an `_attachment@1` record. To record metadata (MIME type, filename, size), create an `_attachment@1` record via `POST /records` after upload.
 
 ```
 POST /attachments
-Content-Type: image/svg+xml
-Content-Disposition: attachment; filename="logo.svg"
 Authorization: Bearer <token>
 
 <binary data>
@@ -719,9 +717,11 @@ Authorization: Bearer <token>
 
 Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`).
 
-**Download:** Responds with the stored `Content-Type`. If a filename was provided at upload time, the response also includes `Content-Disposition: attachment; filename="..."` so browsers can save the file with its original name.
+The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both steps automatically. Direct HTTP callers must create the `_attachment@1` record separately if metadata is needed.
 
-**Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. Additionally, the uploader can always access their own attachment before it has been associated with any Record, via the `_attachment@1` record created at upload time.
+**Download:** If an `_attachment@1` record exists for the `fileId`, the response uses the stored `mimeType` as `Content-Type`. If the requester owns an `_attachment@1` record with a `filename`, the response includes `Content-Disposition: attachment; filename="..."`. When no metadata record exists (e.g. immediately after a raw upload before the caller has created one), the response falls back to `Content-Type: application/octet-stream`.
+
+**Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
 
 ### Entity
 
