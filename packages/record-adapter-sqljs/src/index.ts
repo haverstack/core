@@ -29,7 +29,6 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
-  RecordId,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
