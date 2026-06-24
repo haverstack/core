@@ -20,13 +20,13 @@ The key idea: apps only talk to the Haverstack library. They don't know or care 
 
 This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 
-| Package                                                                 | Description                                           |
-| ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| [`@haverstack/core`](./packages/core)                                   | Stack class, types, schema, validation, ID generation |
-| [`@haverstack/adapter-local`](./packages/adapter-local)                 | Local adapter (SQLite + disk) — the common case       |
-| [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | SQLite `StackRecordAdapter`                           |
-| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                    |
-| [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                 |
+| Package                                                               | Description                                           |
+| --------------------------------------------------------------------- | ----------------------------------------------------- |
+| [`@haverstack/core`](./packages/core)                                 | Stack class, types, schema, validation, ID generation |
+| [`@haverstack/adapter-local`](./packages/adapter-local)               | Local adapter (SQLite + disk) — the common case       |
+| [`@haverstack/record-adapter-sqljs`](./packages/record-adapter-sqljs) | sql.js (SQLite/WASM) `StackRecordAdapter`             |
+| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)       | Disk filesystem `StackBlobAdapter`                    |
+| [`@haverstack/adapter-api`](./packages/adapter-api)                   | HTTP adapter for remote stack servers                 |
 
 Planned:
 
@@ -148,13 +148,13 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 - **`record-adapter-*`** — `StackRecordAdapter` only
 - **`blob-adapter-*`** — `StackBlobAdapter` only
 
-| Package                 | Type   | Use case                                        |
-| ----------------------- | ------ | ----------------------------------------------- |
-| `adapter-local`         | full   | Local app storage — SQLite records + disk blobs |
-| `record-adapter-sqlite` | record | SQLite records, full query support, FTS         |
-| `blob-adapter-disk`     | blob   | Content-addressed blobs on the local filesystem |
-| `adapter-api`           | full   | Hosted/shared stacks via HTTP                   |
-| `adapter-json`          | full   | Portable JSON files _(planned)_                 |
+| Package                | Type   | Use case                                        |
+| ---------------------- | ------ | ----------------------------------------------- |
+| `adapter-local`        | full   | Local app storage — SQLite records + disk blobs |
+| `record-adapter-sqljs` | record | sql.js records, full query support, FTS         |
+| `blob-adapter-disk`    | blob   | Content-addressed blobs on the local filesystem |
+| `adapter-api`          | full   | Hosted/shared stacks via HTTP                   |
+| `adapter-json`         | full   | Portable JSON files _(planned)_                 |
 
 Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `SQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
@@ -200,7 +200,7 @@ packages/
     src/
       index.ts            # LocalAdapter (StackAdapter) — wraps record + blob adapters below
     tests/
-  record-adapter-sqlite/  # @haverstack/record-adapter-sqlite
+  record-adapter-sqljs/  # @haverstack/record-adapter-sqljs
     src/
       index.ts            # SQLiteRecordAdapter (StackRecordAdapter) + token management
     tests/

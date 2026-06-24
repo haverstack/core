@@ -26,16 +26,16 @@ import type {
   RecordId,
   FileId,
 } from '@haverstack/core';
-import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
+import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
 import { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 import type { StackBlobAdapter } from '@haverstack/core';
 
-export { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
+export { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
 export type {
   SQLiteRecordInitializeOptions,
   SQLiteRecordOpenOptions,
   TokenInfo,
-} from '@haverstack/record-adapter-sqlite';
+} from '@haverstack/record-adapter-sqljs';
 export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 
 // -------------------------------------------------------

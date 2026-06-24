@@ -60,35 +60,13 @@ importers:
       '@haverstack/core':
         specifier: workspace:*
         version: link:../core
-      '@haverstack/record-adapter-sqlite':
+      '@haverstack/record-adapter-sqljs':
         specifier: workspace:*
-        version: link:../record-adapter-sqlite
+        version: link:../record-adapter-sqljs
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.0.0
-        version: 2.1.9(@types/node@22.19.17)
-
-  packages/adapter-sqlite:
-    dependencies:
-      '@haverstack/core':
-        specifier: workspace:*
-        version: link:../core
-      sql.js:
-        specifier: ^1.14.0
-        version: 1.14.1
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.17
-      '@types/sql.js':
-        specifier: ^1.4.9
-        version: 1.4.11
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -124,7 +102,7 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.19.17)
 
-  packages/record-adapter-sqlite:
+  packages/record-adapter-sqljs:
     dependencies:
       '@haverstack/core':
         specifier: workspace:*

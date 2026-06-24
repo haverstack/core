@@ -1,7 +1,7 @@
 {
-  "name": "@haverstack/record-adapter-sqlite",
+  "name": "@haverstack/record-adapter-sqljs",
   "version": "0.5.0",
-  "description": "SQLite record adapter for Haverstack",
+  "description": "sql.js record adapter for Haverstack",
   "type": "module",
   "exports": {
     ".": {
@@ -17,11 +17,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/record-adapter-sqlite"
+    "directory": "packages/record-adapter-sqljs"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
+    "sqljs",
+    "sql.js",
     "sqlite",
     "record",
     "adapter",

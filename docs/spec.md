@@ -412,13 +412,13 @@ Packages follow a naming convention that makes the adapter type discoverable:
 
 ### Adapter backends
 
-| Package                 | Type   | Use case                                |
-| ----------------------- | ------ | --------------------------------------- |
-| `adapter-local`         | full   | Local app storage — SQLite + disk blobs |
-| `record-adapter-sqlite` | record | SQLite records, FTS, full query support |
-| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk         |
-| `adapter-api`           | full   | Hosted/shared stacks via HTTP           |
-| `adapter-json`          | full   | Portable JSON files _(planned)_         |
+| Package                | Type   | Use case                                |
+| ---------------------- | ------ | --------------------------------------- |
+| `adapter-local`        | full   | Local app storage — SQLite + disk blobs |
+| `record-adapter-sqljs` | record | sql.js records, FTS, full query support |
+| `blob-adapter-disk`    | blob   | Content-addressed blobs on disk         |
+| `adapter-api`          | full   | Hosted/shared stacks via HTTP           |
+| `adapter-json`         | full   | Portable JSON files _(planned)_         |
 
 `adapter-local` is the batteries-included package for the common local case. It wraps `SQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file.
 
@@ -426,7 +426,7 @@ Use `combineAdapters()` from `@haverstack/core` when you want different backends
 
 ```ts
 import { combineAdapters } from '@haverstack/core';
-import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
+import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3'; // hypothetical
 
 const record = await SQLiteRecordAdapter.initialize({ path, entityId, timezone });

@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@haverstack/core": "workspace:*",
-    "@haverstack/record-adapter-sqlite": "workspace:*",
+    "@haverstack/record-adapter-sqljs": "workspace:*",
     "@haverstack/blob-adapter-disk": "workspace:*"
   },
   "devDependencies": {
