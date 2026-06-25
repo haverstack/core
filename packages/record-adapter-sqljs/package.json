@@ -1,16 +1,12 @@
 {
-  "name": "@haverstack/core",
+  "name": "@haverstack/record-adapter-sqljs",
   "version": "0.6.0",
-  "description": "Core library for Haverstack — portable personal data stack",
+  "description": "sql.js record adapter for Haverstack",
   "type": "module",
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./testing": {
-      "import": "./dist/testing.js",
-      "types": "./dist/testing.d.ts"
     }
   },
   "main": "./dist/index.js",
@@ -21,16 +17,18 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/core"
+    "directory": "packages/record-adapter-sqljs"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
+    "sqljs",
+    "sql.js",
+    "sqlite",
+    "record",
+    "adapter",
     "personal data",
-    "data stack",
-    "structured data",
-    "records",
-    "portable"
+    "storage"
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
@@ -39,8 +37,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests"
   },
+  "dependencies": {
+    "@haverstack/core": "workspace:*",
+    "sql.js": "^1.14.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/sql.js": "^1.4.9",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   }

@@ -1,16 +1,12 @@
 {
-  "name": "@haverstack/core",
+  "name": "@haverstack/adapter-local",
   "version": "0.6.0",
-  "description": "Core library for Haverstack — portable personal data stack",
+  "description": "Local (SQLite + disk) stack adapter for Haverstack",
   "type": "module",
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./testing": {
-      "import": "./dist/testing.js",
-      "types": "./dist/testing.d.ts"
     }
   },
   "main": "./dist/index.js",
@@ -21,16 +17,16 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/core"
+    "directory": "packages/adapter-local"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
+    "sqlite",
+    "local",
+    "adapter",
     "personal data",
-    "data stack",
-    "structured data",
-    "records",
-    "portable"
+    "storage"
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
@@ -38,6 +34,11 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "@haverstack/core": "workspace:*",
+    "@haverstack/record-adapter-sqljs": "workspace:*",
+    "@haverstack/blob-adapter-disk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,29 +1,26 @@
 /**
- * Stack — SQLite Adapter
+ * Haverstack — SQLite Record Adapter
  * -------------------------------------------------------
- * Implements StackAdapter using sql.js (SQLite compiled to
- * WebAssembly). Runs in Node, browsers, and other runtimes
+ * Implements StackRecordAdapter using sql.js (SQLite compiled
+ * to WebAssembly). Runs in Node, browsers, and other runtimes
  * without native compilation.
  *
  * The database is held in memory and flushed to disk on every
- * write. Attachments are stored as extension-less files in an
- * `attachments/` subdirectory next to the database file.
- * File IDs are SHA-256 hashes of the content; the filesystem
- * is the authoritative store — no separate DB table is needed.
+ * write. Stack config (ownerEntityId, timezone) is stored as
+ * a singleton _config@1 record with id='_config' in the
+ * records table.
  *
- * Stack config (ownerEntityId, timezone) is stored as a singleton
- * _config@1 record with id='_config' in the records table.
+ * Also exposes token management methods (createToken,
+ * lookupToken, listTokens, revokeToken) used by server
+ * implementations to issue and validate bearer tokens.
  */
 
 import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { readFile, writeFile, unlink } from 'fs/promises';
-import { join, dirname } from 'path';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import type {
-  StackAdapter,
-  StackBlobAdapter,
+  StackRecordAdapter,
   StackRecord,
   StackType,
   TypeId,
@@ -32,14 +29,13 @@ import type {
   QueryResult,
   Association,
   AdapterCapabilities,
-  FileId,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-export type SQLiteInitializeOptions = {
+export type SQLiteRecordInitializeOptions = {
   /** Absolute path to the .db file. Must not already exist. */
   path: string;
   /** IANA timezone string e.g. "America/New_York". */
@@ -48,7 +44,7 @@ export type SQLiteInitializeOptions = {
   entityId: string;
 };
 
-export type SQLiteOpenOptions = {
+export type SQLiteRecordOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
 };
@@ -142,56 +138,6 @@ const SCHEMA_SQL = `
 
 // -------------------------------------------------------
 // Helpers
-// -------------------------------------------------------
-
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
-const assertFileId = (fileId: string): void => {
-  if (!SHA256_HEX_RE.test(fileId)) {
-    throw new Error(`Invalid fileId: expected 64-character lowercase hex string`);
-  }
-};
-
-// -------------------------------------------------------
-// DiskBlobAdapter
-// -------------------------------------------------------
-
-/**
- * StackBlobAdapter that stores content-addressed blobs on the local filesystem.
- * File IDs are SHA-256 hashes of the content; if a file with that hash already
- * exists it is not overwritten (content-addressed deduplication).
- */
-export class DiskBlobAdapter implements StackBlobAdapter {
-  constructor(private readonly dir: string) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    const fileId = createHash('sha256').update(data).digest('hex');
-    if (!existsSync(join(this.dir, fileId))) {
-      await writeFile(join(this.dir, fileId), data);
-    }
-    return fileId;
-  }
-
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    assertFileId(fileId);
-    if (!existsSync(join(this.dir, fileId))) throw new Error(`Attachment not found: "${fileId}"`);
-    return readFile(join(this.dir, fileId));
-  }
-
-  async deleteAttachment(fileId: FileId): Promise<void> {
-    assertFileId(fileId);
-    try {
-      await unlink(join(this.dir, fileId));
-    } catch {
-      // Non-fatal — file may already be gone.
-    }
-  }
-}
-
-// -------------------------------------------------------
-// Row <-> domain object mapping
 // -------------------------------------------------------
 
 const toMs = (d: Date): number => d.getTime();
@@ -485,10 +431,10 @@ const makeCursor = (record: StackRecord, field: SortField): string => {
 };
 
 // -------------------------------------------------------
-// SQLite adapter
+// SQLiteRecordAdapter
 // -------------------------------------------------------
 
-export class SQLiteAdapter implements StackAdapter {
+export class SQLiteRecordAdapter implements StackRecordAdapter {
   readonly capabilities: AdapterCapabilities = {
     fullTextSearch: true,
     contentFieldQuery: true,
@@ -499,7 +445,6 @@ export class SQLiteAdapter implements StackAdapter {
   timezone!: string;
 
   private db!: Database;
-  private blob!: DiskBlobAdapter;
 
   private constructor(
     private readonly SQL: SqlJsStatic,
@@ -510,16 +455,15 @@ export class SQLiteAdapter implements StackAdapter {
    * Initialize a new stack database. Fails if the file already exists —
    * use open() for existing databases.
    */
-  static async initialize(opts: SQLiteInitializeOptions): Promise<SQLiteAdapter> {
+  static async initialize(opts: SQLiteRecordInitializeOptions): Promise<SQLiteRecordAdapter> {
     if (existsSync(opts.path)) {
       throw new Error(
         `Cannot initialize: database already exists at "${opts.path}". ` +
-          `Use SQLiteAdapter.open() instead.`,
+          `Use SQLiteRecordAdapter.open() instead.`,
       );
     }
     const SQL = await initSqlJs();
-    const adapter = new SQLiteAdapter(SQL, opts.path);
-    adapter.blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
+    const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
     adapter.db.run(SCHEMA_SQL);
     const now = Date.now();
@@ -538,16 +482,15 @@ export class SQLiteAdapter implements StackAdapter {
    * Open an existing stack database. Fails if the file does not exist —
    * use initialize() for new databases.
    */
-  static async open(opts: SQLiteOpenOptions): Promise<SQLiteAdapter> {
+  static async open(opts: SQLiteRecordOpenOptions): Promise<SQLiteRecordAdapter> {
     if (!existsSync(opts.path)) {
       throw new Error(
         `Cannot open: no database found at "${opts.path}". ` +
-          `Use SQLiteAdapter.initialize() to create one.`,
+          `Use SQLiteRecordAdapter.initialize() to create one.`,
       );
     }
     const SQL = await initSqlJs();
-    const adapter = new SQLiteAdapter(SQL, opts.path);
-    adapter.blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
+    const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
     adapter.db.run(SCHEMA_SQL);
@@ -793,22 +736,6 @@ export class SQLiteAdapter implements StackAdapter {
       'SELECT * FROM types ORDER BY base_id, version',
     );
     return rows.map(rowToType);
-  }
-
-  // -------------------------------------------------------
-  // Attachments — delegated to DiskBlobAdapter
-  // -------------------------------------------------------
-
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    return this.blob.putAttachment(data);
-  }
-
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    return this.blob.getAttachment(fileId);
-  }
-
-  async deleteAttachment(fileId: FileId): Promise<void> {
-    return this.blob.deleteAttachment(fileId);
   }
 
   // -------------------------------------------------------

@@ -1,7 +1,7 @@
 {
-  "name": "@haverstack/adapter-sqlite",
-  "version": "0.5.0",
-  "description": "SQLite storage adapter for Haverstack",
+  "name": "@haverstack/blob-adapter-disk",
+  "version": "0.6.0",
+  "description": "Disk blob adapter for Haverstack",
   "type": "module",
   "exports": {
     ".": {
@@ -17,12 +17,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/adapter-sqlite"
+    "directory": "packages/blob-adapter-disk"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
-    "sqlite",
+    "disk",
+    "blob",
     "adapter",
     "personal data",
     "storage"
@@ -35,12 +36,10 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*",
-    "sql.js": "^1.14.0"
+    "@haverstack/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/sql.js": "^1.4.9",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   }

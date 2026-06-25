@@ -16,14 +16,14 @@ A Stack is created via an async factory that reads identity and timezone from th
 
 ```ts
 // First run — create a new database with initial config
-const adapter = await SQLiteAdapter.initialize({
+const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
   entityId: 'abc123', // required — owner entity ID
   timezone: 'America/New_York', // required — IANA timezone string
 });
 
 // Subsequent runs — open an existing database
-const adapter = await SQLiteAdapter.open({ path: './my-stack.db' });
+const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
 // Always the same — reads identity and timezone from the adapter
 const stack = await Stack.create(adapter);
@@ -31,7 +31,7 @@ stack.ownerEntityId; // from adapter.ownerEntityId
 stack.timezone; // from adapter.timezone
 ```
 
-`SQLiteAdapter.initialize()` fails if the file already exists. `SQLiteAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
+`LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
 Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `putAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
@@ -402,34 +402,38 @@ The adapter contract is split into two focused interfaces that are composed into
 type StackAdapter = StackRecordAdapter & StackBlobAdapter;
 ```
 
+### Package naming convention
+
+Packages follow a naming convention that makes the adapter type discoverable:
+
+- **`adapter-*`** — full `StackAdapter` (convenience packages covering both halves)
+- **`record-adapter-*`** — `StackRecordAdapter` only
+- **`blob-adapter-*`** — `StackBlobAdapter` only
+
+### Adapter backends
+
+| Package                | Type   | Use case                                |
+| ---------------------- | ------ | --------------------------------------- |
+| `adapter-local`        | full   | Local app storage — SQLite + disk blobs |
+| `record-adapter-sqljs` | record | sql.js records, FTS, full query support |
+| `blob-adapter-disk`    | blob   | Content-addressed blobs on disk         |
+| `adapter-api`          | full   | Hosted/shared stacks via HTTP           |
+| `adapter-json`         | full   | Portable JSON files _(planned)_         |
+
+`adapter-local` is the batteries-included package for the common local case. It wraps `SQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file.
+
 Use `combineAdapters()` from `@haverstack/core` when you want different backends for records and blobs — for example, SQLite records with S3 blob storage:
 
 ```ts
 import { combineAdapters } from '@haverstack/core';
-import { SQLiteAdapter, DiskBlobAdapter } from '@haverstack/adapter-sqlite';
+import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
+import { S3BlobAdapter } from '@haverstack/blob-adapter-s3'; // hypothetical
 
-const record = await SQLiteAdapter.initialize({ path, entityId, timezone });
-const blob = new S3BlobAdapter(bucketConfig); // hypothetical
+const record = await SQLiteRecordAdapter.initialize({ path, entityId, timezone });
+const blob = new S3BlobAdapter(bucketConfig);
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.create(adapter);
 ```
-
-When you don't need to mix backends, just use the adapter directly — `SQLiteAdapter` already implements the full `StackAdapter` and internally delegates blob storage to a `DiskBlobAdapter`:
-
-```ts
-const adapter = await SQLiteAdapter.initialize({ path, entityId, timezone });
-const stack = await Stack.create(adapter); // no combineAdapters needed
-```
-
-`DiskBlobAdapter` is exported from `@haverstack/adapter-sqlite` for use in custom compositions.
-
-### Adapter backends
-
-| Adapter        | Use case                                | Notes                                                   |
-| -------------- | --------------------------------------- | ------------------------------------------------------- |
-| **JSON files** | Portable, human-readable, backup/export | Slow queries (O(n) scan); may maintain an `_index.json` |
-| **SQLite**     | Local app storage, fast queries         | Indexes associations, parentId, appId, etc.             |
-| **Server API** | Hosted/shared stacks                    | Enforces permissions and app identity                   |
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
