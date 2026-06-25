@@ -123,7 +123,9 @@ export interface StackClient {
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number): Promise<StackRecord>;
+  getAttachment(fileId: string): Promise<Uint8Array>;
   putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
+  deleteAttachment(fileId: string): Promise<void>;
 }
 
 // -------------------------------------------------------
@@ -606,6 +608,42 @@ export class Stack implements StackClient {
     return this.adapter.getAttachment(fileId);
   }
 
+  /**
+   * Delete an attachment's bytes and its _attachment@1 metadata record(s).
+   * Throws if any record in the stack still references the file.
+   * Throws StackNotFoundError if neither metadata records nor bytes exist.
+   */
+  async deleteAttachment(fileId: string): Promise<void> {
+    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) {
+      throw new Error('Attachment is still referenced by one or more records');
+    }
+
+    const metaResult = await this.query({
+      filter: {
+        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+        ...(this.features.contentFieldQuery && { content: { fileId } }),
+      },
+    });
+    const metaRecords = this.features.contentFieldQuery
+      ? metaResult.records
+      : metaResult.records.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+
+    if (!metaRecords.length) {
+      try {
+        await this.adapter.getAttachment(fileId);
+      } catch {
+        throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
+      }
+    }
+
+    for (const record of metaRecords) {
+      await this.delete(record.id, { hard: true });
+    }
+
+    await this.adapter.deleteAttachment(fileId);
+  }
+
   // -------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------
@@ -964,5 +1002,51 @@ export class ScopedStack implements StackClient {
       { entityId: requester },
     );
     return fileId;
+  }
+
+  /**
+   * Download attachment bytes. Accessible if the requester is the owner,
+   * can read any record referencing the file, or uploaded the file themselves
+   * and it hasn't been associated with a record yet.
+   */
+  async getAttachment(fileId: string): Promise<Uint8Array> {
+    if (this.requesterEntityId === this.stack.ownerEntityId) {
+      return this.stack.getAttachment(fileId);
+    }
+
+    // Accessible if the requester can read any record that references this file
+    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) {
+      return this.stack.getAttachment(fileId);
+    }
+
+    // Accessible if the requester uploaded it and it hasn't been associated yet
+    if (this.requesterEntityId) {
+      const uploadResult = await this.stack.query({
+        filter: {
+          typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+          entityId: this.requesterEntityId,
+          ...(this.stack.features.contentFieldQuery && { content: { fileId } }),
+        },
+        limit: 1,
+      });
+      const hasUpload = this.stack.features.contentFieldQuery
+        ? uploadResult.records.length > 0
+        : uploadResult.records.some((r) => (r.content as AttachmentContent).fileId === fileId);
+      if (hasUpload) return this.stack.getAttachment(fileId);
+    }
+
+    throw new StackPermissionError();
+  }
+
+  /**
+   * Delete an attachment. Only the stack owner may delete attachments.
+   * Delegates to Stack.deleteAttachment(), which enforces the "not referenced" check.
+   */
+  async deleteAttachment(fileId: string): Promise<void> {
+    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+      throw new StackPermissionError('Only the stack owner can delete attachments');
+    }
+    return this.stack.deleteAttachment(fileId);
   }
 }
