@@ -33,7 +33,7 @@ stack.timezone; // from adapter.timezone
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `putAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 **Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store.
 
@@ -449,6 +449,10 @@ const fileId = await stack.putAttachment(data: Uint8Array, mimeType: string, fil
 
 // Fetch the binary
 const data: Uint8Array = await stack.getAttachment(fileId)
+
+// Delete the binary and its _attachment@1 metadata record(s)
+// Throws StackConflictError if any record still references the file
+await stack.deleteAttachment(fileId)
 ```
 
 A `fileId` is referenced in an `Association` of kind `"attachment"`. To read metadata for a given `fileId`, query `_attachment@1` records:
@@ -464,10 +468,16 @@ const results = await stack.query({
 const meta = results.records[0]?.content as AttachmentContent | undefined;
 ```
 
-**`Stack.putAttachment()` vs `ScopedStack.putAttachment()`:**
+**`Stack` vs `ScopedStack` attachment methods:**
 
 - `Stack.putAttachment(data, mimeType, filename?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
 - `ScopedStack.putAttachment(data, mimeType, filename?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is set to the uploading entity.
+
+- `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
+- `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
+
+- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file. Throws `StackConflictError` if any record still references the file. Throws `StackNotFoundError` if the file doesn't exist.
+- `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
 
 **Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record with its own `mimeType` and `filename`. The same `fileId` may have multiple `_attachment@1` records from separate uploads.
 
@@ -618,6 +628,7 @@ Standard HTTP status codes are used throughout:
 | **401** | Unauthorized             | Missing or invalid bearer token                                                                                                        |
 | **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                  |
 | **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                |
+| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record)          |
 | **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                      |
 | **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type) |
 
@@ -760,6 +771,8 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 ```
 
 When neither parameter is provided the server queries the `_attachment@1` record: the stored `mimeType` becomes `Content-Type`, and the filename is taken from the requester's own `_attachment@1` record (if one exists). Falls back to `Content-Type: application/octet-stream` when no metadata record is found.
+
+**Delete:** Owner only. Returns `409 Conflict` if any record in the stack still references the file (i.e. has it in an `attachment` association or its content references the `fileId`). The bytes and all `_attachment@1` metadata records for the file are removed atomically on success.
 
 **Attachment permissions** are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
 
