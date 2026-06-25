@@ -97,6 +97,14 @@ export class StackNotFoundError extends Error {
   }
 }
 
+/** Thrown when an operation cannot proceed due to a constraint violation (e.g. deleting an attachment that is still referenced). */
+export class StackConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackConflictError';
+  }
+}
+
 // -------------------------------------------------------
 // StackClient interface
 // -------------------------------------------------------
@@ -610,13 +618,13 @@ export class Stack implements StackClient {
 
   /**
    * Delete an attachment's bytes and its _attachment@1 metadata record(s).
-   * Throws if any record in the stack still references the file.
+   * Throws StackConflictError if any record in the stack still references the file.
    * Throws StackNotFoundError if neither metadata records nor bytes exist.
    */
   async deleteAttachment(fileId: string): Promise<void> {
     const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
     if (refResult.records.length > 0) {
-      throw new Error('Attachment is still referenced by one or more records');
+      throw new StackConflictError('Attachment is still referenced by one or more records');
     }
 
     const metaResult = await this.query({
