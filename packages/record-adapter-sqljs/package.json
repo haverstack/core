@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/record-adapter-sqljs",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "sql.js record adapter for Haverstack",
   "type": "module",
   "exports": {

@@ -12,7 +12,6 @@
  */
 
 import { dirname, join } from 'path';
-import { combineAdapters } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
