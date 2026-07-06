@@ -18,7 +18,7 @@ Haverstack is a portable personal data stack: apps write typed **Records** into 
 ## How we work
 
 1. Reviewer raises design flaws → owner (cuibonobo) adds intent/context → discuss until a direction is agreed → file a GitHub issue capturing problem, decided direction, work items, open questions, cross-refs.
-2. Issues that change spec *semantics* are titled "RFC: …". Mechanical/implementation issues are plain titles.
+2. Issues that change spec _semantics_ are titled "RFC: …". Mechanical/implementation issues are plain titles.
 3. Discussion first, filing second — don't file until the owner says so. Follow-up analysis (perf, clarifications) is posted as issue comments so decisions live on the tracker.
 4. Lead with the verdict; cite prior art when it earns its place (Stripe versioning, Cambria lenses, protobuf/ATProto additive evolution, SSB/Nostr key identity, petnames/Zooko's triangle).
 
@@ -33,7 +33,7 @@ Haverstack is a portable personal data stack: apps write typed **Records** into 
 
 ## Design philosophy (decisions of record — the durable output of this review)
 
-1. **Layering**: adapters are storage engines; `Stack` is the library's *invariant* layer (schema validation, `_config` protection, drift guard, ID legality); `ScopedStack` is per-requester policy. Invariants are written once in core and inherited by every adapter. The one exception: query-shape rules (system-record exclusion) must be pushed down into adapters for pagination correctness — so they're promoted from convention to specced contract enforced by shared conformance fixtures. (#67, #68, #52)
+1. **Layering**: adapters are storage engines; `Stack` is the library's _invariant_ layer (schema validation, `_config` protection, drift guard, ID legality); `ScopedStack` is per-requester policy. Invariants are written once in core and inherited by every adapter. The one exception: query-shape rules (system-record exclusion) must be pushed down into adapters for pagination correctness — so they're promoted from convention to specced contract enforced by shared conformance fixtures. (#67, #68, #52)
 2. **Recoverability over fencing**: record-level `write` stays one coarse bit; its trust model is "anything a write-holder does, the owner can undo." Irreversible or privilege-bearing verbs (hard delete, `setPermissions`) are owner/creator-only. Grants stay fine-grained — type-wide access for third-party apps warrants verb precision; per-record sharing among intimates warrants simplicity. (#59)
 3. **One versioning rule**: every record mutation — content, associations, permissions, soft-delete/undelete — bumps `version` and snapshots the prior full state (`RecordVersion` gains `associations`/`permissions`/`typeId`). No special cases; `ifVersion` CAS then covers all races. Restore returns content + typeId + associations, never permissions. (#61, #62, #48)
 4. **Soft-deleted records count as references** — nothing reachable from a recoverable state gets destroyed (blob GC, undelete). Only hard deletion removes a reference. (#64, #60)
@@ -41,16 +41,18 @@ Haverstack is a portable personal data stack: apps write typed **Records** into 
 6. **Two compatibility relations, never conflated**: `isCompatible` = read-compatibility ("may a consumer of this shape read records of that type"; requires required-on-candidate; `text`⇄`string` mutually readable) vs `diffSchemas` = evolution legality ("may this schema replace that one under the same id"; kind changes are always drift). (#54, #68)
 7. **Wire honesty**: never silently widen or narrow a query — missing capability fails loudly (#56); errors round-trip as typed core classes via a wire `code` vocabulary (#53); malformed input is 400, invalid content is 422; the #52 conformance fixtures (run by both `adapter-api` and `haverstack/server`) are the enforcement point for every wire contract decided in this review.
 8. **Server-authoritative envelope**: `version`/`updatedAt` (#48) and ID legality (charset, length, reserved `_` prefix, duplicate → 409) (#55) are audited server-side; clients keep generating IDs (offline-friendly) but the server validates always, may assign optionally.
-9. **Properties vs perspectives**: fields that describe *the bytes/the world* are singular and deterministic (attachment `mimeType`: first-recorded wins, conflicts rejected); fields that describe *someone's view* are plural and per-requester (attachment `filename`, entity petnames in #49's `_entity` cards). (#65, #49)
-10. **Determinism + backstop pairing**: make behavior deterministic first (#65 Content-Type), then make even a deterministic lie inert (#66 forcing applies to the *resulting* type from any source, safe-list + `nosniff`). Neither substitutes for the other.
+9. **Properties vs perspectives**: fields that describe _the bytes/the world_ are singular and deterministic (attachment `mimeType`: first-recorded wins, conflicts rejected); fields that describe _someone's view_ are plural and per-requester (attachment `filename`, entity petnames in #49's `_entity` cards). (#65, #49)
+10. **Determinism + backstop pairing**: make behavior deterministic first (#65 Content-Type), then make even a deterministic lie inert (#66 forcing applies to the _resulting_ type from any source, safe-list + `nosniff`). Neither substitutes for the other.
 11. **`entityId` means author, everywhere** — never grantee (#57), never stamped on owner writes through any path (#69), and becomes a DID string under #49.
 
 ## Issues index
 
 **Prior session (#45–#52):**
+
 - #45 single-writer storage model + topology guidance; #46 SQLite split (native adapter, browser sqljs, shared SQL layer, `StackTokenStore`) — accumulated implementation comments: transactions for `deleteAttachment` race (metadata in tx, bytes after commit), `PRAGMA foreign_keys`, token storage out of the portable file; #47 owner-driven migration + additive evolution — amended twice by comment: `migrateAll()` sweeps soft-deleted unconditionally; governance (staging area / consolidation points); #48 opt-in optimistic concurrency — parked question resolved by #61; #49 RFC identity = DID; #50 pagination-as-exhaustive; #51 ScopedStack.create passthrough / reference-implies-access gating; #52 PATCH contract split + conformance fixtures.
 
 **This session (#53–#69):**
+
 - #53 error taxonomy round-trip (wire `code` vocabulary; + comment: malformed cursors → 400)
 - #54 `isCompatible` strengthening (required-on-candidate, `text`⇄`string` table — clarifying comment with the full relation, recursive descent)
 - #55 ID authority (server validates always/assigns optionally; `% max` off-by-one; clock-regression clamp)
@@ -74,7 +76,7 @@ Pre-existing owner issues: #3 (event/hook system), #15 (RFC: ATProto compat — 
 ## Open questions flagged for implementation time (none block filing; all recorded on their issues)
 
 - #48: 409 vs 412 for `ifVersion` conflicts.
-- #49/#58: who may act *as* a group (key custody) — deferred; #58's admin definition must not foreclose it.
+- #49/#58: who may act _as_ a group (key custody) — deferred; #58's admin definition must not foreclose it.
 - #53: does 400 get a typed core error or stay adapter-level (leaning adapter-level).
 - #55: `createdAt` server-authoritative in the same pass? Retry-on-409 automatic in `create()`? Timestamp-prefix skew tolerance is server-optional.
 - #59: does `delete-any` (grant) also lose hard delete (leaning yes)? Non-owner `{ hard: true }` → error or silent soften (leaning error)?
