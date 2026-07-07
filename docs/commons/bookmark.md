@@ -51,9 +51,10 @@ can be surfaced by a bookmark consumer.
 
 - `tags: string[]` — tag associations.
 - `unread`, `archived`, `favorite` — perspectives.
-- `siteName`, `author`, `publishedAt` page metadata — belongs to a future
-  `article`/`webpage` proposal (the read-later apps' richer shape), which should be
-  read-compatible with this type rather than bloating it.
+- `siteName`, `author`, `publishedAt` page metadata — that is [`article`](./article.md)
+  territory (the read-later apps' richer shape). An app that captures full articles
+  keeps a paired bookmark record for bookmark-consumer reach and links it to the
+  article with `{ kind: 'relationship', label: 'capture', recordId }`.
 
 ## Changelog
 

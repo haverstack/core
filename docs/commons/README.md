@@ -29,6 +29,10 @@ org.haverstack/note@1
 org.haverstack/bookmark@1
 org.haverstack/task@1
 org.haverstack/contact@1
+org.haverstack/article@1
+org.haverstack/place@1
+org.haverstack/page@1
+org.haverstack/photo@1   (staged — see below)
 ```
 
 Everything outside `org.haverstack` (and the `_`-prefixed system types, which belong to
@@ -109,6 +113,25 @@ these.
 
 ---
 
+## Cross-type conventions
+
+Some semantics belong to no single type. These association labels carry commons
+authority on **any** record, of any type:
+
+- **`location`** — `{ kind: 'relationship', label: 'location', recordId: <place> }`
+  points at a [`place`](./place.md) record: the geotagged photo, the note written at a
+  café, the check-in. Apps that understand places understand every located record for
+  free, whatever its type.
+- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId, mimeType }` marks a file
+  referenced from a record's body text (`note`, `article`, `page`). How the body refers
+  to the embed is app territory in v1; a commons syntax is an expected follow-up once
+  `file-ref` fields (#63) land.
+
+Cross-type conventions are governed like fields: proposing one is proposing it for
+every record in every stack, so the bar is correspondingly higher.
+
+---
+
 ## Governance
 
 Lightweight by design, sized for a project with one maintainer and zero budget. The
@@ -143,21 +166,34 @@ rewritten by and for them.
 
 ## The initial set
 
-Four types, chosen because they are the shapes nearly every personal-software ecosystem
-re-invents first, and because pairs of them make the interop story demonstrable (notes ↔
-flashcards, bookmarks ↔ read-later, tasks ↔ calendar/agenda).
+Two clusters. The **personal-data cluster** covers the shapes nearly every personal app
+re-invents first; the **publishing cluster** covers the personal-web shapes (its
+note/article boundary is the IndieWeb's post-type-discovery rule: a note is an entry
+without a name, an article is an entry with one). Pairs across the set make the interop
+story demonstrable: notes ↔ flashcards, bookmarks ↔ read-later, tasks ↔ agenda, articles
 
-| Type                        | File                           | Read-compat core  |
-| --------------------------- | ------------------------------ | ----------------- |
-| `org.haverstack/note@1`     | [`note.md`](./note.md)         | `{ text }`        |
-| `org.haverstack/bookmark@1` | [`bookmark.md`](./bookmark.md) | `{ url }`         |
-| `org.haverstack/task@1`     | [`task.md`](./task.md)         | `{ title, done }` |
-| `org.haverstack/contact@1`  | [`contact.md`](./contact.md)   | `{ name }`        |
+- pages ↔ any site generator.
+
+| Type                        | File                           | Status | Read-compat core          |
+| --------------------------- | ------------------------------ | ------ | ------------------------- |
+| `org.haverstack/note@1`     | [`note.md`](./note.md)         | Draft  | `{ text }`                |
+| `org.haverstack/bookmark@1` | [`bookmark.md`](./bookmark.md) | Draft  | `{ url }`                 |
+| `org.haverstack/task@1`     | [`task.md`](./task.md)         | Draft  | `{ title, done }`         |
+| `org.haverstack/contact@1`  | [`contact.md`](./contact.md)   | Draft  | `{ name }`                |
+| `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft  | `{ title, text }`         |
+| `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft  | `{ latitude, longitude }` |
+| `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft  | `{ slug, text }`          |
+| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Staged | `{ image }` (pending #63) |
+
+**Staged** means the design is recorded but the type must not be registered yet —
+`photo` waits on the `file-ref` field kind (#63) so its required image can be
+schema-enforced rather than convention-only.
 
 Deliberately absent from the initial set: `event` (recurrence rules deserve their own
 proposal, not a rushed subset), `message`/`post` (social shapes should be reconciled
-with the ATProto-compat RFC, #15), and `file`/`document` (largely covered by the
-attachment machinery plus `note`).
+with the ATProto-compat RFC, #15), `file`/`document` (largely covered by the
+attachment machinery plus `note`), and `checkin` (subsumed by the `location`
+cross-type convention plus any record).
 
 ---
 
