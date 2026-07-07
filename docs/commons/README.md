@@ -110,7 +110,13 @@ these.
    point and mark; they never carry data.** Anything that needs validation, migration,
    or patching lives in content, where the schema machinery can see it — which is why
    there is no text-bearing association kind, and why a contact's phone numbers are
-   labeled content entries rather than associations.
+   labeled content entries rather than associations. One carve-out, for references
+   rather than data: a **constitutive reference** — the record is _about_ exactly one
+   target and is invalid without it — is a schema-required `record-ref`/`file-ref`
+   content field (`vote.pollId`, `photo.image`), so validation can enforce it and
+   read-compat can see it. Organizational references — optional, heterogeneous,
+   legitimately re-parentable — stay native (`parentId`, relationship associations);
+   "no bare ID strings" still holds, since `record-ref` is a typed kind, not a string.
 6. **Well-known association labels are part of the type.** Where a type has a
    conventional attachment or relationship (a contact's `avatar`, a bookmark's
    `snapshot`), the label is specified in the type file with the same authority as a

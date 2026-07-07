@@ -75,6 +75,17 @@ await stack.defineType('org.haverstack/vote@1', 'Vote', {
 
 ## Conventions
 
+- **Why `pollId` is content, not `parentId`.** A ballot's poll is a _constitutive_
+  reference (see README rule 5): required — schema validation rejects a poll-less vote
+  at write time, which `parentId` (native, unrequirable) never could — homogeneous
+  (always a poll, unlike a `message`'s anchor, which is optional and can be any
+  record), and immutable in spirit: re-parenting is legal, ordinary behavior elsewhere
+  in the commons, but a re-targeted ballot is fraud-shaped, so the reference lives
+  where repointing is a visible, versioned content edit. The honest trade: `parentId`
+  filtering is natively indexed on every adapter, while `content: { pollId }` needs
+  the `contentFieldQuery` capability — on adapters without it, tallying degrades to
+  fetch-and-scan of `vote@1` records, which is fine at this project's stated scale
+  (small cohesive groups) and recorded here so nobody discovers it by surprise.
 - **One ballot per member per poll.** Revoting is updating your existing `vote` record,
   not creating a second — a writer obligation (query `pollId` + own `entityId` before
   creating), with version history preserving every revision. Duplicate ballots from a
