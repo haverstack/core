@@ -146,6 +146,39 @@ relationship shape (`recordId`). Commons labels (`reply-to`, `about`, `location`
 `series`, …) are orthogonal to #16's `target` union and ride on it unchanged — no
 commons redesign is implied by that RFC landing.
 
+## On the names
+
+Two serious prior-art bodies use "note" for the public short utterance — the IndieWeb's
+post-type taxonomy, and ActivityStreams 2.0, where a Mastodon toot is literally a `Note`
+object on the wire. That collision was considered, and the commons keeps its names
+anyway, for reasons worth recording so the question isn't reopened by every reader who
+arrives with fediverse reflexes:
+
+- **Their choice is principled — for a universe this commons doesn't live in.** Both
+  vocabularies describe only published/social content. On the IndieWeb, "post" is the
+  _superclass_ (every entry on your site is a post; post-type discovery subdivides
+  posts into article, note, photo, reply, …), so "note" was the available name for the
+  small unnamed kind — and since everything in that universe is already public, no
+  private meaning competed for the word. Haverstack's defining axis is exactly the one
+  those vocabularies lack: records are private by default, and most never leave the
+  stack. In this universe "note" reverts to what it means in the software users touch
+  daily — Apple Notes, OneNote, Evernote, Obsidian: the kept, private thing — which
+  outweighs the fediverse usage by orders of magnitude of humans. Meanwhile "post" as
+  the broadcast utterance is what the rest of the world says, and what ATProto itself
+  uses (`app.bsky.feed.post`).
+- **The verb test.** Each name conjugates with its own contract: you _keep_ notes,
+  _send_ messages, _publish_ articles, _broadcast_ posts. Names that verb correctly
+  get used correctly without consulting this guide; "note" for a public utterance fails
+  the test inside this system.
+- **The collision cost is one translation line, at the layer built for translation.**
+  Microformats never put a type name on the wire (post-type is discovered from
+  properties), so there is no IndieWeb wire collision at all. The AS2 collision
+  surfaces exactly once — a future ActivityPub bridge maps `post` → AS2 `Note` in its
+  translation table, the same mechanism as #15's `lexiconId`.
+- **The word was never stable anyway.** Facebook "Notes" was a _long-form articles_
+  feature — a third, opposite usage. There is no uncontested name to find; the defense
+  is precise contracts here and explicit mappings at the bridges.
+
 ## Consequences for app authors
 
 - **Consumers key UX on `typeId`.** A reading app renders articles with bylines and
