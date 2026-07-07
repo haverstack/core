@@ -16,6 +16,10 @@ social shape (reposts, mentions, public replies) belongs to the ATProto-compat R
 (#15) and is still deferred; this type must not foreclose it, and reconciliation is
 expected when #15 lands.
 
+Messages are **sent** — speech addressed to others, whose meaning is indexed to its
+moment and thread. For the boundary with `note` (kept) and `article` (published), see
+[Choosing a text type](./text-types.md).
+
 Prior art: RFC 5322 (email — subject/body/references), Usenet, Discourse topics,
 Basecamp's message board.
 
@@ -42,10 +46,14 @@ write, which is the whole reason this type needs no author field.
 
 ## Conventions
 
-- **Threading is `parentId`, flat.** A thread starter has no message parent; replies
-  set `parentId` to the starter. The thread view is one indexed query
-  (`parentId = <starter>`, sort `createdAt` asc); the board index is another
-  (`typeId = message@1, parentId = null`). Basecamp-style flat threads are the model.
+- **Threading is `parentId`, flat — and any record can anchor a thread.** A board
+  thread's anchor is a message with no parent; a comment section's anchor is the record
+  being discussed — comments on a blog post are messages parented to the `article`,
+  and the same move gives photos, polls, and events their discussions. Replies set
+  `parentId` to the anchor. The thread view is one indexed query
+  (`parentId = <anchor>`, sort `createdAt` asc); the board index is another
+  (`typeId = message@1, parentId = null`, which finds exactly the threads that _are_
+  board threads). Basecamp-style flat threads are the model.
 - **Replying to a specific earlier message** (quoting) adds
   `{ kind: 'relationship', label: 'reply-to', recordId }` on top of `parentId` — the
   spec's own example association, used here for precision, not structure.
@@ -59,6 +67,10 @@ write, which is the whole reason this type needs no author field.
 - **Email-list bridging** is a motivating consumer: subject/body/threading map 1:1 to
   RFC 5322, so a bridge app can mirror a listserv into a group stack (and out), giving
   a group a searchable, owned archive without asking anyone to switch tools on day one.
+- **Comments across trust boundaries**: a public blog's comment section is this same
+  shape living in the author's personal stack — commenters are entities holding a
+  `create` grant on `message@1`. Webmention-grade interop with real primitives
+  underneath; making that practical for strangers depends on the identity work (#49).
 
 ## Read-compat core
 
@@ -81,3 +93,5 @@ discussion.
 ## Changelog
 
 - **Proposed** — initial definition: `text` (required), `subject`, `format`.
+- **Proposed, amended** — threads may be anchored by any record (comments on articles,
+  photos, polls); text-type contract guide cross-referenced.

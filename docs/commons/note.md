@@ -7,6 +7,11 @@ The most universal shape in personal software, and the anchor of the commons —
 spec's own `isCompatible()` example ("any Type with `{ text: string }`") is this type's
 read-compat core.
 
+Notes are **kept** — working material written by and for the writer, where the writer
+may be a group (a shared stack's collectively maintained minutes and how-tos are still
+notes). For the boundary with `article` (published) and `message` (sent), see
+[Choosing a text type](./text-types.md).
+
 ## Schema
 
 ```ts

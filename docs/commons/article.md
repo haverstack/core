@@ -88,8 +88,10 @@ keep the paired bookmark record described above.
 - Social/microblog `post` semantics (replies, reposts, mentions) — deferred to
   reconciliation with the ATProto-compat RFC (#15). An article is a work; a post is an
   utterance.
-- Comments — a future proposal once shared/group stacks settle; likely a `note` with an
-  `about` relationship rather than a new type.
+- Comments — already covered, no new type: a comment is a [`message`](./message.md)
+  whose `parentId` is the article (sent into a shared space, moment-indexed,
+  tamper-evident), while a reader's private marginalia is a `note` with an `about`
+  relationship. See [Choosing a text type](./text-types.md) for the ruling.
 
 ## Changelog
 

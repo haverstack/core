@@ -186,6 +186,11 @@ make the interop story demonstrable: notes ↔ flashcards, bookmarks ↔ read-la
 articles and pages ↔ any site generator, polls ↔ calendar (a scheduling poll's winning
 slot becomes an event).
 
+Three types carry free-form text and are distinguished by **social contract, not
+shape** — notes are kept, messages are sent, articles are published.
+[Choosing a text type](./text-types.md) is the decision guide, with worked examples
+(comments on a blog post are messages; private marginalia are notes).
+
 | Type                        | File                           | Status   | Read-compat core          |
 | --------------------------- | ------------------------------ | -------- | ------------------------- |
 | `org.haverstack/note@1`     | [`note.md`](./note.md)         | Draft    | `{ text }`                |
