@@ -220,6 +220,8 @@ packages/
 
 The design spec lives in [`docs/spec.md`](./docs/spec.md). It covers the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
 
+Shared, app-neutral record types (note, bookmark, task, contact) live in the [Schema Commons](./docs/commons/README.md) — start there if you want your app's data to interoperate with other Haverstack apps.
+
 ---
 
 ## Related
