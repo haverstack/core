@@ -72,6 +72,9 @@ that being read as a finished work is its purpose.
 | Recipe in your kitchen file                  | `note`                       | Kept.                                                                                    |
 | Same recipe on your blog                     | `article`                    | Published. The type records the act, not the text.                                       |
 | Sharing a link into the group ("read this!") | `message` (+ rel.)           | The commentary is speech; the shared bookmark/article stays an artifact, linked.         |
+| Check-in, private location diary             | `note` (+ `location`)        | A journal entry with coordinates — addressed to no one.                                  |
+| "I'm at the café — come join me" (group)     | `message` (+ `location`)     | Speech; the `location` association is the invariant across every check-in contract.      |
+| Foursquare-style public check-in             | _deferred (#15)_             | Broadcast speech — `post` + `location` once the fourth contract lands.                   |
 | Social media post                            | _deferred (#15)_             | A fourth contract — public broadcast — see below.                                        |
 
 ## Comments are messages; marginalia are notes
