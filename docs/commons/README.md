@@ -135,6 +135,13 @@ authority on **any** record, of any type:
   that are occurrences of one recurring thing (materialized [`event`](./event.md)
   occurrences are the motivating case). Reserved now so recurrence proposals build on
   it rather than around it.
+- **`author`** — `{ kind: 'relationship', label: 'author', recordId: <contact> }`
+  attributes any record to a person the stack knows, pointing at a
+  [`contact`](./contact.md) (or `_entity`) record. Complements, never replaces, a
+  displayed-byline string like `article.author`: the string is what the work says
+  about itself (a property, faithful to the work as published); the association is
+  what _you_ know about the world. Multiple `author` associations express
+  co-authorship. Prior art: ActivityStreams `attributedTo`.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.

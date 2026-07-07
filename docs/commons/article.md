@@ -59,6 +59,15 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
   cross-type convention in the README.
 - **Series/collections**: `parentId` when the app has a container record; otherwise tag
   associations.
+- **Known authors** use the cross-type `author` relationship (see README) alongside —
+  never instead of — the `author` string. Three tiers of acquaintance, three
+  mechanisms: a principal writing in this stack is `entityId` (native); someone you
+  know is an `author` relationship to their `contact` record; a stranger's byline is
+  the `author` string alone. When string and association coexist they don't conflict —
+  the association is machine-readable identity ("3 articles by Alice" is a query), the
+  string is the byline as displayed, faithful to the work even if the contact is later
+  renamed. Co-authorship is multiple `author` associations, with the string holding
+  the joint byline ("Alice Smith and Bob Jones").
 - **Captured articles** should also carry `{ kind: 'relationship', label: 'about', … }`
   associations from any notes annotating them, and may coexist with a `bookmark` record
   for the same URL (the bookmark is "I saved this link"; the article is "I captured this
