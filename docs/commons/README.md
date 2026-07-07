@@ -106,7 +106,11 @@ these.
    associations, not a `tags: string[]` field. Cross-references are relationship
    associations or `parentId`, not bare ID strings in content. Files are attachment
    associations. Authorship is `entityId`; timestamps are `createdAt`/`updatedAt` —
-   never mirrored into content.
+   never mirrored into content. The boundary runs the other way too: **associations
+   point and mark; they never carry data.** Anything that needs validation, migration,
+   or patching lives in content, where the schema machinery can see it — which is why
+   there is no text-bearing association kind, and why a contact's phone numbers are
+   labeled content entries rather than associations.
 6. **Well-known association labels are part of the type.** Where a type has a
    conventional attachment or relationship (a contact's `avatar`, a bookmark's
    `snapshot`), the label is specified in the type file with the same authority as a

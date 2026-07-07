@@ -13,11 +13,19 @@ people actually fill in, minus the 40 years of accretion.
 ## Schema
 
 ```ts
+const labeledValue = {
+  kind: 'object',
+  properties: {
+    value: { kind: 'string', required: true },
+    label: { kind: 'string' },
+  },
+} as const;
+
 await stack.defineType('org.haverstack/contact@1', 'Contact', {
   name: { kind: 'string', required: true },
-  emails: { kind: 'array', items: { kind: 'string' } },
-  phones: { kind: 'array', items: { kind: 'string' } },
-  urls: { kind: 'array', items: { kind: 'string' } },
+  emails: { kind: 'array', items: labeledValue },
+  phones: { kind: 'array', items: labeledValue },
+  urls: { kind: 'array', items: labeledValue },
   org: { kind: 'string' },
   note: { kind: 'text' },
 });
@@ -25,19 +33,24 @@ await stack.defineType('org.haverstack/contact@1', 'Contact', {
 
 ## Field semantics
 
-| Field    | Kind            | Required | Meaning                                                                                                                                                                                                                                                      |
-| -------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`   | `string`        | yes      | Display name, as the user knows them. No given/family split in @1 — name-order and name-structure assumptions are a known internationalization trap; a structured-name addition should arrive as a follow-up optional field, never by reinterpreting `name`. |
-| `emails` | `array<string>` | no       | Email addresses, most-preferred first. Plain addresses, no `mailto:`.                                                                                                                                                                                        |
-| `phones` | `array<string>` | no       | Phone numbers, most-preferred first. Stored as entered; E.164 normalization is app-side display logic.                                                                                                                                                       |
-| `urls`   | `array<string>` | no       | Websites/profiles, most-preferred first.                                                                                                                                                                                                                     |
-| `org`    | `string`        | no       | Organization/affiliation, freeform.                                                                                                                                                                                                                          |
-| `note`   | `text`          | no       | Freeform notes about the contact.                                                                                                                                                                                                                            |
+| Field    | Kind                     | Required | Meaning                                                                                                                                                                                                                                                      |
+| -------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`   | `string`                 | yes      | Display name, as the user knows them. No given/family split in @1 — name-order and name-structure assumptions are a known internationalization trap; a structured-name addition should arrive as a follow-up optional field, never by reinterpreting `name`. |
+| `emails` | `array<{value, label?}>` | no       | Email addresses, most-preferred first. `value` is the plain address (no `mailto:`); `label` is an optional user-facing word.                                                                                                                                 |
+| `phones` | `array<{value, label?}>` | no       | Phone numbers, most-preferred first. `value` stored as entered (E.164 normalization is app-side display logic); `label` as below.                                                                                                                            |
+| `urls`   | `array<{value, label?}>` | no       | Websites/profiles, most-preferred first.                                                                                                                                                                                                                     |
+| `org`    | `string`                 | no       | Organization/affiliation, freeform.                                                                                                                                                                                                                          |
+| `note`   | `text`                   | no       | Freeform notes about the contact.                                                                                                                                                                                                                            |
 
-Arrays are ordered but unlabeled in @1 (no `home`/`work` typing) — labels are the first
-candidate follow-up proposal, and per the additive rules they would arrive as a parallel
-optional structure, not a reshape of these arrays. Note that array fields are opaque to
-the query engine; apps filter contacts by `name` or via associations, not by address.
+**Labels** (vCard's `TYPE` parameter, humanized): an open vocabulary of user-facing
+words. Well-known values: `"home"`, `"work"`, `"mobile"`. Unknown labels are displayed
+verbatim — they are the user's words ("boat phone" is legal and correct), not a
+machine namespace. Absent means unspecified. This is deliberately the same
+labeled-multi-value shape as #15's revised `externalIds` on `EntityContent`, differing
+only in that `label` is for humans where `ns` is for machines.
+
+Note that array fields are opaque to the query engine; apps filter contacts by `name`
+or via associations, not by address.
 
 ## Conventions
 
@@ -68,7 +81,6 @@ lead — can be listed by a contacts consumer.
 ## Deliberately excluded
 
 - Structured names (`givenName`/`familyName`) — i18n trap; future optional addition.
-- Typed/labeled addresses (`home`/`work`) — future proposal.
 - Postal addresses — genuinely structured, rarely shared between apps; future proposal
   with vCard `ADR` as prior art.
 - `birthday` and dates — see conventions.
@@ -79,3 +91,7 @@ lead — can be listed by a contacts consumer.
 
 - **Draft** — initial definition: `name` (required), `emails`, `phones`, `urls`, `org`,
   `note`.
+- **Draft, reshaped in place** — `emails`/`phones`/`urls` items changed from bare
+  strings to `{ value, label? }` objects (vCard `TYPE`, humanized). An in-place item
+  reshape is legal exactly once: pre-install-base, per the project's evolution stance —
+  the cheap window this project's own doctrine says to use.
