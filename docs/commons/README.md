@@ -33,6 +33,11 @@ org.haverstack/article@1
 org.haverstack/place@1
 org.haverstack/page@1
 org.haverstack/photo@1   (staged — see below)
+org.haverstack/message@1 (proposed — see below)
+org.haverstack/event@1   (proposed)
+org.haverstack/poll@1    (proposed)
+org.haverstack/vote@1    (proposed)
+org.haverstack/folder@1  (proposed)
 ```
 
 Everything outside `org.haverstack` (and the `_`-prefixed system types, which belong to
@@ -123,9 +128,13 @@ authority on **any** record, of any type:
   café, the check-in. Apps that understand places understand every located record for
   free, whatever its type.
 - **`embed`** — `{ kind: 'attachment', label: 'embed', fileId, mimeType }` marks a file
-  referenced from a record's body text (`note`, `article`, `page`). How the body refers
-  to the embed is app territory in v1; a commons syntax is an expected follow-up once
-  `file-ref` fields (#63) land.
+  referenced from a record's body text (`note`, `article`, `page`, `message`). How the
+  body refers to the embed is app territory in v1; a commons syntax is an expected
+  follow-up once `file-ref` fields (#63) land.
+- **`series`** — `{ kind: 'relationship', label: 'series', recordId }` groups records
+  that are occurrences of one recurring thing (materialized [`event`](./event.md)
+  occurrences are the motivating case). Reserved now so recurrence proposals build on
+  it rather than around it.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.
@@ -166,34 +175,47 @@ rewritten by and for them.
 
 ## The initial set
 
-Two clusters. The **personal-data cluster** covers the shapes nearly every personal app
-re-invents first; the **publishing cluster** covers the personal-web shapes (its
+Three clusters. The **personal-data cluster** covers the shapes nearly every personal
+app re-invents first. The **publishing cluster** covers the personal-web shapes (its
 note/article boundary is the IndieWeb's post-type-discovery rule: a note is an entry
-without a name, an article is an entry with one). Pairs across the set make the interop
-story demonstrable: notes ↔ flashcards, bookmarks ↔ read-later, tasks ↔ agenda, articles
+without a name, an article is an entry with one). The **group cluster** covers the
+small-group workspace — the Basecamp shape: message board, shared calendar, decisions,
+shared drive — built on collaborative group stacks (`_group` with `stackUrl`), where
+`entityId`-as-author and per-type grants do the heavy lifting. Pairs across the set
+make the interop story demonstrable: notes ↔ flashcards, bookmarks ↔ read-later,
+articles and pages ↔ any site generator, polls ↔ calendar (a scheduling poll's winning
+slot becomes an event).
 
-- pages ↔ any site generator.
+| Type                        | File                           | Status   | Read-compat core          |
+| --------------------------- | ------------------------------ | -------- | ------------------------- |
+| `org.haverstack/note@1`     | [`note.md`](./note.md)         | Draft    | `{ text }`                |
+| `org.haverstack/bookmark@1` | [`bookmark.md`](./bookmark.md) | Draft    | `{ url }`                 |
+| `org.haverstack/task@1`     | [`task.md`](./task.md)         | Draft    | `{ title, done }`         |
+| `org.haverstack/contact@1`  | [`contact.md`](./contact.md)   | Draft    | `{ name }`                |
+| `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft    | `{ title, text }`         |
+| `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft    | `{ latitude, longitude }` |
+| `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
+| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Staged   | `{ image }` (pending #63) |
+| `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
+| `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
+| `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
+| `org.haverstack/vote@1`     | [`poll.md`](./poll.md)         | Proposed | `{ pollId, choices }`     |
+| `org.haverstack/folder@1`   | [`folder.md`](./folder.md)     | Proposed | `{ name }`                |
 
-| Type                        | File                           | Status | Read-compat core          |
-| --------------------------- | ------------------------------ | ------ | ------------------------- |
-| `org.haverstack/note@1`     | [`note.md`](./note.md)         | Draft  | `{ text }`                |
-| `org.haverstack/bookmark@1` | [`bookmark.md`](./bookmark.md) | Draft  | `{ url }`                 |
-| `org.haverstack/task@1`     | [`task.md`](./task.md)         | Draft  | `{ title, done }`         |
-| `org.haverstack/contact@1`  | [`contact.md`](./contact.md)   | Draft  | `{ name }`                |
-| `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft  | `{ title, text }`         |
-| `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft  | `{ latitude, longitude }` |
-| `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft  | `{ slug, text }`          |
-| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Staged | `{ image }` (pending #63) |
+**Statuses.** _Draft_: settled enough to build against (still subject to in-place
+change until there's an install base). _Staged_: design recorded, registration blocked
+on a named implementation issue (`photo` waits on #63 so its required image is
+schema-enforced rather than convention-only). _Proposed_: design recorded to fix
+intent, but per the governance rule it stays parked until a concrete intended writer
+exists — the group cluster graduates when a group-tools app or demo is real. The group
+cluster additionally depends on the grant/group reshape (#57/#58) landing as decided.
 
-**Staged** means the design is recorded but the type must not be registered yet —
-`photo` waits on the `file-ref` field kind (#63) so its required image can be
-schema-enforced rather than convention-only.
-
-Deliberately absent from the initial set: `event` (recurrence rules deserve their own
-proposal, not a rushed subset), `message`/`post` (social shapes should be reconciled
-with the ATProto-compat RFC, #15), `file`/`document` (largely covered by the
-attachment machinery plus `note`), and `checkin` (subsumed by the `location`
-cross-type convention plus any record).
+Deliberately absent from the initial set: `post` (public social shapes are reconciled
+with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
+one), recurrence rules (see `event`: occurrences are materialized in @1),
+`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern
+once #63 lands; until then a record plus attachment covers it), and `checkin` (subsumed
+by the `location` cross-type convention plus any record).
 
 ---
 
