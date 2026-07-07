@@ -46,6 +46,13 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
 - **Draft state** is `publishedAt` absence — a property of the work, not a perspective.
   Editorial workflow states beyond draft/published (in-review, scheduled-vs-published
   nuance) are app sidecar territory.
+- **Canonical URL write-back**: on authored articles, the _publishing app_ stamps
+  `url` at first publish (a site generator derives the permalink, builds, then writes
+  the canonical location back to the record). `url` present therefore means "this work
+  lives somewhere on the web" — symmetrically for authored and captured articles — and
+  any app can render a "view published" link. Syndicated copies elsewhere never
+  overwrite it: canonical means canonical; other locations are sidecar territory (or
+  future syndication relationships, #15).
 - **Cover image**: attachment association with label `cover` (JSON Feed `image`,
   h-entry `u-featured`).
 - **Embedded media** in `text`: attachment associations with label `embed`, per the

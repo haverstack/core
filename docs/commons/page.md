@@ -62,6 +62,14 @@ await stack.defineType('org.haverstack/page@1', 'Page', {
   chronological collection (permalinks derived from `publishedAt`/`title` are the
   generator's business) and pages → the site tree. If a post genuinely needs a
   hand-placed path, that's the generator's permalink override — sidecar, not commons.
+- **Collection membership is a query, not a field.** For the common single-site case,
+  the generator's collection is simply every `article` with `publishedAt` set —
+  publishing _is_ setting `publishedAt`; nothing else is recorded. When selection must
+  be narrower (multiple sites from one stack, guest posts published elsewhere), the
+  generator narrows its query — by `parentId` to its site record, or by a tag its
+  config names. A stored "on this site" flag would be a stale-able cache of that
+  query, so none exists. The generator stamps the article's canonical `url` at first
+  publish (see `article.md`).
 
 ## Read-compat core
 
