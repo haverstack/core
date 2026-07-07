@@ -84,14 +84,64 @@ So a comment is a **`message` whose `parentId` is the article** — which is why
 superficially resembles a comment but fails the test — a reader's private annotation —
 is a `note` with an `about` relationship. Both exist; the test separates them.
 
-## The fourth contract, deliberately not covered here
+## The fourth contract: posts are broadcast
 
-Public broadcast — speech addressed to whoever listens, rather than to a bounded
-audience that a stack's membership defines — is a distinct contract (**posts are
-broadcast**), and it is deliberately outside this guide. It is the territory of the
-ATProto-compat RFC (#15): a broadcast utterance needs self-certified authorship (#49)
-and cross-stack reference, neither of which bounded-audience `message` records require.
-Neither `message` nor `article` should absorb it.
+A social media post _is_ speech — moment-indexed, conversational, tamper-evident,
+unnamed — so the instinct "a tweet is a message" is right about its nature. But the
+contracts encode two things, and speech-ness is only one. The other is **audience
+shape**: a `message`'s audience is defined by a boundary (presence in the stack _is_
+the addressing — the reason `message` has no `to`/`cc`), while a post's audience is
+whoever listens: unbounded and unenumerable. That completes a 2×2, and the fourth cell
+is deliberately outside this guide:
+
+|              | Bounded audience              | Unbounded audience                 |
+| ------------ | ----------------------------- | ---------------------------------- |
+| **Artifact** | `note` (kept — self or group) | `article` / `page` (published)     |
+| **Speech**   | `message` (sent)              | **`post` (broadcast)** — see below |
+
+(Naming trap from prior art: the IndieWeb's "note" post-type is a public short
+utterance — _their_ note is our `post`, not our `note`.)
+
+`post` must be its own type rather than a `message` with `{ access: 'public' }`, for
+four mechanical reasons, not just taxonomy:
+
+1. **Sync blast radius.** Outbound bridges map _types_ to external shapes (#15's
+   `lexiconId` maps a type to an ATProto `$type`), so the type is the sync boundary.
+   "Everything of type `post` is meant for the world" is an invariant a bridge can
+   enforce; "messages whose permissions happen to be public" puts a group's private
+   thread one permission bug away from the public firehose.
+2. **Different threading fabric.** A message thread is `parentId` — within-stack, one
+   trust domain, one indexed query. A post's conversation is inherently cross-stack:
+   a reply lives in the replier's stack, referencing a record in someone else's, which
+   `parentId` cannot express and #16's `target` union
+   (`{ scope: 'internal', recordId, stackUrl }` / `{ scope: 'external', id, ns }`)
+   exists to express. Posts-as-messages would hand board apps threads whose parents
+   they structurally cannot traverse.
+3. **Different deletion physics.** Inside a stack, recoverability is real: "anything a
+   write-holder does, the owner can undo" (#59). Broadcast breaks it — the network has
+   copies; deletion is a request (ATProto's tombstones exist because of this). The type
+   boundary keeps the commons honest about which text lives under which physics.
+4. **Different authorship requirements.** In-stack, `entityId` means author because
+   the stack is a trust domain. A broadcast utterance travels _without_ its stack, so
+   authorship must be self-certifying — the #49 DID work, surfaced in #15's revised
+   `externalIds` on `EntityContent`. `message` needs none of it; `post` can't exist
+   without it.
+
+The dependency chain is therefore: **#16** (cross-stack/cross-protocol reference
+fabric, plus its `relatedTo`/capability follow-up so external references are
+queryable) → **#49** (self-certified identity) → **#15 as revised** (protocol-neutral
+core hooks; ATProto-specific machinery in `adapter-atproto`) → a `post@1` proposal
+here, as the _protocol-neutral_ broadcast utterance: the canonical copy lives in your
+stack; bridges syndicate it (`adapter-atproto` maps it to `app.bsky.feed.post`, an
+ActivityPub bridge to a `Note`) and replies come home as external-target
+relationships. That is the IndieWeb's POSSE pattern — publish on your own site,
+syndicate elsewhere — with real primitives underneath: Bluesky and Mastodon become
+views of a record you own.
+
+One forward-compatibility note: `message`'s quote-reply convention uses today's flat
+relationship shape (`recordId`). Commons labels (`reply-to`, `about`, `location`,
+`series`, …) are orthogonal to #16's `target` union and ride on it unchanged — no
+commons redesign is implied by that RFC landing.
 
 ## Consequences for app authors
 
