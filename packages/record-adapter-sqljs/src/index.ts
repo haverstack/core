@@ -87,11 +87,13 @@ const SCHEMA_SQL = `
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS versions (
-    record_id  TEXT NOT NULL REFERENCES records(id),
-    version    INTEGER NOT NULL,
-    content    TEXT NOT NULL CHECK (json_valid(content)),
-    updated_at INTEGER NOT NULL,
-    entity_id  TEXT,
+    record_id   TEXT NOT NULL REFERENCES records(id),
+    version     INTEGER NOT NULL,
+    content     TEXT NOT NULL CHECK (json_valid(content)),
+    updated_at  INTEGER NOT NULL,
+    entity_id   TEXT,
+    associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
+    permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)
   ) STRICT;
 
@@ -202,6 +204,8 @@ const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
     updatedAt: fromMs(row.updated_at as number),
   };
   if (row.entity_id) v.entityId = row.entity_id as string;
+  if (row.associations) v.associations = JSON.parse(row.associations as string);
+  if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
   return v;
 };
 
@@ -699,14 +703,17 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
 
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
     this.db.run(
-      `INSERT OR IGNORE INTO versions (record_id, version, content, updated_at, entity_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO versions
+        (record_id, version, content, updated_at, entity_id, associations, permissions)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         version.version,
         JSON.stringify(version.content),
         toMs(version.updatedAt),
         version.entityId ?? null,
+        version.associations ? JSON.stringify(version.associations) : null,
+        version.permissions ? JSON.stringify(version.permissions) : null,
       ],
     );
     this.persist();

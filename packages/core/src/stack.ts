@@ -504,46 +504,90 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add an association to a record.
+   * Add an association to a record. Snapshots the record's prior state and
+   * bumps version, same as update() — associations are covered by the same
+   * versioning rule as content.
    * If the association already exists (same kind, label, and payload), this is a no-op.
    */
   async associate(id: string, association: Association): Promise<void> {
-    return this.adapter.associate(id, association);
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    if ((existing.associations ?? []).some((a) => associationEqual(a, association))) return;
+
+    await this.saveVersion(existing);
+    await this.adapter.associate(id, association);
+    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
-   * Remove an association from a record.
-   * Matched by kind, label, and payload. No-op if not found.
+   * Remove an association from a record. Snapshots and bumps version, same
+   * as associate(). Matched by kind, label, and payload. No-op if not found.
    */
   async dissociate(id: string, association: Association): Promise<void> {
-    return this.adapter.dissociate(id, association);
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) return;
+
+    await this.saveVersion(existing);
+    await this.adapter.dissociate(id, association);
+    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
-   * Replace all permissions on a record.
-   * Pass an empty array to make the record private (the default).
+   * Replace all permissions on a record. Snapshots and bumps version, same
+   * as associate(). Pass an empty array to make the record private (the
+   * default). No-op if the new set is deep-equal to the current one.
    */
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    await this.adapter.updateRecord(id, { permissions });
+    if (permissionsEqual(existing.permissions ?? [], permissions)) return;
+
+    await this.saveVersion(existing);
+    await this.adapter.updateRecord(id, {
+      permissions,
+      version: existing.version + 1,
+      updatedAt: new Date(),
+    });
   }
 
   /**
    * Soft-delete a record (default) or hard-delete it permanently.
    * Soft-deleted records are excluded from queries unless includeDeleted is set.
    * Hard-deleted records and all their version history are permanently removed.
+   *
+   * Soft delete snapshots the record's prior state and bumps version, same
+   * as update(); it's a no-op if the record is already deleted. Hard delete
+   * destroys the record (and its version history) outright — there's
+   * nothing to snapshot.
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
-    return this.adapter.deleteRecord(id, opts);
+    if (opts.hard) {
+      return this.adapter.deleteRecord(id, opts);
+    }
+
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    if (existing.deletedAt) return;
+
+    await this.saveVersion(existing);
+    await this.adapter.deleteRecord(id, opts);
+    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
    * Reverse a soft delete. Idempotent — undeleting a record that isn't
    * deleted returns it unchanged. Hard-deleted records are gone, so this
    * throws StackNotFoundError for them just like any other missing record.
+   * Snapshots and bumps version, same as delete().
    */
   async undelete(id: string): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
@@ -551,7 +595,10 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     if (!existing.deletedAt) return existing;
-    return this.adapter.undeleteRecord(id);
+
+    await this.saveVersion(existing);
+    await this.adapter.undeleteRecord(id);
+    return this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
@@ -577,6 +624,12 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version
    * with the old content. Never rewrites history.
+   *
+   * Restores associations too, when the target snapshot has them. Never
+   * restores permissions — those are owner/creator territory (see
+   * setPermissions()), and silently reverting an ACL as a side effect of a
+   * content rollback would be a surprise nobody wants. Permissions in a
+   * snapshot are for audit and deliberate owner action, not automatic restore.
    */
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
@@ -596,6 +649,7 @@ export class Stack implements StackClient {
       content: target.content,
       updatedAt: new Date(),
       version: existing.version + 1,
+      ...(target.associations !== undefined && { associations: target.associations }),
     });
   }
 
@@ -760,9 +814,43 @@ export class Stack implements StackClient {
       content: record.content,
       updatedAt: record.updatedAt,
       ...(record.entityId && { entityId: record.entityId }),
+      ...(record.associations && { associations: record.associations }),
+      ...(record.permissions && { permissions: record.permissions }),
     };
     await this.adapter.saveVersion(record.id, version);
   }
+}
+
+// -------------------------------------------------------
+// Equality helpers
+// -------------------------------------------------------
+
+/**
+ * Matches the SQLite adapter's association primary key (kind, label,
+ * file_id, related_id) — mimeType is not part of an attachment
+ * association's identity.
+ */
+function associationEqual(a: Association, b: Association): boolean {
+  if (a.kind !== b.kind || a.label !== b.label) return false;
+  if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
+  if (a.kind === 'relationship' && b.kind === 'relationship') return a.recordId === b.recordId;
+  return true;
+}
+
+function permissionEqual(a: Permission, b: Permission): boolean {
+  if (a.access !== b.access) return false;
+  if (a.access === 'public') return true;
+  if (a.access === 'entity' && b.access === 'entity') {
+    return a.entityId === b.entityId && a.read === b.read && a.write === b.write;
+  }
+  if (a.access === 'group' && b.access === 'group') {
+    return a.groupId === b.groupId && a.read === b.read && a.write === b.write;
+  }
+  return false;
+}
+
+function permissionsEqual(a: Permission[], b: Permission[]): boolean {
+  return a.length === b.length && a.every((p, i) => permissionEqual(p, b[i]));
 }
 
 // -------------------------------------------------------

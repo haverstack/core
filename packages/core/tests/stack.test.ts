@@ -405,6 +405,70 @@ describe('versions', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(stack.restoreVersion(record.id, 99)).rejects.toThrow();
   });
+
+  test('restoreVersion restores associations captured in the snapshot', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2
+    await stack.update(record.id, { text: 'changed' }); // v3, snapshots v2 (assoc: [favourite])
+    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' }); // v4, assoc now []
+    const restored = await stack.restoreVersion(record.id, 2); // v5
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
+  });
+
+  test('restoreVersion never restores permissions, even when the snapshot has them', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.setPermissions(record.id, [{ access: 'public' }]); // v2
+    await stack.update(record.id, { text: 'changed' }); // v3, snapshots v2 (permissions: [public])
+    await stack.setPermissions(record.id, []); // v4, private again
+    const restored = await stack.restoreVersion(record.id, 2); // v5
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.permissions).toEqual([]);
+  });
+
+  test('version snapshot captures associations and permissions when present', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2, snapshots v1
+    await stack.setPermissions(record.id, [{ access: 'public' }]); // v3, snapshots v2
+    await stack.update(record.id, { text: 'changed' }); // v4, snapshots v3
+    const versions = await stack.getVersions(record.id);
+    const v3snap = versions.find((v) => v.version === 3);
+    expect(v3snap?.associations).toEqual([{ kind: 'tag', label: 'x' }]);
+    expect(v3snap?.permissions).toEqual([{ access: 'public' }]);
+  });
+});
+
+// -------------------------------------------------------
+// Versioning rule — mixed mutations
+// -------------------------------------------------------
+
+describe('versioning rule — mixed mutations', () => {
+  test('version increments by exactly one per real mutation, across mixed operation types', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v3
+    await stack.setPermissions(record.id, [{ access: 'public' }]); // v4
+    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // v5
+    await stack.delete(record.id); // v6
+    const undeleted = await stack.undelete(record.id); // v7
+
+    expect(undeleted.version).toBe(7);
+    const versionNumbers = (await stack.getVersions(record.id))
+      .map((v) => v.version)
+      .sort((a, b) => a - b);
+    expect(versionNumbers).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  test('no-op mutations never bump version or add a snapshot', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no-op
+    await stack.dissociate(record.id, { kind: 'tag', label: 'gone' }); // no-op
+    await stack.setPermissions(record.id, []); // no-op (already private)
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
 });
 
 // -------------------------------------------------------
@@ -437,6 +501,27 @@ describe('delete', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.delete(record.id, { hard: true });
     expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+
+  test('soft delete bumps version and snapshots the prior state', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    const deleted = await adapter.getRecord(record.id);
+    expect(deleted?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
+
+  test('soft-deleting an already-deleted record is a no-op — no version bump', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    await stack.delete(record.id);
+    const deleted = await adapter.getRecord(record.id);
+    expect(deleted?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
+
+  test('throws StackNotFoundError for a missing record (soft delete)', async () => {
+    await expect(stack.delete('nonexistent')).rejects.toThrow(StackNotFoundError);
   });
 });
 
@@ -483,6 +568,22 @@ describe('undelete', () => {
     await stack.undelete(record.id);
     const result = await stack.query({ filter: { typeId: NOTE_V1 } });
     expect(result.records.find((r) => r.id === record.id)).toBeDefined();
+  });
+
+  test('bumps version and snapshots the deleted state', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.delete(record.id); // v2
+    const undeleted = await stack.undelete(record.id); // v3
+    expect(undeleted.version).toBe(3);
+    expect(await stack.getVersions(record.id)).toHaveLength(2);
+  });
+
+  test('idempotent no-op undelete does not bump version', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.undelete(record.id);
+    const result = await adapter.getRecord(record.id);
+    expect(result?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 });
 
@@ -576,6 +677,94 @@ describe('associate / dissociate', () => {
     await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations?.some((a) => a.label === 'favourite')).toBe(false);
+  });
+
+  test('associate bumps version and snapshots the prior state', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    const versions = await stack.getVersions(record.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].version).toBe(1);
+    expect(versions[0].associations ?? []).toEqual([]);
+  });
+
+  test('associate is a no-op for a duplicate association — no version bump', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
+
+  test('associate throws StackNotFoundError for a missing record', async () => {
+    await expect(stack.associate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('dissociate bumps version and snapshots the prior state', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(3);
+    expect(await stack.getVersions(record.id)).toHaveLength(2);
+  });
+
+  test('dissociate is a no-op when the association is not present — no version bump', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.dissociate(record.id, { kind: 'tag', label: 'nonexistent' });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
+  });
+
+  test('dissociate throws StackNotFoundError for a missing record', async () => {
+    await expect(stack.dissociate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+});
+
+// -------------------------------------------------------
+// setPermissions
+// -------------------------------------------------------
+
+describe('setPermissions', () => {
+  test('bumps version and snapshots the prior state', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, [{ access: 'public' }]);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(updated?.permissions).toEqual([{ access: 'public' }]);
+    const versions = await stack.getVersions(record.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].permissions ?? []).toEqual([]);
+  });
+
+  test('is a no-op for a deep-equal permission set — no version bump', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, [{ access: 'public' }]);
+    await stack.setPermissions(record.id, [{ access: 'public' }]);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
+
+  test('setting empty permissions on an already-private record is a no-op', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, []);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(1);
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(stack.setPermissions('nonexistent', [{ access: 'public' }])).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 });
 
