@@ -165,6 +165,27 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
 
+  test('write:true holder can soft-delete but not hard-delete', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect(await adapter.getRecord(record.id)).not.toBeNull();
+
+    await stack.asEntity(MEMBER).delete(record.id);
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('owner can hard-delete', async () => {
+    const record = await adapter.createRecord(makeRecord());
+    await stack.asEntity(OWNER).delete(record.id, { hard: true });
+    expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+
   test('associate/dissociate/setPermissions enforce write access', async () => {
     const record = await adapter.createRecord(makeRecord());
     const tag: Association = { kind: 'tag', label: 'starred' };
@@ -491,6 +512,15 @@ describe('ScopedStack — grant-based update/delete', () => {
     const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
     await stack.asEntity(MEMBER).delete(record.id);
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('delete-any grant does not allow hard delete', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect(await adapter.getRecord(record.id)).not.toBeNull();
   });
 
   test('update grant does not allow delete', async () => {
