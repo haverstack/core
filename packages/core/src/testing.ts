@@ -65,6 +65,15 @@ export class MemoryAdapter implements StackAdapter {
     }
   }
 
+  async undeleteRecord(id: string) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    const { deletedAt: _deletedAt, ...rest } = record;
+    const updated = rest as StackRecord;
+    this.records.set(id, updated);
+    return updated;
+  }
+
   /** Cursor is a stringified offset into insertion order. */
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     const f = query.filter ?? {};

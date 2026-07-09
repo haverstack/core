@@ -125,6 +125,10 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteRecord(id, opts);
   }
 
+  async undeleteRecord(id: RecordId): Promise<StackRecord> {
+    return this.record.undeleteRecord(id);
+  }
+
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
   }

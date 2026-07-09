@@ -636,6 +636,15 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     this.persist();
   }
 
+  async undeleteRecord(id: string): Promise<StackRecord> {
+    this.db.run('UPDATE records SET deleted_at = NULL WHERE id = ?', [id]);
+    this.persist();
+
+    const updated = await this.getRecord(id);
+    if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
+    return updated;
+  }
+
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     const { sql: where, params } = buildWhereClause(query);
     const order = buildOrderClause(query);

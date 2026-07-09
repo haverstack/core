@@ -1,5 +1,10 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack, StackValidationError, StackMigrationError } from '../src/stack.js';
+import {
+  Stack,
+  StackValidationError,
+  StackMigrationError,
+  StackNotFoundError,
+} from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 
 // -------------------------------------------------------
@@ -341,6 +346,18 @@ describe('migrateAll', () => {
     expect(result.migrated).toBe(0);
   });
 
+  test('sweeps soft-deleted records too, so undelete returns them healed', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'stale' });
+    await stack.delete(record.id);
+
+    const result = await stack.migrateAll('com.example.test/note');
+
+    expect(result.migrated).toBe(1);
+    const undeleted = await stack.undelete(record.id);
+    expect(undeleted.typeId).toBe(NOTE_V2);
+    expect(undeleted.content).toEqual({ text: 'stale', title: '' });
+  });
+
   test('snapshots previous content to version history before migrating', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' });
     await stack.migrateAll('com.example.test/note');
@@ -420,6 +437,52 @@ describe('delete', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.delete(record.id, { hard: true });
     expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+});
+
+// -------------------------------------------------------
+// undelete
+// -------------------------------------------------------
+
+describe('undelete', () => {
+  test('reverses a soft delete', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    const undeleted = await stack.undelete(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeUndefined();
+  });
+
+  test('is idempotent — undeleting a non-deleted record returns it unchanged', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const result = await stack.undelete(record.id);
+    expect(result).toEqual(record);
+  });
+
+  test('a second undelete call is also a no-op success', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    await stack.undelete(record.id);
+    const result = await stack.undelete(record.id);
+    expect(result.deletedAt).toBeUndefined();
+  });
+
+  test('throws StackNotFoundError for a hard-deleted (missing) record', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id, { hard: true });
+    await expect(stack.undelete(record.id)).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('throws StackNotFoundError for a record that never existed', async () => {
+    await expect(stack.undelete('nonexistent')).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('undeleted record is included in default queries again', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.delete(record.id);
+    await stack.undelete(record.id);
+    const result = await stack.query({ filter: { typeId: NOTE_V1 } });
+    expect(result.records.find((r) => r.id === record.id)).toBeDefined();
   });
 });
 

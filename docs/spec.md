@@ -33,7 +33,7 @@ stack.timezone; // from adapter.timezone
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 **Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store.
 
@@ -579,6 +579,16 @@ Queries exclude soft-deleted Records by default. Opt in with:
 stack.query({ filter: { includeDeleted: true } });
 ```
 
+**Undelete** reverses a soft delete. It's idempotent — calling it on a Record that isn't deleted succeeds and returns the Record unchanged, so a retried call after a network blip never fails. A missing Record throws `StackNotFoundError`; a hard-deleted Record is simply missing, so it throws the same way.
+
+```ts
+const record = await stack.undelete(recordId); // clears deletedAt, returns the record
+```
+
+Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `write` bit or a `delete-own`/`delete-any` grant. Undelete is the inverse of soft delete, so the same capability governs both directions; granting one without the other would be backwards. (Hard delete's owner-only carve-out above is unaffected — it has no inverse.)
+
+Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing the same way any other stale Record is, the next time it's written or `migrateAll()` sweeps it. `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
+
 **Restore** always creates a new version with the old content — it never rewrites history. The act of restoring is itself part of the version history.
 
 ```ts
@@ -648,6 +658,7 @@ GET    /records/:id          — get one
 PATCH  /records/:id          — update content only (partial merge, null = delete field)
 DELETE /records/:id          — soft delete
 DELETE /records/:id?hard=true — hard delete
+POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 ```
 
 **`GET /records` query params:**
