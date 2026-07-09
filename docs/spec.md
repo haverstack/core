@@ -472,6 +472,8 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 - `Stack.putAttachment(data, mimeType, filename?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
 - `ScopedStack.putAttachment(data, mimeType, filename?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is set to the uploading entity.
+- `Stack.putAttachmentBytes(data)` — owner-level, bytes only. Stores the file and returns its `fileId` without creating an `_attachment@1` record. No grant check.
+- `ScopedStack.putAttachmentBytes(data)` — entity-scoped, bytes only. Gated identically to `ScopedStack.putAttachment()` (a `create` grant on `_attachment@1`): a bytes upload is only meaningful as a precursor to metadata creation, so the two share one authorization check. Anonymous requesters are always denied.
 
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
@@ -754,6 +756,8 @@ Authorization: Bearer <token>
 
 <binary data>
 ```
+
+`POST /attachments` requires the same authorization as creating an `_attachment@1` record: `401` for anonymous/missing tokens, `403` if the requester lacks a `create` grant on `_attachment@1`. A bytes upload is only meaningful as a precursor to metadata creation, so the two share one authorization requirement.
 
 Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`).
 
