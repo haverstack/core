@@ -323,6 +323,11 @@ export class APIAdapter implements StackAdapter {
     await this.request<void>('DELETE', path);
   }
 
+  async undeleteRecord(id: RecordId): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>('POST', `/records/${id}/undelete`);
+    return parseRecord(raw);
+  }
+
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     type Envelope = {
       records: WireRecord[];

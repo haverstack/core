@@ -339,6 +339,8 @@ export interface StackRecordAdapter {
   getRecord(id: RecordId): Promise<StackRecord | null>;
   updateRecord(id: RecordId, changes: Partial<StackRecord>): Promise<StackRecord>;
   deleteRecord(id: RecordId, opts?: { hard?: boolean }): Promise<void>;
+  /** Reverse a soft delete. Returns the record as it now stands. */
+  undeleteRecord(id: RecordId): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations

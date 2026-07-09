@@ -186,6 +186,26 @@ describe('ScopedStack — write access', () => {
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
+  test('undelete enforces write access', async () => {
+    const record = await adapter.createRecord(makeRecord({ deletedAt: new Date() }));
+    await expect(stack.asEntity(STRANGER).undelete(record.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+    const undeleted = await stack.asEntity(OWNER).undelete(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+  });
+
+  test('write:true holder can undelete', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        deletedAt: new Date(),
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    const undeleted = await stack.asEntity(MEMBER).undelete(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+  });
+
   test('associate/dissociate/setPermissions enforce write access', async () => {
     const record = await adapter.createRecord(makeRecord());
     const tag: Association = { kind: 'tag', label: 'starred' };
@@ -535,6 +555,21 @@ describe('ScopedStack — grant-based update/delete', () => {
     await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
       StackPermissionError,
     );
+  });
+
+  test('delete-any grant also allows undelete', async () => {
+    await stack.grant(MEMBER, [{ actions: ['delete-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    await stack.asEntity(MEMBER).delete(record.id);
+    const undeleted = await stack.asEntity(MEMBER).undelete(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+  });
+
+  test('update grant does not allow undelete', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    await adapter.deleteRecord(record.id);
+    await expect(stack.asEntity(MEMBER).undelete(record.id)).rejects.toThrow(StackPermissionError);
   });
 
   test('default grant (null entityId) applies update-own to any authenticated entity', async () => {

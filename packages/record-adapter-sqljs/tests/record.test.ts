@@ -250,6 +250,19 @@ describe('records — CRUD', () => {
     expect(await adapter.getVersions(record.id)).toEqual([]);
   });
 
+  test('undeleteRecord clears deletedAt and returns the record', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.deleteRecord(record.id);
+
+    const undeleted = await adapter.undeleteRecord(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.deletedAt).toBeUndefined();
+  });
+
   test('stored dates roundtrip correctly', async () => {
     const adapter = await initAdapter();
     const createdAt = new Date('2024-06-15T12:00:00.000Z');

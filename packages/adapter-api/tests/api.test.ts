@@ -316,6 +316,31 @@ describe('deleteRecord', () => {
 });
 
 // -------------------------------------------------------
+// undeleteRecord
+// -------------------------------------------------------
+
+describe('undeleteRecord', () => {
+  test('sends POST /records/:id/undelete', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.undeleteRecord('rec-abc123');
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/undelete`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('returns the record with parsed dates', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    const result = await adapter.undeleteRecord('rec-abc123');
+    expect(result.id).toBe('rec-abc123');
+    expect(result.createdAt).toBeInstanceOf(Date);
+    expect(result.deletedAt).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
 // queryRecords
 // -------------------------------------------------------
 

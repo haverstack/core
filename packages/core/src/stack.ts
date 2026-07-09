@@ -128,6 +128,7 @@ export interface StackClient {
   dissociate(id: string, association: Association): Promise<void>;
   setPermissions(id: string, permissions: Permission[]): Promise<void>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
+  undelete(id: string): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number): Promise<StackRecord>;
@@ -339,7 +340,7 @@ export class Stack implements StackClient {
       let cursor: string | undefined;
       do {
         const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId },
+          filter: { typeId, includeDeleted: true },
           limit: 100,
           cursor,
         });
@@ -537,6 +538,20 @@ export class Stack implements StackClient {
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     return this.adapter.deleteRecord(id, opts);
+  }
+
+  /**
+   * Reverse a soft delete. Idempotent — undeleting a record that isn't
+   * deleted returns it unchanged. Hard-deleted records are gone, so this
+   * throws StackNotFoundError for them just like any other missing record.
+   */
+  async undelete(id: string): Promise<StackRecord> {
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    if (!existing.deletedAt) return existing;
+    return this.adapter.undeleteRecord(id);
   }
 
   /**
@@ -973,6 +988,16 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError('Hard delete is owner-only');
     }
     return this.stack.delete(id, opts);
+  }
+
+  /**
+   * Reverse a soft delete. Gated the same as delete() — undelete is the
+   * inverse of soft delete, so granting one direction without the other
+   * would be backwards. Idempotent, per Stack.undelete().
+   */
+  async undelete(id: string): Promise<StackRecord> {
+    await this.requireDeletable(id);
+    return this.stack.undelete(id);
   }
 
   async getVersions(id: string): Promise<RecordVersion[]> {
