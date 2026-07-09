@@ -132,6 +132,7 @@ export interface StackClient {
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
+  putAttachmentBytes(data: Uint8Array): Promise<string>;
   putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
   deleteAttachment(fileId: string): Promise<void>;
 }
@@ -986,11 +987,13 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Store bytes and create an _attachment@1 metadata record owned by the
-   * requester. Requires a `create` grant on `_attachment@1`.
-   * Anonymous requesters are always denied.
+   * Store raw bytes only — no _attachment@1 record. Gated identically to
+   * putAttachment(): a bytes upload is only meaningful as a precursor to
+   * metadata creation, so the two share one authorization check.
+   * Requires a `create` grant on `_attachment@1`. Anonymous requesters are
+   * always denied.
    */
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+  async putAttachmentBytes(data: Uint8Array): Promise<string> {
     const requester = this.requesterEntityId;
     if (!requester) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
@@ -998,7 +1001,18 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
-    const fileId = await this.stack.putAttachmentBytes(data);
+    return this.stack.putAttachmentBytes(data);
+  }
+
+  /**
+   * Store bytes and create an _attachment@1 metadata record owned by the
+   * requester. Requires a `create` grant on `_attachment@1`.
+   * Anonymous requesters are always denied.
+   */
+  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    const fileId = await this.putAttachmentBytes(data);
+    // putAttachmentBytes() above throws if requesterEntityId is null.
+    const requester = this.requesterEntityId as string;
     await this.stack.create(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {
