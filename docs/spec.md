@@ -571,6 +571,8 @@ stack.delete(recordId); // soft delete — reversible
 stack.delete(recordId, { hard: true }); // hard delete — permanent
 ```
 
+**Hard delete is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ hard: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary; only the owner can invoke it. Non-owners are always limited to soft delete, which remains recoverable. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to the `asEntity()` wrapper.)
+
 Queries exclude soft-deleted Records by default. Opt in with:
 
 ```ts

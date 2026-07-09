@@ -962,8 +962,16 @@ export class ScopedStack implements StackClient {
     return this.stack.setPermissions(id, permissions);
   }
 
+  /**
+   * Hard delete is owner-only: it is irreversible and destroys version
+   * history, so neither the write bit nor delete-own/delete-any grants
+   * reach it. Non-owners are always limited to soft delete.
+   */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     await this.requireDeletable(id);
+    if (opts.hard && this.requesterEntityId !== this.stack.ownerEntityId) {
+      throw new StackPermissionError('Hard delete is owner-only');
+    }
     return this.stack.delete(id, opts);
   }
 
