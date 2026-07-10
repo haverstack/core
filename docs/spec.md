@@ -578,7 +578,7 @@ type Query = {
 };
 ```
 
-Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page.
+Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackQueryError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
 
 ### Adapter capabilities
 
@@ -680,17 +680,38 @@ Authorization: Bearer <token>
 
 Standard HTTP status codes are used throughout:
 
-| Status  | Meaning                  | When                                                                                                                                                                      |
-| ------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **400** | Bad request              | Structurally malformed request — missing a required field, unparseable query parameter, invalid JSON, a malformed or reserved-prefix record `id`                          |
-| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                           |
-| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                     |
-| **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                   |
-| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists) |
-| **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                         |
-| **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                    |
+| Status  | Meaning                  | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **400** | Bad request              | `StackQueryError` (code `bad_request`) where the library can identify the malformed input itself — e.g. an undecodable pagination cursor; otherwise a lower-level parse failure (missing required field, invalid JSON) with no core-taxonomy equivalent                                                                                                                                                                                                                                       |
+| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists)                                                                                                                                                                                                                                                                                                                     |
+| **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                                                                                                                                                                                                                                                                                                                                        |
+| **500** | Internal server error    | Reserved for `StackMigrationError` (code `migration`) — migration-graph corruption. No current code path produces this over the wire (migration-graph errors are thrown during client-side migration registration, never as a server response); the mapping exists for forward compatibility only. **Not** used as a generic catch-all: an unrelated server crash is a plain 500 with no wire error body, and clients must not infer `StackMigrationError` from status 500 alone (see below). |
 
 The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /records/:id/migrate`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
+
+#### Wire error body
+
+Every non-2xx response whose failure maps to the core error taxonomy carries a JSON body of the shape:
+
+```json
+{
+  "error": {
+    "code": "permission" | "not_found" | "conflict" | "validation" | "migration" | "bad_request",
+    "message": "human-readable description",
+    "details": [ { "path": "title", "message": "expected string, got number" } ]
+  }
+}
+```
+
+`details` is only present for `code: "validation"`, carrying `StackValidationError.errors`.
+
+`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response. When a response has no parseable wire error body (a foreign or legacy server, or a proxy that strips bodies but preserves status), `APIAdapter` falls back to reconstructing from status alone for the unambiguous statuses above (400/403/404/409/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
+
+This mapping is pinned by the shared conformance fixtures (`@haverstack/conformance-fixtures`) so `APIAdapter` and any server implementation can't drift on it independently.
 
 ### Records
 

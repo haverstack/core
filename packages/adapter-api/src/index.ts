@@ -29,6 +29,7 @@ import type {
   FileId,
 } from '@haverstack/core';
 import type { WireRecord, WireType, WireVersion } from '@haverstack/wire-types';
+import { isWireError, deserializeError, errorForStatus } from '@haverstack/wire-types';
 
 // -------------------------------------------------------
 // Public option types
@@ -229,6 +230,27 @@ export class APIAdapter implements StackAdapter {
   // Request helpers
   // -------------------------------------------------------
 
+  /**
+   * Build the typed error for a failed response. `code` in the wire error
+   * body is authoritative and reconstructs the corresponding core error
+   * class (StackPermissionError, StackNotFoundError, StackConflictError,
+   * StackValidationError, StackQueryError, StackMigrationError). Falls back
+   * to status-based reconstruction when the body is missing or foreign
+   * (unrecognized shape), then to a generic APIAdapterError when neither
+   * yields an unambiguous mapping.
+   */
+  private async errorForResponse(res: Response, method: string, path: string): Promise<Error> {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      body = undefined;
+    }
+    if (isWireError(body)) return deserializeError(body);
+    const message = `HTTP ${res.status}: ${method} ${path}`;
+    return errorForStatus(res.status, message) ?? new APIAdapterError(message, res.status);
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -253,7 +275,7 @@ export class APIAdapter implements StackAdapter {
 
     if (res.status === 401) throw new APIAdapterAuthError();
     if (res.status === 404 && nullOn404) return null as T;
-    if (!res.ok) throw new APIAdapterError(`HTTP ${res.status}: ${method} ${path}`, res.status);
+    if (!res.ok) throw await this.errorForResponse(res, method, path);
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
   }
@@ -271,7 +293,7 @@ export class APIAdapter implements StackAdapter {
     }
 
     if (res.status === 401) throw new APIAdapterAuthError();
-    if (!res.ok) throw new APIAdapterError(`HTTP ${res.status}: GET ${path}`, res.status);
+    if (!res.ok) throw await this.errorForResponse(res, 'GET', path);
     return new Uint8Array(await res.arrayBuffer());
   }
 
@@ -296,7 +318,7 @@ export class APIAdapter implements StackAdapter {
     }
 
     if (res.status === 401) throw new APIAdapterAuthError();
-    if (!res.ok) throw new APIAdapterError(`HTTP ${res.status}: POST ${path}`, res.status);
+    if (!res.ok) throw await this.errorForResponse(res, 'POST', path);
     return res.json() as Promise<Record<string, unknown>>;
   }
 

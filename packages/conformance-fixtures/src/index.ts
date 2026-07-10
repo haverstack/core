@@ -23,7 +23,7 @@
  * prior state — that's the consumer's test setup.
  */
 
-import type { WireRecord } from '@haverstack/wire-types';
+import type { WireRecord, WireError } from '@haverstack/wire-types';
 
 export type WireMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -263,6 +263,102 @@ export const commitMigrationFixtures: ConformanceFixture<
 ];
 
 // -------------------------------------------------------
+// Error responses
+// -------------------------------------------------------
+//
+// Pins the wire error body contract (#53): every failed request returns
+// { error: { code, message, details? } }, with `code` as the authoritative
+// discriminator — status is a transport hint. Each fixture assumes the
+// server is already in the state its description names (a missing record,
+// a requester without a grant, ...); these fixtures pin the error shape a
+// server must produce and APIAdapter must reconstruct, not how a server
+// gets into that state.
+
+export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
+  {
+    name: 'error-permission-denied',
+    description:
+      'A write from a requester without the required grant on the record returns 403 with ' +
+      'code "permission" — reconstructed client-side as StackPermissionError.',
+    method: 'PATCH',
+    path: '/records/rec-1',
+    requestBody: { title: 'New title' },
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-not-found',
+    description:
+      'A write (e.g. PATCH) against a record id that does not exist — deleted or never ' +
+      'created — returns 404 with code "not_found", reconstructed as StackNotFoundError. ' +
+      '(GET /records/:id is deliberately excluded here: APIAdapter treats a 404 there as ' +
+      '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.) Must be ' +
+      'indistinguishable from the "exists but forbidden" case only in error *shape*, never in ' +
+      'status/code (see #51 anti-oracle rule).',
+    method: 'PATCH',
+    path: '/records/rec-does-not-exist',
+    requestBody: { title: 'New title' },
+    responseStatus: 404,
+    responseBody: {
+      error: { code: 'not_found', message: 'Record "rec-does-not-exist" not found.' },
+    },
+  },
+  {
+    name: 'error-conflict-duplicate-id',
+    description:
+      'POST /records with a client-supplied id that already exists in the stack returns 409 ' +
+      'with code "conflict" — reconstructed as StackConflictError, never a silent overwrite.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-1',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Duplicate' },
+      version: 1,
+    },
+    responseStatus: 409,
+    responseBody: { error: { code: 'conflict', message: 'Record "rec-1" already exists.' } },
+  },
+  {
+    name: 'error-validation-failed',
+    description:
+      'PATCH content that fails the target type schema returns 422 with code "validation" and ' +
+      'field-level details — reconstructed as StackValidationError, with `details` populating ' +
+      '`.errors`.',
+    method: 'PATCH',
+    path: '/records/rec-1',
+    requestBody: { title: 42 },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [{ path: 'title', message: 'expected string, got number' }],
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-malformed-cursor',
+    description:
+      'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +
+      'structurally malformed request, distinct from a 422 content-validation failure. ' +
+      'Reconstructed as StackQueryError (see the cursor codec fix in record-adapter-sqljs, #53).',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { cursor: 'not-a-valid-cursor' },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid cursor: unknown sort field "not-a-valid-cursor"',
+      },
+    },
+  },
+];
+
+// -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
 
@@ -277,4 +373,5 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...setPermissionsFixtures,
   ...restoreVersionFixtures,
   ...commitMigrationFixtures,
+  ...errorResponseFixtures,
 ];

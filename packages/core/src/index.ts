@@ -17,6 +17,7 @@ export {
   StackPermissionError,
   StackNotFoundError,
   StackConflictError,
+  StackQueryError,
 } from './stack.js';
 export type {
   StackClient,
