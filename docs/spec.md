@@ -340,11 +340,34 @@ Group permissions reference a `_group` Record by ID. The group may be a simple p
 
 Cross-stack group resolution (where the `_group` Record lives in a different stack than the Record being accessed) requires the server to have read access to that stack.
 
+### The `write` bit: a recoverability trust model
+
+Record-level `write` stays a single coarse bit — no per-verb fencing (`update` vs `associate` vs `delete`) at the record level. That's a deliberate scale decision: per-record sharing among a small, cohesive group doesn't call for maintained per-verb ACLs. What makes one bit safe is this:
+
+> **Anything a write-holder does, the owner can undo.** Recoverability is the backstop, not per-verb precision.
+
+| Verb, via `write: true`    | Reversible?                 | How                                                                                                             |
+| -------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `update`                   | Yes                         | Versioned — `restoreVersion()` undoes it                                                                        |
+| `associate` / `dissociate` | Yes                         | Versioned (see [Versions](#versions)) — `restoreVersion()` restores prior associations                          |
+| `restoreVersion`           | Yes                         | Update-shaped; itself creates a new, restorable version                                                         |
+| `delete` (soft)            | Yes                         | `undelete()` reverses it — the owner can always undelete, regardless of who deleted (see [Deletion](#deletion)) |
+| `delete` (hard)            | Never reachable via `write` | Owner-only, unconditionally — see below                                                                         |
+
+Two operations sit outside the `write` bit entirely, regardless of grants:
+
+- **Hard delete** is owner-only (see [Deletion](#deletion)) — it destroys the Record and its version history, so there's nothing left to undo. An irreversible verb has no place in a bit whose entire safety argument is recoverability.
+- **`setPermissions()`** is owner-or-creator-only. A write-holder who is neither the owner nor the Record's creator cannot change who else can access it — otherwise a `write: true` grant would let its holder escalate to granting others access, defeating the point of scoping access in the first place. This is not a special case bolted onto `setPermissions` alone; it's the same pattern as hard delete: a privilege-bearing operation stays outside the coarse bit. (`restoreVersion()` reinforces this from the other direction — it restores `content` and `associations` but never `permissions`, so a content rollback can't silently change who has access either.)
+
+This is about the **served topology**: for `adapter-local`, direct adapter access is full trust and the permission model doesn't apply — `Stack` is unscoped by design. Record-level permissions exist for the requester on the far side of a server, who has no direct database access. For them, the `write` bit is the only fence, so what it permits has to hold up as a real policy surface — which is exactly why everything it reaches has to be undoable by the owner.
+
 ### Layer 2: Type-level grants
 
 `_grant` records (see [Grant](#grant)) authorise Entities to perform actions across all Records of a given Type, without touching individual records. A read-any grant on `comment@1`, for example, makes all comments of that type readable by the grantee without setting `permissions` on each one.
 
 `ScopedStack` checks both layers on every operation: if either the Record's own `permissions` or a matching `_grant` record permits the action, access is granted. The owner always has full access and bypasses both checks.
+
+The two layers deliberately use different granularities. Record-level `write` is one coarse bit (above); grants are precise per verb (`update-own`/`update-any`, `delete-own`/`delete-any`, etc. — see [Grant](#grant)). Type-wide access for a third-party app warrants verb precision in a way per-record sharing among intimates doesn't. `associate()`/`dissociate()` don't get their own grant action — they ride `update-own`/`update-any`, the same as content changes, keeping the grant vocabulary from growing a verb for every mutation kind.
 
 ### Enforcement: `Stack.asEntity()`
 
