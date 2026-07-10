@@ -1,0 +1,42 @@
+{
+  "name": "@haverstack/conformance-fixtures",
+  "version": "0.1.0",
+  "description": "Request/response fixtures for the Stack API wire protocol, shared between adapter-api and server implementations",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haverstack/core",
+    "directory": "packages/conformance-fixtures"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "conformance",
+    "fixtures",
+    "wire protocol"
+  ],
+  "scripts": {
+    "prepublishOnly": "pnpm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@haverstack/wire-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
