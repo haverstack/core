@@ -149,6 +149,143 @@ describe('isCompatible', () => {
     const required: TypeSchema = { text: { kind: 'text', required: true } };
     expect(isCompatible({}, required)).toBe(false);
   });
+
+  test('candidate declaring a required field as optional is not compatible', () => {
+    const candidate: TypeSchema = { title: { kind: 'string', required: false } };
+    const required: TypeSchema = { title: { kind: 'string', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('candidate declaring a required field with no required flag at all is not compatible', () => {
+    const candidate: TypeSchema = { title: { kind: 'string' } };
+    const required: TypeSchema = { title: { kind: 'string', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('text candidate satisfies a required string field', () => {
+    const candidate: TypeSchema = { body: { kind: 'text', required: true } };
+    const required: TypeSchema = { body: { kind: 'string', required: true } };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test('string candidate satisfies a required text field', () => {
+    const candidate: TypeSchema = { body: { kind: 'string', required: true } };
+    const required: TypeSchema = { body: { kind: 'text', required: true } };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test('date candidate does not satisfy a required string field', () => {
+    const candidate: TypeSchema = { body: { kind: 'date', required: true } };
+    const required: TypeSchema = { body: { kind: 'string', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('string candidate does not satisfy a required date field', () => {
+    const candidate: TypeSchema = { body: { kind: 'string', required: true } };
+    const required: TypeSchema = { body: { kind: 'date', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('nested required object property mismatch is not compatible', () => {
+    const candidate: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: {
+          name: { kind: 'string', required: false },
+        },
+      },
+    };
+    const required: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: {
+          name: { kind: 'string', required: true },
+        },
+      },
+    };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('nested object property satisfying required sub-field is compatible', () => {
+    const candidate: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: {
+          name: { kind: 'string', required: true },
+        },
+      },
+    };
+    const required: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: {
+          name: { kind: 'string', required: true },
+        },
+      },
+    };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test('nested array item kind mismatch is not compatible', () => {
+    const candidate: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'number' } },
+    };
+    const required: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'string' } },
+    };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('nested array item kind text/string equivalence is compatible', () => {
+    const candidate: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'text' } },
+    };
+    const required: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'string' } },
+    };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test("spec's motivating example: a text body satisfies a required string requirement", () => {
+    const candidate: TypeSchema = {
+      text: { kind: 'text', required: true },
+    };
+    const required: TypeSchema = {
+      text: { kind: 'string', required: true },
+    };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test('deeply nested matching schemas beyond the depth limit are not compatible (fails closed)', () => {
+    const buildNested = (depth: number): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: 'string', required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const candidate = buildNested(1000);
+    const required = buildNested(1000);
+    expect(() => isCompatible(candidate, required)).not.toThrow();
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('matching schemas within the depth limit remain compatible', () => {
+    const buildNested = (depth: number): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: 'string', required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const candidate = buildNested(10);
+    const required = buildNested(10);
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
 });
 
 // -------------------------------------------------------
