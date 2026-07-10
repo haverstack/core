@@ -206,6 +206,20 @@ describe('ScopedStack — write access', () => {
     expect(undeleted.deletedAt).toBeUndefined();
   });
 
+  test('a write-holder soft-delete is undeletable by the owner — recoverability holds', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    await stack.asEntity(MEMBER).delete(record.id);
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
+
+    const undeleted = await stack.asEntity(OWNER).undelete(record.id);
+    expect(undeleted.deletedAt).toBeUndefined();
+    expect((await adapter.getRecord(record.id))?.deletedAt).toBeUndefined();
+  });
+
   test('associate/dissociate/setPermissions enforce write access', async () => {
     const record = await adapter.createRecord(makeRecord());
     const tag: Association = { kind: 'tag', label: 'starred' };
