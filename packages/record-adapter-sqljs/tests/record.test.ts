@@ -775,6 +775,36 @@ describe('versions', () => {
     const versions = await adapter.getVersions(record.id);
     expect(versions.length).toBe(1);
   });
+
+  test('saveVersion and getVersion roundtrip associations and permissions', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      content: { text: 'original' },
+      updatedAt: new Date(),
+      associations: [{ kind: 'tag', label: 'starred' }],
+      permissions: [{ access: 'public' }],
+    });
+    const retrieved = await adapter.getVersion(record.id, 1);
+    expect(retrieved?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(retrieved?.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  test('version without associations/permissions omits them, not nulls', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      content: { text: 'original' },
+      updatedAt: new Date(),
+    });
+    const retrieved = await adapter.getVersion(record.id, 1);
+    expect(retrieved?.associations).toBeUndefined();
+    expect(retrieved?.permissions).toBeUndefined();
+  });
 });
 
 // -------------------------------------------------------

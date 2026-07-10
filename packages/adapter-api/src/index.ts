@@ -123,6 +123,8 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
     updatedAt: new Date(raw.updatedAt),
   };
   if (raw.entityId != null) v.entityId = raw.entityId;
+  if (raw.associations != null) v.associations = raw.associations;
+  if (raw.permissions != null) v.permissions = raw.permissions;
   return v;
 };
 

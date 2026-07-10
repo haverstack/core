@@ -37,6 +37,8 @@ export type WireVersion = {
   content: Record<string, unknown>;
   updatedAt: string;
   entityId?: string;
+  associations?: Association[];
+  permissions?: Permission[];
 };
 
 export function serializeRecord(r: StackRecord): WireRecord {
@@ -78,6 +80,8 @@ export function serializeVersion(v: RecordVersion): WireVersion {
     updatedAt: v.updatedAt.toISOString(),
   };
   if (v.entityId !== undefined) w.entityId = v.entityId;
+  if (v.associations !== undefined) w.associations = v.associations;
+  if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;
 }
 

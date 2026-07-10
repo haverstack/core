@@ -92,6 +92,8 @@ export type RecordVersion = {
   content: Record<string, unknown>;
   updatedAt: Date;
   entityId?: RecordId; // Who made this change
+  associations?: Association[];
+  permissions?: Permission[];
 };
 
 // -------------------------------------------------------

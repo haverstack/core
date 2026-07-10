@@ -364,7 +364,9 @@ Plain `Stack` methods remain unscoped and perform no permission checks — corre
 
 ## Versions
 
-Version history is managed by the library as a side channel — apps do not manage it directly. On every `update()`, the library snapshots the previous state.
+Version history is managed by the library as a side channel — apps do not manage it directly.
+
+**One rule, no special cases:** every mutation of a Record — content (`update`), associations (`associate`/`dissociate`), permissions (`setPermissions`), soft delete, undelete — snapshots the Record's prior full state and bumps `version`. A mutation that changes nothing (re-adding an association that's already present, removing one that isn't there, setting a deep-equal permission set, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Hard delete is the one exception — it destroys the Record and its version history outright, so there's nothing to snapshot.
 
 ```ts
 type RecordVersion = {
@@ -372,19 +374,21 @@ type RecordVersion = {
   content: object;
   updatedAt: Date;
   entityId?: string; // Who made this change
+  associations?: Association[]; // Present if the record had associations at snapshot time
+  permissions?: Permission[]; // Present if the record had permissions at snapshot time
 };
 ```
 
 **API surface:**
 
 - `stack.getVersions(recordId)` — retrieve version history
-- `stack.restoreVersion(recordId, version)` — revert to a prior version
+- `stack.restoreVersion(recordId, version)` — revert to a prior version. Restores `content` and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
 
 **Storage per adapter:**
 
 - JSON: sibling file `{id}.versions.json`
 - SQLite: `versions` table
-- API: server snapshots automatically on every `PATCH /records/:id`; history is read via `/records/:id/versions`
+- API: server snapshots automatically on every mutating endpoint (`PATCH /records/:id`, associations, permissions, delete, undelete); history is read via `/records/:id/versions`
 
 ---
 
@@ -707,7 +711,7 @@ PUT  /records/:id/permissions        — replace all permissions (empty array = 
 
 ### Versions
 
-The server snapshots a record's state automatically on every `PATCH /records/:id` — there is no client-initiated endpoint to write a version directly.
+The server snapshots a record's state automatically on every mutating endpoint — content, associations, permissions, delete, undelete (see [Versions](#versions) for the full rule) — there is no client-initiated endpoint to write a version directly.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)

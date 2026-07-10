@@ -488,6 +488,19 @@ describe('getVersion', () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
     expect(await adapter.getVersion('rec-abc123', 99)).toBeNull();
   });
+
+  test('parses associations and permissions when present', async () => {
+    const adapter = await openAdapter();
+    const withOptionals = {
+      ...VERSION_RAW,
+      associations: [{ kind: 'tag', label: 'starred' }],
+      permissions: [{ access: 'public' }],
+    };
+    mockFetch.mockResolvedValueOnce(jsonResponse(withOptionals));
+    const version = await adapter.getVersion('rec-abc123', 1);
+    expect(version?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(version?.permissions).toEqual([{ access: 'public' }]);
+  });
 });
 
 describe('saveVersion', () => {
