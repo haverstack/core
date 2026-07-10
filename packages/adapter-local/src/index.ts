@@ -49,11 +49,20 @@ export type LocalInitializeOptions = {
   timezone: string;
   /** Entity ID of the stack owner. */
   entityId: string;
+  /** Bypass the storage-ownership lock check. See LocalOpenOptions.force. */
+  force?: boolean;
 };
 
 export type LocalOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
+  /**
+   * Open even if a lock file from another live process is present.
+   * Only needed if that process is gone but its PID was reused by
+   * something else (the automatic stale-lock check already reclaims
+   * locks whose owning process is no longer running).
+   */
+  force?: boolean;
 };
 
 // -------------------------------------------------------
@@ -79,6 +88,7 @@ export class LocalAdapter implements StackAdapter {
       path: opts.path,
       entityId: opts.entityId,
       timezone: opts.timezone,
+      force: opts.force,
     });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     return new LocalAdapter(record, blob);
@@ -89,7 +99,7 @@ export class LocalAdapter implements StackAdapter {
    * use initialize() for new stacks.
    */
   static async open(opts: LocalOpenOptions): Promise<LocalAdapter> {
-    const record = await SQLiteRecordAdapter.open({ path: opts.path });
+    const record = await SQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     return new LocalAdapter(record, blob);
   }

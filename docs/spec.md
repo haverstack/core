@@ -483,6 +483,19 @@ All adapters support the full Record API. Performance guarantees differ; correct
 
 ---
 
+## Concurrency & storage ownership
+
+A stack's backing storage (a SQLite file, a JSON directory) has exactly one owning process at a time. Adapters are not required to support concurrent multi-process access, and the whole-file adapters (`record-adapter-sqljs` and the planned `adapter-json`) do not: they read the entire store into memory on open and rewrite it whole on every persist, so two processes opening the same store each hold an independent copy and silently clobber each other's writes.
+
+Multi-app access goes through a server implementation over the wire protocol (`adapter-api`, against `localhost` or a hosted provider) — never by pointing multiple apps at the same storage file directly. This is also the only topology in which permissions, grants, and `appId` attribution mean anything: `Stack` performs no permission checks, `ScopedStack` is opt-in, and `appId` is self-reported by the writing app, so direct storage access implies full trust over everything in the store, including grants and token hashes.
+
+Two properties adapters SHOULD provide regardless of topology, since even a single process can crash mid-write or be opened twice by accident:
+
+- **Fail loudly on double-open.** An adapter SHOULD detect that its storage is already open in another live process and reject `open()`/`initialize()` with a clear error, rather than silently entering a last-writer-wins mode. `record-adapter-sqljs` does this with a PID-stamped lock file beside the database, released on `close()`; a stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
+- **Persist atomically.** A crash mid-write must never leave storage unreadable. `record-adapter-sqljs` writes each snapshot to a temp file in the same directory and `rename()`s it over the target — atomic on POSIX, so there is no window where the file is truncated or partially written.
+
+---
+
 ## Attachments
 
 Binary files are stored and retrieved through the library using **content-addressed storage**. A file's ID is the SHA-256 hash of its bytes, so uploading identical bytes twice returns the same `fileId` without writing a second binary copy. Each upload creates a new `_attachment@1` record (see [Attachment](#attachment)) regardless of deduplication, so metadata (mimeType, size, filename) is tracked per upload.

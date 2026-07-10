@@ -12,7 +12,16 @@ Haverstack is a structured data store for individuals and small organizations. A
 
 A stack is a personal or organizational data store. It belongs to one **Entity** (a person or org) and holds **Records** — structured data objects that apps create and read.
 
-The key idea: apps only talk to the Haverstack library. They don't know or care whether the underlying storage is a local SQLite database, a folder of JSON files, or a remote server. Switch backends without changing your app.
+The key idea: apps talk to the Haverstack library, not to a storage format directly — switch backends without changing your app's data-access code. That said, storage ownership is exclusive: **a stack file is owned by exactly one process at a time.**
+
+---
+
+## How apps share a stack
+
+- **One app, one stack:** the app embeds `adapter-local` and owns the file directly. This is the simple, common case.
+- **Multiple apps, one stack:** run a server (local or hosted) that owns the file, and have each app connect through `adapter-api` — the same client works against `localhost` or a remote provider.
+
+Don't point more than one app at the same stack file with `adapter-local`. Nothing enforces permissions at that layer — `appId` is self-reported and grants aren't checked — so direct file access is a full-trust, single-owner arrangement, not a way to share data between apps. See [Concurrency & storage ownership](./docs/spec.md#concurrency--storage-ownership) in the spec for the full rationale.
 
 ---
 
@@ -20,13 +29,13 @@ The key idea: apps only talk to the Haverstack library. They don't know or care 
 
 This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 
-| Package                                                               | Description                                           |
-| --------------------------------------------------------------------- | ----------------------------------------------------- |
-| [`@haverstack/core`](./packages/core)                                 | Stack class, types, schema, validation, ID generation |
-| [`@haverstack/adapter-local`](./packages/adapter-local)               | Local adapter (SQLite + disk) — the common case       |
-| [`@haverstack/record-adapter-sqljs`](./packages/record-adapter-sqljs) | sql.js (SQLite/WASM) `StackRecordAdapter`             |
-| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)       | Disk filesystem `StackBlobAdapter`                    |
-| [`@haverstack/adapter-api`](./packages/adapter-api)                   | HTTP adapter for remote stack servers                 |
+| Package                                                               | Description                                                       |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [`@haverstack/core`](./packages/core)                                 | Stack class, types, schema, validation, ID generation             |
+| [`@haverstack/adapter-local`](./packages/adapter-local)               | Local adapter (SQLite + disk) — single-app/embedded or server use |
+| [`@haverstack/record-adapter-sqljs`](./packages/record-adapter-sqljs) | sql.js (SQLite/WASM) `StackRecordAdapter`                         |
+| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)       | Disk filesystem `StackBlobAdapter`                                |
+| [`@haverstack/adapter-api`](./packages/adapter-api)                   | HTTP adapter for remote stack servers                             |
 
 Planned:
 
@@ -148,13 +157,13 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 - **`record-adapter-*`** — `StackRecordAdapter` only
 - **`blob-adapter-*`** — `StackBlobAdapter` only
 
-| Package                | Type   | Use case                                        |
-| ---------------------- | ------ | ----------------------------------------------- |
-| `adapter-local`        | full   | Local app storage — SQLite records + disk blobs |
-| `record-adapter-sqljs` | record | sql.js records, full query support, FTS         |
-| `blob-adapter-disk`    | blob   | Content-addressed blobs on the local filesystem |
-| `adapter-api`          | full   | Hosted/shared stacks via HTTP                   |
-| `adapter-json`         | full   | Portable JSON files _(planned)_                 |
+| Package                | Type   | Use case                                                        |
+| ---------------------- | ------ | --------------------------------------------------------------- |
+| `adapter-local`        | full   | Single-app/embedded or server use — SQLite records + disk blobs |
+| `record-adapter-sqljs` | record | sql.js records, full query support, FTS                         |
+| `blob-adapter-disk`    | blob   | Content-addressed blobs on the local filesystem                 |
+| `adapter-api`          | full   | Hosted/shared stacks via HTTP                                   |
+| `adapter-json`         | full   | Portable JSON files _(planned)_                                 |
 
 Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `SQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 

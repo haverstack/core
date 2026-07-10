@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { SQLiteRecordAdapter } from '../src/index.js';
@@ -106,6 +106,94 @@ test('preserves ownerEntityId and timezone across reopen', async () => {
   const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
   expect(adapter.timezone).toBe('Europe/London');
+});
+
+// -------------------------------------------------------
+// Storage ownership lock
+// -------------------------------------------------------
+
+describe('storage ownership lock', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('open() rejects when a live process already holds the lock', async () => {
+    await initAdapter();
+    const otherPid = process.pid + 1;
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await expect(SQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
+      new RegExp(`in use by another process \\(pid ${otherPid}\\)`),
+    );
+  });
+
+  test('open() reclaims a lock left by a dead process', async () => {
+    await initAdapter();
+    const deadPid = process.pid + 1;
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: deadPid }));
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('no such process') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+
+    const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
+    expect(adapter.ownerEntityId).toBe('entity-123');
+  });
+
+  test('open() with force bypasses a live lock', async () => {
+    await initAdapter();
+    const otherPid = process.pid + 1;
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const adapter = await SQLiteRecordAdapter.open({ path: dbPath, force: true });
+    expect(adapter.ownerEntityId).toBe('entity-123');
+  });
+
+  test('close() releases the lock so a later open() succeeds without force', async () => {
+    const adapter = await initAdapter();
+    await adapter.close();
+    await expect(SQLiteRecordAdapter.open({ path: dbPath })).resolves.toBeDefined();
+  });
+
+  test('reopening from the same process does not require force', async () => {
+    await initAdapter();
+    await expect(SQLiteRecordAdapter.open({ path: dbPath })).resolves.toBeDefined();
+  });
+
+  test('initialize() rejects when a live process holds the lock at the target path', async () => {
+    const otherPid = process.pid + 1;
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await expect(initAdapter()).rejects.toThrow(/in use by another process/);
+  });
+});
+
+// -------------------------------------------------------
+// Atomic persist
+// -------------------------------------------------------
+
+describe('atomic persist', () => {
+  test('leaves no temp files behind after a write', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord());
+    const entries = readdirSync(testDir);
+    expect(entries.some((f) => f.includes('.tmp-'))).toBe(false);
+  });
+
+  test('the database file is valid after multiple persists', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1' }));
+    await adapter.createRecord(makeRecord({ id: 'r2' }));
+    await adapter.patchContent('r1', { text: 'updated' });
+
+    const reopened = await SQLiteRecordAdapter.open({ path: dbPath });
+    expect((await reopened.getRecord('r1'))?.content).toEqual({ text: 'updated' });
+    expect(await reopened.getRecord('r2')).not.toBeNull();
+  });
 });
 
 // -------------------------------------------------------
