@@ -213,44 +213,22 @@ type StackType = {
 
 **Schema drift detection:** If two Records share a `typeId` but their Type definitions have different `schemaHash` values, that is unambiguously a bug — intentional changes always produce a new version number.
 
-**Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, it declares that field as required with a read-compatible kind. This licenses *consuming* Records, not writing them: a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which `isCompatible()` never inspects). Used by apps that want to work with Records regardless of exact Type, e.g. any Type with a required `text` or `string` field:
+**Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses *consuming* Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
 
-```ts
-const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
-  string: ['string', 'text'],
-  text: ['text', 'string'],
-  number: ['number'],
-  boolean: ['boolean'],
-  date: ['date'],
-  'record-ref': ['record-ref'],
-};
+A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
 
-function isFieldCompatible(candidate: FieldDef, required: FieldDef): boolean {
-  if (required.kind === 'array') {
-    return candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items);
-  }
-  if (required.kind === 'object') {
-    return candidate.kind === 'object' && isCompatible(candidate.properties, required.properties);
-  }
-  if (candidate.kind === 'array' || candidate.kind === 'object') return false;
-  return READ_COMPATIBLE[required.kind].includes(candidate.kind);
-}
+| required → | `string` | `text` | `number` | `boolean` | `date` | `record-ref` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `string` | ✓ | ✓ | | | | |
+| `text` | ✓ | ✓ | | | | |
+| `number` | | | ✓ | | | |
+| `boolean` | | | | ✓ | | |
+| `date` | | | | | ✓ | |
+| `record-ref` | | | | | | ✓ |
 
-function isCompatible(
-  candidateSchema: TypeSchema, // the Record's actual Type
-  requiredSchema: TypeSchema, // minimum fields the app needs
-): boolean {
-  return Object.entries(requiredSchema).every(([key, def]) => {
-    if (!def.required) return true;
-    const field = candidateSchema[key];
-    return field !== undefined && field.required === true && isFieldCompatible(field, def);
-  });
-}
-```
+`string` and `text` are mutually read-compatible — both are strings at the value level, and the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
 
-`string` and `text` are mutually read-compatible — both are strings at the value level, and the distinction is presentation/indexing intent. Every other kind pair requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
-
-Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()`.
+Used by apps that want to work with Records regardless of exact Type, e.g. any Type with a required `text` or `string` field. Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()` — see `packages/core/src/schema.ts` for the authoritative implementation and `packages/core/tests/schema.test.ts` for its behavior under nesting and the string/text equivalence.
 
 **System types** (reserved, library-defined): `_config@1`, `_entity@1`, `_app@1`, `_group@1`, `_grant@1`, `_attachment@1`. System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is created via `Stack.create()` — they are always available without any setup by the caller.
 
