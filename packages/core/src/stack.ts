@@ -14,7 +14,7 @@
  * Apps should never talk to a StackAdapter directly.
  */
 
-import { generateId } from './id.js';
+import { generateId, isValidIdFormat, idTimestamp } from './id.js';
 import { hashSchema, isCompatible, parseTypeId } from './schema.js';
 import { validateContent } from './validate.js';
 import { checkAccess } from './access.js';
@@ -44,11 +44,29 @@ import type {
 // -------------------------------------------------------
 
 export type CreateRecordOptions = {
+  /**
+   * Client-minted record ID. Must be 12 lowercase Crockford base-32
+   * characters and may not use the reserved `_` prefix. Omit to let the
+   * library generate one. See Stack.create() and ScopedStack.create()
+   * for the validation each applies.
+   */
+  id?: string;
   parentId?: string;
   entityId?: string;
   appId?: string;
   permissions?: Permission[];
   associations?: Association[];
+};
+
+export type StackOptions = {
+  /**
+   * Clock-skew tolerance (ms) for the timestamp-prefix plausibility check
+   * ScopedStack.create() runs on a grantee-supplied `id` — a grantee is an
+   * untrusted actor who could otherwise mint an ID that forges its sort
+   * position. Default: 24 hours. Pass null to disable the check entirely.
+   * Unscoped Stack.create() never runs this check (full-trust context).
+   */
+  idTimestampSkewMs?: number | null;
 };
 
 export type GetRecordOptions = {
@@ -106,6 +124,53 @@ export class StackConflictError extends Error {
 }
 
 // -------------------------------------------------------
+// Record ID validation
+// -------------------------------------------------------
+
+const RESERVED_ID_PREFIX = '_';
+const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Format and reserved-prefix checks — full-trust context (Stack.create()).
+ * Checked before the format check: the Crockford charset already excludes
+ * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
+ * as a generic format error instead of a specific, actionable one.
+ */
+function validateRecordId(id: string): void {
+  if (id.startsWith(RESERVED_ID_PREFIX)) {
+    throw new StackValidationError([
+      { path: 'id', message: `ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.` },
+    ]);
+  }
+  if (!isValidIdFormat(id)) {
+    throw new StackValidationError([
+      {
+        path: 'id',
+        message: `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
+      },
+    ]);
+  }
+}
+
+/**
+ * Timestamp-prefix plausibility check for grantee-minted IDs
+ * (ScopedStack.create()) — a grantee is untrusted and could otherwise mint
+ * an ID that forges its sort position. Pass null to disable.
+ */
+function validateIdTimestampSkew(id: string, toleranceMs: number | null): void {
+  if (toleranceMs === null) return;
+  const skew = Math.abs(Date.now() - idTimestamp(id));
+  if (skew > toleranceMs) {
+    throw new StackValidationError([
+      {
+        path: 'id',
+        message: `ID "${id}" timestamp is outside the allowed clock-skew tolerance (${toleranceMs}ms).`,
+      },
+    ]);
+  }
+}
+
+// -------------------------------------------------------
 // StackClient interface
 // -------------------------------------------------------
 
@@ -145,19 +210,25 @@ export interface StackClient {
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
 
-  private constructor(private readonly adapter: StackAdapter) {}
+  private constructor(
+    private readonly adapter: StackAdapter,
+    private readonly idTimestampSkewMsValue: number | null,
+  ) {}
 
   /**
    * Create a Stack instance. Reads ownerEntityId and timezone from the adapter.
    */
-  static async create(adapter: StackAdapter): Promise<Stack> {
+  static async create(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
       throw new Error(
         'Stack misconfiguration: adapter has no ownerEntityId. ' +
           'Initialise the adapter with an entityId before calling Stack.create().',
       );
     }
-    const stack = new Stack(adapter);
+    const stack = new Stack(
+      adapter,
+      opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
+    );
     await stack.seedSystemTypes();
     return stack;
   }
@@ -187,7 +258,7 @@ export class Stack implements StackClient {
    * multi-tenant API server).
    */
   asEntity(entityId: string | null): ScopedStack {
-    return new ScopedStack(this, entityId);
+    return new ScopedStack(this, entityId, this.idTimestampSkewMsValue);
   }
 
   // -------------------------------------------------------
@@ -386,9 +457,16 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
+    if (opts.id !== undefined) {
+      validateRecordId(opts.id);
+      if (await this.adapter.getRecord(opts.id)) {
+        throw new StackConflictError(`Record already exists: "${opts.id}"`);
+      }
+    }
+
     const now = new Date();
     const record: StackRecord = {
-      id: generateId(),
+      id: opts.id ?? generateId(),
       typeId,
       createdAt: now,
       updatedAt: now,
@@ -875,6 +953,7 @@ export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: string | null,
+    private readonly idTimestampSkewMs: number | null,
   ) {}
 
   get features(): StackFeatures {
@@ -982,6 +1061,11 @@ export class ScopedStack implements StackClient {
    * Requires either an entity-specific _grant or a default _grant for
    * the target type. Anonymous requesters (null entityId) are always denied.
    * The created record's entityId is always set to the requester.
+   *
+   * A client-supplied `opts.id` gets the same format validation as
+   * Stack.create() plus a timestamp-skew check — the requester here is an
+   * untrusted actor who could otherwise mint an ID that forges its sort
+   * position. See StackOptions.idTimestampSkewMs.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -992,6 +1076,10 @@ export class ScopedStack implements StackClient {
     if (!requester) throw new StackPermissionError('Anonymous requesters cannot create records');
     if (!(await this.checkCreateGrant(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
+    if (opts.id !== undefined) {
+      validateRecordId(opts.id);
+      validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
     }
     return this.stack.create(typeId, content, { ...opts, entityId: requester });
   }

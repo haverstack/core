@@ -21,6 +21,10 @@ export const RAND_SUFFIX_LENGTH = 3;
 // Module-level state for monotonicity within the same millisecond
 let lastNowId = '';
 let lastRandChars = '';
+// Tracks the highest timestamp an ID has been minted for, so a backward
+// clock step (NTP correction, suspend/resume) can't produce an ID that
+// sorts before ones already generated in this process.
+let lastTimestamp = 0;
 
 // -------------------------------------------------------
 // Errors
@@ -91,15 +95,15 @@ const pad = (chars: string, length: number): string => chars.padStart(length, CH
  * Works in Node (>=19), browsers, Deno, and Bun.
  */
 const generateRandChars = (): string => {
-  const max = Math.pow(BASE, RAND_SUFFIX_LENGTH) - 1;
+  const modulus = Math.pow(BASE, RAND_SUFFIX_LENGTH);
   const arr = new Uint32Array(1);
   // Rejection sampling to avoid modulo bias
   let value: number;
   do {
     crypto.getRandomValues(arr);
     value = arr[0];
-  } while (value > Math.floor(0xffffffff / max) * max);
-  return pad(crockford32Encode(value % max), RAND_SUFFIX_LENGTH);
+  } while (value > Math.floor(0xffffffff / modulus) * modulus);
+  return pad(crockford32Encode(value % modulus), RAND_SUFFIX_LENGTH);
 };
 
 const incrementRandChars = (randChars: string): string => {
@@ -128,6 +132,17 @@ export const _setLastRandChars = (chars: string): void => {
   lastRandChars = chars;
 };
 
+export const _setLastTimestamp = (timestamp: number): void => {
+  lastTimestamp = timestamp;
+};
+
+/** Resets all module-level generator state. For test isolation only. */
+export const _resetIdState = (): void => {
+  lastNowId = '';
+  lastRandChars = '';
+  lastTimestamp = 0;
+};
+
 // -------------------------------------------------------
 // Public API
 // -------------------------------------------------------
@@ -143,11 +158,34 @@ export const _setLastRandChars = (chars: string): void => {
  * @param timestamp - Override the timestamp (ms since epoch). Defaults to Date.now().
  */
 export const generateId = (timestamp: number = Date.now()): string => {
-  const nowId = pad(crockford32Encode(timestamp), MIN_TIMESTAMP_LENGTH);
+  const effectiveTimestamp = Math.max(timestamp, lastTimestamp);
+  const nowId = pad(crockford32Encode(effectiveTimestamp), MIN_TIMESTAMP_LENGTH);
   const randChars = nowId !== lastNowId ? generateRandChars() : incrementRandChars(lastRandChars);
 
+  lastTimestamp = effectiveTimestamp;
   lastNowId = nowId;
   lastRandChars = randChars;
 
   return nowId + randChars;
 };
+
+// -------------------------------------------------------
+// Format validation
+// -------------------------------------------------------
+
+const ID_LENGTH = MIN_TIMESTAMP_LENGTH + RAND_SUFFIX_LENGTH;
+const ID_FORMAT = new RegExp(`^[${CHARACTERS}]{${ID_LENGTH}}$`);
+
+/**
+ * Check whether a string has the shape of a Stack record ID: exactly
+ * 12 lowercase Crockford base-32 characters. Does not check whether the
+ * ID actually exists — see Stack.create()'s duplicate check for that.
+ */
+export const isValidIdFormat = (id: string): boolean => ID_FORMAT.test(id);
+
+/**
+ * Extract the timestamp (ms since epoch) encoded in an ID's prefix.
+ * Only meaningful for IDs that pass isValidIdFormat().
+ */
+export const idTimestamp = (id: string): number =>
+  crockford32Decode(id.slice(0, MIN_TIMESTAMP_LENGTH));

@@ -1,13 +1,16 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   generateId,
   crockford32Encode,
   crockford32Decode,
+  isValidIdFormat,
+  idTimestamp,
   RAND_SUFFIX_LENGTH,
   BASE,
   IdGenerationOverflowError,
   _setLastNowId,
   _setLastRandChars,
+  _resetIdState,
 } from '../src/id.js';
 
 // -------------------------------------------------------
@@ -102,6 +105,10 @@ describe('encode/decode roundtrip', () => {
 // -------------------------------------------------------
 
 describe('generateId', () => {
+  beforeEach(() => {
+    _resetIdState();
+  });
+
   test('returns a string of at least 12 characters', () => {
     const id = generateId();
     expect(typeof id).toBe('string');
@@ -181,5 +188,74 @@ describe('generateId', () => {
     const id = generateId(now);
     // A buggy implementation would drop the leading zero: '1hk1p9749as' (11 chars)
     expect(id).toBe('1hk1p97490as');
+  });
+
+  test('a fresh random draw can produce the maximum suffix "zzz" (regression #55: modulus off-by-one)', () => {
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((arr) => {
+      (arr as Uint32Array)[0] = Math.pow(BASE, RAND_SUFFIX_LENGTH) - 1; // 32767
+      return arr;
+    });
+    const id = generateId(Date.now());
+    expect(id.slice(-RAND_SUFFIX_LENGTH)).toBe('zzz');
+    spy.mockRestore();
+  });
+
+  test('clamps to the last timestamp when the clock regresses (regression #55)', () => {
+    const t2 = new Date('2024-06-01T00:00:05.000Z').valueOf();
+    const t1 = t2 - 5000; // clock steps backward after t2
+
+    const id1 = generateId(t2);
+    const id2 = generateId(t1);
+
+    // Still sorts after id1 despite the clock reading an earlier time.
+    expect(id2 > id1).toBe(true);
+    // Clamped to the same effective timestamp, so the prefix is unchanged
+    // and the suffix simply increments.
+    expect(id2.slice(0, -RAND_SUFFIX_LENGTH)).toBe(id1.slice(0, -RAND_SUFFIX_LENGTH));
+  });
+
+  test('does not clamp when the clock advances normally', () => {
+    const t1 = new Date('2024-06-01T00:00:00.000Z').valueOf();
+    const t2 = t1 + 5000;
+
+    const id1 = generateId(t1);
+    const id2 = generateId(t2);
+
+    expect(id2.slice(0, -RAND_SUFFIX_LENGTH)).toBe(crockford32Encode(t2).padStart(9, '0'));
+    expect(id1 < id2).toBe(true);
+  });
+});
+
+// -------------------------------------------------------
+// ID format validation
+// -------------------------------------------------------
+
+describe('isValidIdFormat', () => {
+  test('accepts a freshly generated ID', () => {
+    expect(isValidIdFormat(generateId())).toBe(true);
+  });
+
+  test('rejects the wrong length', () => {
+    expect(isValidIdFormat('short')).toBe(false);
+    expect(isValidIdFormat('a'.repeat(13))).toBe(false);
+  });
+
+  test('rejects characters outside the Crockford charset', () => {
+    expect(isValidIdFormat('1111111111i1')).toBe(false); // 'i' excluded
+    expect(isValidIdFormat('1111111111l1')).toBe(false); // 'l' excluded
+    expect(isValidIdFormat('1111111111o1')).toBe(false); // 'o' excluded
+    expect(isValidIdFormat('1111111111u1')).toBe(false); // 'u' excluded
+  });
+
+  test('rejects uppercase', () => {
+    expect(isValidIdFormat('ABCDEFGHJ123')).toBe(false);
+  });
+});
+
+describe('idTimestamp', () => {
+  test('extracts the encoded timestamp from an ID prefix', () => {
+    const now = Date.now();
+    const id = generateId(now);
+    expect(idTimestamp(id)).toBe(now);
   });
 });

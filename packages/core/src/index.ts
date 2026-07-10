@@ -21,6 +21,7 @@ export {
 export type {
   StackClient,
   CreateRecordOptions,
+  StackOptions,
   GetRecordOptions,
   DeleteRecordOptions,
 } from './stack.js';
@@ -75,7 +76,13 @@ export { SYSTEM_TYPES } from './types.js';
 export { combineAdapters } from './combine.js';
 
 // Utilities
-export { generateId, crockford32Encode, crockford32Decode } from './id.js';
+export {
+  generateId,
+  crockford32Encode,
+  crockford32Decode,
+  isValidIdFormat,
+  idTimestamp,
+} from './id.js';
 export { hashSchema, isCompatible, parseTypeId, buildTypeId } from './schema.js';
 export { validateContent, isValid } from './validate.js';
 export type { ValidationError } from './validate.js';
