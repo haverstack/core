@@ -213,9 +213,29 @@ type StackType = {
 
 **Schema drift detection:** If two Records share a `typeId` but their Type definitions have different `schemaHash` values, that is unambiguously a bug — intentional changes always produce a new version number.
 
-**Type compatibility:** Structural/duck-typed — a Type is compatible with a required schema if it contains all required fields with matching kinds. Used by apps that want to work with Records regardless of exact Type, e.g. any Type with `{ text: string }`:
+**Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, it declares that field as required with a read-compatible kind. This licenses *consuming* Records, not writing them: a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which `isCompatible()` never inspects). Used by apps that want to work with Records regardless of exact Type, e.g. any Type with a required `text` or `string` field:
 
 ```ts
+const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
+  string: ['string', 'text'],
+  text: ['text', 'string'],
+  number: ['number'],
+  boolean: ['boolean'],
+  date: ['date'],
+  'record-ref': ['record-ref'],
+};
+
+function isFieldCompatible(candidate: FieldDef, required: FieldDef): boolean {
+  if (required.kind === 'array') {
+    return candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items);
+  }
+  if (required.kind === 'object') {
+    return candidate.kind === 'object' && isCompatible(candidate.properties, required.properties);
+  }
+  if (candidate.kind === 'array' || candidate.kind === 'object') return false;
+  return READ_COMPATIBLE[required.kind].includes(candidate.kind);
+}
+
 function isCompatible(
   candidateSchema: TypeSchema, // the Record's actual Type
   requiredSchema: TypeSchema, // minimum fields the app needs
@@ -223,10 +243,12 @@ function isCompatible(
   return Object.entries(requiredSchema).every(([key, def]) => {
     if (!def.required) return true;
     const field = candidateSchema[key];
-    return field !== undefined && field.kind === def.kind;
+    return field !== undefined && field.required === true && isFieldCompatible(field, def);
   });
 }
 ```
+
+`string` and `text` are mutually read-compatible — both are strings at the value level, and the distinction is presentation/indexing intent. Every other kind pair requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
 
 Apps that care about semantics filter by exact `typeId`. Apps that want flexibility use `isCompatible()`.
 

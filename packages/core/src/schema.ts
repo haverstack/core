@@ -9,7 +9,7 @@
  * the namespaced ID controlled by the app author.
  */
 
-import type { TypeSchema, FieldDef } from './types.js';
+import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -73,12 +73,48 @@ export const hashSchema = async (schema: TypeSchema): Promise<string> => {
 // -------------------------------------------------------
 
 /**
- * Check whether a candidate schema satisfies a required schema.
+ * Kinds acceptable in a candidate field, per required kind. `string` and
+ * `text` share an identical value set (the distinction is presentation/
+ * indexing intent, not data shape), so they're mutually acceptable for
+ * reading. Everything else requires an exact kind match — notably `date`
+ * is NOT compatible with `string`: it carries a parse/validity guarantee
+ * a plain string doesn't.
+ */
+const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
+  string: ['string', 'text'],
+  text: ['text', 'string'],
+  number: ['number'],
+  boolean: ['boolean'],
+  date: ['date'],
+  'record-ref': ['record-ref'],
+};
+
+/**
+ * Check whether a candidate field satisfies a required field, recursing
+ * into array items and object properties.
+ */
+const isFieldCompatible = (candidate: FieldDef, required: FieldDef): boolean => {
+  if (required.kind === 'array') {
+    return candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items);
+  }
+  if (required.kind === 'object') {
+    return candidate.kind === 'object' && isCompatible(candidate.properties, required.properties);
+  }
+  if (candidate.kind === 'array' || candidate.kind === 'object') return false;
+  return READ_COMPATIBLE[required.kind].includes(candidate.kind);
+};
+
+/**
+ * Check whether a candidate schema is read-compatible with a required schema:
+ * whether records of the candidate Type carry every field an app needs to
+ * *read*, at a kind the app can safely consume. This licenses consuming
+ * records, not writing them — a consumer writing through a "compatible" view
+ * still has to validate against the candidate's full schema.
  *
- * A candidate is compatible if it contains all *required* fields from
- * the required schema with matching kinds. Optional fields in the
- * required schema are ignored. Array and object fields are matched
- * shallowly — only the top-level kind is checked.
+ * A candidate is compatible if, for every *required* field in the required
+ * schema, the candidate declares that field as required with a read-compatible
+ * kind (see READ_COMPATIBLE). Optional fields in the required schema are
+ * ignored. Array and object fields recurse into their items/properties.
  *
  * Apps that need precise type matching should compare typeIds directly.
  * isCompatible() is for duck-typed consumption across types.
@@ -87,7 +123,7 @@ export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSc
   return Object.entries(requiredSchema).every(([key, def]) => {
     if (!def.required) return true;
     const field = candidateSchema[key];
-    return field !== undefined && field.kind === def.kind;
+    return field !== undefined && field.required === true && isFieldCompatible(field, def);
   });
 };
 
