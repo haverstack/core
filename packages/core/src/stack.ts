@@ -245,11 +245,6 @@ export class Stack implements StackClient {
     return this.adapter.capabilities;
   }
 
-  /** Clock-skew tolerance applied to grantee-minted IDs — see StackOptions.idTimestampSkewMs. */
-  get idTimestampSkewMs(): number | null {
-    return this.idTimestampSkewMsValue;
-  }
-
   /**
    * Get a permission-scoped view of this Stack, as if the request came from
    * the given entity. Pass null for an anonymous/unauthenticated requester.
@@ -263,7 +258,7 @@ export class Stack implements StackClient {
    * multi-tenant API server).
    */
   asEntity(entityId: string | null): ScopedStack {
-    return new ScopedStack(this, entityId);
+    return new ScopedStack(this, entityId, this.idTimestampSkewMsValue);
   }
 
   // -------------------------------------------------------
@@ -958,6 +953,7 @@ export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: string | null,
+    private readonly idTimestampSkewMs: number | null,
   ) {}
 
   get features(): StackFeatures {
@@ -1083,7 +1079,7 @@ export class ScopedStack implements StackClient {
     }
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
-      validateIdTimestampSkew(opts.id, this.stack.idTimestampSkewMs);
+      validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
     }
     return this.stack.create(typeId, content, { ...opts, entityId: requester });
   }
