@@ -6,9 +6,15 @@
  * without native compilation.
  *
  * The database is held in memory and flushed to disk on every
- * write. Stack config (ownerEntityId, timezone) is stored as
- * a singleton _config@1 record with id='_config' in the
- * records table.
+ * write, atomically (temp file + rename). Stack config
+ * (ownerEntityId, timezone) is stored as a singleton _config@1
+ * record with id='_config' in the records table.
+ *
+ * A stack file is owned by exactly one process at a time (see
+ * docs/spec.md § Concurrency & storage ownership). open()/
+ * initialize() acquire a PID-stamped lock file beside the
+ * database and reject if another live process already holds
+ * it; close() releases it.
  *
  * Also exposes token management methods (createToken,
  * lookupToken, listTokens, revokeToken) used by server
@@ -18,7 +24,8 @@
 import initSqlJs from 'sql.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs';
+import { dirname, basename, join } from 'path';
 import type {
   StackRecordAdapter,
   StackRecord,
@@ -44,11 +51,20 @@ export type SQLiteRecordInitializeOptions = {
   timezone: string;
   /** Entity ID of the stack owner. */
   entityId: string;
+  /** Bypass the storage-ownership lock check. See SQLiteRecordOpenOptions.force. */
+  force?: boolean;
 };
 
 export type SQLiteRecordOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
+  /**
+   * Open even if a lock file from another live process is present.
+   * Only needed if that process is gone but its PID was reused by
+   * something else (the automatic stale-lock check already reclaims
+   * locks whose owning process is no longer running).
+   */
+  force?: boolean;
 };
 
 export type TokenInfo = {
@@ -209,6 +225,56 @@ const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   if (row.associations) v.associations = JSON.parse(row.associations as string);
   if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
   return v;
+};
+
+// -------------------------------------------------------
+// Storage ownership lock
+// -------------------------------------------------------
+//
+// A stack file is owned by exactly one process at a time (see
+// docs/spec.md § Concurrency & storage ownership). The lock file
+// sits beside the database and records the PID of its opener.
+
+type LockInfo = { pid: number };
+
+const lockPathFor = (dbPath: string): string => `${dbPath}.lock`;
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH: no such process — safe to reclaim. Anything else (e.g. EPERM,
+    // meaning the process exists but we can't signal it) — assume alive.
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+};
+
+const acquireLock = (dbPath: string, force?: boolean): void => {
+  const lockPath = lockPathFor(dbPath);
+  if (existsSync(lockPath)) {
+    const info = JSON.parse(readFileSync(lockPath, 'utf-8')) as LockInfo;
+    const ownedBySelf = info.pid === process.pid;
+    if (!ownedBySelf && !force && isProcessAlive(info.pid)) {
+      throw new Error(
+        `Stack database at "${dbPath}" is in use by another process (pid ${info.pid}). ` +
+          `Connect via its server instead, or pass { force: true } to override.`,
+      );
+    }
+  }
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid } satisfies LockInfo));
+};
+
+const releaseLock = (dbPath: string): void => {
+  const lockPath = lockPathFor(dbPath);
+  if (!existsSync(lockPath)) return;
+  try {
+    const info = JSON.parse(readFileSync(lockPath, 'utf-8')) as LockInfo;
+    if (info.pid === process.pid) unlinkSync(lockPath);
+  } catch {
+    // Corrupt lock file — remove it rather than leaving storage permanently unopenable.
+    unlinkSync(lockPath);
+  }
 };
 
 // -------------------------------------------------------
@@ -471,6 +537,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
           `Use SQLiteRecordAdapter.open() instead.`,
       );
     }
+    acquireLock(opts.path, opts.force);
     const SQL = await initSqlJs();
     const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
@@ -498,6 +565,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
           `Use SQLiteRecordAdapter.initialize() to create one.`,
       );
     }
+    acquireLock(opts.path, opts.force);
     const SQL = await initSqlJs();
     const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     const fileBuffer = readFileSync(opts.path);
@@ -511,10 +579,20 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   // Persistence
   // -------------------------------------------------------
 
-  /** Flush the in-memory database to disk. Called after every write. */
+  /**
+   * Flush the in-memory database to disk. Called after every write.
+   * Writes to a temp file in the same directory and renames it over
+   * the target — rename is atomic on POSIX, so a crash mid-write can
+   * never leave a torn, unreadable database file.
+   */
   private persist(): void {
     const data = this.db.export();
-    writeFileSync(this.path, Buffer.from(data));
+    const tmpPath = join(
+      dirname(this.path),
+      `.${basename(this.path)}.tmp-${randomBytes(6).toString('hex')}`,
+    );
+    writeFileSync(tmpPath, Buffer.from(data));
+    renameSync(tmpPath, this.path);
   }
 
   private readConfig(): void {
@@ -927,5 +1005,6 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
 
   async close(): Promise<void> {
     this.db.close();
+    releaseLock(this.path);
   }
 }
