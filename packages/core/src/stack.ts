@@ -85,6 +85,7 @@ export type DefineTypeOptions = {
 };
 
 export class StackValidationError extends Error {
+  static readonly code = 'validation' as const;
   constructor(public readonly errors: ValidationError[]) {
     super(
       `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
@@ -94,6 +95,7 @@ export class StackValidationError extends Error {
 }
 
 export class StackMigrationError extends Error {
+  static readonly code = 'migration' as const;
   constructor(message: string) {
     super(message);
     this.name = 'StackMigrationError';
@@ -102,6 +104,7 @@ export class StackMigrationError extends Error {
 
 /** Thrown by ScopedStack when a requester lacks permission for the operation. */
 export class StackPermissionError extends Error {
+  static readonly code = 'permission' as const;
   constructor(message = 'Permission denied') {
     super(message);
     this.name = 'StackPermissionError';
@@ -110,6 +113,7 @@ export class StackPermissionError extends Error {
 
 /** Thrown when a record (or specific version) does not exist. */
 export class StackNotFoundError extends Error {
+  static readonly code = 'not_found' as const;
   constructor(message: string) {
     super(message);
     this.name = 'StackNotFoundError';
@@ -118,9 +122,24 @@ export class StackNotFoundError extends Error {
 
 /** Thrown when an operation cannot proceed due to a constraint violation (e.g. deleting an attachment that is still referenced). */
 export class StackConflictError extends Error {
+  static readonly code = 'conflict' as const;
   constructor(message: string) {
     super(message);
     this.name = 'StackConflictError';
+  }
+}
+
+/**
+ * Thrown when a request is structurally malformed — not a content-validation
+ * failure, but input the adapter/server can't even interpret (e.g. an
+ * undecodable pagination cursor). Distinct from StackValidationError, which
+ * means the request was well-formed but content failed schema validation.
+ */
+export class StackQueryError extends Error {
+  static readonly code = 'bad_request' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackQueryError';
   }
 }
 

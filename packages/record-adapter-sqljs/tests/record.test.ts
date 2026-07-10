@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { SQLiteRecordAdapter } from '../src/index.js';
+import { StackQueryError } from '@haverstack/core';
 import type { StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -600,6 +601,29 @@ describe('records — queries', () => {
 
     const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
     expect(allIds.size).toBe(5);
+  });
+
+  test('malformed cursor with unknown sort field throws StackQueryError', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1' }));
+    const badCursor = Buffer.from('bogusField|123|r1').toString('base64');
+    await expect(adapter.queryRecords({ cursor: badCursor })).rejects.toThrow(StackQueryError);
+  });
+
+  test('malformed cursor with non-numeric sort value throws StackQueryError', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1' }));
+    const badCursor = Buffer.from('createdAt|not-a-number|r1').toString('base64');
+    await expect(adapter.queryRecords({ cursor: badCursor })).rejects.toThrow(StackQueryError);
+  });
+
+  test('corrupted/garbage cursor throws StackQueryError instead of a generic Error', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1' }));
+    // Not base64-decodable into a "field|value|id" or "value|id" shape at all.
+    await expect(adapter.queryRecords({ cursor: '!!!not-a-cursor!!!' })).rejects.toThrow(
+      StackQueryError,
+    );
   });
 
   test('sort by createdAt descending (default)', async () => {

@@ -6,6 +6,14 @@ import {
   APIAdapterError,
 } from '../src/index.js';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
+import {
+  StackPermissionError,
+  StackNotFoundError,
+  StackConflictError,
+  StackValidationError,
+  StackQueryError,
+  StackMigrationError,
+} from '@haverstack/core';
 
 // -------------------------------------------------------
 // Test fixtures
@@ -764,5 +772,116 @@ describe('error propagation on subsequent requests', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response('Internal Server Error', { status: 500 }));
     await expect(adapter.listTypes()).rejects.toThrow(APIAdapterError);
+  });
+});
+
+// -------------------------------------------------------
+// Error taxonomy reconstruction (#53)
+// -------------------------------------------------------
+
+describe('error taxonomy reconstruction', () => {
+  test('reconstructs StackPermissionError from a 403 wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'permission', message: 'Permission denied' } }, 403),
+    );
+    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('reconstructs StackNotFoundError from a 404 wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'not_found', message: 'Record "rec-1" not found.' } }, 404),
+    );
+    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('reconstructs StackConflictError from a 409 wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'conflict', message: 'Record "rec-1" already exists.' } }, 409),
+    );
+    const record: StackRecord = {
+      id: 'rec-1',
+      typeId: 'com.example/note@1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      content: {},
+      version: 1,
+    };
+    await expect(adapter.createRecord(record)).rejects.toThrow(StackConflictError);
+  });
+
+  test('reconstructs StackValidationError from a 422 wire error body, preserving details as .errors', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: 'validation',
+            message: 'Content validation failed',
+            details: [{ path: 'title', message: 'expected string, got number' }],
+          },
+        },
+        422,
+      ),
+    );
+    let caught: unknown;
+    try {
+      await adapter.patchContent('rec-1', { title: 42 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(StackValidationError);
+    expect((caught as StackValidationError).errors).toEqual([
+      { path: 'title', message: 'expected string, got number' },
+    ]);
+  });
+
+  test('reconstructs StackQueryError from a 400 wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'bad_request', message: 'Invalid cursor' } }, 400),
+    );
+    await expect(adapter.queryRecords({ cursor: 'garbage' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('falls back to status-based reconstruction when the body is not a wire error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('falls back to generic APIAdapterError for a status with no unambiguous code', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 418 }));
+    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(APIAdapterError);
+  });
+
+  test('does not reconstruct StackMigrationError from a bare 500 status', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 500 }));
+    let caught: unknown;
+    try {
+      await adapter.patchContent('rec-1', { title: 'x' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(APIAdapterError);
+    expect(caught).not.toBeInstanceOf(StackMigrationError);
+  });
+
+  test('reconstructs StackMigrationError from an explicit 500 wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'migration', message: 'Migration graph corrupted' } }, 500),
+    );
+    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+      StackMigrationError,
+    );
   });
 });

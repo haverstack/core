@@ -18,8 +18,16 @@ import {
   setPermissionsFixtures,
   restoreVersionFixtures,
   commitMigrationFixtures,
+  errorResponseFixtures,
 } from '@haverstack/conformance-fixtures';
 import type { Association } from '@haverstack/core';
+import {
+  StackPermissionError,
+  StackNotFoundError,
+  StackConflictError,
+  StackValidationError,
+  StackQueryError,
+} from '@haverstack/core';
 
 const BASE_URL = 'https://stack.example.com';
 
@@ -214,6 +222,60 @@ describe('commitMigration fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.typeId).toBe(fixture.responseBody!.typeId);
+    });
+  }
+});
+
+// -------------------------------------------------------
+// Error responses (#53) — pins that APIAdapter reconstructs the documented
+// core error class from each fixture's wire error body.
+// -------------------------------------------------------
+
+const ERROR_CLASS_FOR_CODE = {
+  permission: StackPermissionError,
+  not_found: StackNotFoundError,
+  conflict: StackConflictError,
+  validation: StackValidationError,
+  bad_request: StackQueryError,
+} as const;
+
+describe('error response fixtures', () => {
+  for (const fixture of errorResponseFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const dispatch = (): Promise<unknown> => {
+        if (fixture.method === 'POST' && fixture.path === '/records') {
+          const body = fixture.requestBody as Record<string, unknown>;
+          return adapter.createRecord({
+            id: body.id as string,
+            typeId: body.typeId as string,
+            createdAt: new Date(body.createdAt as string),
+            updatedAt: new Date(body.updatedAt as string),
+            content: body.content as Record<string, unknown>,
+            version: body.version as number,
+          });
+        }
+        if (fixture.method === 'POST' && fixture.path === '/records/query') {
+          return adapter.queryRecords(fixture.requestBody as never);
+        }
+        if (fixture.method === 'PATCH') {
+          return adapter.patchContent(
+            idFromPath(fixture.path),
+            fixture.requestBody as Record<string, unknown>,
+          );
+        }
+        throw new Error(`no dispatch wired for error fixture "${fixture.name}"`);
+      };
+
+      const code = (fixture.responseBody as { error: { code: keyof typeof ERROR_CLASS_FOR_CODE } })
+        .error.code;
+      await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
     });
   }
 });

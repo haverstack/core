@@ -31,7 +31,7 @@ import type {
   Permission,
   AdapterCapabilities,
 } from '@haverstack/core';
-import { applyMergePatch } from '@haverstack/core';
+import { applyMergePatch, StackQueryError } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Types
@@ -399,13 +399,16 @@ const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] }
       parts.length === 3
         ? (parts as [string, string, string])
         : (['createdAt', parts[0], parts[1]] as [string, string, string]);
+    if (cursorField === undefined || cursorValue === undefined || cursorId === undefined) {
+      throw new StackQueryError(`Invalid cursor: malformed "${query.cursor}"`);
+    }
     const validSortFields: SortField[] = ['createdAt', 'updatedAt', 'version'];
     if (!validSortFields.includes(cursorField as SortField)) {
-      throw new Error(`Invalid cursor: unknown sort field "${cursorField}"`);
+      throw new StackQueryError(`Invalid cursor: unknown sort field "${cursorField}"`);
     }
     const numericValue = Number(cursorValue);
     if (!isFinite(numericValue)) {
-      throw new Error(`Invalid cursor: non-numeric sort value`);
+      throw new StackQueryError(`Invalid cursor: non-numeric sort value`);
     }
     const col = getSortColumn(cursorField as SortField);
     const sortDir = query.sort?.direction ?? 'desc';
