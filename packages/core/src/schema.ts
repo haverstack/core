@@ -89,19 +89,45 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   'record-ref': ['record-ref'],
 };
 
+// Candidate schemas can come from another app's Type definition (the
+// untrusted side of duck-typed consumption), so recursion into array
+// items / object properties is depth-bounded — matches MAX_VALIDATION_DEPTH
+// in validate.ts. Past the limit we can't verify compatibility, so we
+// fail closed (treat as incompatible) rather than risk a stack overflow.
+const MAX_COMPATIBILITY_DEPTH = 32;
+
 /**
  * Check whether a candidate field satisfies a required field, recursing
  * into array items and object properties.
  */
-const isFieldCompatible = (candidate: FieldDef, required: FieldDef): boolean => {
+const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: number): boolean => {
+  if (depth > MAX_COMPATIBILITY_DEPTH) return false;
   if (required.kind === 'array') {
-    return candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items);
+    return (
+      candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items, depth + 1)
+    );
   }
   if (required.kind === 'object') {
-    return candidate.kind === 'object' && isCompatible(candidate.properties, required.properties);
+    return (
+      candidate.kind === 'object' &&
+      isCompatibleAtDepth(candidate.properties, required.properties, depth + 1)
+    );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
   return READ_COMPATIBLE[required.kind].includes(candidate.kind);
+};
+
+const isCompatibleAtDepth = (
+  candidateSchema: TypeSchema,
+  requiredSchema: TypeSchema,
+  depth: number,
+): boolean => {
+  if (depth > MAX_COMPATIBILITY_DEPTH) return false;
+  return Object.entries(requiredSchema).every(([key, def]) => {
+    if (!def.required) return true;
+    const field = candidateSchema[key];
+    return field !== undefined && field.required === true && isFieldCompatible(field, def, depth);
+  });
 };
 
 /**
@@ -114,18 +140,14 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef): boolean => 
  * A candidate is compatible if, for every *required* field in the required
  * schema, the candidate declares that field as required with a read-compatible
  * kind (see READ_COMPATIBLE). Optional fields in the required schema are
- * ignored. Array and object fields recurse into their items/properties.
+ * ignored. Array and object fields recurse into their items/properties, up
+ * to MAX_COMPATIBILITY_DEPTH.
  *
  * Apps that need precise type matching should compare typeIds directly.
  * isCompatible() is for duck-typed consumption across types.
  */
-export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSchema): boolean => {
-  return Object.entries(requiredSchema).every(([key, def]) => {
-    if (!def.required) return true;
-    const field = candidateSchema[key];
-    return field !== undefined && field.required === true && isFieldCompatible(field, def);
-  });
-};
+export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSchema): boolean =>
+  isCompatibleAtDepth(candidateSchema, requiredSchema, 0);
 
 // -------------------------------------------------------
 // Type ID parsing

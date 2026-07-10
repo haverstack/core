@@ -213,18 +213,18 @@ type StackType = {
 
 **Schema drift detection:** If two Records share a `typeId` but their Type definitions have different `schemaHash` values, that is unambiguously a bug — intentional changes always produce a new version number.
 
-**Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses *consuming* Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
+**Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses _consuming_ Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
 
 A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
 
-| required → | `string` | `text` | `number` | `boolean` | `date` | `record-ref` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `string` | ✓ | ✓ | | | | |
-| `text` | ✓ | ✓ | | | | |
-| `number` | | | ✓ | | | |
-| `boolean` | | | | ✓ | | |
-| `date` | | | | | ✓ | |
-| `record-ref` | | | | | | ✓ |
+| required →   | `string` | `text` | `number` | `boolean` | `date` | `record-ref` |
+| ------------ | -------- | ------ | -------- | --------- | ------ | ------------ |
+| `string`     | ✓        | ✓      |          |           |        |              |
+| `text`       | ✓        | ✓      |          |           |        |              |
+| `number`     |          |        | ✓        |           |        |              |
+| `boolean`    |          |        |          | ✓         |        |              |
+| `date`       |          |        |          |           | ✓      |              |
+| `record-ref` |          |        |          |           |        | ✓            |
 
 `string` and `text` are mutually read-compatible — both are strings at the value level, and the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
 

@@ -259,6 +259,33 @@ describe('isCompatible', () => {
     };
     expect(isCompatible(candidate, required)).toBe(true);
   });
+
+  test('deeply nested matching schemas beyond the depth limit are not compatible (fails closed)', () => {
+    const buildNested = (depth: number): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: 'string', required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const candidate = buildNested(1000);
+    const required = buildNested(1000);
+    expect(() => isCompatible(candidate, required)).not.toThrow();
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('matching schemas within the depth limit remain compatible', () => {
+    const buildNested = (depth: number): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: 'string', required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const candidate = buildNested(10);
+    const required = buildNested(10);
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
 });
 
 // -------------------------------------------------------
