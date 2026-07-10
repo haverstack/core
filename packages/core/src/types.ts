@@ -339,7 +339,15 @@ export interface StackRecordAdapter {
   // Records
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
-  updateRecord(id: RecordId, changes: Partial<StackRecord>): Promise<StackRecord>;
+  /**
+   * Apply a content-only RFC 7396 merge patch. `null` removes a field;
+   * other values replace it; omitted fields are retained. Bumps `version`
+   * and `updatedAt` as part of the same write. Does not touch `typeId` —
+   * a patch that also commits a pending migration goes through
+   * commitMigration() instead, since a content-only patch has no way to
+   * carry a type change.
+   */
+  patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord>;
   deleteRecord(id: RecordId, opts?: { hard?: boolean }): Promise<void>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(id: RecordId): Promise<StackRecord>;
@@ -349,10 +357,31 @@ export interface StackRecordAdapter {
   associate(id: RecordId, association: Association): Promise<void>;
   dissociate(id: RecordId, association: Association): Promise<void>;
 
+  /** Replace all permissions on a record. Bumps version internally. */
+  setPermissions(id: RecordId, permissions: Permission[]): Promise<void>;
+
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
+  /**
+   * Restore a record to a previous version's content (and associations,
+   * when the snapshot has them). Never restores permissions. Bumps version
+   * internally. Throws StackNotFoundError if the version doesn't exist.
+   */
+  restoreVersion(id: RecordId, version: number): Promise<StackRecord>;
+
+  /**
+   * Commit a migration: write new content under a new typeId in one step.
+   * This is the only way a record's typeId changes after creation — used
+   * by Stack.update() when committing a pending lazy migration, and by
+   * Stack.migrateAll(). Bumps version internally.
+   */
+  commitMigration(
+    id: RecordId,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord>;
 
   // Types
   saveType(type: StackType): Promise<void>;

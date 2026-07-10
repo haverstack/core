@@ -197,25 +197,20 @@ describe('records — CRUD', () => {
     expect(retrieved?.appId).toBe('app-123');
   });
 
-  test('updateRecord changes specified fields', async () => {
+  test('patchContent changes content and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    const now = new Date();
-    const updated = await adapter.updateRecord(record.id, {
-      content: { text: 'Updated' },
-      version: 2,
-      updatedAt: now,
-    });
+    const updated = await adapter.patchContent(record.id, { text: 'Updated' });
     expect(updated.content).toEqual({ text: 'Updated' });
     expect(updated.version).toBe(2);
   });
 
-  test('updateRecord preserves unchanged fields', async () => {
+  test('patchContent preserves unchanged fields', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ parentId: 'parent-abc' });
     await adapter.createRecord(record);
-    await adapter.updateRecord(record.id, { version: 2, updatedAt: new Date() });
+    await adapter.patchContent(record.id, { text: 'Updated' });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe('parent-abc');
   });
@@ -714,6 +709,50 @@ describe('associations', () => {
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.associations?.length).toBe(3);
   });
+
+  test('associate bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.version).toBe(2);
+  });
+
+  test('dissociate bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.dissociate(record.id, { kind: 'tag', label: 'starred' });
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.version).toBe(3);
+  });
+});
+
+// -------------------------------------------------------
+// Permissions
+// -------------------------------------------------------
+
+describe('setPermissions', () => {
+  test('replaces permissions and bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.setPermissions(record.id, [{ access: 'public' }]);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.permissions).toEqual([{ access: 'public' }]);
+    expect(retrieved?.version).toBe(2);
+  });
+
+  test('empty array clears permissions', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ permissions: [{ access: 'public' }] });
+    await adapter.createRecord(record);
+    await adapter.setPermissions(record.id, []);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.permissions).toBeUndefined();
+  });
 });
 
 // -------------------------------------------------------
@@ -804,6 +843,63 @@ describe('versions', () => {
     const retrieved = await adapter.getVersion(record.id, 1);
     expect(retrieved?.associations).toBeUndefined();
     expect(retrieved?.permissions).toBeUndefined();
+  });
+});
+
+describe('restoreVersion', () => {
+  test('restores content and bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      content: { text: 'original' },
+      updatedAt: new Date(),
+    });
+    await adapter.patchContent(record.id, { text: 'changed' });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.version).toBe(3);
+  });
+
+  test('restores associations when the snapshot has them', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      content: { text: 'original' },
+      updatedAt: new Date(),
+      associations: [{ kind: 'tag', label: 'starred' }],
+    });
+    await adapter.associate(record.id, { kind: 'tag', label: 'pinned' });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
+  });
+
+  test('throws for an unknown version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
+  });
+});
+
+describe('commitMigration', () => {
+  test('changes typeId and content together, and bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ typeId: 'com.example.test/note@1' });
+    await adapter.createRecord(record);
+
+    const migrated = await adapter.commitMigration(record.id, 'com.example.test/note@2', {
+      text: 'Hello world',
+      pinned: false,
+    });
+    expect(migrated.typeId).toBe('com.example.test/note@2');
+    expect(migrated.content).toEqual({ text: 'Hello world', pinned: false });
+    expect(migrated.version).toBe(2);
   });
 });
 

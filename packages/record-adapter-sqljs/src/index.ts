@@ -28,8 +28,10 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  Permission,
   AdapterCapabilities,
 } from '@haverstack/core';
+import { applyMergePatch } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Types
@@ -569,59 +571,20 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     return rowToRecord(row, associations);
   }
 
-  async updateRecord(id: string, changes: Partial<StackRecord>): Promise<StackRecord> {
-    const setClauses: string[] = [];
-    const params: unknown[] = [];
+  async patchContent(id: string, patch: Record<string, unknown | null>): Promise<StackRecord> {
+    const existing = await this.getRecord(id);
+    if (!existing) throw new Error(`Record not found: "${id}"`);
 
-    if (changes.content !== undefined) {
-      setClauses.push('content = ?');
-      params.push(JSON.stringify(changes.content));
-    }
-    if (changes.typeId !== undefined) {
-      setClauses.push('type_id = ?');
-      params.push(changes.typeId);
-    }
-    if (changes.updatedAt !== undefined) {
-      setClauses.push('updated_at = ?');
-      params.push(toMs(changes.updatedAt));
-    }
-    if (changes.version !== undefined) {
-      setClauses.push('version = ?');
-      params.push(changes.version);
-    }
-    if (changes.deletedAt !== undefined) {
-      setClauses.push('deleted_at = ?');
-      params.push(toMs(changes.deletedAt));
-    }
-    if (changes.permissions !== undefined) {
-      setClauses.push('permissions = ?');
-      params.push(changes.permissions.length ? JSON.stringify(changes.permissions) : null);
-    }
-
-    if (setClauses.length) {
-      params.push(id);
-      this.db.run(
-        `UPDATE records SET ${setClauses.join(', ')} WHERE id = ?`,
-        params as import('sql.js').BindParams,
-      );
-    }
-
-    // Replace associations if provided
-    if (changes.associations !== undefined) {
-      this.db.run('DELETE FROM associations WHERE record_id = ?', [id]);
-      if (changes.associations.length) {
-        this.insertAssociations(id, changes.associations);
-      }
-    }
-
-    if (changes.content !== undefined) {
-      this.updateFts(id, JSON.stringify(changes.content));
-    }
-
+    const merged = applyMergePatch(existing.content, patch);
+    this.db.run(
+      'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+      [JSON.stringify(merged), toMs(new Date()), id],
+    );
+    this.updateFts(id, JSON.stringify(merged));
     this.persist();
 
     const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after update: "${id}"`);
+    if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
     return updated;
   }
 
@@ -635,17 +598,68 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
       );
       this.db.run('DELETE FROM records WHERE id = ?', [id]);
     } else {
-      this.db.run('UPDATE records SET deleted_at = ? WHERE id = ?', [toMs(new Date()), id]);
+      this.db.run(
+        'UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?',
+        [toMs(new Date()), toMs(new Date()), id],
+      );
     }
     this.persist();
   }
 
   async undeleteRecord(id: string): Promise<StackRecord> {
-    this.db.run('UPDATE records SET deleted_at = NULL WHERE id = ?', [id]);
+    this.db.run(
+      'UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?',
+      [toMs(new Date()), id],
+    );
     this.persist();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
+    return updated;
+  }
+
+  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
+    this.db.run(
+      'UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?',
+      [permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id],
+    );
+    this.persist();
+  }
+
+  async restoreVersion(id: string, version: number): Promise<StackRecord> {
+    const target = await this.getVersion(id, version);
+    if (!target) throw new Error(`Version not found: ${id}@${version}`);
+
+    this.db.run(
+      'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+      [JSON.stringify(target.content), toMs(new Date()), id],
+    );
+    if (target.associations !== undefined) {
+      this.db.run('DELETE FROM associations WHERE record_id = ?', [id]);
+      if (target.associations.length) this.insertAssociations(id, target.associations);
+    }
+    this.updateFts(id, JSON.stringify(target.content));
+    this.persist();
+
+    const updated = await this.getRecord(id);
+    if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
+    return updated;
+  }
+
+  async commitMigration(
+    id: string,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord> {
+    this.db.run(
+      'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+      [toTypeId, JSON.stringify(content), toMs(new Date()), id],
+    );
+    this.updateFts(id, JSON.stringify(content));
+    this.persist();
+
+    const updated = await this.getRecord(id);
+    if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
     return updated;
   }
 
@@ -820,6 +834,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
 
   async associate(recordId: string, association: Association): Promise<void> {
     this.insertAssociations(recordId, [association]);
+    this.bumpVersion(recordId);
     this.persist();
   }
 
@@ -839,7 +854,15 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
         association.kind === 'relationship' ? association.recordId : '',
       ],
     );
+    this.bumpVersion(recordId);
     this.persist();
+  }
+
+  private bumpVersion(id: string): void {
+    this.db.run('UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?', [
+      toMs(new Date()),
+      id,
+    ]);
   }
 
   private insertAssociations(recordId: string, associations: Association[]): void {

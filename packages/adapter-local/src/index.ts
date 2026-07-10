@@ -21,6 +21,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  Permission,
   AdapterCapabilities,
   RecordId,
   FileId,
@@ -117,8 +118,8 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getRecord(id);
   }
 
-  async updateRecord(id: RecordId, changes: Partial<StackRecord>): Promise<StackRecord> {
-    return this.record.updateRecord(id, changes);
+  async patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord> {
+    return this.record.patchContent(id, patch);
   }
 
   async deleteRecord(id: RecordId, opts?: { hard?: boolean }): Promise<void> {
@@ -141,6 +142,10 @@ export class LocalAdapter implements StackAdapter {
     return this.record.dissociate(id, association);
   }
 
+  async setPermissions(id: RecordId, permissions: Permission[]): Promise<void> {
+    return this.record.setPermissions(id, permissions);
+  }
+
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
     return this.record.getVersions(id);
   }
@@ -151,6 +156,18 @@ export class LocalAdapter implements StackAdapter {
 
   async saveVersion(id: RecordId, version: RecordVersion): Promise<void> {
     return this.record.saveVersion(id, version);
+  }
+
+  async restoreVersion(id: RecordId, version: number): Promise<StackRecord> {
+    return this.record.restoreVersion(id, version);
+  }
+
+  async commitMigration(
+    id: RecordId,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord> {
+    return this.record.commitMigration(id, toTypeId, content);
   }
 
   async saveType(type: StackType): Promise<void> {
