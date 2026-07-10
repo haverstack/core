@@ -4,14 +4,20 @@ import {
   StackPermissionError,
   StackNotFoundError,
   StackValidationError,
+  StackConflictError,
 } from '../src/stack.js';
-import { generateId } from '../src/id.js';
+import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackRecord, Association, Permission } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
 // -------------------------------------------------------
+
+// Builds a well-formed 12-char id with a specific timestamp prefix, bypassing
+// generateId()'s own monotonic-clock clamp (which would otherwise pull an
+// "ancient" test timestamp forward to the real current time).
+const idWithTimestamp = (ms: number): string => `${crockford32Encode(ms).padStart(9, '0')}000`;
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
@@ -430,6 +436,67 @@ describe('ScopedStack.create', () => {
     await expect(stack.asEntity(MEMBER).create(COMMENT, {} as { text: string })).rejects.toThrow(
       StackValidationError,
     );
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack.create — client-supplied id (#55)
+// -------------------------------------------------------
+
+describe('ScopedStack.create — client-supplied id', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+  });
+
+  test('accepts a well-formed, recent id from a grantee', async () => {
+    const id = generateId();
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, { id });
+    expect(record.id).toBe(id);
+  });
+
+  test('rejects a malformed id from a grantee', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, { id: 'too-short' }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a reserved-prefix id from a grantee', async () => {
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .create(COMMENT, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects an id whose timestamp is far outside the clock-skew tolerance', async () => {
+    const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
+    await expect(
+      stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, { id: ancientId }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('idTimestampSkewMs: null on the Stack disables the skew check for grantees', async () => {
+    const permissiveAdapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const permissiveStack = await Stack.create(permissiveAdapter, { idTimestampSkewMs: null });
+    await permissiveStack.defineType(COMMENT, 'Comment', {
+      text: { kind: 'text', required: true },
+    });
+    await permissiveStack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+
+    const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
+    const record = await permissiveStack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hello' }, { id: ancientId });
+    expect(record.id).toBe(ancientId);
+  });
+
+  test('duplicate id from a grantee surfaces as StackConflictError', async () => {
+    const id = generateId();
+    await stack.asEntity(MEMBER).create(COMMENT, { text: 'first' }, { id });
+    await expect(
+      stack.asEntity(MEMBER).create(COMMENT, { text: 'second' }, { id }),
+    ).rejects.toThrow(StackConflictError);
   });
 });
 

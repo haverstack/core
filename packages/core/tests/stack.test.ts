@@ -4,12 +4,19 @@ import {
   StackValidationError,
   StackMigrationError,
   StackNotFoundError,
+  StackConflictError,
 } from '../src/stack.js';
+import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
 
 // -------------------------------------------------------
 // Test setup
 // -------------------------------------------------------
+
+// Builds a well-formed 12-char id with a specific timestamp prefix, bypassing
+// generateId()'s own monotonic-clock clamp (which would otherwise pull an
+// "ancient" test timestamp forward to the real current time).
+const idWithTimestamp = (ms: number): string => `${crockford32Encode(ms).padStart(9, '0')}000`;
 
 const NOTE_V1 = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';
@@ -132,6 +139,55 @@ describe('create', () => {
 
   test('throws for unknown typeId', async () => {
     await expect(stack.create('com.example.test/unknown@1', { text: 'hello' })).rejects.toThrow();
+  });
+});
+
+// -------------------------------------------------------
+// create — client-supplied id (#55)
+// -------------------------------------------------------
+
+describe('create — client-supplied id', () => {
+  test('accepts a well-formed client-supplied id', async () => {
+    const id = generateId();
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { id });
+    expect(record.id).toBe(id);
+  });
+
+  test('generates an id when none is supplied', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    expect(record.id).toBeTruthy();
+  });
+
+  test('rejects an id with the wrong length', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'too-short' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects an id with characters outside the Crockford charset', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'UPPERCASE123' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects an id using the reserved "_" prefix', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a duplicate id with StackConflictError', async () => {
+    const id = generateId();
+    await stack.create(NOTE_V1, { text: 'first' }, { id });
+    await expect(stack.create(NOTE_V1, { text: 'second' }, { id })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('unscoped Stack.create() does not apply a timestamp-skew check', async () => {
+    const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { id: ancientId });
+    expect(record.id).toBe(ancientId);
   });
 });
 

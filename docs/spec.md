@@ -290,6 +290,23 @@ type StackRecord = {
 
 **Design principle:** Native fields are things the library needs to operate (routing, querying, syncing, hierarchy). Everything semantic and domain-specific goes in `content`.
 
+### Record IDs
+
+IDs are Crockford base-32, lowercase, exactly 12 characters — a 9-character timestamp prefix (so IDs are time-sortable: lexicographic order matches creation order) plus a 3-character random suffix, monotonically incremented for IDs generated in the same millisecond.
+
+**Client-minted IDs are the default and stay supported.** `Stack.create()` accepts an optional `id`, so an app that needs the ID before the write round-trips (e.g. to reference it immediately) can supply its own; omit it and the library generates one. Nothing about this changes with a server in front of the stack — the client still mints the ID — but the server (and, locally, `Stack` itself) now validates what it's given rather than trusting it blindly:
+
+- **Charset and length** — exactly 12 characters, lowercase Crockford base-32 (`0-9`, `a-z` excluding `i`, `l`, `o`, `u`). Violations → **400**.
+- **Reserved prefix** — an `id` beginning with `_` is rejected; that namespace is reserved for system records (`_config`, `_entity`, etc. — see System types under [Types](#types)). Violations → **400**.
+- **Duplicate ID** — an `id` that already exists in the stack → **409** (`StackConflictError`), never a silent overwrite.
+
+A server MAY additionally reject an `id` whose timestamp prefix is implausibly far from server time (a clock-skew tolerance measured in hours, not years). This is optional: legitimate offline-created records carry an honest but stale prefix, so the trade-off is a per-deployment policy choice, not a spec mandate.
+
+**In `@haverstack/core`**, the same rules are enforced locally so a client-minted ID behaves identically whether it travels over the wire or stays in-process:
+
+- `Stack.create(typeId, content, { id })` validates charset, length, and the reserved prefix, and throws `StackConflictError` on a duplicate. This is a full-trust context (an embedded single-app stack, or the server's own code) — no clock-skew check.
+- `ScopedStack.create()` — a grantee minting an ID — applies the same validation **plus** the timestamp-skew check, since a grantee is exactly the untrusted actor who could otherwise forge a sort position. The tolerance is configurable per Stack via `Stack.create(adapter, { idTimestampSkewMs })` (default 24 hours; pass `null` to disable).
+
 ---
 
 ## Associations
@@ -663,15 +680,15 @@ Authorization: Bearer <token>
 
 Standard HTTP status codes are used throughout:
 
-| Status  | Meaning                  | When                                                                                                                                   |
-| ------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **400** | Bad request              | Structurally malformed request — missing a required field, unparseable query parameter, invalid JSON                                   |
-| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                        |
-| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                  |
-| **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                |
-| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record)          |
-| **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                      |
-| **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type) |
+| Status  | Meaning                  | When                                                                                                                                                                      |
+| ------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **400** | Bad request              | Structurally malformed request — missing a required field, unparseable query parameter, invalid JSON, a malformed or reserved-prefix record `id`                          |
+| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                           |
+| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                     |
+| **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                   |
+| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists) |
+| **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                         |
+| **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                    |
 
 The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
 
@@ -714,6 +731,8 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 
 `PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints.
+
+`POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](#record-ids) for the validation and duplicate-conflict rules the server applies.
 
 ### Permissions
 
