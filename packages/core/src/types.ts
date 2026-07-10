@@ -388,6 +388,20 @@ export interface StackRecordAdapter {
   getType(id: TypeId): Promise<StackType | null>;
   listTypes(): Promise<StackType[]>;
 
+  /**
+   * Atomically verify fileId is unreferenced by any record's attachment
+   * association, then hard-delete every record of `metadataTypeId` whose
+   * content.fileId matches it — all within a single adapter call, so
+   * nothing can add a new reference between the check and the delete.
+   * Returns the ids of the deleted metadata records (empty if none exist,
+   * e.g. bare bytes left by an interrupted upload). Throws
+   * StackConflictError if fileId is still referenced.
+   *
+   * Optional: Stack.deleteAttachment() falls back to a non-atomic
+   * check-then-act sequence for adapters that don't implement this.
+   */
+  deleteUnreferencedAttachmentRecords?(fileId: FileId, metadataTypeId: TypeId): Promise<RecordId[]>;
+
   // Lifecycle
   flush?(): Promise<void>;
   close?(): Promise<void>;

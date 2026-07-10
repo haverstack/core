@@ -19,6 +19,11 @@
  * Also exposes token management methods (createToken,
  * lookupToken, listTokens, revokeToken) used by server
  * implementations to issue and validate bearer tokens.
+ *
+ * Schema DDL, WHERE/ORDER building, cursor codec, row mappers,
+ * and the FTS4 sanitizer live in @haverstack/sqlite-shared —
+ * shared with the native record-adapter-sqlite so the two
+ * engines can't drift on engine-independent SQL.
  */
 
 import initSqlJs from 'sql.js';
@@ -31,6 +36,8 @@ import type {
   StackRecord,
   StackType,
   TypeId,
+  RecordId,
+  FileId,
   RecordVersion,
   StackQuery,
   QueryResult,
@@ -38,7 +45,23 @@ import type {
   Permission,
   AdapterCapabilities,
 } from '@haverstack/core';
-import { applyMergePatch, StackQueryError } from '@haverstack/core';
+import { applyMergePatch, StackConflictError, StackNotFoundError } from '@haverstack/core';
+import {
+  RECORD_SCHEMA_SQL,
+  FTS4_SCHEMA_SQL,
+  PRAGMA_FOREIGN_KEYS_ON,
+  buildWhereClause,
+  buildOrderClause,
+  getSortField,
+  makeCursor,
+  rowToRecord,
+  rowToAssociation,
+  rowToType,
+  rowToVersion,
+  toMs,
+  fromMs,
+  sanitizeFts4Query,
+} from '@haverstack/sqlite-shared';
 
 // -------------------------------------------------------
 // Types
@@ -75,157 +98,7 @@ export type TokenInfo = {
   expiresAt?: Date;
 };
 
-// -------------------------------------------------------
-// SQL — schema
-// -------------------------------------------------------
-
-const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS records (
-    id          TEXT PRIMARY KEY,
-    type_id     TEXT NOT NULL,
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL,
-    content     TEXT NOT NULL CHECK (json_valid(content)),
-    version     INTEGER NOT NULL DEFAULT 1,
-    parent_id   TEXT,
-    entity_id   TEXT,
-    app_id      TEXT,
-    deleted_at  INTEGER,
-    permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
-  ) STRICT;
-
-  CREATE TABLE IF NOT EXISTS associations (
-    record_id  TEXT NOT NULL REFERENCES records(id),
-    kind       TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
-    label      TEXT NOT NULL,
-    file_id    TEXT NOT NULL DEFAULT '',
-    mime_type  TEXT,
-    related_id TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (record_id, kind, label, file_id, related_id)
-  ) STRICT;
-
-  CREATE TABLE IF NOT EXISTS versions (
-    record_id   TEXT NOT NULL REFERENCES records(id),
-    version     INTEGER NOT NULL,
-    content     TEXT NOT NULL CHECK (json_valid(content)),
-    updated_at  INTEGER NOT NULL,
-    entity_id   TEXT,
-    associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
-    permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
-    PRIMARY KEY (record_id, version)
-  ) STRICT;
-
-  CREATE TABLE IF NOT EXISTS types (
-    id            TEXT PRIMARY KEY,
-    base_id       TEXT NOT NULL,
-    version       INTEGER NOT NULL,
-    name          TEXT NOT NULL,
-    schema        TEXT NOT NULL CHECK (json_valid(schema)),
-    schema_hash   TEXT NOT NULL,
-    migrates_from TEXT,
-    created_at    INTEGER NOT NULL
-  ) STRICT;
-
-  CREATE TABLE IF NOT EXISTS tokens (
-    id          TEXT PRIMARY KEY,
-    token_hash  TEXT NOT NULL UNIQUE,
-    entity_id   TEXT NOT NULL,
-    label       TEXT,
-    created_at  INTEGER NOT NULL,
-    expires_at  INTEGER
-  ) STRICT;
-
-  -- Indexes
-  CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
-  CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
-  CREATE INDEX IF NOT EXISTS idx_records_entity_id  ON records(entity_id);
-  CREATE INDEX IF NOT EXISTS idx_records_app_id     ON records(app_id);
-  CREATE INDEX IF NOT EXISTS idx_records_deleted_at ON records(deleted_at);
-  CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
-  CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at);
-  CREATE INDEX IF NOT EXISTS idx_assoc_record_id    ON associations(record_id);
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
-  CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
-  CREATE INDEX IF NOT EXISTS idx_tokens_hash        ON tokens(token_hash);
-
-  -- Full-text search (FTS4 — compatible with sql.js)
-  CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts4(
-    content,
-    content='records'
-  );
-`;
-
-// -------------------------------------------------------
-// Helpers
-// -------------------------------------------------------
-
-const toMs = (d: Date): number => d.getTime();
-const fromMs = (ms: number): Date => new Date(ms);
-
-const rowToRecord = (row: Record<string, unknown>, associations: Association[]): StackRecord => {
-  const record: StackRecord = {
-    id: row.id as string,
-    typeId: row.type_id as string,
-    createdAt: fromMs(row.created_at as number),
-    updatedAt: fromMs(row.updated_at as number),
-    content: JSON.parse(row.content as string),
-    version: row.version as number,
-  };
-  if (row.parent_id) record.parentId = row.parent_id as string;
-  if (row.entity_id) record.entityId = row.entity_id as string;
-  if (row.app_id) record.appId = row.app_id as string;
-  if (row.deleted_at) record.deletedAt = fromMs(row.deleted_at as number);
-  if (row.permissions) record.permissions = JSON.parse(row.permissions as string);
-  if (associations.length) record.associations = associations;
-  return record;
-};
-
-const rowToAssociation = (row: Record<string, unknown>): Association => {
-  if (row.kind === 'tag') {
-    return { kind: 'tag', label: row.label as string };
-  }
-  if (row.kind === 'attachment') {
-    return {
-      kind: 'attachment',
-      label: row.label as string,
-      fileId: row.file_id as string,
-      mimeType: row.mime_type as string,
-    };
-  }
-  // relationship
-  return {
-    kind: 'relationship',
-    label: row.label as string,
-    recordId: row.related_id as string,
-  };
-};
-
-const rowToType = (row: Record<string, unknown>): StackType => {
-  const t: StackType = {
-    id: row.id as string,
-    baseId: row.base_id as string,
-    version: row.version as number,
-    name: row.name as string,
-    schema: JSON.parse(row.schema as string),
-    schemaHash: row.schema_hash as string,
-    createdAt: fromMs(row.created_at as number),
-  };
-  if (row.migrates_from) t.migratesFrom = row.migrates_from as string;
-  return t;
-};
-
-const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
-  const v: RecordVersion = {
-    version: row.version as number,
-    content: JSON.parse(row.content as string),
-    updatedAt: fromMs(row.updated_at as number),
-  };
-  if (row.entity_id) v.entityId = row.entity_id as string;
-  if (row.associations) v.associations = JSON.parse(row.associations as string);
-  if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
-  return v;
-};
+const SCHEMA_SQL = `${RECORD_SCHEMA_SQL}\n${FTS4_SCHEMA_SQL}`;
 
 // -------------------------------------------------------
 // Storage ownership lock
@@ -278,232 +151,12 @@ const releaseLock = (dbPath: string): void => {
 };
 
 // -------------------------------------------------------
-// FTS4 query sanitization
+// Foreign key enforcement
 // -------------------------------------------------------
 
-/**
- * Sanitizes user input for safe use in an FTS4 MATCH clause.
- *
- * FTS4's query language supports operators (AND/OR/NOT, phrases, NEAR, wildcards)
- * that can be expensive or cause parse errors with untrusted input.
- * This function removes the dangerous operators while preserving useful ones:
- *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
- *   removed: wildcards (*), NEAR/N, bare NOT (no left operand)
- *   capped:  parenthesis nesting depth (default: 2)
- *
- * A query timeout is not implementable here: sql.js runs SQLite as synchronous
- * WASM that blocks the JS event loop, and db.interrupt() is not exposed. Moving
- * sql.js into a Worker thread would enable a timeout via interrupt() but is out
- * of scope for this change.
- */
-const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
-  if (!query) return '';
-
-  // Remove wildcards
-  let clean = query.replace(/\*/g, '');
-
-  // Remove NEAR operator (handles NEAR and NEAR/N variants)
-  clean = clean.replace(/\bNEAR(?:\/\d+)?\b/gi, '');
-
-  // Strip bare NOT with no left operand — FTS4 requires "term NOT term", not "NOT term"
-  clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
-
-  // Enforce max nesting depth; replace excess ( with a space and discard unmatched )
-  let currentDepth = 0;
-  let result = '';
-  for (const char of clean) {
-    if (char === '(') {
-      if (currentDepth < maxDepth) {
-        currentDepth++;
-        result += char;
-      } else result += ' ';
-    } else if (char === ')') {
-      if (currentDepth > 0) {
-        currentDepth--;
-        result += char;
-      } else result += ' ';
-    } else {
-      result += char;
-    }
-  }
-
-  // Auto-close any unclosed parens
-  if (currentDepth > 0) result += ')'.repeat(currentDepth);
-
-  // Iteratively remove empty paren pairs left behind by NEAR/NOT stripping
-  let prev: string;
-  do {
-    prev = result;
-    result = result.replace(/\(\s*\)/g, ' ');
-  } while (result !== prev);
-
-  return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
-};
-
-// -------------------------------------------------------
-// Query building
-// -------------------------------------------------------
-
-type SortField = 'createdAt' | 'updatedAt' | 'version';
-
-const getSortField = (query: StackQuery): SortField => query.sort?.field ?? 'createdAt';
-
-const getSortColumn = (field: SortField): string =>
-  field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
-
-const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
-  const conditions: string[] = ["r.id != '_config'"];
-  const params: unknown[] = [];
-  const f = query.filter ?? {};
-
-  if (!f.includeDeleted) {
-    conditions.push('r.deleted_at IS NULL');
-  }
-
-  if (f.typeId !== undefined) {
-    const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
-
-  if (f.parentId !== undefined) {
-    if (f.parentId === null) {
-      conditions.push('r.parent_id IS NULL');
-    } else {
-      conditions.push('r.parent_id = ?');
-      params.push(f.parentId);
-    }
-  }
-
-  if (f.appId !== undefined) {
-    const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
-    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
-
-  if (f.entityId !== undefined) {
-    const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
-
-  if (f.createdAt?.after) {
-    conditions.push('r.created_at > ?');
-    params.push(toMs(f.createdAt.after));
-  }
-  if (f.createdAt?.before) {
-    conditions.push('r.created_at < ?');
-    params.push(toMs(f.createdAt.before));
-  }
-  if (f.updatedAt?.after) {
-    conditions.push('r.updated_at > ?');
-    params.push(toMs(f.updatedAt.after));
-  }
-  if (f.updatedAt?.before) {
-    conditions.push('r.updated_at < ?');
-    params.push(toMs(f.updatedAt.before));
-  }
-
-  // Tag filter — record must have ALL specified tags
-  if (f.tags?.length) {
-    for (const tag of f.tags) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'tag' AND a.label = ?)`,
-      );
-      params.push(tag);
-    }
-  }
-
-  // Attachment label filter
-  if (f.hasAttachment) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.label = ?)`,
-    );
-    params.push(f.hasAttachment);
-  }
-
-  // Attachment file ID filter — find records that reference a specific file
-  if (f.attachmentFileId) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)`,
-    );
-    params.push(f.attachmentFileId);
-  }
-
-  // Relationship filter
-  if (f.relatedTo) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'relationship' AND a.related_id = ?` +
-        (f.relatedTo.label ? ` AND a.label = ?` : '') +
-        `)`,
-    );
-    params.push(f.relatedTo.recordId);
-    if (f.relatedTo.label) params.push(f.relatedTo.label);
-  }
-
-  // Content field filters (top-level scalar exact match)
-  if (f.content) {
-    for (const [key, value] of Object.entries(f.content)) {
-      conditions.push(`json_extract(r.content, ?) = ?`);
-      params.push(`$.${key}`, value);
-    }
-  }
-
-  if (f.search) {
-    const sanitized = sanitizeFts4Query(f.search);
-    if (sanitized) {
-      conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
-      params.push(sanitized);
-    }
-  }
-
-  // Cursor (sort-field value + id for stable pagination)
-  if (query.cursor) {
-    const parts = Buffer.from(query.cursor, 'base64').toString().split('|');
-    // New format: field|value|id (3 parts). Legacy format: value|id (2 parts, implies createdAt).
-    const [cursorField, cursorValue, cursorId] =
-      parts.length === 3
-        ? (parts as [string, string, string])
-        : (['createdAt', parts[0], parts[1]] as [string, string, string]);
-    if (cursorField === undefined || cursorValue === undefined || cursorId === undefined) {
-      throw new StackQueryError(`Invalid cursor: malformed "${query.cursor}"`);
-    }
-    const validSortFields: SortField[] = ['createdAt', 'updatedAt', 'version'];
-    if (!validSortFields.includes(cursorField as SortField)) {
-      throw new StackQueryError(`Invalid cursor: unknown sort field "${cursorField}"`);
-    }
-    const numericValue = Number(cursorValue);
-    if (!isFinite(numericValue)) {
-      throw new StackQueryError(`Invalid cursor: non-numeric sort value`);
-    }
-    const col = getSortColumn(cursorField as SortField);
-    const sortDir = query.sort?.direction ?? 'desc';
-    const op = sortDir === 'asc' ? '>' : '<';
-    conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-    params.push(numericValue, numericValue, cursorId);
-  }
-
-  return {
-    sql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
-    params,
-  };
-};
-
-const buildOrderClause = (query: StackQuery): string => {
-  const field = getSortField(query);
-  const dir = (query.sort?.direction ?? 'desc').toUpperCase();
-  return `ORDER BY r.${getSortColumn(field)} ${dir}, r.id ${dir}`;
-};
-
-const makeCursor = (record: StackRecord, field: SortField): string => {
-  const value =
-    field === 'updatedAt'
-      ? toMs(record.updatedAt)
-      : field === 'version'
-        ? record.version
-        : toMs(record.createdAt);
-  return Buffer.from(`${field}|${value}|${record.id}`).toString('base64');
-};
+/** sql.js's SQLite build reports FK violations as a plain Error with this message. */
+const isForeignKeyViolation = (err: unknown): boolean =>
+  err instanceof Error && err.message.includes('FOREIGN KEY constraint failed');
 
 // -------------------------------------------------------
 // SQLiteRecordAdapter
@@ -541,6 +194,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     const SQL = await initSqlJs();
     const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     adapter.db = new SQL.Database();
+    adapter.db.run(PRAGMA_FOREIGN_KEYS_ON);
     adapter.db.run(SCHEMA_SQL);
     const now = Date.now();
     adapter.db.run(
@@ -570,6 +224,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     const adapter = new SQLiteRecordAdapter(SQL, opts.path);
     const fileBuffer = readFileSync(opts.path);
     adapter.db = new SQL.Database(fileBuffer);
+    adapter.db.run(PRAGMA_FOREIGN_KEYS_ON);
     adapter.db.run(SCHEMA_SQL);
     adapter.readConfig();
     return adapter;
@@ -587,6 +242,10 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
    */
   private persist(): void {
     const data = this.db.export();
+    // sql.js quirk: export() resets connection-level pragmas (including
+    // foreign_keys) on the live Database object — reapply immediately so
+    // FK enforcement doesn't silently go stale after the first write.
+    this.db.run(PRAGMA_FOREIGN_KEYS_ON);
     const tmpPath = join(
       dirname(this.path),
       `.${basename(this.path)}.tmp-${randomBytes(6).toString('hex')}`,
@@ -671,13 +330,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
 
   async deleteRecord(id: string, opts: { hard?: boolean } = {}): Promise<void> {
     if (opts.hard) {
-      this.db.run('DELETE FROM associations WHERE record_id = ?', [id]);
-      this.db.run('DELETE FROM versions WHERE record_id = ?', [id]);
-      this.db.run(
-        `DELETE FROM records_fts WHERE docid = (SELECT rowid FROM records WHERE id = ?)`,
-        [id],
-      );
-      this.db.run('DELETE FROM records WHERE id = ?', [id]);
+      this.hardDeleteRecord(id);
     } else {
       this.db.run(
         'UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?',
@@ -685,6 +338,16 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
       );
     }
     this.persist();
+  }
+
+  /** Deletes a record's associations, versions, FTS entry, and row — no persist(). */
+  private hardDeleteRecord(id: string): void {
+    this.db.run('DELETE FROM associations WHERE record_id = ?', [id]);
+    this.db.run('DELETE FROM versions WHERE record_id = ?', [id]);
+    this.db.run(`DELETE FROM records_fts WHERE docid = (SELECT rowid FROM records WHERE id = ?)`, [
+      id,
+    ]);
+    this.db.run('DELETE FROM records WHERE id = ?', [id]);
   }
 
   async undeleteRecord(id: string): Promise<StackRecord> {
@@ -745,7 +408,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
-    const { sql: where, params } = buildWhereClause(query);
+    const { sql: where, params } = buildWhereClause(query, sanitizeFts4Query);
     const order = buildOrderClause(query);
     const limit = query.limit ?? 50;
 
@@ -774,6 +437,46 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     const cursor = hasMore && lastRecord ? makeCursor(lastRecord, getSortField(query)) : null;
 
     return { records, cursor, total };
+  }
+
+  /**
+   * Atomically verify fileId is unreferenced, then hard-delete every
+   * metadataTypeId record whose content.fileId matches it. See
+   * StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Runs as a
+   * real SQL transaction and, being entirely synchronous SQLite calls
+   * with no `await` in between, nothing else can interleave between the
+   * reference check and the deletes.
+   */
+  async deleteUnreferencedAttachmentRecords(
+    fileId: FileId,
+    metadataTypeId: TypeId,
+  ): Promise<RecordId[]> {
+    this.db.run('BEGIN');
+    try {
+      const referenced = this.execQuery<{ found: number }>(
+        `SELECT 1 as found FROM associations WHERE kind = 'attachment' AND file_id = ? LIMIT 1`,
+        [fileId],
+      );
+      if (referenced.length) {
+        throw new StackConflictError('Attachment is still referenced by one or more records');
+      }
+
+      const metaRows = this.execQuery<{ id: string }>(
+        `SELECT id FROM records WHERE type_id = ? AND json_extract(content, '$.fileId') = ?`,
+        [metadataTypeId, fileId],
+      );
+      const deletedIds = metaRows.map((row) => row.id);
+      for (const id of deletedIds) {
+        this.hardDeleteRecord(id);
+      }
+
+      this.db.run('COMMIT');
+      if (deletedIds.length) this.persist();
+      return deletedIds;
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
   }
 
   // -------------------------------------------------------
@@ -946,21 +649,35 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     ]);
   }
 
+  /**
+   * FK enforcement (PRAGMA_FOREIGN_KEYS_ON) means inserting an
+   * association against a record that doesn't exist throws — mapped
+   * here to StackNotFoundError so associate() on a nonexistent record
+   * fails loudly with a proper error instead of silently creating an
+   * orphan row.
+   */
   private insertAssociations(recordId: string, associations: Association[]): void {
     for (const assoc of associations) {
-      this.db.run(
-        `INSERT OR IGNORE INTO associations
-          (record_id, kind, label, file_id, mime_type, related_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          recordId,
-          assoc.kind,
-          assoc.label,
-          assoc.kind === 'attachment' ? assoc.fileId : '',
-          assoc.kind === 'attachment' ? assoc.mimeType : null,
-          assoc.kind === 'relationship' ? assoc.recordId : '',
-        ],
-      );
+      try {
+        this.db.run(
+          `INSERT OR IGNORE INTO associations
+            (record_id, kind, label, file_id, mime_type, related_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            recordId,
+            assoc.kind,
+            assoc.label,
+            assoc.kind === 'attachment' ? assoc.fileId : '',
+            assoc.kind === 'attachment' ? assoc.mimeType : null,
+            assoc.kind === 'relationship' ? assoc.recordId : '',
+          ],
+        );
+      } catch (err) {
+        if (isForeignKeyViolation(err)) {
+          throw new StackNotFoundError(`Record not found: "${recordId}"`);
+        }
+        throw err;
+      }
     }
   }
 

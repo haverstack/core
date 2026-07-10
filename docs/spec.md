@@ -481,6 +481,10 @@ const stack = await Stack.create(adapter);
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
+**`@haverstack/sqlite-shared`** is an internal, non-public package holding the SQL that's identical across every SQLite-backed record adapter — schema DDL, `WHERE`/`ORDER` building, the cursor codec, row mappers, and the FTS4 sanitizer. `record-adapter-sqljs` consumes it today; a future native SQLite adapter would too, sharing everything but the FTS dialect (FTS4 vs FTS5) and the engine binding itself. Keeping this logic in one place is what keeps a cursor minted by one SQLite-backed adapter decodable by another.
+
+`record-adapter-sqljs` enables SQLite foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+
 ---
 
 ## Concurrency & storage ownership
@@ -537,6 +541,8 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 - `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file. Throws `StackConflictError` if any record still references the file. Throws `StackNotFoundError` if the file doesn't exist.
 - `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
+
+**Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
 
 **Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record with its own `mimeType` and `filename`. The same `fileId` may have multiple `_attachment@1` records from separate uploads.
 

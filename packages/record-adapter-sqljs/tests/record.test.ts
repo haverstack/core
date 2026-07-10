@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { SQLiteRecordAdapter } from '../src/index.js';
-import { StackQueryError } from '@haverstack/core';
+import { StackConflictError, StackNotFoundError, StackQueryError } from '@haverstack/core';
 import type { StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -840,6 +840,27 @@ describe('associations', () => {
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.version).toBe(3);
   });
+
+  test('associate on a nonexistent record throws StackNotFoundError instead of creating an orphan row', async () => {
+    const adapter = await initAdapter();
+    await expect(
+      adapter.associate('does-not-exist', { kind: 'tag', label: 'starred' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('FK enforcement survives across persist() calls (sql.js resets pragmas on export())', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    // Several persist()-triggering writes first, to make sure the pragma
+    // reset sql.js applies on export() doesn't leak past the first one.
+    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.patchContent(record.id, { text: 'updated' });
+
+    await expect(
+      adapter.associate('still-does-not-exist', { kind: 'tag', label: 'x' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
 });
 
 // -------------------------------------------------------
@@ -1012,6 +1033,101 @@ describe('commitMigration', () => {
     expect(migrated.typeId).toBe('com.example.test/note@2');
     expect(migrated.content).toEqual({ text: 'Hello world', pinned: false });
     expect(migrated.version).toBe(2);
+  });
+});
+
+// -------------------------------------------------------
+// deleteUnreferencedAttachmentRecords
+// -------------------------------------------------------
+
+describe('deleteUnreferencedAttachmentRecords', () => {
+  const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+
+  test('throws StackConflictError when a record still references the file', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.associate(record.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId: 'file-1',
+      mimeType: 'image/png',
+    });
+
+    await expect(
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('deletes an unreferenced metadata record and returns its id', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
+    );
+
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE);
+    expect(deleted).toEqual(['meta1']);
+    expect(await adapter.getRecord('meta1')).toBeNull();
+  });
+
+  test('deletes every metadata record sharing the same fileId (dedup case)', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'shared-file' } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'meta2', typeId: ATTACHMENT_TYPE, content: { fileId: 'shared-file' } }),
+    );
+
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'shared-file',
+      ATTACHMENT_TYPE,
+    );
+    expect(deleted.sort()).toEqual(['meta1', 'meta2']);
+  });
+
+  test('returns an empty array when no metadata records exist for the file', async () => {
+    const adapter = await initAdapter();
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'nonexistent-file',
+      ATTACHMENT_TYPE,
+    );
+    expect(deleted).toEqual([]);
+  });
+
+  test('rolls back and leaves the metadata record intact when the reference check fails', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
+    );
+    const referencing = makeRecord({ id: 'referencing' });
+    await adapter.createRecord(referencing);
+    await adapter.associate(referencing.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId: 'file-1',
+      mimeType: 'image/png',
+    });
+
+    await expect(
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE),
+    ).rejects.toThrow(StackConflictError);
+    expect(await adapter.getRecord('meta1')).not.toBeNull();
+  });
+
+  test('deleting a metadata record removes its version history too', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
+    );
+    await adapter.saveVersion('meta1', {
+      version: 1,
+      content: { fileId: 'file-1' },
+      updatedAt: new Date(),
+    });
+
+    await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE);
+    expect(await adapter.getVersions('meta1')).toEqual([]);
   });
 });
 

@@ -765,22 +765,12 @@ export class Stack implements StackClient {
    * Throws StackNotFoundError if neither metadata records nor bytes exist.
    */
   async deleteAttachment(fileId: string): Promise<void> {
-    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
-    if (refResult.records.length > 0) {
-      throw new StackConflictError('Attachment is still referenced by one or more records');
-    }
+    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
+    const deletedRecordIds = this.adapter.deleteUnreferencedAttachmentRecords
+      ? await this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)
+      : await this.deleteUnreferencedAttachmentRecordsFallback(fileId, metadataTypeId);
 
-    const metaResult = await this.query({
-      filter: {
-        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-        ...(this.features.contentFieldQuery && { content: { fileId } }),
-      },
-    });
-    const metaRecords = this.features.contentFieldQuery
-      ? metaResult.records
-      : metaResult.records.filter((r) => (r.content as AttachmentContent).fileId === fileId);
-
-    if (!metaRecords.length) {
+    if (!deletedRecordIds.length) {
       try {
         await this.adapter.getAttachment(fileId);
       } catch {
@@ -788,11 +778,38 @@ export class Stack implements StackClient {
       }
     }
 
+    await this.adapter.deleteAttachment(fileId);
+  }
+
+  /**
+   * Non-atomic fallback for adapters that don't implement
+   * deleteUnreferencedAttachmentRecords(): a concurrent associate() can
+   * race between the reference check below and the deletes it guards.
+   */
+  private async deleteUnreferencedAttachmentRecordsFallback(
+    fileId: string,
+    metadataTypeId: string,
+  ): Promise<string[]> {
+    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) {
+      throw new StackConflictError('Attachment is still referenced by one or more records');
+    }
+
+    const metaResult = await this.query({
+      filter: {
+        typeId: metadataTypeId,
+        ...(this.features.contentFieldQuery && { content: { fileId } }),
+      },
+    });
+    const metaRecords = this.features.contentFieldQuery
+      ? metaResult.records
+      : metaResult.records.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+
     for (const record of metaRecords) {
       await this.delete(record.id, { hard: true });
     }
 
-    await this.adapter.deleteAttachment(fileId);
+    return metaRecords.map((r) => r.id);
   }
 
   // -------------------------------------------------------

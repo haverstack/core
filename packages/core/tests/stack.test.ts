@@ -853,3 +853,78 @@ describe('putAttachment', () => {
     expect(result.records[0].entityId).toBeUndefined();
   });
 });
+
+// -------------------------------------------------------
+// deleteAttachment
+// -------------------------------------------------------
+
+describe('deleteAttachment', () => {
+  test('throws StackConflictError when a record still references the file (fallback path)', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+
+    await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
+  });
+
+  test('deletes the _attachment@1 metadata record when unreferenced (fallback path)', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+
+    await stack.deleteAttachment(fileId);
+
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records).toHaveLength(0);
+  });
+
+  test('throws StackNotFoundError when neither metadata nor bytes exist', async () => {
+    class NoBytesAdapter extends MemoryAdapter {
+      async getAttachment(_fileId: string): Promise<Uint8Array> {
+        throw new Error('not found');
+      }
+    }
+    const noBytesStack = await Stack.create(
+      new NoBytesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+
+    await expect(noBytesStack.deleteAttachment('nonexistent-file')).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('prefers the adapter atomic path over the fallback when the adapter implements it', async () => {
+    const calls: string[] = [];
+    class AtomicAdapter extends MemoryAdapter {
+      async deleteUnreferencedAttachmentRecords(
+        fileId: string,
+        metadataTypeId: string,
+      ): Promise<string[]> {
+        calls.push('atomic');
+        const toDelete = [...this.records.values()].filter(
+          (r) =>
+            r.typeId === metadataTypeId && (r.content as Record<string, unknown>).fileId === fileId,
+        );
+        for (const r of toDelete) {
+          this.records.delete(r.id);
+          this.order.splice(this.order.indexOf(r.id), 1);
+        }
+        return toDelete.map((r) => r.id);
+      }
+    }
+    const atomicStack = await Stack.create(
+      new AtomicAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await atomicStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+
+    const fileId = await atomicStack.putAttachment(new Uint8Array([9]), 'image/png');
+    await atomicStack.deleteAttachment(fileId);
+
+    expect(calls).toEqual(['atomic']);
+  });
+});
