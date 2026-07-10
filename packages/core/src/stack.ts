@@ -17,6 +17,7 @@
 import { generateId, isValidIdFormat, idTimestamp } from './id.js';
 import { hashSchema, isCompatible, parseTypeId } from './schema.js';
 import { validateContent } from './validate.js';
+import { applyMergePatch } from './merge.js';
 import { checkAccess } from './access.js';
 import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
@@ -419,12 +420,7 @@ export class Stack implements StackClient {
         for (const record of result.records) {
           await this.saveVersion(record);
           const migratedContent = migrateFn(record.content);
-          await this.adapter.updateRecord(record.id, {
-            typeId: latestId,
-            content: migratedContent,
-            updatedAt: new Date(),
-            version: record.version + 1,
-          });
+          await this.adapter.commitMigration(record.id, latestId, migratedContent);
           migrated++;
         }
 
@@ -554,16 +550,8 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${latestTypeId}"`);
     }
 
-    // Shallow merge: start with (migrated) existing content, apply changes.
-    // null values mean "delete this field" (RFC 7396 / JSON Merge Patch).
-    const merged: Record<string, unknown> = { ...existingContent };
-    for (const [key, value] of Object.entries(content)) {
-      if (value === null) {
-        delete merged[key];
-      } else {
-        merged[key] = value;
-      }
-    }
+    // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
+    const merged = applyMergePatch(existingContent, content);
 
     const errors = validateContent(merged, type.schema);
     if (errors.length > 0) {
@@ -573,12 +561,13 @@ export class Stack implements StackClient {
     // Snapshot the raw stored state before overwriting
     await this.saveVersion(existing);
 
-    return this.adapter.updateRecord(id, {
-      typeId: latestTypeId,
-      content: merged,
-      updatedAt: new Date(),
-      version: existing.version + 1,
-    });
+    // If a pending lazy migration is being committed alongside this patch,
+    // the typeId change has to travel through commitMigration() — a
+    // content-only patch has no way to carry it.
+    if (latestTypeId !== existing.typeId) {
+      return this.adapter.commitMigration(id, latestTypeId, merged);
+    }
+    return this.adapter.patchContent(id, content);
   }
 
   /**
@@ -596,7 +585,6 @@ export class Stack implements StackClient {
 
     await this.saveVersion(existing);
     await this.adapter.associate(id, association);
-    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
@@ -612,7 +600,6 @@ export class Stack implements StackClient {
 
     await this.saveVersion(existing);
     await this.adapter.dissociate(id, association);
-    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
@@ -628,11 +615,7 @@ export class Stack implements StackClient {
     if (permissionsEqual(existing.permissions ?? [], permissions)) return;
 
     await this.saveVersion(existing);
-    await this.adapter.updateRecord(id, {
-      permissions,
-      version: existing.version + 1,
-      updatedAt: new Date(),
-    });
+    await this.adapter.setPermissions(id, permissions);
   }
 
   /**
@@ -658,7 +641,6 @@ export class Stack implements StackClient {
 
     await this.saveVersion(existing);
     await this.adapter.deleteRecord(id, opts);
-    await this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
   }
 
   /**
@@ -675,8 +657,7 @@ export class Stack implements StackClient {
     if (!existing.deletedAt) return existing;
 
     await this.saveVersion(existing);
-    await this.adapter.undeleteRecord(id);
-    return this.adapter.updateRecord(id, { version: existing.version + 1, updatedAt: new Date() });
+    return this.adapter.undeleteRecord(id);
   }
 
   /**
@@ -723,12 +704,7 @@ export class Stack implements StackClient {
     // Snapshot current state before restoring
     await this.saveVersion(existing);
 
-    return this.adapter.updateRecord(id, {
-      content: target.content,
-      updatedAt: new Date(),
-      version: existing.version + 1,
-      ...(target.associations !== undefined && { associations: target.associations }),
-    });
+    return this.adapter.restoreVersion(id, version);
   }
 
   // -------------------------------------------------------

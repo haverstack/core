@@ -690,7 +690,7 @@ Standard HTTP status codes are used throughout:
 | **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                         |
 | **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                    |
 
-The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
+The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /records/:id/migrate`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
 
 ### Records
 
@@ -703,6 +703,7 @@ PATCH  /records/:id          — update content only (partial merge, null = dele
 DELETE /records/:id          — soft delete
 DELETE /records/:id?hard=true — hard delete
 POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
+POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
 **`GET /records` query params:**
@@ -734,12 +735,16 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 
 `POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](#record-ids) for the validation and duplicate-conflict rules the server applies.
 
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass.
+
 ### Permissions
 
 ```
 GET  /records/:id/permissions        — get current permissions
 PUT  /records/:id/permissions        — replace all permissions (empty array = private)
 ```
+
+Both endpoints use the envelope `{ "permissions": [...] }` as the request/response body.
 
 **Response envelope:**
 

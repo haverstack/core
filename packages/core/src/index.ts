@@ -86,3 +86,4 @@ export {
 export { hashSchema, isCompatible, parseTypeId, buildTypeId } from './schema.js';
 export { validateContent, isValid } from './validate.js';
 export type { ValidationError } from './validate.js';
+export { applyMergePatch } from './merge.js';

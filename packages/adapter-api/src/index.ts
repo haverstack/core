@@ -23,6 +23,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  Permission,
   AdapterCapabilities,
   RecordId,
   FileId,
@@ -315,8 +316,24 @@ export class APIAdapter implements StackAdapter {
     return raw ? parseRecord(raw) : null;
   }
 
-  async updateRecord(id: RecordId, changes: Partial<StackRecord>): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, changes);
+  async patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord> {
+    // Content-only RFC 7396 merge patch — no record fields (typeId, version,
+    // updatedAt) travel in this body. The server merges against its own
+    // current state and assigns the new version/updatedAt; the response is
+    // authoritative.
+    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, patch);
+    return parseRecord(raw);
+  }
+
+  async commitMigration(
+    id: RecordId,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>('POST', `/records/${id}/migrate`, {
+      toTypeId,
+      content,
+    });
     return parseRecord(raw);
   }
 
@@ -368,6 +385,14 @@ export class APIAdapter implements StackAdapter {
   }
 
   // -------------------------------------------------------
+  // Permissions
+  // -------------------------------------------------------
+
+  async setPermissions(id: RecordId, permissions: Permission[]): Promise<void> {
+    await this.request<void>('PUT', `/records/${id}/permissions`, { permissions });
+  }
+
+  // -------------------------------------------------------
   // Versions
   // -------------------------------------------------------
 
@@ -387,8 +412,14 @@ export class APIAdapter implements StackAdapter {
   }
 
   async saveVersion(_id: RecordId, _version: RecordVersion): Promise<void> {
-    // The server snapshots versions automatically as a side effect of updateRecord.
-    // There is no client-initiated saveVersion endpoint in the wire protocol.
+    // The server snapshots versions automatically as a side effect of every
+    // mutating endpoint. There is no client-initiated saveVersion endpoint
+    // in the wire protocol.
+  }
+
+  async restoreVersion(id: RecordId, version: number): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>('POST', `/records/${id}/restore/${version}`);
+    return parseRecord(raw);
   }
 
   // -------------------------------------------------------

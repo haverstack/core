@@ -7,8 +7,10 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  Permission,
   AdapterCapabilities,
 } from './types.js';
+import { applyMergePatch } from './merge.js';
 
 /**
  * Fully functional in-memory StackAdapter with offset-based cursor pagination.
@@ -47,10 +49,14 @@ export class MemoryAdapter implements StackAdapter {
     return this.records.get(id) ?? null;
   }
 
-  async updateRecord(id: string, changes: Partial<StackRecord>) {
+  private bump(record: StackRecord): StackRecord {
+    return { ...record, version: record.version + 1, updatedAt: new Date() };
+  }
+
+  async patchContent(id: string, patch: Record<string, unknown | null>) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
-    const updated = { ...existing, ...changes };
+    const updated = this.bump({ ...existing, content: applyMergePatch(existing.content, patch) });
     this.records.set(id, updated);
     return updated;
   }
@@ -61,7 +67,7 @@ export class MemoryAdapter implements StackAdapter {
       this.order.splice(this.order.indexOf(id), 1);
     } else {
       const record = this.records.get(id);
-      if (record) this.records.set(id, { ...record, deletedAt: new Date() });
+      if (record) this.records.set(id, this.bump({ ...record, deletedAt: new Date() }));
     }
   }
 
@@ -69,7 +75,7 @@ export class MemoryAdapter implements StackAdapter {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     const { deletedAt: _deletedAt, ...rest } = record;
-    const updated = rest as StackRecord;
+    const updated = this.bump(rest as StackRecord);
     this.records.set(id, updated);
     return updated;
   }
@@ -107,7 +113,7 @@ export class MemoryAdapter implements StackAdapter {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     const assocs = record.associations ?? [];
-    this.records.set(id, { ...record, associations: [...assocs, association] });
+    this.records.set(id, this.bump({ ...record, associations: [...assocs, association] }));
   }
 
   async dissociate(id: string, association: Association) {
@@ -116,7 +122,13 @@ export class MemoryAdapter implements StackAdapter {
     const assocs = (record.associations ?? []).filter(
       (a) => !(a.kind === association.kind && a.label === association.label),
     );
-    this.records.set(id, { ...record, associations: assocs });
+    this.records.set(id, this.bump({ ...record, associations: assocs }));
+  }
+
+  async setPermissions(id: string, permissions: Permission[]) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    this.records.set(id, this.bump({ ...record, permissions }));
   }
 
   async getVersions(id: string) {
@@ -128,6 +140,28 @@ export class MemoryAdapter implements StackAdapter {
   async saveVersion(id: string, version: RecordVersion) {
     const existing = this.versions.get(id) ?? [];
     this.versions.set(id, [...existing, version]);
+  }
+
+  async restoreVersion(id: string, version: number) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    const target = (this.versions.get(id) ?? []).find((v) => v.version === version);
+    if (!target) throw new Error(`Version not found: ${id}@${version}`);
+    const updated = this.bump({
+      ...record,
+      content: target.content,
+      ...(target.associations !== undefined && { associations: target.associations }),
+    });
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async commitMigration(id: string, toTypeId: TypeId, content: Record<string, unknown>) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    const updated = this.bump({ ...record, typeId: toTypeId, content });
+    this.records.set(id, updated);
+    return updated;
   }
 
   async saveType(type: StackType) {

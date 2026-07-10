@@ -264,28 +264,85 @@ describe('getRecord', () => {
 });
 
 // -------------------------------------------------------
-// updateRecord
+// patchContent
 // -------------------------------------------------------
 
-describe('updateRecord', () => {
+describe('patchContent', () => {
   test('sends PATCH /records/:id', async () => {
     const adapter = await openAdapter();
     const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
     mockFetch.mockResolvedValueOnce(jsonResponse(updated));
-    await adapter.updateRecord('rec-abc123', { content: { text: 'Updated' }, version: 2 });
+    await adapter.patchContent('rec-abc123', { text: 'Updated' });
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123`,
       expect.objectContaining({ method: 'PATCH' }),
     );
   });
 
+  test('sends only the raw patch — no record fields — as the body', async () => {
+    const adapter = await openAdapter();
+    const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
+    mockFetch.mockResolvedValueOnce(jsonResponse(updated));
+    await adapter.patchContent('rec-abc123', { text: 'Updated', removedField: null });
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'Updated', removedField: null });
+  });
+
   test('returns updated record with parsed dates', async () => {
     const adapter = await openAdapter();
     const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
     mockFetch.mockResolvedValueOnce(jsonResponse(updated));
-    const result = await adapter.updateRecord('rec-abc123', { content: { text: 'Updated' } });
+    const result = await adapter.patchContent('rec-abc123', { text: 'Updated' });
     expect(result.content).toEqual({ text: 'Updated' });
     expect(result.updatedAt).toBeInstanceOf(Date);
+  });
+});
+
+// -------------------------------------------------------
+// commitMigration
+// -------------------------------------------------------
+
+describe('commitMigration', () => {
+  test('sends POST /records/:id/migrate with toTypeId and content', async () => {
+    const adapter = await openAdapter();
+    const migrated = { ...RECORD_RAW, typeId: 'com.example/note@2', version: 2 };
+    mockFetch.mockResolvedValueOnce(jsonResponse(migrated));
+    await adapter.commitMigration('rec-abc123', 'com.example/note@2', { text: 'Hello world' });
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/migrate`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      toTypeId: 'com.example/note@2',
+      content: { text: 'Hello world' },
+    });
+  });
+
+  test('returns the migrated record', async () => {
+    const adapter = await openAdapter();
+    const migrated = { ...RECORD_RAW, typeId: 'com.example/note@2', version: 2 };
+    mockFetch.mockResolvedValueOnce(jsonResponse(migrated));
+    const result = await adapter.commitMigration('rec-abc123', 'com.example/note@2', {});
+    expect(result.typeId).toBe('com.example/note@2');
+  });
+});
+
+// -------------------------------------------------------
+// setPermissions
+// -------------------------------------------------------
+
+describe('setPermissions', () => {
+  test('sends PUT /records/:id/permissions with a permissions envelope', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await adapter.setPermissions('rec-abc123', [{ access: 'public' }]);
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/permissions`,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ permissions: [{ access: 'public' }] });
   });
 });
 
@@ -500,6 +557,28 @@ describe('getVersion', () => {
     const version = await adapter.getVersion('rec-abc123', 1);
     expect(version?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(version?.permissions).toEqual([{ access: 'public' }]);
+  });
+});
+
+describe('restoreVersion', () => {
+  test('sends POST /records/:id/restore/:version', async () => {
+    const adapter = await openAdapter();
+    const restored = { ...RECORD_RAW, content: { text: 'original' }, version: 2 };
+    mockFetch.mockResolvedValueOnce(jsonResponse(restored));
+    await adapter.restoreVersion('rec-abc123', 1);
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/restore/1`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('returns the restored record with parsed dates', async () => {
+    const adapter = await openAdapter();
+    const restored = { ...RECORD_RAW, content: { text: 'original' }, version: 2 };
+    mockFetch.mockResolvedValueOnce(jsonResponse(restored));
+    const result = await adapter.restoreVersion('rec-abc123', 1);
+    expect(result.content).toEqual({ text: 'original' });
+    expect(result.createdAt).toBeInstanceOf(Date);
   });
 });
 
