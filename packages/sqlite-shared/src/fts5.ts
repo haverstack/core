@@ -22,6 +22,9 @@
  *            colons, bare NOT (no left operand)
  *   capped:  parenthesis nesting depth (default: 2)
  */
+
+import type { FtsStrategy } from './fts-strategy.js';
+
 export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   if (!query) return '';
 
@@ -67,4 +70,37 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   } while (result !== prev);
 
   return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+};
+
+// -------------------------------------------------------
+// Indexing strategy
+// -------------------------------------------------------
+
+/**
+ * FTS5's external-content table needs its special `('delete', rowid,
+ * content)` command — with the *old* content — to correctly unindex a
+ * row; a plain DELETE leaves stale, still-searchable entries behind
+ * (discovered and regression-tested while building the native adapter).
+ * `remove()` therefore reads the current rowid/content before whatever
+ * caller-side change is about to happen, which is why it must run
+ * before that change, not after.
+ */
+export const fts5Strategy: FtsStrategy = {
+  insert(exec, recordId, content) {
+    exec.run(`INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`, [
+      content,
+      recordId,
+    ]);
+  },
+  remove(exec, recordId) {
+    const row = exec.get<{ rowid: number; content: string }>(
+      'SELECT rowid, content FROM records WHERE id = ?',
+      [recordId],
+    );
+    if (!row) return;
+    exec.run(`INSERT INTO records_fts(records_fts, rowid, content) VALUES('delete', ?, ?)`, [
+      row.rowid,
+      row.content,
+    ]);
+  },
 };

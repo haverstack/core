@@ -6,19 +6,23 @@
  * it, and restoring a backup shouldn't resurrect revoked tokens. Server
  * implementations wire these up as separate parts
  * (`{ adapter, tokens }`), the same philosophy as combineAdapters().
+ *
+ * The actual createToken/lookupToken/listTokens/revokeToken logic lives
+ * once in @haverstack/sqlite-shared's SharedTokenLogic, shared with
+ * record-adapter-sqljs's inline token methods via the SqlExecutor
+ * interface.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
 import type { StackTokenStore, TokenInfo } from '@haverstack/core';
 import {
   TOKENS_SCHEMA_SQL,
   PRAGMA_JOURNAL_MODE_WAL,
-  toMs,
-  fromMs,
   acquireLock,
   releaseLock,
+  SharedTokenLogic,
 } from '@haverstack/sqlite-shared';
 import { DatabaseSync } from './node-sqlite.js';
+import { NativeSqliteExecutor } from './executor.js';
 
 /** Conventional sibling path for a token store beside a stack's main .db file. */
 export const defaultTokenStorePath = (dbPath: string): string => `${dbPath}.tokens`;
@@ -32,6 +36,7 @@ export type NativeTokenStoreOptions = {
 
 export class NativeTokenStore implements StackTokenStore {
   private db!: DatabaseSync;
+  private tokens!: SharedTokenLogic;
 
   private constructor(private readonly path: string) {}
 
@@ -42,64 +47,27 @@ export class NativeTokenStore implements StackTokenStore {
     store.db = new DatabaseSync(opts.path);
     store.db.exec(PRAGMA_JOURNAL_MODE_WAL);
     store.db.exec(TOKENS_SCHEMA_SQL);
+    store.tokens = new SharedTokenLogic({ exec: new NativeSqliteExecutor(store.db) });
     return store;
   }
 
-  async createToken(
+  createToken(
     entityId: string,
-    opts: { label?: string; expiresAt?: Date } = {},
+    opts?: { label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
-    const id = randomBytes(8).toString('hex');
-    const token = randomBytes(32).toString('hex');
-    const tokenHash = createHash('sha256').update(token).digest('hex');
-    this.db
-      .prepare(
-        'INSERT INTO tokens (id, token_hash, entity_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        id,
-        tokenHash,
-        entityId,
-        opts.label ?? null,
-        toMs(new Date()),
-        opts.expiresAt ? toMs(opts.expiresAt) : null,
-      );
-    return { id, token };
+    return this.tokens.createToken(entityId, opts);
   }
 
-  async lookupToken(token: string): Promise<{ entityId: string } | null> {
-    const hash = createHash('sha256').update(token).digest('hex');
-    const row = this.db
-      .prepare('SELECT entity_id, expires_at FROM tokens WHERE token_hash = ?')
-      .get(hash) as { entity_id: string; expires_at: number | null } | undefined;
-    if (!row) return null;
-    if (row.expires_at !== null && Date.now() > row.expires_at) return null;
-    return { entityId: row.entity_id };
+  lookupToken(token: string): Promise<{ entityId: string } | null> {
+    return this.tokens.lookupToken(token);
   }
 
-  async listTokens(): Promise<TokenInfo[]> {
-    const rows = this.db
-      .prepare(
-        'SELECT id, entity_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC',
-      )
-      .all() as {
-      id: string;
-      entity_id: string;
-      label: string | null;
-      created_at: number;
-      expires_at: number | null;
-    }[];
-    return rows.map((row) => ({
-      id: row.id,
-      entityId: row.entity_id,
-      ...(row.label && { label: row.label }),
-      createdAt: fromMs(row.created_at),
-      ...(row.expires_at !== null && { expiresAt: fromMs(row.expires_at) }),
-    }));
+  listTokens(): Promise<TokenInfo[]> {
+    return this.tokens.listTokens();
   }
 
-  async revokeToken(id: string): Promise<void> {
-    this.db.prepare('DELETE FROM tokens WHERE id = ?').run(id);
+  revokeToken(id: string): Promise<void> {
+    return this.tokens.revokeToken(id);
   }
 
   async close(): Promise<void> {

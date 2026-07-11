@@ -23,47 +23,47 @@
  * package, which implements @haverstack/core's StackTokenStore against
  * its own file rather than this adapter's records database.
  *
- * Schema DDL, WHERE/ORDER building, cursor codec, row mappers, and the
- * storage-ownership lock live in @haverstack/sqlite-shared — shared
- * with record-adapter-sqljs so the two engines can't drift on
- * engine-independent logic.
+ * This class itself is a thin node:sqlite binding: schema setup,
+ * pragmas, the storage-ownership lock, and the FTS4->FTS5 migration are
+ * genuinely engine-specific and live here. The actual
+ * StackRecordAdapter logic lives once in @haverstack/sqlite-shared's
+ * SharedSqlRecordLogic, shared with record-adapter-sqljs via the
+ * SqlExecutor interface (NativeSqliteExecutor here normalizes
+ * node:sqlite's spread-args run/get/all calls to it).
  */
 
 import { DatabaseSync } from './node-sqlite.js';
 import { existsSync } from 'fs';
 import type {
   StackRecordAdapter,
-  StackRecord,
   StackType,
   TypeId,
   RecordId,
   FileId,
   RecordVersion,
+} from '@haverstack/core';
+import type {
+  StackRecord,
   StackQuery,
   QueryResult,
   Association,
   Permission,
   AdapterCapabilities,
 } from '@haverstack/core';
-import { applyMergePatch, StackConflictError, StackNotFoundError } from '@haverstack/core';
 import {
   RECORD_SCHEMA_SQL,
   FTS5_SCHEMA_SQL,
   PRAGMA_FOREIGN_KEYS_ON,
   PRAGMA_JOURNAL_MODE_WAL,
-  buildWhereClause,
-  buildOrderClause,
-  getSortField,
-  makeCursor,
-  rowToRecord,
-  rowToAssociation,
-  rowToType,
-  rowToVersion,
-  toMs,
   sanitizeFts5Query,
+  fts5Strategy,
   acquireLock,
   releaseLock,
+  insertConfigRecord,
+  readStackConfig,
+  SharedSqlRecordLogic,
 } from '@haverstack/sqlite-shared';
+import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
@@ -91,14 +91,6 @@ export type NativeRecordOpenOptions = {
    */
   force?: boolean;
 };
-
-// -------------------------------------------------------
-// Foreign key enforcement
-// -------------------------------------------------------
-
-/** node:sqlite reports FK violations as an Error with this message (code ERR_SQLITE_ERROR). */
-const isForeignKeyViolation = (err: unknown): boolean =>
-  err instanceof Error && err.message.includes('FOREIGN KEY constraint failed');
 
 // -------------------------------------------------------
 // FTS4 -> FTS5 migration
@@ -140,8 +132,18 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
   timezone!: string;
 
   private db!: DatabaseSync;
+  private record!: SharedSqlRecordLogic;
 
   private constructor(private readonly path: string) {}
+
+  private wire(): void {
+    const exec = new NativeSqliteExecutor(this.db);
+    this.record = new SharedSqlRecordLogic({
+      exec,
+      fts: fts5Strategy,
+      sanitizeSearch: sanitizeFts5Query,
+    });
+  }
 
   /**
    * Initialize a new stack database. Fails if the file already exists —
@@ -161,13 +163,8 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     adapter.db.exec(PRAGMA_JOURNAL_MODE_WAL);
     adapter.db.exec(RECORD_SCHEMA_SQL);
     adapter.db.exec(FTS5_SCHEMA_SQL);
-    const now = Date.now();
-    adapter.db
-      .prepare(
-        `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
-         VALUES ('_config', '_config@1', ?, ?, ?, 1)`,
-      )
-      .run(now, now, JSON.stringify({ entityId: opts.entityId, timezone: opts.timezone }));
+    adapter.wire();
+    insertConfigRecord(new NativeSqliteExecutor(adapter.db), opts.entityId, opts.timezone);
     adapter.ownerEntityId = opts.entityId;
     adapter.timezone = opts.timezone;
     return adapter;
@@ -192,404 +189,103 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     adapter.db.exec(PRAGMA_JOURNAL_MODE_WAL);
     adapter.db.exec(RECORD_SCHEMA_SQL);
     migrateFtsIfNeeded(adapter.db);
-    adapter.readConfig();
+    adapter.wire();
+    const config = readStackConfig(new NativeSqliteExecutor(adapter.db));
+    adapter.ownerEntityId = config.entityId;
+    adapter.timezone = config.timezone;
     return adapter;
-  }
-
-  private readConfig(): void {
-    const row = this.db.prepare(`SELECT content FROM records WHERE id = '_config'`).get() as
-      | { content: string }
-      | undefined;
-    if (!row) throw new Error('Stack database is missing its config record.');
-    const content = JSON.parse(row.content) as { entityId: string; timezone?: string };
-    this.ownerEntityId = content.entityId;
-    this.timezone = content.timezone ?? 'UTC';
   }
 
   // -------------------------------------------------------
   // Records
   // -------------------------------------------------------
 
-  async createRecord(record: StackRecord): Promise<StackRecord> {
-    this.db
-      .prepare(
-        `INSERT INTO records
-          (id, type_id, created_at, updated_at, content, version,
-           parent_id, entity_id, app_id, deleted_at, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        record.id,
-        record.typeId,
-        toMs(record.createdAt),
-        toMs(record.updatedAt),
-        JSON.stringify(record.content),
-        record.version,
-        record.parentId ?? null,
-        record.entityId ?? null,
-        record.appId ?? null,
-        record.deletedAt ? toMs(record.deletedAt) : null,
-        record.permissions ? JSON.stringify(record.permissions) : null,
-      );
-
-    if (record.associations?.length) {
-      this.insertAssociations(record.id, record.associations);
-    }
-
-    this.insertFts(record.id, JSON.stringify(record.content));
-    return record;
+  createRecord(record: StackRecord): Promise<StackRecord> {
+    return this.record.createRecord(record);
   }
 
-  async getRecord(id: string): Promise<StackRecord | null> {
-    const row = this.db.prepare('SELECT * FROM records WHERE id = ?').get(id) as
-      | Record<string, unknown>
-      | undefined;
-    if (!row) return null;
-    const associations = this.getAssociationsForRecord(id);
-    return rowToRecord(row, associations);
+  getRecord(id: string): Promise<StackRecord | null> {
+    return this.record.getRecord(id);
   }
 
-  async patchContent(id: string, patch: Record<string, unknown | null>): Promise<StackRecord> {
-    const existing = await this.getRecord(id);
-    if (!existing) throw new Error(`Record not found: "${id}"`);
-
-    const merged = applyMergePatch(existing.content, patch);
-    this.removeFts(id);
-    this.db
-      .prepare('UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?')
-      .run(JSON.stringify(merged), toMs(new Date()), id);
-    this.insertFts(id, JSON.stringify(merged));
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
-    return updated;
+  patchContent(id: string, patch: Record<string, unknown | null>): Promise<StackRecord> {
+    return this.record.patchContent(id, patch);
   }
 
-  async deleteRecord(id: string, opts: { hard?: boolean } = {}): Promise<void> {
-    if (opts.hard) {
-      this.hardDeleteRecord(id);
-    } else {
-      this.db
-        .prepare(
-          'UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?',
-        )
-        .run(toMs(new Date()), toMs(new Date()), id);
-    }
+  deleteRecord(id: string, opts?: { hard?: boolean }): Promise<void> {
+    return this.record.deleteRecord(id, opts);
   }
 
-  /** Deletes a record's associations, versions, FTS entry, and row. */
-  private hardDeleteRecord(id: string): void {
-    this.removeFts(id);
-    this.db.prepare('DELETE FROM associations WHERE record_id = ?').run(id);
-    this.db.prepare('DELETE FROM versions WHERE record_id = ?').run(id);
-    this.db.prepare('DELETE FROM records WHERE id = ?').run(id);
+  undeleteRecord(id: string): Promise<StackRecord> {
+    return this.record.undeleteRecord(id);
   }
 
-  async undeleteRecord(id: string): Promise<StackRecord> {
-    this.db
-      .prepare(
-        'UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?',
-      )
-      .run(toMs(new Date()), id);
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
-    return updated;
+  setPermissions(id: string, permissions: Permission[]): Promise<void> {
+    return this.record.setPermissions(id, permissions);
   }
 
-  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    this.db
-      .prepare(
-        'UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      )
-      .run(permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id);
+  restoreVersion(id: string, version: number): Promise<StackRecord> {
+    return this.record.restoreVersion(id, version);
   }
 
-  async restoreVersion(id: string, version: number): Promise<StackRecord> {
-    const target = await this.getVersion(id, version);
-    if (!target) throw new Error(`Version not found: ${id}@${version}`);
-
-    this.removeFts(id);
-    this.db
-      .prepare('UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?')
-      .run(JSON.stringify(target.content), toMs(new Date()), id);
-    if (target.associations !== undefined) {
-      this.db.prepare('DELETE FROM associations WHERE record_id = ?').run(id);
-      if (target.associations.length) this.insertAssociations(id, target.associations);
-    }
-    this.insertFts(id, JSON.stringify(target.content));
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
-    return updated;
-  }
-
-  async commitMigration(
+  commitMigration(
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
   ): Promise<StackRecord> {
-    this.removeFts(id);
-    this.db
-      .prepare(
-        'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      )
-      .run(toTypeId, JSON.stringify(content), toMs(new Date()), id);
-    this.insertFts(id, JSON.stringify(content));
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
-    return updated;
+    return this.record.commitMigration(id, toTypeId, content);
   }
 
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
-    const { sql: where, params } = buildWhereClause(query, sanitizeFts5Query);
-    const order = buildOrderClause(query);
-    const limit = query.limit ?? 50;
-
-    // Fetch one extra to determine if there's a next page
-    const rows = this.execQuery<Record<string, unknown>>(
-      `SELECT r.* FROM records r ${where} ${order} LIMIT ?`,
-      [...params, limit + 1],
-    );
-
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
-
-    const records = page.map((row) => {
-      const associations = this.getAssociationsForRecord(row.id as string);
-      return rowToRecord(row, associations);
-    });
-
-    // Total count (without pagination)
-    const countRows = this.execQuery<{ total: number }>(
-      `SELECT COUNT(*) as total FROM records r ${where}`,
-      params,
-    );
-    const total = countRows[0]?.total ?? 0;
-
-    const lastRecord = records[records.length - 1];
-    const cursor = hasMore && lastRecord ? makeCursor(lastRecord, getSortField(query)) : null;
-
-    return { records, cursor, total };
+  queryRecords(query: StackQuery): Promise<QueryResult> {
+    return this.record.queryRecords(query);
   }
 
-  /**
-   * Atomically verify fileId is unreferenced, then hard-delete every
-   * metadataTypeId record whose content.fileId matches it. See
-   * StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Runs as a
-   * real SQL transaction and, being entirely synchronous SQLite calls
-   * with no `await` in between, nothing else can interleave between the
-   * reference check and the deletes.
-   */
-  async deleteUnreferencedAttachmentRecords(
-    fileId: FileId,
-    metadataTypeId: TypeId,
-  ): Promise<RecordId[]> {
-    this.db.exec('BEGIN');
-    try {
-      const referenced = this.execQuery<{ found: number }>(
-        `SELECT 1 as found FROM associations WHERE kind = 'attachment' AND file_id = ? LIMIT 1`,
-        [fileId],
-      );
-      if (referenced.length) {
-        throw new StackConflictError('Attachment is still referenced by one or more records');
-      }
-
-      const metaRows = this.execQuery<{ id: string }>(
-        `SELECT id FROM records WHERE type_id = ? AND json_extract(content, '$.fileId') = ?`,
-        [metadataTypeId, fileId],
-      );
-      const deletedIds = metaRows.map((row) => row.id);
-      for (const id of deletedIds) {
-        this.hardDeleteRecord(id);
-      }
-
-      this.db.exec('COMMIT');
-      return deletedIds;
-    } catch (err) {
-      this.db.exec('ROLLBACK');
-      throw err;
-    }
+  deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeId: TypeId): Promise<RecordId[]> {
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
   }
 
   // -------------------------------------------------------
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: string): Promise<RecordVersion[]> {
-    const rows = this.execQuery<Record<string, unknown>>(
-      'SELECT * FROM versions WHERE record_id = ? ORDER BY version DESC',
-      [id],
-    );
-    return rows.map(rowToVersion);
+  getVersions(id: string): Promise<RecordVersion[]> {
+    return this.record.getVersions(id);
   }
 
-  async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    const rows = this.execQuery<Record<string, unknown>>(
-      'SELECT * FROM versions WHERE record_id = ? AND version = ?',
-      [id, version],
-    );
-    return rows.length ? rowToVersion(rows[0]) : null;
+  getVersion(id: string, version: number): Promise<RecordVersion | null> {
+    return this.record.getVersion(id, version);
   }
 
-  async saveVersion(id: string, version: RecordVersion): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO versions
-          (record_id, version, content, updated_at, entity_id, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        version.version,
-        JSON.stringify(version.content),
-        toMs(version.updatedAt),
-        version.entityId ?? null,
-        version.associations ? JSON.stringify(version.associations) : null,
-        version.permissions ? JSON.stringify(version.permissions) : null,
-      );
+  saveVersion(id: string, version: RecordVersion): Promise<void> {
+    return this.record.saveVersion(id, version);
   }
 
   // -------------------------------------------------------
   // Types
   // -------------------------------------------------------
 
-  async saveType(type: StackType): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO types
-          (id, base_id, version, name, schema, schema_hash, migrates_from, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        type.id,
-        type.baseId,
-        type.version,
-        type.name,
-        JSON.stringify(type.schema),
-        type.schemaHash,
-        type.migratesFrom ?? null,
-        toMs(type.createdAt),
-      );
+  saveType(type: StackType): Promise<void> {
+    return this.record.saveType(type);
   }
 
-  async getType(id: TypeId): Promise<StackType | null> {
-    const rows = this.execQuery<Record<string, unknown>>('SELECT * FROM types WHERE id = ?', [id]);
-    return rows.length ? rowToType(rows[0]) : null;
+  getType(id: TypeId): Promise<StackType | null> {
+    return this.record.getType(id);
   }
 
-  async listTypes(): Promise<StackType[]> {
-    const rows = this.execQuery<Record<string, unknown>>(
-      'SELECT * FROM types ORDER BY base_id, version',
-    );
-    return rows.map(rowToType);
+  listTypes(): Promise<StackType[]> {
+    return this.record.listTypes();
   }
 
   // -------------------------------------------------------
   // Associations
   // -------------------------------------------------------
 
-  async associate(recordId: string, association: Association): Promise<void> {
-    this.insertAssociations(recordId, [association]);
-    this.bumpVersion(recordId);
+  associate(recordId: string, association: Association): Promise<void> {
+    return this.record.associate(recordId, association);
   }
 
-  async dissociate(recordId: string, association: Association): Promise<void> {
-    this.db
-      .prepare(
-        `DELETE FROM associations
-         WHERE record_id = ?
-           AND kind = ?
-           AND label = ?
-           AND file_id    = ?
-           AND related_id = ?`,
-      )
-      .run(
-        recordId,
-        association.kind,
-        association.label,
-        association.kind === 'attachment' ? association.fileId : '',
-        association.kind === 'relationship' ? association.recordId : '',
-      );
-    this.bumpVersion(recordId);
-  }
-
-  private bumpVersion(id: string): void {
-    this.db
-      .prepare('UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?')
-      .run(toMs(new Date()), id);
-  }
-
-  /**
-   * FK enforcement (PRAGMA_FOREIGN_KEYS_ON) means inserting an
-   * association against a record that doesn't exist throws — mapped
-   * here to StackNotFoundError so associate() on a nonexistent record
-   * fails loudly instead of silently creating an orphan row.
-   */
-  private insertAssociations(recordId: string, associations: Association[]): void {
-    for (const assoc of associations) {
-      try {
-        this.db
-          .prepare(
-            `INSERT OR IGNORE INTO associations
-              (record_id, kind, label, file_id, mime_type, related_id)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            recordId,
-            assoc.kind,
-            assoc.label,
-            assoc.kind === 'attachment' ? assoc.fileId : '',
-            assoc.kind === 'attachment' ? assoc.mimeType : null,
-            assoc.kind === 'relationship' ? assoc.recordId : '',
-          );
-      } catch (err) {
-        if (isForeignKeyViolation(err)) {
-          throw new StackNotFoundError(`Record not found: "${recordId}"`);
-        }
-        throw err;
-      }
-    }
-  }
-
-  private getAssociationsForRecord(recordId: string): Association[] {
-    const rows = this.execQuery<Record<string, unknown>>(
-      'SELECT * FROM associations WHERE record_id = ?',
-      [recordId],
-    );
-    return rows.map(rowToAssociation);
-  }
-
-  /** Index a record that has no FTS entry yet (used right after an INSERT). */
-  private insertFts(recordId: string, content: string): void {
-    this.db
-      .prepare(`INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`)
-      .run(content, recordId);
-  }
-
-  /**
-   * Remove a record's FTS entry via FTS5's special 'delete' command,
-   * which — for an external-content table — needs the *old* rowid and
-   * content to correctly unindex it; a plain `DELETE FROM records_fts`
-   * leaves stale, still-searchable index entries behind. MUST be called
-   * before the records row's content changes or the row is deleted, since
-   * it reads the current content to build that command. No-op if the
-   * record has no FTS entry (shouldn't happen in practice, but a missing
-   * row is not this method's problem to raise).
-   */
-  private removeFts(recordId: string): void {
-    const row = this.db.prepare('SELECT rowid, content FROM records WHERE id = ?').get(recordId) as
-      | { rowid: number; content: string }
-      | undefined;
-    if (!row) return;
-    this.db
-      .prepare(`INSERT INTO records_fts(records_fts, rowid, content) VALUES('delete', ?, ?)`)
-      .run(row.rowid, row.content);
-  }
-
-  private execQuery<T>(sql: string, params: unknown[] = []): T[] {
-    return this.db.prepare(sql).all(...(params as (string | number | null)[])) as T[];
+  dissociate(recordId: string, association: Association): Promise<void> {
+    return this.record.dissociate(recordId, association);
   }
 
   // -------------------------------------------------------

@@ -17,6 +17,9 @@
  * sanitizer reviewed against FTS5's rules rather than assuming this one
  * transfers — tracked with the native adapter's work, not duplicated here.
  */
+
+import type { FtsStrategy } from './fts-strategy.js';
+
 export const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
   if (!query) return '';
 
@@ -59,4 +62,27 @@ export const sanitizeFts4Query = (query: string, maxDepth = 2): string => {
   } while (result !== prev);
 
   return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+};
+
+// -------------------------------------------------------
+// Indexing strategy
+// -------------------------------------------------------
+
+/**
+ * FTS4's `content='records'` table uses `docid` as its rowid alias. A
+ * plain DELETE by docid is sufficient to unindex a row — FTS4 doesn't
+ * need the old content to do so, unlike FTS5 (see fts5Strategy).
+ */
+export const fts4Strategy: FtsStrategy = {
+  insert(exec, recordId, content) {
+    exec.run(`INSERT INTO records_fts(docid, content) SELECT rowid, ? FROM records WHERE id = ?`, [
+      content,
+      recordId,
+    ]);
+  },
+  remove(exec, recordId) {
+    exec.run(`DELETE FROM records_fts WHERE docid = (SELECT rowid FROM records WHERE id = ?)`, [
+      recordId,
+    ]);
+  },
 };
