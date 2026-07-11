@@ -3,6 +3,9 @@
   "version": "0.6.0",
   "description": "Local (SQLite + disk) stack adapter for Haverstack",
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -37,7 +40,7 @@
   },
   "dependencies": {
     "@haverstack/core": "workspace:*",
-    "@haverstack/record-adapter-sqljs": "workspace:*",
+    "@haverstack/record-adapter-sqlite": "workspace:*",
     "@haverstack/blob-adapter-disk": "workspace:*"
   },
   "devDependencies": {

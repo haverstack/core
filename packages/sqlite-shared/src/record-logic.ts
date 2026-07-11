@@ -34,8 +34,14 @@ export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
   fts: FtsStrategy;
   sanitizeSearch: SanitizeSearch;
-  /** Called after every mutating operation. Omit for engines with durable writes (e.g. native SQLite/WAL); sql.js uses this to export+rename. */
-  onWrite?: () => void;
+  /**
+   * Called (and awaited) after every mutating operation. Omit for engines
+   * with durable writes (e.g. native SQLite/WAL); sql.js uses this to
+   * export the database and hand the bytes to the host's persistence
+   * (temp-file-and-rename on Node, or a caller-supplied async callback
+   * for the browser build — hence this may return a Promise).
+   */
+  onWrite?: () => void | Promise<void>;
 };
 
 export class SharedSqlRecordLogic {
@@ -49,8 +55,8 @@ export class SharedSqlRecordLogic {
     return this.deps.fts;
   }
 
-  private write(): void {
-    this.deps.onWrite?.();
+  private async write(): Promise<void> {
+    await this.deps.onWrite?.();
   }
 
   // -------------------------------------------------------
@@ -83,7 +89,7 @@ export class SharedSqlRecordLogic {
     }
 
     this.fts.insert(this.exec, record.id, JSON.stringify(record.content));
-    this.write();
+    await this.write();
     return record;
   }
 
@@ -105,7 +111,7 @@ export class SharedSqlRecordLogic {
       [JSON.stringify(merged), toMs(new Date()), id],
     );
     this.fts.insert(this.exec, id, JSON.stringify(merged));
-    this.write();
+    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
@@ -121,7 +127,7 @@ export class SharedSqlRecordLogic {
         [toMs(new Date()), toMs(new Date()), id],
       );
     }
-    this.write();
+    await this.write();
   }
 
   /** Deletes a record's FTS entry, associations, versions, and row. No write() call — callers batch it. */
@@ -137,7 +143,7 @@ export class SharedSqlRecordLogic {
       'UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?',
       [toMs(new Date()), id],
     );
-    this.write();
+    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
@@ -149,7 +155,7 @@ export class SharedSqlRecordLogic {
       'UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?',
       [permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id],
     );
-    this.write();
+    await this.write();
   }
 
   async restoreVersion(id: string, version: number): Promise<StackRecord> {
@@ -166,7 +172,7 @@ export class SharedSqlRecordLogic {
       if (target.associations.length) this.insertAssociations(id, target.associations);
     }
     this.fts.insert(this.exec, id, JSON.stringify(target.content));
-    this.write();
+    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
@@ -184,7 +190,7 @@ export class SharedSqlRecordLogic {
       [toTypeId, JSON.stringify(content), toMs(new Date()), id],
     );
     this.fts.insert(this.exec, id, JSON.stringify(content));
-    this.write();
+    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
@@ -254,7 +260,7 @@ export class SharedSqlRecordLogic {
       }
 
       this.exec.exec('COMMIT');
-      if (deletedIds.length) this.write();
+      if (deletedIds.length) await this.write();
       return deletedIds;
     } catch (err) {
       this.exec.exec('ROLLBACK');
@@ -297,7 +303,7 @@ export class SharedSqlRecordLogic {
         version.permissions ? JSON.stringify(version.permissions) : null,
       ],
     );
-    this.write();
+    await this.write();
   }
 
   // -------------------------------------------------------
@@ -320,7 +326,7 @@ export class SharedSqlRecordLogic {
         toMs(type.createdAt),
       ],
     );
-    this.write();
+    await this.write();
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
@@ -342,7 +348,7 @@ export class SharedSqlRecordLogic {
   async associate(recordId: string, association: Association): Promise<void> {
     this.insertAssociations(recordId, [association]);
     this.bumpVersion(recordId);
-    this.write();
+    await this.write();
   }
 
   async dissociate(recordId: string, association: Association): Promise<void> {
@@ -362,7 +368,7 @@ export class SharedSqlRecordLogic {
       ],
     );
     this.bumpVersion(recordId);
-    this.write();
+    await this.write();
   }
 
   private bumpVersion(id: string): void {

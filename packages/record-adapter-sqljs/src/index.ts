@@ -1,55 +1,48 @@
 /**
- * Haverstack — SQLite Record Adapter
+ * Haverstack — SQLite Record Adapter (browser)
  * -------------------------------------------------------
  * Implements StackRecordAdapter using sql.js (SQLite compiled
- * to WebAssembly). Runs in Node, browsers, and other runtimes
- * without native compilation.
+ * to WebAssembly) — an in-memory engine with no filesystem access
+ * of its own, which is exactly sql.js's reason to exist: it's for
+ * browser contexts (OPFS, IndexedDB, a download) where there is no
+ * real filesystem, not for Node (see @haverstack/record-adapter-sqlite
+ * for that — page-level writes, WAL, real file locking).
  *
- * The database is held in memory and flushed to disk on every
- * write, atomically (temp file + rename). Stack config
- * (ownerEntityId, timezone) is stored as a singleton _config@1
- * record with id='_config' in the records table.
+ * Durability is the embedder's concern: initialize()/open() take an
+ * optional `persist(bytes: Uint8Array) => Promise<void>` callback,
+ * called after every write with the current serialized database. Wire
+ * it to OPFS, IndexedDB, or a manual "download" action — or omit it
+ * for a purely in-memory, session-scoped database.
  *
- * A stack file is owned by exactly one process at a time (see
- * docs/spec.md § Concurrency & storage ownership). open()/
- * initialize() acquire a PID-stamped lock file beside the
- * database and reject if another live process already holds
- * it; close() releases it.
+ * Stack config (ownerEntityId, timezone) is stored as a singleton
+ * _config@1 record with id='_config' in the records table. Uses FTS4,
+ * the sql.js WASM build's full-text search — the native adapter uses
+ * FTS5 and can transparently migrate a database created here.
  *
- * Also exposes token management methods (createToken,
- * lookupToken, listTokens, revokeToken) used by server
- * implementations to issue and validate bearer tokens.
+ * No bearer-token storage here — that's server-side tooling with no
+ * business in a browser adapter. See @haverstack/core's StackTokenStore
+ * and @haverstack/record-adapter-sqlite's NativeTokenStore.
  *
- * This class itself is a thin sql.js binding: schema DDL, the
- * storage-ownership lock, and — most of the actual
- * StackRecordAdapter/StackTokenStore logic — live in
- * @haverstack/sqlite-shared's SharedSqlRecordLogic/SharedTokenLogic,
- * shared with the native record-adapter-sqlite via the SqlExecutor
- * interface (SqlJsExecutor here normalizes sql.js's bind/step/free
- * calls to it). What's left here is genuinely sql.js-specific:
- * WASM init, in-memory export/persist, and the pragma-reset quirk.
+ * This class itself is a thin sql.js binding: WASM init and export/
+ * persist are genuinely engine-specific and live here. The actual
+ * StackRecordAdapter logic lives once in @haverstack/sqlite-shared's
+ * SharedSqlRecordLogic, shared with the native record-adapter-sqlite
+ * via the SqlExecutor interface (SqlJsExecutor here normalizes sql.js's
+ * bind/step/free calls to it).
  */
 
 import initSqlJs from 'sql.js';
-import type { Database, SqlJsStatic, BindParams } from 'sql.js';
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs';
-import { dirname, basename, join } from 'path';
-import { randomBytes } from 'node:crypto';
-import type { StackRecordAdapter, StackTokenStore, TokenInfo } from '@haverstack/core';
-export type { TokenInfo } from '@haverstack/core';
+import type { Database, BindParams } from 'sql.js';
+import type { StackRecordAdapter } from '@haverstack/core';
 import {
   RECORD_SCHEMA_SQL,
-  TOKENS_SCHEMA_SQL,
   FTS4_SCHEMA_SQL,
   PRAGMA_FOREIGN_KEYS_ON,
   sanitizeFts4Query,
   fts4Strategy,
-  acquireLock,
-  releaseLock,
   insertConfigRecord,
   readStackConfig,
   SharedSqlRecordLogic,
-  SharedTokenLogic,
   type SqlExecutor,
 } from '@haverstack/sqlite-shared';
 import type {
@@ -70,30 +63,26 @@ import type {
 // Types
 // -------------------------------------------------------
 
+/** Called after every write with the current serialized database. */
+export type PersistFn = (bytes: Uint8Array) => Promise<void>;
+
 export type SQLiteRecordInitializeOptions = {
-  /** Absolute path to the .db file. Must not already exist. */
-  path: string;
   /** IANA timezone string e.g. "America/New_York". */
   timezone: string;
   /** Entity ID of the stack owner. */
   entityId: string;
-  /** Bypass the storage-ownership lock check. See SQLiteRecordOpenOptions.force. */
-  force?: boolean;
+  /** Called after every write. Omit for a purely in-memory, non-persisted database. */
+  persist?: PersistFn;
 };
 
 export type SQLiteRecordOpenOptions = {
-  /** Absolute path to an existing .db file. */
-  path: string;
-  /**
-   * Open even if a lock file from another live process is present.
-   * Only needed if that process is gone but its PID was reused by
-   * something else (the automatic stale-lock check already reclaims
-   * locks whose owning process is no longer running).
-   */
-  force?: boolean;
+  /** Serialized database bytes previously produced by `persist` (or initialize()'s first snapshot). */
+  bytes: Uint8Array;
+  /** Called after every write. Omit for a purely in-memory, non-persisted database. */
+  persist?: PersistFn;
 };
 
-const SCHEMA_SQL = `${RECORD_SCHEMA_SQL}\n${TOKENS_SCHEMA_SQL}\n${FTS4_SCHEMA_SQL}`;
+const SCHEMA_SQL = `${RECORD_SCHEMA_SQL}\n${FTS4_SCHEMA_SQL}`;
 
 // -------------------------------------------------------
 // SqlExecutor over a sql.js Database
@@ -138,7 +127,7 @@ class SqlJsExecutor implements SqlExecutor {
 // SQLiteRecordAdapter
 // -------------------------------------------------------
 
-export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore {
+export class SQLiteRecordAdapter implements StackRecordAdapter {
   readonly capabilities: AdapterCapabilities = {
     fullTextSearch: true,
     contentFieldQuery: true,
@@ -151,12 +140,9 @@ export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore 
   private db!: Database;
   private exec!: SqlExecutor;
   private record!: SharedSqlRecordLogic;
-  private tokens!: SharedTokenLogic;
+  private onPersist: PersistFn | undefined;
 
-  private constructor(
-    private readonly SQL: SqlJsStatic,
-    private readonly path: string,
-  ) {}
+  private constructor() {}
 
   private wire(): void {
     this.exec = new SqlJsExecutor(this.db);
@@ -166,23 +152,13 @@ export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore 
       sanitizeSearch: sanitizeFts4Query,
       onWrite: () => this.persist(),
     });
-    this.tokens = new SharedTokenLogic({ exec: this.exec, onWrite: () => this.persist() });
   }
 
-  /**
-   * Initialize a new stack database. Fails if the file already exists —
-   * use open() for existing databases.
-   */
+  /** Initialize a fresh, empty stack database, held entirely in memory. */
   static async initialize(opts: SQLiteRecordInitializeOptions): Promise<SQLiteRecordAdapter> {
-    if (existsSync(opts.path)) {
-      throw new Error(
-        `Cannot initialize: database already exists at "${opts.path}". ` +
-          `Use SQLiteRecordAdapter.open() instead.`,
-      );
-    }
-    acquireLock(opts.path, opts.force);
     const SQL = await initSqlJs();
-    const adapter = new SQLiteRecordAdapter(SQL, opts.path);
+    const adapter = new SQLiteRecordAdapter();
+    adapter.onPersist = opts.persist;
     adapter.db = new SQL.Database();
     adapter.db.run(PRAGMA_FOREIGN_KEYS_ON);
     adapter.db.run(SCHEMA_SQL);
@@ -190,26 +166,16 @@ export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore 
     insertConfigRecord(adapter.exec, opts.entityId, opts.timezone);
     adapter.ownerEntityId = opts.entityId;
     adapter.timezone = opts.timezone;
-    adapter.persist();
+    await adapter.persist();
     return adapter;
   }
 
-  /**
-   * Open an existing stack database. Fails if the file does not exist —
-   * use initialize() for new databases.
-   */
+  /** Open a stack database from previously-persisted bytes. */
   static async open(opts: SQLiteRecordOpenOptions): Promise<SQLiteRecordAdapter> {
-    if (!existsSync(opts.path)) {
-      throw new Error(
-        `Cannot open: no database found at "${opts.path}". ` +
-          `Use SQLiteRecordAdapter.initialize() to create one.`,
-      );
-    }
-    acquireLock(opts.path, opts.force);
     const SQL = await initSqlJs();
-    const adapter = new SQLiteRecordAdapter(SQL, opts.path);
-    const fileBuffer = readFileSync(opts.path);
-    adapter.db = new SQL.Database(fileBuffer);
+    const adapter = new SQLiteRecordAdapter();
+    adapter.onPersist = opts.persist;
+    adapter.db = new SQL.Database(opts.bytes);
     adapter.db.run(PRAGMA_FOREIGN_KEYS_ON);
     adapter.db.run(SCHEMA_SQL);
     adapter.wire();
@@ -223,24 +189,15 @@ export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore 
   // Persistence
   // -------------------------------------------------------
 
-  /**
-   * Flush the in-memory database to disk. Called after every write.
-   * Writes to a temp file in the same directory and renames it over
-   * the target — rename is atomic on POSIX, so a crash mid-write can
-   * never leave a torn, unreadable database file.
-   */
-  private persist(): void {
-    const data = this.db.export();
+  /** Exports the in-memory database and hands the bytes to the host's persist callback, if any. */
+  private async persist(): Promise<void> {
+    if (!this.onPersist) return;
+    const bytes = this.db.export();
     // sql.js quirk: export() resets connection-level pragmas (including
     // foreign_keys) on the live Database object — reapply immediately so
     // FK enforcement doesn't silently go stale after the first write.
     this.db.run(PRAGMA_FOREIGN_KEYS_ON);
-    const tmpPath = join(
-      dirname(this.path),
-      `.${basename(this.path)}.tmp-${randomBytes(6).toString('hex')}`,
-    );
-    writeFileSync(tmpPath, Buffer.from(data));
-    renameSync(tmpPath, this.path);
+    await this.onPersist(bytes);
   }
 
   // -------------------------------------------------------
@@ -336,38 +293,14 @@ export class SQLiteRecordAdapter implements StackRecordAdapter, StackTokenStore 
   }
 
   // -------------------------------------------------------
-  // Tokens
-  // -------------------------------------------------------
-
-  createToken(
-    entityId: string,
-    opts?: { label?: string; expiresAt?: Date },
-  ): Promise<{ id: string; token: string }> {
-    return this.tokens.createToken(entityId, opts);
-  }
-
-  lookupToken(token: string): Promise<{ entityId: string } | null> {
-    return this.tokens.lookupToken(token);
-  }
-
-  listTokens(): Promise<TokenInfo[]> {
-    return this.tokens.listTokens();
-  }
-
-  revokeToken(id: string): Promise<void> {
-    return this.tokens.revokeToken(id);
-  }
-
-  // -------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------
 
   async flush(): Promise<void> {
-    this.persist();
+    await this.persist();
   }
 
   async close(): Promise<void> {
     this.db.close();
-    releaseLock(this.path);
   }
 }

@@ -63,9 +63,9 @@ importers:
       '@haverstack/core':
         specifier: workspace:*
         version: link:../core
-      '@haverstack/record-adapter-sqljs':
+      '@haverstack/record-adapter-sqlite':
         specifier: workspace:*
-        version: link:../record-adapter-sqljs
+        version: link:../record-adapter-sqlite
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

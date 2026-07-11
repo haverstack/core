@@ -456,24 +456,25 @@ Packages follow a naming convention that makes the adapter type discoverable:
 
 ### Adapter backends
 
-| Package                | Type   | Use case                                |
-| ---------------------- | ------ | --------------------------------------- |
-| `adapter-local`        | full   | Local app storage — SQLite + disk blobs |
-| `record-adapter-sqljs` | record | sql.js records, FTS, full query support |
-| `blob-adapter-disk`    | blob   | Content-addressed blobs on disk         |
-| `adapter-api`          | full   | Hosted/shared stacks via HTTP           |
-| `adapter-json`         | full   | Portable JSON files _(planned)_         |
+| Package                 | Type   | Use case                                                 |
+| ----------------------- | ------ | -------------------------------------------------------- |
+| `adapter-local`         | full   | Local app storage — native SQLite + disk blobs           |
+| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL    |
+| `record-adapter-sqljs`  | record | Browser-only sql.js records, FTS4, pluggable persistence |
+| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk                          |
+| `adapter-api`           | full   | Hosted/shared stacks via HTTP                            |
+| `adapter-json`          | full   | Portable JSON files _(planned)_                          |
 
-`adapter-local` is the batteries-included package for the common local case. It wraps `SQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file.
+`adapter-local` is the batteries-included package for the common local case. It wraps `NativeSQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file. Bearer tokens, when used, live in a separate sibling file (`<path>.tokens`, via `NativeTokenStore`) — never inside the portable stack database.
 
-Use `combineAdapters()` from `@haverstack/core` when you want different backends for records and blobs — for example, SQLite records with S3 blob storage:
+Use `combineAdapters()` from `@haverstack/core` when you want different backends for records and blobs — for example, native SQLite records with S3 blob storage:
 
 ```ts
 import { combineAdapters } from '@haverstack/core';
-import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
+import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3'; // hypothetical
 
-const record = await SQLiteRecordAdapter.initialize({ path, entityId, timezone });
+const record = await NativeSQLiteRecordAdapter.initialize({ path, entityId, timezone });
 const blob = new S3BlobAdapter(bucketConfig);
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.create(adapter);
@@ -481,22 +482,23 @@ const stack = await Stack.create(adapter);
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
-**`@haverstack/sqlite-shared`** is an internal, non-public package holding the SQL that's identical across every SQLite-backed record adapter — schema DDL, `WHERE`/`ORDER` building, the cursor codec, row mappers, and the FTS4 sanitizer. `record-adapter-sqljs` consumes it today; a future native SQLite adapter would too, sharing everything but the FTS dialect (FTS4 vs FTS5) and the engine binding itself. Keeping this logic in one place is what keeps a cursor minted by one SQLite-backed adapter decodable by another.
+**`@haverstack/sqlite-shared`** is an internal, non-public package holding everything identical across the two SQLite-backed record adapters — schema DDL, `WHERE`/`ORDER` building, the cursor codec, row mappers, both FTS sanitizers, the storage-ownership lock, and (via a small `SqlExecutor` interface normalizing sql.js's and `node:sqlite`'s different call conventions) the actual CRUD/query/version/type/association/token logic itself. Each adapter implements only what's genuinely engine-specific: WASM init vs. `DatabaseSync` construction, pragma/WAL setup, and lifecycle. Keeping this in one place is what keeps a cursor minted by one SQLite-backed adapter decodable by another, and what keeps the two engines from silently drifting in behavior.
 
-`record-adapter-sqljs` enables SQLite foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+Both SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+
+**File compatibility:** both adapters produce standard SQLite files, so `record-adapter-sqlite` can open a stack created by `record-adapter-sqljs` — `open()` detects an FTS4 `records_fts` table (sqljs's dialect) and transparently rebuilds it as FTS5, once.
 
 ---
 
 ## Concurrency & storage ownership
 
-A stack's backing storage (a SQLite file, a JSON directory) has exactly one owning process at a time. Adapters are not required to support concurrent multi-process access, and the whole-file adapters (`record-adapter-sqljs` and the planned `adapter-json`) do not: they read the entire store into memory on open and rewrite it whole on every persist, so two processes opening the same store each hold an independent copy and silently clobber each other's writes.
+A stack's backing storage (a SQLite file, a JSON directory) has exactly one owning process at a time. Multi-app access goes through a server implementation over the wire protocol (`adapter-api`, against `localhost` or a hosted provider) — never by pointing multiple apps at the same storage file directly. This is also the only topology in which permissions, grants, and `appId` attribution mean anything: `Stack` performs no permission checks, `ScopedStack` is opt-in, and `appId` is self-reported by the writing app, so direct storage access implies full trust over everything in the store, including grants and token hashes.
 
-Multi-app access goes through a server implementation over the wire protocol (`adapter-api`, against `localhost` or a hosted provider) — never by pointing multiple apps at the same storage file directly. This is also the only topology in which permissions, grants, and `appId` attribution mean anything: `Stack` performs no permission checks, `ScopedStack` is opt-in, and `appId` is self-reported by the writing app, so direct storage access implies full trust over everything in the store, including grants and token hashes.
+How each adapter honors the single-writer rule differs by what it actually is:
 
-Two properties adapters SHOULD provide regardless of topology, since even a single process can crash mid-write or be opened twice by accident:
-
-- **Fail loudly on double-open.** An adapter SHOULD detect that its storage is already open in another live process and reject `open()`/`initialize()` with a clear error, rather than silently entering a last-writer-wins mode. `record-adapter-sqljs` does this with a PID-stamped lock file beside the database, released on `close()`; a stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
-- **Persist atomically.** A crash mid-write must never leave storage unreadable. `record-adapter-sqljs` writes each snapshot to a temp file in the same directory and `rename()`s it over the target — atomic on POSIX, so there is no window where the file is truncated or partially written.
+- **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself, not something the adapter has to implement. It still acquires a PID-stamped lock file beside the database on `open()`/`initialize()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way; a stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
+- **`record-adapter-sqljs`** (browser, no filesystem of its own) is a purely in-memory engine — it has no file, no PID, and no lock to speak of. Durability and multi-tab/multi-process coordination are the embedding host's concern entirely: the adapter calls an optional `persist(bytes) => Promise<void>` callback after every write, and the host wires that to OPFS, IndexedDB, or a download, with whatever locking that storage layer provides.
+- **The planned whole-file `adapter-json`** is the adapter this guidance was originally written for: an adapter that reads its entire store into memory on open and rewrites it whole on every persist needs its own PID lock file (to fail loudly on double-open) and its own atomic temp-file-and-`rename()` persist (so a crash mid-write can't leave a torn, unreadable file) — `record-adapter-sqlite` no longer needs either, since WAL and real file locking already provide them.
 
 ---
 
@@ -616,7 +618,8 @@ type AdapterCapabilities = {
 **Per-adapter notes:**
 
 - **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1
-- **SQLite adapter** — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
+- **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
+- **sql.js adapter** (`record-adapter-sqljs`, browser-only) — same query support as the native adapter, but full-text search via FTS4 (the sql.js WASM build's dialect)
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint
 
 ---
@@ -693,7 +696,7 @@ Bearer token in the `Authorization` header. Token issuance is out of scope for t
 Authorization: Bearer <token>
 ```
 
-(As a non-normative example, `SQLiteAdapter` ships an optional hashed-token store — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — for servers that want DB-backed bearer tokens without rolling their own storage. This is adapter-specific tooling, not part of the wire protocol; other adapters are free to manage tokens however they like, or not at all.)
+(As a non-normative example, `@haverstack/core` defines a `StackTokenStore` contract — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol; other adapters and servers are free to manage tokens however they like, or not at all.)
 
 ### Error responses
 
