@@ -29,13 +29,14 @@ Don't point more than one app at the same stack file with `adapter-local`. Nothi
 
 This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 
-| Package                                                               | Description                                                       |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| [`@haverstack/core`](./packages/core)                                 | Stack class, types, schema, validation, ID generation             |
-| [`@haverstack/adapter-local`](./packages/adapter-local)               | Local adapter (SQLite + disk) — single-app/embedded or server use |
-| [`@haverstack/record-adapter-sqljs`](./packages/record-adapter-sqljs) | sql.js (SQLite/WASM) `StackRecordAdapter`                         |
-| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)       | Disk filesystem `StackBlobAdapter`                                |
-| [`@haverstack/adapter-api`](./packages/adapter-api)                   | HTTP adapter for remote stack servers                             |
+| Package                                                                 | Description                                                                       |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [`@haverstack/core`](./packages/core)                                   | Stack class, types, schema, validation, ID generation                             |
+| [`@haverstack/adapter-local`](./packages/adapter-local)                 | Local adapter (native SQLite + disk) — single-app/embedded or server use          |
+| [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | Node native SQLite (`node:sqlite`) `StackRecordAdapter` — used by `adapter-local` |
+| [`@haverstack/record-adapter-sqljs`](./packages/record-adapter-sqljs)   | sql.js (SQLite/WASM) `StackRecordAdapter` — browser-only                          |
+| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                                                |
+| [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                                             |
 
 Planned:
 
@@ -157,15 +158,16 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 - **`record-adapter-*`** — `StackRecordAdapter` only
 - **`blob-adapter-*`** — `StackBlobAdapter` only
 
-| Package                | Type   | Use case                                                        |
-| ---------------------- | ------ | --------------------------------------------------------------- |
-| `adapter-local`        | full   | Single-app/embedded or server use — SQLite records + disk blobs |
-| `record-adapter-sqljs` | record | sql.js records, full query support, FTS                         |
-| `blob-adapter-disk`    | blob   | Content-addressed blobs on the local filesystem                 |
-| `adapter-api`          | full   | Hosted/shared stacks via HTTP                                   |
-| `adapter-json`         | full   | Portable JSON files _(planned)_                                 |
+| Package                 | Type   | Use case                                                                        |
+| ----------------------- | ------ | ------------------------------------------------------------------------------- |
+| `adapter-local`         | full   | Single-app/embedded or server use — native SQLite records + disk blobs          |
+| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL — used by `adapter-local` |
+| `record-adapter-sqljs`  | record | Browser-only sql.js (SQLite/WASM) records, FTS4 — pluggable persistence         |
+| `blob-adapter-disk`     | blob   | Content-addressed blobs on the local filesystem                                 |
+| `adapter-api`           | full   | Hosted/shared stacks via HTTP                                                   |
+| `adapter-json`          | full   | Portable JSON files _(planned)_                                                 |
 
-Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `SQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
+Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
 ---
 
@@ -209,9 +211,14 @@ packages/
     src/
       index.ts            # LocalAdapter (StackAdapter) — wraps record + blob adapters below
     tests/
+  record-adapter-sqlite/  # @haverstack/record-adapter-sqlite
+    src/
+      index.ts            # NativeSQLiteRecordAdapter (StackRecordAdapter), node:sqlite
+      token-store.ts       # NativeTokenStore (StackTokenStore), separate file from records
+    tests/
   record-adapter-sqljs/  # @haverstack/record-adapter-sqljs
     src/
-      index.ts            # SQLiteRecordAdapter (StackRecordAdapter) + token management
+      index.ts            # SQLiteRecordAdapter (StackRecordAdapter) — browser-only, sql.js
     tests/
   blob-adapter-disk/      # @haverstack/blob-adapter-disk
     src/

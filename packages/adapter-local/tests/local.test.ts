@@ -161,4 +161,42 @@ describe('tokens', () => {
     const tokens = await adapter.listTokens();
     expect(tokens.length).toBe(2);
   });
+
+  test('tokens live in a separate sibling file, not the main .db', async () => {
+    const adapter = await initAdapter();
+    expect(existsSync(`${dbPath}.tokens`)).toBe(false);
+    await adapter.createToken('entity-abc');
+    expect(existsSync(`${dbPath}.tokens`)).toBe(true);
+  });
+
+  test('never touching tokens never creates the sibling token store file', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord());
+    await adapter.close();
+    expect(existsSync(`${dbPath}.tokens`)).toBe(false);
+  });
+});
+
+// -------------------------------------------------------
+// deleteUnreferencedAttachmentRecords through LocalAdapter
+// -------------------------------------------------------
+
+describe('deleteUnreferencedAttachmentRecords', () => {
+  test('deletes an unreferenced metadata record and returns its id', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({
+        id: 'meta1',
+        typeId: 'com.example.test/_attachment@1',
+        content: { fileId: 'file-1' },
+      }),
+    );
+
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'file-1',
+      'com.example.test/_attachment@1',
+    );
+    expect(deleted).toEqual(['meta1']);
+    expect(await adapter.getRecord('meta1')).toBeNull();
+  });
 });

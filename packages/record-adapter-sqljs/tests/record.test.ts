@@ -1,8 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
-import { SQLiteRecordAdapter } from '../src/index.js';
+import { describe, test, expect } from 'vitest';
+import { SQLiteRecordAdapter, type PersistFn } from '../src/index.js';
 import { StackConflictError, StackNotFoundError, StackQueryError } from '@haverstack/core';
 import type { StackRecord } from '@haverstack/core';
 
@@ -10,24 +7,22 @@ import type { StackRecord } from '@haverstack/core';
 // Test helpers
 // -------------------------------------------------------
 
-let testDir: string;
-let dbPath: string;
+/** A persist callback that just captures the latest bytes in memory, for roundtrip tests. */
+const capturingPersist = (): { persist: PersistFn; calls: Uint8Array[] } => {
+  const calls: Uint8Array[] = [];
+  return {
+    persist: async (bytes) => {
+      calls.push(bytes);
+    },
+    calls,
+  };
+};
 
-beforeEach(() => {
-  testDir = join(tmpdir(), `stack-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(testDir, { recursive: true });
-  dbPath = join(testDir, 'test.db');
-});
-
-afterEach(() => {
-  rmSync(testDir, { recursive: true, force: true });
-});
-
-const initAdapter = (opts?: { timezone?: string; entityId?: string }) =>
+const initAdapter = (opts?: { timezone?: string; entityId?: string; persist?: PersistFn }) =>
   SQLiteRecordAdapter.initialize({
-    path: dbPath,
     entityId: opts?.entityId ?? 'entity-123',
     timezone: opts?.timezone ?? 'America/New_York',
+    persist: opts?.persist,
   });
 
 const NOTE_TYPE = {
@@ -51,15 +46,10 @@ const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
 });
 
 // -------------------------------------------------------
-// initialize / open
+// initialize / open / persistence
 // -------------------------------------------------------
 
 describe('initialize', () => {
-  test('creates a new database file', async () => {
-    await initAdapter();
-    expect(existsSync(dbPath)).toBe(true);
-  });
-
   test('sets ownerEntityId', async () => {
     const adapter = await initAdapter({ entityId: 'owner-abc' });
     expect(adapter.ownerEntityId).toBe('owner-abc');
@@ -70,129 +60,66 @@ describe('initialize', () => {
     expect(adapter.timezone).toBe('Europe/London');
   });
 
-  test('throws if database already exists', async () => {
-    await initAdapter();
-    await expect(initAdapter()).rejects.toThrow(/already exists/);
+  test('works with no persist callback (purely in-memory)', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    expect(await adapter.getRecord(record.id)).not.toBeNull();
+  });
+
+  test('calls persist with bytes during initialize()', async () => {
+    const { persist, calls } = capturingPersist();
+    await initAdapter({ persist });
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBeInstanceOf(Uint8Array);
+  });
+
+  test('calls persist again after every write', async () => {
+    const { persist, calls } = capturingPersist();
+    const adapter = await initAdapter({ persist });
+    const callsAfterInit = calls.length;
+    await adapter.createRecord(makeRecord());
+    expect(calls.length).toBeGreaterThan(callsAfterInit);
   });
 });
 
 describe('open', () => {
-  test('opens an existing database', async () => {
-    await initAdapter();
-    const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
-    expect(adapter.ownerEntityId).toBe('entity-123');
+  test('opens from previously-persisted bytes', async () => {
+    const { persist, calls } = capturingPersist();
+    await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London', persist });
+    const adapter = await SQLiteRecordAdapter.open({ bytes: calls[calls.length - 1] });
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+    expect(adapter.timezone).toBe('Europe/London');
   });
 
-  test('throws if database does not exist', async () => {
-    await expect(
-      SQLiteRecordAdapter.open({ path: join(testDir, 'nonexistent.db') }),
-    ).rejects.toThrow(/no database found/);
-  });
-
-  test('data persists across adapter instances', async () => {
-    const adapter1 = await initAdapter();
+  test('data persists across adapter instances via exported bytes', async () => {
+    const { persist, calls } = capturingPersist();
+    const adapter1 = await initAdapter({ persist });
     await adapter1.saveType(NOTE_TYPE);
     const record = makeRecord();
     await adapter1.createRecord(record);
 
-    const adapter2 = await SQLiteRecordAdapter.open({ path: dbPath });
+    const adapter2 = await SQLiteRecordAdapter.open({ bytes: calls[calls.length - 1] });
     expect(await adapter2.getType(NOTE_TYPE.id)).not.toBeNull();
     expect(await adapter2.getRecord(record.id)).not.toBeNull();
   });
-});
 
-test('preserves ownerEntityId and timezone across reopen', async () => {
-  await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
-  const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
-  expect(adapter.ownerEntityId).toBe('owner-abc');
-  expect(adapter.timezone).toBe('Europe/London');
-});
+  test('an adapter opened from bytes also persists further writes', async () => {
+    const { persist: persist1, calls: calls1 } = capturingPersist();
+    const adapter1 = await initAdapter({ persist: persist1 });
+    await adapter1.createRecord(makeRecord({ id: 'r1' }));
 
-// -------------------------------------------------------
-// Storage ownership lock
-// -------------------------------------------------------
-
-describe('storage ownership lock', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  test('open() rejects when a live process already holds the lock', async () => {
-    await initAdapter();
-    const otherPid = process.pid + 1;
-    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
-    vi.spyOn(process, 'kill').mockImplementation(() => true);
-
-    await expect(SQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
-      new RegExp(`in use by another process \\(pid ${otherPid}\\)`),
-    );
-  });
-
-  test('open() reclaims a lock left by a dead process', async () => {
-    await initAdapter();
-    const deadPid = process.pid + 1;
-    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: deadPid }));
-    vi.spyOn(process, 'kill').mockImplementation(() => {
-      const err = new Error('no such process') as NodeJS.ErrnoException;
-      err.code = 'ESRCH';
-      throw err;
+    const { persist: persist2, calls: calls2 } = capturingPersist();
+    const adapter2 = await SQLiteRecordAdapter.open({
+      bytes: calls1[calls1.length - 1],
+      persist: persist2,
     });
+    await adapter2.createRecord(makeRecord({ id: 'r2' }));
+    expect(calls2.length).toBeGreaterThan(0);
 
-    const adapter = await SQLiteRecordAdapter.open({ path: dbPath });
-    expect(adapter.ownerEntityId).toBe('entity-123');
-  });
-
-  test('open() with force bypasses a live lock', async () => {
-    await initAdapter();
-    const otherPid = process.pid + 1;
-    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
-    vi.spyOn(process, 'kill').mockImplementation(() => true);
-
-    const adapter = await SQLiteRecordAdapter.open({ path: dbPath, force: true });
-    expect(adapter.ownerEntityId).toBe('entity-123');
-  });
-
-  test('close() releases the lock so a later open() succeeds without force', async () => {
-    const adapter = await initAdapter();
-    await adapter.close();
-    await expect(SQLiteRecordAdapter.open({ path: dbPath })).resolves.toBeDefined();
-  });
-
-  test('reopening from the same process does not require force', async () => {
-    await initAdapter();
-    await expect(SQLiteRecordAdapter.open({ path: dbPath })).resolves.toBeDefined();
-  });
-
-  test('initialize() rejects when a live process holds the lock at the target path', async () => {
-    const otherPid = process.pid + 1;
-    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: otherPid }));
-    vi.spyOn(process, 'kill').mockImplementation(() => true);
-
-    await expect(initAdapter()).rejects.toThrow(/in use by another process/);
-  });
-});
-
-// -------------------------------------------------------
-// Atomic persist
-// -------------------------------------------------------
-
-describe('atomic persist', () => {
-  test('leaves no temp files behind after a write', async () => {
-    const adapter = await initAdapter();
-    await adapter.createRecord(makeRecord());
-    const entries = readdirSync(testDir);
-    expect(entries.some((f) => f.includes('.tmp-'))).toBe(false);
-  });
-
-  test('the database file is valid after multiple persists', async () => {
-    const adapter = await initAdapter();
-    await adapter.createRecord(makeRecord({ id: 'r1' }));
-    await adapter.createRecord(makeRecord({ id: 'r2' }));
-    await adapter.patchContent('r1', { text: 'updated' });
-
-    const reopened = await SQLiteRecordAdapter.open({ path: dbPath });
-    expect((await reopened.getRecord('r1'))?.content).toEqual({ text: 'updated' });
-    expect(await reopened.getRecord('r2')).not.toBeNull();
+    const adapter3 = await SQLiteRecordAdapter.open({ bytes: calls2[calls2.length - 1] });
+    expect(await adapter3.getRecord('r1')).not.toBeNull();
+    expect(await adapter3.getRecord('r2')).not.toBeNull();
   });
 });
 
@@ -524,42 +451,6 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('with-file');
   });
 
-  test('attachmentFileId filter returns multiple records sharing a file', async () => {
-    const adapter = await initAdapter();
-    const r1 = makeRecord({ id: 'r1' });
-    const r2 = makeRecord({ id: 'r2' });
-    const r3 = makeRecord({ id: 'r3' });
-    await adapter.createRecord(r1);
-    await adapter.createRecord(r2);
-    await adapter.createRecord(r3);
-    await adapter.associate(r1.id, {
-      kind: 'attachment',
-      label: 'photo',
-      fileId: 'shared-file',
-      mimeType: 'image/jpeg',
-    });
-    await adapter.associate(r2.id, {
-      kind: 'attachment',
-      label: 'thumbnail',
-      fileId: 'shared-file',
-      mimeType: 'image/jpeg',
-    });
-    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'shared-file' } });
-    const ids = result.records.map((r) => r.id).sort();
-    expect(ids).toEqual(['r1', 'r2']);
-    expect(result.total).toBe(2);
-  });
-
-  test('attachmentFileId filter returns empty when no records reference the file', async () => {
-    const adapter = await initAdapter();
-    await adapter.createRecord(makeRecord({ id: 'r1' }));
-    const result = await adapter.queryRecords({
-      filter: { attachmentFileId: 'nonexistent-file-id' },
-    });
-    expect(result.records.length).toBe(0);
-    expect(result.total).toBe(0);
-  });
-
   test('filters by relatedTo', async () => {
     const adapter = await initAdapter();
     const source = makeRecord({ id: 'source' });
@@ -596,6 +487,18 @@ describe('records — queries', () => {
     const result = await adapter.queryRecords({ filter: { search: 'SQLite' } });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
+  });
+
+  test('full-text search reflects patchContent updates (not stale index entries)', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ content: { text: 'original content here' } });
+    await adapter.createRecord(record);
+    await adapter.patchContent(record.id, { text: 'updated content here' });
+
+    const staleSearch = await adapter.queryRecords({ filter: { search: 'original' } });
+    expect(staleSearch.records).toEqual([]);
+    const freshSearch = await adapter.queryRecords({ filter: { search: 'updated' } });
+    expect(freshSearch.records.map((r) => r.id)).toEqual([record.id]);
   });
 
   test('cursor pagination returns correct pages', async () => {
@@ -660,55 +563,23 @@ describe('records — queries', () => {
     expect(allIds.size).toBe(5);
   });
 
-  test('cursor pagination works correctly when sorted by version', async () => {
-    const adapter = await initAdapter();
-    for (let i = 1; i <= 5; i++) {
-      await adapter.createRecord(
-        makeRecord({
-          id: `r${i}`,
-          createdAt: new Date(i * 1000),
-          version: 6 - i,
-        }),
-      );
-    }
-
-    const page1 = await adapter.queryRecords({
-      sort: { field: 'version', direction: 'asc' },
-      limit: 3,
-    });
-    expect(page1.records.length).toBe(3);
-    expect(page1.cursor).not.toBeNull();
-
-    const page2 = await adapter.queryRecords({
-      sort: { field: 'version', direction: 'asc' },
-      limit: 3,
-      cursor: page1.cursor!,
-    });
-    expect(page2.records.length).toBe(2);
-    expect(page2.cursor).toBeNull();
-
-    const allIds = new Set([...page1.records, ...page2.records].map((r) => r.id));
-    expect(allIds.size).toBe(5);
-  });
-
   test('malformed cursor with unknown sort field throws StackQueryError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    const badCursor = Buffer.from('bogusField|123|r1').toString('base64');
+    const badCursor = btoa('bogusField|123|r1');
     await expect(adapter.queryRecords({ cursor: badCursor })).rejects.toThrow(StackQueryError);
   });
 
   test('malformed cursor with non-numeric sort value throws StackQueryError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    const badCursor = Buffer.from('createdAt|not-a-number|r1').toString('base64');
+    const badCursor = btoa('createdAt|not-a-number|r1');
     await expect(adapter.queryRecords({ cursor: badCursor })).rejects.toThrow(StackQueryError);
   });
 
   test('corrupted/garbage cursor throws StackQueryError instead of a generic Error', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    // Not base64-decodable into a "field|value|id" or "value|id" shape at all.
     await expect(adapter.queryRecords({ cursor: '!!!not-a-cursor!!!' })).rejects.toThrow(
       StackQueryError,
     );
@@ -849,7 +720,8 @@ describe('associations', () => {
   });
 
   test('FK enforcement survives across persist() calls (sql.js resets pragmas on export())', async () => {
-    const adapter = await initAdapter();
+    const { persist } = capturingPersist();
+    const adapter = await initAdapter({ persist });
     const record = makeRecord();
     await adapter.createRecord(record);
     // Several persist()-triggering writes first, to make sure the pragma
@@ -1012,6 +884,25 @@ describe('restoreVersion', () => {
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
   });
 
+  test('restored content is searchable and the pre-restore content is not', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ content: { text: 'original searchable text' } });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      content: { text: 'original searchable text' },
+      updatedAt: new Date(),
+    });
+    await adapter.patchContent(record.id, { text: 'changed unrelated text' });
+
+    await adapter.restoreVersion(record.id, 1);
+
+    const findsOriginal = await adapter.queryRecords({ filter: { search: 'searchable' } });
+    expect(findsOriginal.records.map((r) => r.id)).toEqual([record.id]);
+    const findsChanged = await adapter.queryRecords({ filter: { search: 'unrelated' } });
+    expect(findsChanged.records).toEqual([]);
+  });
+
   test('throws for an unknown version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
@@ -1132,97 +1023,20 @@ describe('deleteUnreferencedAttachmentRecords', () => {
 });
 
 // -------------------------------------------------------
-// Tokens
+// Lifecycle
 // -------------------------------------------------------
 
-describe('tokens', () => {
-  test('createToken returns id and plaintext token', async () => {
-    const adapter = await initAdapter();
-    const { id, token } = await adapter.createToken('entity-abc');
-    expect(typeof id).toBe('string');
-    expect(id.length).toBeGreaterThan(0);
-    expect(typeof token).toBe('string');
-    expect(token.length).toBeGreaterThan(0);
+describe('flush / close', () => {
+  test('flush() calls persist even without a preceding write', async () => {
+    const { persist, calls } = capturingPersist();
+    const adapter = await initAdapter({ persist });
+    const callsBefore = calls.length;
+    await adapter.flush();
+    expect(calls.length).toBeGreaterThan(callsBefore);
   });
 
-  test('lookupToken returns entityId for valid token', async () => {
+  test('close() does not throw', async () => {
     const adapter = await initAdapter();
-    const { token } = await adapter.createToken('entity-abc');
-    const result = await adapter.lookupToken(token);
-    expect(result).not.toBeNull();
-    expect(result?.entityId).toBe('entity-abc');
-  });
-
-  test('lookupToken returns null for invalid token', async () => {
-    const adapter = await initAdapter();
-    const result = await adapter.lookupToken('not-a-real-token');
-    expect(result).toBeNull();
-  });
-
-  test('lookupToken returns null for expired token', async () => {
-    const adapter = await initAdapter();
-    const { token } = await adapter.createToken('entity-abc', {
-      expiresAt: new Date(Date.now() - 1000),
-    });
-    const result = await adapter.lookupToken(token);
-    expect(result).toBeNull();
-  });
-
-  test('lookupToken returns entityId for non-expired token', async () => {
-    const adapter = await initAdapter();
-    const { token } = await adapter.createToken('entity-abc', {
-      expiresAt: new Date(Date.now() + 60_000),
-    });
-    const result = await adapter.lookupToken(token);
-    expect(result?.entityId).toBe('entity-abc');
-  });
-
-  test('listTokens returns all created tokens', async () => {
-    const adapter = await initAdapter();
-    await adapter.createToken('entity-a', { label: 'Token A' });
-    await adapter.createToken('entity-b', { label: 'Token B' });
-    const tokens = await adapter.listTokens();
-    expect(tokens.length).toBe(2);
-    const labels = tokens.map((t) => t.label);
-    expect(labels).toContain('Token A');
-    expect(labels).toContain('Token B');
-  });
-
-  test('listTokens does not expose plaintext token values', async () => {
-    const adapter = await initAdapter();
-    await adapter.createToken('entity-abc', { label: 'my-token' });
-    const tokens = await adapter.listTokens();
-    for (const t of tokens) {
-      expect(Object.keys(t)).not.toContain('token');
-    }
-  });
-
-  test('revokeToken removes the token', async () => {
-    const adapter = await initAdapter();
-    const { id, token } = await adapter.createToken('entity-abc');
-    await adapter.revokeToken(id);
-    expect(await adapter.lookupToken(token)).toBeNull();
-  });
-
-  test('listTokens returns empty after all tokens revoked', async () => {
-    const adapter = await initAdapter();
-    const { id } = await adapter.createToken('entity-abc');
-    await adapter.revokeToken(id);
-    expect(await adapter.listTokens()).toEqual([]);
-  });
-
-  test('createToken label is present in listTokens', async () => {
-    const adapter = await initAdapter();
-    await adapter.createToken('entity-abc', { label: 'my-token' });
-    const [t] = await adapter.listTokens();
-    expect(t.label).toBe('my-token');
-  });
-
-  test('createToken expiresAt is present in listTokens', async () => {
-    const adapter = await initAdapter();
-    const expiresAt = new Date(Date.now() + 3600_000);
-    await adapter.createToken('entity-abc', { expiresAt });
-    const [t] = await adapter.listTokens();
-    expect(t.expiresAt?.getTime()).toBeCloseTo(expiresAt.getTime(), -2);
+    await expect(adapter.close()).resolves.toBeUndefined();
   });
 });

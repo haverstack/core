@@ -1,9 +1,8 @@
 /**
  * The actual StackTokenStore logic (createToken/lookupToken/listTokens/
- * revokeToken), parametrized over a SqlExecutor so it works whether the
- * tokens table lives in the same file as records (record-adapter-sqljs,
- * today) or its own separate file (record-adapter-sqlite's
- * NativeTokenStore) — see TOKENS_SCHEMA_SQL in schema.ts.
+ * revokeToken), parametrized over a SqlExecutor. Currently consumed by
+ * record-adapter-sqlite's NativeTokenStore, which points it at a file
+ * separate from records — see TOKENS_SCHEMA_SQL in schema.ts.
  */
 
 import { createHash, randomBytes } from 'node:crypto';

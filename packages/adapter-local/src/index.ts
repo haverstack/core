@@ -1,13 +1,15 @@
 /**
  * Haverstack — Local Adapter
  * -------------------------------------------------------
- * Convenience StackAdapter that combines SQLiteRecordAdapter
- * (records, types, versions, associations, tokens) with
- * DiskBlobAdapter (binary attachments stored next to the DB).
+ * Convenience StackAdapter that combines NativeSQLiteRecordAdapter
+ * (records, types, versions, associations) with DiskBlobAdapter
+ * (binary attachments stored next to the DB). Bearer-token methods
+ * are exposed too, as a convenience for server implementations, but
+ * backed by a separate NativeTokenStore — see below.
  *
  * For most local use cases this is the only package you need.
  * If you want a different blob backend (e.g. S3), import
- * SQLiteRecordAdapter and DiskBlobAdapter separately and
+ * NativeSQLiteRecordAdapter and DiskBlobAdapter separately and
  * compose them with combineAdapters() from @haverstack/core.
  */
 
@@ -25,17 +27,27 @@ import type {
   AdapterCapabilities,
   RecordId,
   FileId,
+  TokenInfo,
 } from '@haverstack/core';
-import { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
+import {
+  NativeSQLiteRecordAdapter,
+  NativeTokenStore,
+  defaultTokenStorePath,
+} from '@haverstack/record-adapter-sqlite';
 import { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 import type { StackBlobAdapter } from '@haverstack/core';
 
-export { SQLiteRecordAdapter } from '@haverstack/record-adapter-sqljs';
+export {
+  NativeSQLiteRecordAdapter,
+  NativeTokenStore,
+  defaultTokenStorePath,
+} from '@haverstack/record-adapter-sqlite';
 export type {
-  SQLiteRecordInitializeOptions,
-  SQLiteRecordOpenOptions,
-  TokenInfo,
-} from '@haverstack/record-adapter-sqljs';
+  NativeRecordInitializeOptions,
+  NativeRecordOpenOptions,
+  NativeTokenStoreOptions,
+} from '@haverstack/record-adapter-sqlite';
+export type { TokenInfo } from '@haverstack/core';
 export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 
 // -------------------------------------------------------
@@ -70,13 +82,20 @@ export type LocalOpenOptions = {
 // -------------------------------------------------------
 
 /**
- * Full StackAdapter backed by SQLite (records) and the local filesystem (blobs).
- * Also exposes token management methods for server implementations.
+ * Full StackAdapter backed by native SQLite (records) and the local
+ * filesystem (blobs). Also exposes token management methods for server
+ * implementations, backed by a NativeTokenStore in a separate sibling
+ * file (`<path>.tokens`) — opened lazily on first use, so plain
+ * single-app embedded use that never touches tokens never creates it.
  */
 export class LocalAdapter implements StackAdapter {
+  private tokenStore?: NativeTokenStore;
+
   private constructor(
-    private readonly record: SQLiteRecordAdapter,
+    private readonly record: NativeSQLiteRecordAdapter,
     private readonly blob: StackBlobAdapter,
+    private readonly dbPath: string,
+    private readonly force: boolean | undefined,
   ) {}
 
   /**
@@ -84,14 +103,14 @@ export class LocalAdapter implements StackAdapter {
    * use open() for existing stacks.
    */
   static async initialize(opts: LocalInitializeOptions): Promise<LocalAdapter> {
-    const record = await SQLiteRecordAdapter.initialize({
+    const record = await NativeSQLiteRecordAdapter.initialize({
       path: opts.path,
       entityId: opts.entityId,
       timezone: opts.timezone,
       force: opts.force,
     });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
-    return new LocalAdapter(record, blob);
+    return new LocalAdapter(record, blob, opts.path, opts.force);
   }
 
   /**
@@ -99,9 +118,19 @@ export class LocalAdapter implements StackAdapter {
    * use initialize() for new stacks.
    */
   static async open(opts: LocalOpenOptions): Promise<LocalAdapter> {
-    const record = await SQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
+    const record = await NativeSQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
-    return new LocalAdapter(record, blob);
+    return new LocalAdapter(record, blob, opts.path, opts.force);
+  }
+
+  private async getTokenStore(): Promise<NativeTokenStore> {
+    if (!this.tokenStore) {
+      this.tokenStore = await NativeTokenStore.open({
+        path: defaultTokenStorePath(this.dbPath),
+        force: this.force,
+      });
+    }
+    return this.tokenStore;
   }
 
   // -------------------------------------------------------
@@ -142,6 +171,13 @@ export class LocalAdapter implements StackAdapter {
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
+  }
+
+  async deleteUnreferencedAttachmentRecords(
+    fileId: FileId,
+    metadataTypeId: TypeId,
+  ): Promise<RecordId[]> {
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
   }
 
   async associate(id: RecordId, association: Association): Promise<void> {
@@ -209,26 +245,30 @@ export class LocalAdapter implements StackAdapter {
   }
 
   // -------------------------------------------------------
-  // Tokens (SQLite-specific extras for server implementations)
+  // Tokens (server-implementation convenience, backed by a separate file)
   // -------------------------------------------------------
 
   async createToken(
     entityId: string,
     opts?: { label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
-    return this.record.createToken(entityId, opts);
+    const store = await this.getTokenStore();
+    return store.createToken(entityId, opts);
   }
 
   async lookupToken(token: string): Promise<{ entityId: string } | null> {
-    return this.record.lookupToken(token);
+    const store = await this.getTokenStore();
+    return store.lookupToken(token);
   }
 
-  async listTokens(): Promise<Awaited<ReturnType<SQLiteRecordAdapter['listTokens']>>> {
-    return this.record.listTokens();
+  async listTokens(): Promise<TokenInfo[]> {
+    const store = await this.getTokenStore();
+    return store.listTokens();
   }
 
   async revokeToken(id: string): Promise<void> {
-    return this.record.revokeToken(id);
+    const store = await this.getTokenStore();
+    return store.revokeToken(id);
   }
 
   // -------------------------------------------------------
@@ -243,6 +283,7 @@ export class LocalAdapter implements StackAdapter {
   async close(): Promise<void> {
     await this.record.close?.();
     await this.blob.close?.();
+    await this.tokenStore?.close();
   }
 }
 

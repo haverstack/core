@@ -1,10 +1,9 @@
 /**
- * Schema DDL shared by SQLite-backed record adapters. Split so each
- * engine composes only what it needs: record-adapter-sqljs keeps tokens
- * in the same file (RECORD_SCHEMA_SQL + TOKENS_SCHEMA_SQL + FTS4), while
- * the native adapter keeps tokens in a separate file (RECORD_SCHEMA_SQL +
- * FTS5 on the main db, TOKENS_SCHEMA_SQL on its own) — see docs/spec.md
- * § Adapters and the StackTokenStore portability rationale in #46.
+ * Schema DDL shared by SQLite-backed record adapters. TOKENS_SCHEMA_SQL
+ * is split out from RECORD_SCHEMA_SQL because token storage lives in its
+ * own file, never a browser adapter's, and never bundled with records —
+ * see NativeTokenStore in record-adapter-sqlite, docs/spec.md § Adapters,
+ * and the StackTokenStore portability rationale in #46.
  */
 
 export const RECORD_SCHEMA_SQL = `
