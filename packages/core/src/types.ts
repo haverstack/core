@@ -428,3 +428,39 @@ export interface StackBlobAdapter {
  * want different backends for records and blobs (e.g. SQLite + S3).
  */
 export type StackAdapter = StackRecordAdapter & StackBlobAdapter;
+
+export type TokenInfo = {
+  id: string;
+  entityId: string;
+  label?: string;
+  createdAt: Date;
+  expiresAt?: Date;
+};
+
+/**
+ * Bearer-token issuance and lookup for server implementations. Neither
+ * `Stack` nor `StackClient` touches this — it's server-side tooling, not
+ * part of the record/blob adapter contract, so it's a standalone
+ * interface rather than a slot on `StackAdapter`. Server implementations
+ * accept storage and tokens as separate parts (`{ adapter, tokens }`)
+ * rather than sniffing an adapter for token methods.
+ *
+ * Token storage is deliberately decoupled from record storage: the
+ * portable stack file is "your data, take it with you," and auth
+ * material shouldn't travel with it (an export/backup shouldn't also
+ * hand over — or resurrect — bearer tokens). Implementations SHOULD
+ * default to storing tokens outside the stack's own file, treating
+ * in-file storage as an explicit opt-in at most.
+ */
+export interface StackTokenStore {
+  createToken(
+    entityId: string,
+    opts?: { label?: string; expiresAt?: Date },
+  ): Promise<{
+    id: string;
+    token: string;
+  }>;
+  lookupToken(token: string): Promise<{ entityId: string } | null>;
+  listTokens(): Promise<TokenInfo[]>;
+  revokeToken(id: string): Promise<void>;
+}

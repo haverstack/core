@@ -1,0 +1,51 @@
+{
+  "name": "@haverstack/record-adapter-sqlite",
+  "version": "0.1.0",
+  "description": "Native SQLite (node:sqlite) record adapter for Haverstack — Node's built-in engine, no native compilation",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haverstack/core",
+    "directory": "packages/record-adapter-sqlite"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "sqlite",
+    "node:sqlite",
+    "record",
+    "adapter",
+    "personal data",
+    "storage"
+  ],
+  "scripts": {
+    "prepublishOnly": "pnpm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "@haverstack/core": "workspace:*",
+    "@haverstack/sqlite-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

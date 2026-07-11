@@ -63,6 +63,8 @@ export type {
   StackRecordAdapter,
   StackBlobAdapter,
   StackAdapter,
+  StackTokenStore,
+  TokenInfo,
   EntityContent,
   AppContent,
   GroupContent,
