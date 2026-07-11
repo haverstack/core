@@ -1,8 +1,10 @@
 /**
- * Schema DDL shared by SQLite-backed record adapters. FTS4 is what sql.js's
- * WASM build supports; the native adapter uses FTS5 and defines its own
- * virtual table DDL rather than sharing this one — the rest of the schema
- * (tables, indexes) is identical across engines.
+ * Schema DDL shared by SQLite-backed record adapters. Split so each
+ * engine composes only what it needs: record-adapter-sqljs keeps tokens
+ * in the same file (RECORD_SCHEMA_SQL + TOKENS_SCHEMA_SQL + FTS4), while
+ * the native adapter keeps tokens in a separate file (RECORD_SCHEMA_SQL +
+ * FTS5 on the main db, TOKENS_SCHEMA_SQL on its own) — see docs/spec.md
+ * § Adapters and the StackTokenStore portability rationale in #46.
  */
 
 export const RECORD_SCHEMA_SQL = `
@@ -52,15 +54,6 @@ export const RECORD_SCHEMA_SQL = `
     created_at    INTEGER NOT NULL
   ) STRICT;
 
-  CREATE TABLE IF NOT EXISTS tokens (
-    id          TEXT PRIMARY KEY,
-    token_hash  TEXT NOT NULL UNIQUE,
-    entity_id   TEXT NOT NULL,
-    label       TEXT,
-    created_at  INTEGER NOT NULL,
-    expires_at  INTEGER
-  ) STRICT;
-
   -- Indexes
   CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
@@ -73,7 +66,24 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
-  CREATE INDEX IF NOT EXISTS idx_tokens_hash        ON tokens(token_hash);
+`;
+
+/**
+ * Bearer-token storage backing StackTokenStore. Kept separate from
+ * RECORD_SCHEMA_SQL so an adapter can put it in its own file — the
+ * portable stack file shouldn't also carry a server's auth material.
+ */
+export const TOKENS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS tokens (
+    id          TEXT PRIMARY KEY,
+    token_hash  TEXT NOT NULL UNIQUE,
+    entity_id   TEXT NOT NULL,
+    label       TEXT,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
 `;
 
 /** FTS4 — compatible with sql.js's WASM SQLite build. */
@@ -81,6 +91,15 @@ export const FTS4_SCHEMA_SQL = `
   CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts4(
     content,
     content='records'
+  );
+`;
+
+/** FTS5 — used by the native (node:sqlite) adapter. */
+export const FTS5_SCHEMA_SQL = `
+  CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+    content,
+    content='records',
+    content_rowid='rowid'
   );
 `;
 
@@ -93,3 +112,11 @@ export const FTS4_SCHEMA_SQL = `
  * (chiefly `associate()` on a record that doesn't exist).
  */
 export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
+
+/**
+ * WAL journaling: page-level writes, crash-safe without our own
+ * temp-file-and-rename dance, and real SQLite file locking. Only
+ * meaningful for a real file (a :memory: or sql.js in-memory database
+ * silently ignores it).
+ */
+export const PRAGMA_JOURNAL_MODE_WAL = `PRAGMA journal_mode = WAL;`;

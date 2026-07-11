@@ -1,4 +1,11 @@
-export { RECORD_SCHEMA_SQL, FTS4_SCHEMA_SQL, PRAGMA_FOREIGN_KEYS_ON } from './schema.js';
+export {
+  RECORD_SCHEMA_SQL,
+  TOKENS_SCHEMA_SQL,
+  FTS4_SCHEMA_SQL,
+  FTS5_SCHEMA_SQL,
+  PRAGMA_FOREIGN_KEYS_ON,
+  PRAGMA_JOURNAL_MODE_WAL,
+} from './schema.js';
 export {
   buildWhereClause,
   buildOrderClause,
@@ -16,3 +23,5 @@ export {
 } from './cursor.js';
 export { rowToRecord, rowToAssociation, rowToType, rowToVersion, toMs, fromMs } from './mappers.js';
 export { sanitizeFts4Query } from './fts.js';
+export { sanitizeFts5Query } from './fts5.js';
+export { acquireLock, releaseLock } from './lock.js';
