@@ -9,6 +9,7 @@ export default defineConfig({
         __dirname,
         '../record-adapter-sqljs/src/index.ts',
       ),
+      '@haverstack/sqlite-shared': resolve(__dirname, '../sqlite-shared/src/index.ts'),
       '@haverstack/blob-adapter-disk': resolve(__dirname, '../blob-adapter-disk/src/index.ts'),
     },
   },

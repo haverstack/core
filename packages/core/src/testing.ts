@@ -99,6 +99,13 @@ export class MemoryAdapter implements StackAdapter {
       const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
       results = results.filter((r) => r.entityId !== undefined && ids.includes(r.entityId));
     }
+    if (f.attachmentFileId) {
+      results = results.filter((r) =>
+        (r.associations ?? []).some(
+          (a) => a.kind === 'attachment' && a.fileId === f.attachmentFileId,
+        ),
+      );
+    }
 
     const limit = query.limit ?? 50;
     const start = query.cursor ? Number(query.cursor) : 0;

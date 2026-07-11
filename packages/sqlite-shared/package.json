@@ -1,7 +1,7 @@
 {
-  "name": "@haverstack/record-adapter-sqljs",
-  "version": "0.6.0",
-  "description": "sql.js record adapter for Haverstack",
+  "name": "@haverstack/sqlite-shared",
+  "version": "0.1.0",
+  "description": "Engine-independent SQL building blocks shared between Haverstack's SQLite-backed record adapters. Internal package, not a StackAdapter implementation.",
   "type": "module",
   "exports": {
     ".": {
@@ -17,18 +17,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/haverstack/core",
-    "directory": "packages/record-adapter-sqljs"
+    "directory": "packages/sqlite-shared"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
-    "sqljs",
-    "sql.js",
     "sqlite",
-    "record",
-    "adapter",
-    "personal data",
-    "storage"
+    "internal"
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
@@ -38,13 +33,10 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*",
-    "@haverstack/sqlite-shared": "workspace:*",
-    "sql.js": "^1.14.0"
+    "@haverstack/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/sql.js": "^1.4.9",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   }
