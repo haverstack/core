@@ -291,11 +291,12 @@ export class SharedSqlRecordLogic {
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
     this.exec.run(
       `INSERT OR IGNORE INTO versions
-        (record_id, version, content, updated_at, entity_id, associations, permissions)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (record_id, version, type_id, content, updated_at, entity_id, associations, permissions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         version.version,
+        version.typeId,
         JSON.stringify(version.content),
         toMs(version.updatedAt),
         version.entityId ?? null,

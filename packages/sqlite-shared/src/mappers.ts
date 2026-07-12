@@ -67,6 +67,7 @@ export const rowToType = (row: Record<string, unknown>): StackType => {
 export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   const v: RecordVersion = {
     version: row.version as number,
+    typeId: row.type_id as string,
     content: JSON.parse(row.content as string),
     updatedAt: fromMs(row.updated_at as number),
   };

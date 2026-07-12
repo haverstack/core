@@ -169,3 +169,10 @@ export const parseTypeId = (typeId: string): { baseId: string; version: number }
  * e.g. ("com.example.myapp/note", 2) → "com.example.myapp/note@2"
  */
 export const buildTypeId = (baseId: string, version: number): string => `${baseId}@${version}`;
+
+/**
+ * Extract the base (family) ID from a TypeId, tolerating an already-bare
+ * baseId (no "@n" suffix) as a no-op. Used to compare across versions —
+ * e.g. a grant on "comment@1" and a record at "comment@2" share a baseId.
+ */
+export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;

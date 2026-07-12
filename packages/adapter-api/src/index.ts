@@ -121,6 +121,7 @@ const parseType = (raw: WireType): StackType => {
 const parseVersion = (raw: WireVersion): RecordVersion => {
   const v: RecordVersion = {
     version: raw.version,
+    typeId: raw.typeId,
     content: raw.content,
     updatedAt: new Date(raw.updatedAt),
   };

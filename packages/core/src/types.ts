@@ -89,6 +89,8 @@ export type StackRecord = {
 
 export type RecordVersion = {
   version: number;
+  /** The record's typeId at the moment this version was snapshotted. */
+  typeId: TypeId;
   content: Record<string, unknown>;
   updatedAt: Date;
   entityId?: RecordId; // Who made this change
@@ -245,6 +247,14 @@ export type DateRange = {
 export type RecordFilter = {
   // Native fields
   typeId?: TypeId | TypeId[];
+  /**
+   * Match every version of a type family — e.g. baseId: "com.example/note"
+   * matches both "com.example/note@1" and "com.example/note@2" records.
+   * Resolved against registered Types, not parsed from typeId strings, so
+   * it works regardless of which versions happen to exist. Combined with
+   * typeId (if both given) as an intersection.
+   */
+  baseId?: string | string[];
   parentId?: RecordId | null; // null = root records only
   appId?: RecordId | RecordId[];
   entityId?: RecordId | RecordId[];
@@ -280,6 +290,13 @@ export type StackQuery = {
   sort?: QuerySort;
   limit?: number;
   cursor?: string; // Opaque cursor for page-based pagination
+  /**
+   * Records are returned exactly as stored by default ("stored"). Pass
+   * "latest" to apply the registered migration chain in memory before
+   * returning — never written back. Throws StackMigrationError if any
+   * matched record has no registered path to the latest version.
+   */
+  presentAt?: 'stored' | 'latest';
 };
 
 export type QueryResult = {
@@ -374,8 +391,8 @@ export interface StackRecordAdapter {
   /**
    * Commit a migration: write new content under a new typeId in one step.
    * This is the only way a record's typeId changes after creation — used
-   * by Stack.update() when committing a pending lazy migration, and by
-   * Stack.migrateAll(). Bumps version internally.
+   * exclusively by Stack.migrateAll(); Stack.update() never changes typeId
+   * as a side effect. Bumps version internally.
    */
   commitMigration(
     id: RecordId,

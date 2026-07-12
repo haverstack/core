@@ -7,7 +7,7 @@
  *  - ID generation
  *  - Type definition and schema hashing
  *  - Content validation on write
- *  - Migration registry and auto-migration on read
+ *  - Migration registry and explicit, owner-driven migrateAll()
  *  - Version snapshotting on update
  *  - Soft and hard delete
  *
@@ -15,7 +15,7 @@
  */
 
 import { generateId, isValidIdFormat, idTimestamp } from './id.js';
-import { hashSchema, isCompatible, parseTypeId } from './schema.js';
+import { hashSchema, isCompatible, parseTypeId, baseIdOf } from './schema.js';
 import { validateContent } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess } from './access.js';
@@ -28,6 +28,7 @@ import type {
   TypeId,
   StackAdapter,
   StackQuery,
+  RecordFilter,
   QueryResult,
   Association,
   Permission,
@@ -43,6 +44,9 @@ import type {
 // -------------------------------------------------------
 // Supporting types
 // -------------------------------------------------------
+
+/** Sentinel: filter.baseId resolved to zero matching types. */
+const EMPTY_FAMILY = Symbol('empty-family');
 
 export type CreateRecordOptions = {
   /**
@@ -71,8 +75,13 @@ export type StackOptions = {
 };
 
 export type GetRecordOptions = {
-  /** If false, return the raw stored record without auto-migrating. Default: true */
-  migrate?: boolean;
+  /**
+   * Records are returned exactly as stored by default ("stored"). Pass
+   * "latest" to apply the registered migration chain in memory before
+   * returning — never written back. Throws StackMigrationError if the
+   * record has no registered path to the latest version.
+   */
+  presentAt?: 'stored' | 'latest';
 };
 
 export type DeleteRecordOptions = {
@@ -229,6 +238,13 @@ export interface StackClient {
 
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
+  /**
+   * Highest version this Stack instance has itself defineType()'d, per
+   * baseId — i.e. what *this app process* currently understands, as
+   * distinct from whatever versions happen to exist in shared storage.
+   * Used to detect the stale-writer case in presentAtLatest().
+   */
+  private readonly maxDefinedVersion = new Map<string, number>();
 
   private constructor(
     private readonly adapter: StackAdapter,
@@ -315,6 +331,9 @@ export class Stack implements StackClient {
       ...(opts.migratesFrom && { migratesFrom: opts.migratesFrom }),
     };
 
+    const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
+    if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
+
     await this.adapter.saveType(type);
     return type;
   }
@@ -400,14 +419,22 @@ export class Stack implements StackClient {
 
   /**
    * Eagerly migrate all records of a type family to the latest version,
-   * committing the results to disk immediately.
+   * committing the results to disk immediately. This is the *only* way a
+   * record's disk state changes version — the library never migrates as a
+   * side effect of a read or an unrelated content edit. Call it at app
+   * startup after registerMigration(), or after a schema change.
    *
-   * Normally migration is lazy — records are migrated in memory on read
-   * and written back only when next updated. Call migrateAll() when you
-   * want to commit all pending migrations in one deliberate pass, for
-   * example before a deployment or after a major schema change.
+   * Sweeps soft-deleted records unconditionally (includeDeleted: true is
+   * not a caller option in either direction) so a record can't come back
+   * from undelete() stale merely because it was deleted during a migration
+   * window.
    *
-   * Previous content is preserved in version history before each write.
+   * Each record's migrated content is validated against the target type's
+   * schema before it's written; a validation failure aborts the batch
+   * immediately (a buggy migration function is a bug, not something to
+   * paper over by skipping the offending records) — anything already
+   * committed earlier in the pass stays committed. Previous content is
+   * preserved in version history before each write.
    */
   async migrateAll(baseTypeId: string): Promise<{ migrated: number }> {
     const types = await this.adapter.listTypes();
@@ -428,6 +455,11 @@ export class Stack implements StackClient {
       const migrateFn = this.resolveMigrationPath(typeId, latestId);
       if (!migrateFn) continue;
 
+      const latestType = await this.adapter.getType(latestId);
+      if (!latestType) {
+        throw new StackMigrationError(`migrateAll: target type "${latestId}" is not defined.`);
+      }
+
       let cursor: string | undefined;
       do {
         const result: QueryResult = await this.adapter.queryRecords({
@@ -437,8 +469,13 @@ export class Stack implements StackClient {
         });
 
         for (const record of result.records) {
-          await this.saveVersion(record);
           const migratedContent = migrateFn(record.content);
+          const errors = validateContent(migratedContent, latestType.schema);
+          if (errors.length > 0) {
+            throw new StackValidationError(errors);
+          }
+
+          await this.saveVersion(record);
           await this.adapter.commitMigration(record.id, latestId, migratedContent);
           migrated++;
         }
@@ -498,39 +535,59 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Get a record by ID.
+   * Apply the registered migration chain to a record in memory, for the
+   * presentAt: 'latest' opt-in on get() and query(). Never writes back —
+   * only migrateAll() commits a migration to disk.
    *
-   * If the record is on an older type version and a migration path is
-   * registered, the content is migrated in memory and returned at the
-   * latest type version — but nothing is written to disk. Migration is
-   * only persisted when the record is next updated via update().
+   * If there's no forward migration path from the record's stored version,
+   * that's only unambiguous when this app instance has never defineType()'d
+   * a different version of the family — otherwise the record's version
+   * disagrees with what this app understands (older with a registration
+   * gap, or newer than anything this app has ever defined — the
+   * stale-writer case) and presentAt: 'latest' can't honor the request.
+   * Throws StackMigrationError rather than silently returning the raw
+   * record with a console.warn.
+   */
+  private presentAtLatest(record: StackRecord): StackRecord {
+    const latestId = this.latestTypeId(record.typeId);
+
+    if (latestId !== record.typeId) {
+      // latestTypeId() found this by walking the same migration graph
+      // resolveMigrationPath() walks, from the same starting point, so a
+      // path is always resolvable here.
+      const migrateFn = this.resolveMigrationPath(record.typeId, latestId)!;
+      return { ...record, typeId: latestId, content: migrateFn(record.content) };
+    }
+
+    const parsed = parseTypeId(record.typeId);
+    const knownMax = parsed ? this.maxDefinedVersion.get(parsed.baseId) : undefined;
+    if (parsed && knownMax !== undefined && parsed.version !== knownMax) {
+      const direction =
+        parsed.version > knownMax
+          ? `the record is newer than this app instance understands — update the app, or register the missing migrations`
+          : `no registered migration bridges the gap — call stack.registerMigration()`;
+      throw new StackMigrationError(
+        `Record "${record.id}" is at "${record.typeId}", but this app instance has defined ` +
+          `up to "${parsed.baseId}@${knownMax}": ${direction}. Omit presentAt: "latest" to ` +
+          `read the record as stored.`,
+      );
+    }
+
+    return record;
+  }
+
+  /**
+   * Get a record by ID, exactly as stored (its own typeId and content —
+   * no implicit migration).
    *
-   * Pass { migrate: false } to get the raw stored record without migration.
+   * Pass { presentAt: 'latest' } to apply the registered migration chain
+   * in memory instead; nothing is written to disk. Committing a migration
+   * to disk is exclusively migrateAll()'s job.
    */
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
-
-    const shouldMigrate = opts.migrate !== false;
-    if (!shouldMigrate) return record;
-
-    const latestId = this.latestTypeId(record.typeId);
-    if (latestId === record.typeId) return record;
-
-    const migrateFn = this.resolveMigrationPath(record.typeId, latestId);
-    if (!migrateFn) {
-      console.warn(
-        `[Stack] No migration path from "${record.typeId}" to "${latestId}" for record "${id}". ` +
-          `Returning raw record. Register migrations with stack.registerMigration().`,
-      );
-      return record;
-    }
-
-    return {
-      ...record,
-      typeId: latestId,
-      content: migrateFn(record.content),
-    };
+    return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
   }
 
   /**
@@ -540,13 +597,13 @@ export class Stack implements StackClient {
    * To remove an optional field, set it explicitly to null:
    *   stack.update(id, { title: null })  // removes 'title' from content
    *
-   * If the record is on an older type version, its content is migrated
-   * in memory first, then the patch is applied. The updated record is
-   * written at the latest type version — this is when lazy migration
-   * is committed to disk.
+   * Validates the merged result against the record's *current* stored
+   * type's schema — update() never changes a record's typeId as a side
+   * effect. Migrating disk state is migrateAll()'s job exclusively, so an
+   * unrelated content edit never folds an invisible schema rewrite into
+   * the same version-history entry.
    *
-   * Validates the merged result against the type's schema. Saves the
-   * previous state to version history before updating.
+   * Saves the previous state to version history before updating.
    *
    * For association or permission changes, use associate(), dissociate(),
    * and setPermissions() instead.
@@ -557,20 +614,13 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
 
-    // Resolve the latest type version and migrate existing content
-    // in memory before applying the patch. This is when lazy migration
-    // from get() gets committed to disk.
-    const latestTypeId = this.latestTypeId(existing.typeId);
-    const migrateFn = this.resolveMigrationPath(existing.typeId, latestTypeId);
-    const existingContent = migrateFn ? migrateFn(existing.content) : existing.content;
-
-    const type = await this.adapter.getType(latestTypeId);
+    const type = await this.adapter.getType(existing.typeId);
     if (!type) {
-      throw new Error(`Unknown type: "${latestTypeId}"`);
+      throw new Error(`Unknown type: "${existing.typeId}"`);
     }
 
     // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
-    const merged = applyMergePatch(existingContent, content);
+    const merged = applyMergePatch(existing.content, content);
 
     const errors = validateContent(merged, type.schema);
     if (errors.length > 0) {
@@ -580,12 +630,6 @@ export class Stack implements StackClient {
     // Snapshot the raw stored state before overwriting
     await this.saveVersion(existing);
 
-    // If a pending lazy migration is being committed alongside this patch,
-    // the typeId change has to travel through commitMigration() — a
-    // content-only patch has no way to carry it.
-    if (latestTypeId !== existing.typeId) {
-      return this.adapter.commitMigration(id, latestTypeId, merged);
-    }
     return this.adapter.patchContent(id, content);
   }
 
@@ -681,10 +725,59 @@ export class Stack implements StackClient {
 
   /**
    * Query records. See StackQuery for filter, sort, and pagination options.
+   *
+   * filter.baseId matches every version of a type family, resolved against
+   * registered Types (not string-parsed from typeId) — this is what fixes
+   * `query({ filter: { baseId } })` missing not-yet-migrated older-version
+   * records. Records are returned exactly as stored by default; pass
+   * presentAt: 'latest' to migrate each result in memory (see get()).
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    const limit = query.limit !== undefined ? Math.min(query.limit, MAX_QUERY_LIMIT) : undefined;
-    return this.adapter.queryRecords(limit !== undefined ? { ...query, limit } : query);
+    const { presentAt, filter, limit: rawLimit, ...rest } = query;
+    const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
+
+    const resolvedFilter = await this.resolveBaseIdFilter(filter);
+    if (resolvedFilter === EMPTY_FAMILY) {
+      return { records: [], cursor: null, total: 0 };
+    }
+
+    const result = await this.adapter.queryRecords({
+      ...rest,
+      ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
+      ...(limit !== undefined && { limit }),
+    });
+
+    if (presentAt !== 'latest') return result;
+    return { ...result, records: result.records.map((r) => this.presentAtLatest(r)) };
+  }
+
+  /**
+   * Resolve filter.baseId into a concrete typeId set via listTypes(), so
+   * adapters — which only know about typeId — never need their own baseId
+   * concept. Intersects with filter.typeId when both are given. Returns
+   * EMPTY_FAMILY as a sentinel when the resolved set is empty (unknown
+   * baseId, or a typeId/baseId combination with no overlap), so the caller
+   * can short-circuit without a wasted adapter round trip.
+   */
+  private async resolveBaseIdFilter(
+    filter: RecordFilter | undefined,
+  ): Promise<RecordFilter | undefined | typeof EMPTY_FAMILY> {
+    if (filter?.baseId === undefined) return filter;
+
+    const { baseId, typeId, ...rest } = filter;
+    const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
+    const types = await this.adapter.listTypes();
+    const familyTypeIds = types.filter((t) => requestedBaseIds.includes(t.baseId)).map((t) => t.id);
+
+    const resolvedTypeIds =
+      typeId === undefined
+        ? familyTypeIds
+        : familyTypeIds.filter((id) =>
+            Array.isArray(typeId) ? typeId.includes(id) : typeId === id,
+          );
+
+    if (resolvedTypeIds.length === 0) return EMPTY_FAMILY;
+    return { ...rest, typeId: resolvedTypeIds };
   }
 
   // -------------------------------------------------------
@@ -901,6 +994,7 @@ export class Stack implements StackClient {
   private async saveVersion(record: StackRecord): Promise<void> {
     const version: RecordVersion = {
       version: record.version,
+      typeId: record.typeId,
       content: record.content,
       updatedAt: record.updatedAt,
       ...(record.entityId && { entityId: record.entityId }),
@@ -972,8 +1066,7 @@ export class ScopedStack implements StackClient {
     return this.stack.features;
   }
 
-  private resolveRecord = (id: string): Promise<StackRecord | null> =>
-    this.stack.get(id, { migrate: false });
+  private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
 
   private checkRead(record: StackRecord): Promise<boolean> {
     return checkAccess(
@@ -997,9 +1090,12 @@ export class ScopedStack implements StackClient {
 
   /**
    * Check whether the requester holds a _grant record covering at least one
-   * of the given actions for the given type. For -own actions, additionally
-   * requires that `record.entityId` matches the requester (authorship check).
-   * Anonymous requesters always return false.
+   * of the given actions for the given type's family. Grants target
+   * baseId, not the exact versioned typeId — a grant on "comment@1" covers
+   * "comment@2" too, so a version bump never silently orphans an existing
+   * grant. For -own actions, additionally requires that `record.entityId`
+   * matches the requester (authorship check). Anonymous requesters always
+   * return false.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -1009,22 +1105,23 @@ export class ScopedStack implements StackClient {
   ): Promise<boolean> {
     if (!this.requesterEntityId) return false;
 
+    const familyId = baseIdOf(typeId);
+
     let grantRecords: StackRecord[];
     if (prefetchedGrants !== undefined) {
       grantRecords = prefetchedGrants;
     } else {
-      const result = await this.stack.query({
-        filter: {
-          typeId: `${SYSTEM_TYPES.GRANT}@1`,
-          ...(this.stack.features.contentFieldQuery && { content: { typeId } }),
-        },
-      });
+      // No content-field prefilter here: matching is by baseId, which a
+      // stored grant may express as either a bare baseId or a versioned
+      // typeId, so an exact-match content filter would wrongly exclude
+      // grants for other versions of the family.
+      const result = await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } });
       grantRecords = result.records;
     }
 
     return grantRecords.some((r) => {
       const c = r.content as GrantContent;
-      if (c.typeId !== typeId) return false;
+      if (baseIdOf(c.typeId) !== familyId) return false;
       if (r.entityId && r.entityId !== this.requesterEntityId) return false;
       return actions.some((action) => {
         if (!(c.actions as string[]).includes(action)) return false;
@@ -1048,7 +1145,7 @@ export class ScopedStack implements StackClient {
 
   /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
   private async requireUpdatable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id, { migrate: false });
+    const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     const allowed =
       (await this.checkWrite(record)) ||
@@ -1059,7 +1156,7 @@ export class ScopedStack implements StackClient {
 
   /** Fetch a record the requester can delete (via permissions or a delete grant), or throw. */
   private async requireDeletable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id, { migrate: false });
+    const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     const allowed =
       (await this.checkWrite(record)) ||
@@ -1155,7 +1252,7 @@ export class ScopedStack implements StackClient {
   }
 
   async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    const record = await this.stack.get(id, { migrate: false });
+    const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
 
     const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
@@ -1189,14 +1286,14 @@ export class ScopedStack implements StackClient {
   }
 
   async getVersions(id: string): Promise<RecordVersion[]> {
-    const existing = await this.stack.get(id, { migrate: false });
+    const existing = await this.stack.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    const existing = await this.stack.get(id, { migrate: false });
+    const existing = await this.stack.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (!(await this.canRead(existing))) throw new StackPermissionError();
     return this.stack.getVersion(id, version);

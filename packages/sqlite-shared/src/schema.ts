@@ -34,6 +34,7 @@ export const RECORD_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
     version     INTEGER NOT NULL,
+    type_id     TEXT NOT NULL,
     content     TEXT NOT NULL CHECK (json_valid(content)),
     updated_at  INTEGER NOT NULL,
     entity_id   TEXT,

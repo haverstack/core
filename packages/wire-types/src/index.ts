@@ -43,6 +43,7 @@ export type WireType = {
 
 export type WireVersion = {
   version: number;
+  typeId: string;
   content: Record<string, unknown>;
   updatedAt: string;
   entityId?: string;
@@ -85,6 +86,7 @@ export function serializeType(t: StackType): WireType {
 export function serializeVersion(v: RecordVersion): WireVersion {
   const w: WireVersion = {
     version: v.version,
+    typeId: v.typeId,
     content: v.content,
     updatedAt: v.updatedAt.toISOString(),
   };
