@@ -794,7 +794,17 @@ export class Stack implements StackClient {
 
   /**
    * Restore a record to a previous version by creating a new version
-   * with the old content. Never rewrites history.
+   * with the old content and typeId. Never rewrites history.
+   *
+   * Validates the snapshot's content against the *snapshot's own* stored
+   * type — not the record's current type, which may have since migrated.
+   * A snapshot taken before a migration is `@1`-shaped; validating it
+   * against a current `@2` schema would wrongly reject a perfectly valid
+   * restore. Restoring an old-version snapshot therefore leaves the record
+   * stale at that old typeId, same as undelete() — legal, and healed by
+   * the owning app's next migrateAll() sweep. This never forward-migrates:
+   * migration functions are app code, and restore shouldn't behave
+   * differently locally than a server-side restore endpoint could.
    *
    * Restores associations too, when the target snapshot has them. Never
    * restores permissions — those are owner/creator territory (see
@@ -811,6 +821,16 @@ export class Stack implements StackClient {
     const target = await this.adapter.getVersion(id, version);
     if (!target) {
       throw new StackNotFoundError(`Version ${version} not found for record "${id}"`);
+    }
+
+    const type = await this.adapter.getType(target.typeId);
+    if (!type) {
+      throw new Error(`Unknown type: "${target.typeId}"`);
+    }
+
+    const errors = validateContent(target.content, type.schema);
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
     }
 
     // Snapshot current state before restoring

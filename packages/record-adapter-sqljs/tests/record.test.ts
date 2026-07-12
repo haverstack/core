@@ -923,6 +923,26 @@ describe('restoreVersion', () => {
     await adapter.createRecord(record);
     await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
   });
+
+  test('restores typeId from the snapshot, even when it differs from the record’s current typeId', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ typeId: 'com.example.test/note@1' });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: 'com.example.test/note@1',
+      content: { text: 'original' },
+      updatedAt: new Date(),
+    });
+    await adapter.commitMigration(record.id, 'com.example.test/note@2', {
+      text: 'original',
+      pinned: false,
+    });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.typeId).toBe('com.example.test/note@1');
+    expect(restored.content).toEqual({ text: 'original' });
+  });
 });
 
 describe('commitMigration', () => {

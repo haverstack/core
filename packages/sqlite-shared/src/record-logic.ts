@@ -164,8 +164,8 @@ export class SharedSqlRecordLogic {
 
     this.fts.remove(this.exec, id);
     this.exec.run(
-      'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      [JSON.stringify(target.content), toMs(new Date()), id],
+      'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+      [target.typeId, JSON.stringify(target.content), toMs(new Date()), id],
     );
     if (target.associations !== undefined) {
       this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);

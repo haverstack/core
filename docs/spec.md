@@ -447,7 +447,11 @@ type RecordVersion = {
 **API surface:**
 
 - `stack.getVersions(recordId)` — retrieve version history
-- `stack.restoreVersion(recordId, version)` — revert to a prior version. Restores `content` and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
+- `stack.restoreVersion(recordId, version)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
+
+  The snapshot's content is validated against **the type it claims** (`typeId` as stored in the snapshot), not the Record's current type — a snapshot taken before a migration is `@1`-shaped, and validating it against a since-migrated `@2` schema would wrongly reject a legitimate restore. A snapshot that fails validation against its own claimed type — in-place schema drift, or a corrupted/buggy adapter — throws `StackValidationError` instead of being written back; restore is a recovery path, so it is not a backdoor around content validation.
+
+  Restoring a pre-migration snapshot therefore also restores its old `typeId`, leaving the Record legitimately **stale** rather than mislabeled. No forward-migration happens at restore time — migration functions are app code (see [Type migrations](#type-migrations)), so restore behaves the same locally as it does through the server-side restore endpoint, which cannot run them either. A stale restored Record self-heals the same way any other stale Record does: on the owning app's next `migrateAll()` sweep.
 
 **Storage per adapter:**
 
@@ -685,7 +689,7 @@ Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `w
 
 Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing the same way any other stale Record is, the next time it's written or `migrateAll()` sweeps it. `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
 
-**Restore** always creates a new version with the old content — it never rewrites history. The act of restoring is itself part of the version history.
+**Restore** always creates a new version with the old content and `typeId` — it never rewrites history. The act of restoring is itself part of the version history. The snapshot's content is validated against the type it claims (its own stored `typeId`, not the Record's current one) before being written back; a snapshot that fails that validation — schema drift, or a corrupted/buggy adapter — throws `StackValidationError` rather than being restored. Restoring an old snapshot does not migrate it forward, so a restored pre-migration Record comes back stale, same as undelete above — legal, and healed by the next `migrateAll()` sweep.
 
 ```ts
 stack.restoreVersion(recordId, version); // creates a new version, doesn't rewrite history

@@ -156,6 +156,7 @@ export class MemoryAdapter implements StackAdapter {
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
     const updated = this.bump({
       ...record,
+      typeId: target.typeId,
       content: target.content,
       ...(target.associations !== undefined && { associations: target.associations }),
     });
