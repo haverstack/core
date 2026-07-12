@@ -635,6 +635,8 @@ type Query = {
 
 Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackQueryError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
 
+**`query()` always paginates.** An absent `limit` means one adapter-default page (50), never "every matching Record." Any caller — app code or library-internal — that needs the complete result set MUST follow `cursor` to exhaustion; treating a single `query()` call as exhaustive is a caller bug, not a pagination bug, however the pages are sized.
+
 ### Adapter capabilities
 
 Adapters expose a capabilities object so apps can check what's supported before relying on a feature:

@@ -233,6 +233,47 @@ export interface StackClient {
 }
 
 // -------------------------------------------------------
+// Query helpers
+// -------------------------------------------------------
+
+/**
+ * query() always paginates: an absent `limit` returns one adapter-default
+ * page, never the complete result set. This walks `cursor` to exhaustion
+ * for the handful of internal call sites that need every match — grant
+ * checks, attachment-metadata cleanup, uploader-access checks — where
+ * silently stopping at page one would misfire past the page boundary
+ * (deny an existing grant, leave orphaned metadata, false-deny an
+ * uploader). Not a public API: callers that can tolerate normal paging
+ * should call query() directly.
+ *
+ * Throws StackQueryError rather than silently truncating if more than
+ * `max` records are found without the cursor terminating — a runaway
+ * scan is a bug to surface, not paper over.
+ */
+async function queryAllPages(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  query: StackQuery,
+  max = QUERY_ALL_MAX,
+): Promise<StackRecord[]> {
+  const records: StackRecord[] = [];
+  let cursor = query.cursor;
+  do {
+    const page = await run({ ...query, cursor });
+    records.push(...page.records);
+    if (records.length > max) {
+      throw new StackQueryError(
+        `queryAllPages: exceeded max of ${max} records without exhausting the cursor`,
+      );
+    }
+    cursor = page.cursor ?? undefined;
+  } while (cursor);
+  return records;
+}
+
+/** Safety cap for queryAllPages() — generous for personal-stack scale. */
+const QUERY_ALL_MAX = 10_000;
+
+// -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
 
@@ -908,15 +949,19 @@ export class Stack implements StackClient {
       throw new StackConflictError('Attachment is still referenced by one or more records');
     }
 
-    const metaResult = await this.query({
+    // Cursor-walked: on adapters without contentFieldQuery, every
+    // _attachment@1 record must be scanned in memory below, and a single
+    // default page would leave metadata beyond page one un-deleted —
+    // exactly the orphan this method exists to prevent.
+    const metaResults = await queryAllPages((q) => this.query(q), {
       filter: {
         typeId: metadataTypeId,
         ...(this.features.contentFieldQuery && { content: { fileId } }),
       },
     });
     const metaRecords = this.features.contentFieldQuery
-      ? metaResult.records
-      : metaResult.records.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+      ? metaResults
+      : metaResults.filter((r) => (r.content as AttachmentContent).fileId === fileId);
 
     for (const record of metaRecords) {
       await this.delete(record.id, { hard: true });
@@ -1134,9 +1179,11 @@ export class ScopedStack implements StackClient {
       // No content-field prefilter here: matching is by baseId, which a
       // stored grant may express as either a bare baseId or a versioned
       // typeId, so an exact-match content filter would wrongly exclude
-      // grants for other versions of the family.
-      const result = await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } });
-      grantRecords = result.records;
+      // grants for other versions of the family. Cursor-walked: a single
+      // default page would silently miss grants past page one.
+      grantRecords = await queryAllPages((q) => this.stack.query(q), {
+        filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+      });
     }
 
     return grantRecords.some((r) => {
@@ -1232,7 +1279,10 @@ export class ScopedStack implements StackClient {
    * `total` is always null — see the QueryResult.total doc comment.
    *
    * Grant records are pre-fetched once before the pagination loop so read
-   * grants don't trigger a separate _grant@1 query per record.
+   * grants don't trigger a separate _grant@1 query per record. The
+   * prefetch itself cursor-walks every _grant@1 record — a single default
+   * page would silently miss grants past page one, denying access that
+   * should exist with no error (see queryAllPages()).
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
@@ -1241,7 +1291,9 @@ export class ScopedStack implements StackClient {
     let totalFetched = 0;
 
     const prefetchedGrants = this.requesterEntityId
-      ? (await this.stack.query({ filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } })).records
+      ? await queryAllPages((q) => this.stack.query(q), {
+          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+        })
       : undefined;
 
     let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
@@ -1380,19 +1432,32 @@ export class ScopedStack implements StackClient {
       return this.stack.getAttachment(fileId);
     }
 
-    // Accessible if the requester uploaded it and it hasn't been associated yet
+    // Accessible if the requester uploaded it and it hasn't been associated yet.
+    // With contentFieldQuery, the filter narrows to this fileId server-side, so
+    // limit: 1 is a correct existence check. Without it, matching happens in
+    // memory below — limit: 1 there would only ever see the requester's single
+    // most recent upload, false-denying every earlier one, so that path
+    // cursor-walks all of the requester's uploads instead.
     if (this.requesterEntityId) {
-      const uploadResult = await this.stack.query({
-        filter: {
-          typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-          entityId: this.requesterEntityId,
-          ...(this.stack.features.contentFieldQuery && { content: { fileId } }),
-        },
-        limit: 1,
-      });
       const hasUpload = this.stack.features.contentFieldQuery
-        ? uploadResult.records.length > 0
-        : uploadResult.records.some((r) => (r.content as AttachmentContent).fileId === fileId);
+        ? (
+            await this.stack.query({
+              filter: {
+                typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+                entityId: this.requesterEntityId,
+                content: { fileId },
+              },
+              limit: 1,
+            })
+          ).records.length > 0
+        : (
+            await queryAllPages((q) => this.stack.query(q), {
+              filter: {
+                typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+                entityId: this.requesterEntityId,
+              },
+            })
+          ).some((r) => (r.content as AttachmentContent).fileId === fileId);
       if (hasUpload) return this.stack.getAttachment(fileId);
     }
 

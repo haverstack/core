@@ -13,8 +13,11 @@ import type {
 import { applyMergePatch } from './merge.js';
 
 /**
- * Fully functional in-memory StackAdapter with offset-based cursor pagination.
- * Intended for use in tests — import from `@haverstack/core/testing`.
+ * In-memory StackAdapter with offset-based cursor pagination. Implements the
+ * full RecordFilter shape (mirroring sqlite-shared's buildWhereClause) so
+ * permission logic under test exercises real predicates rather than an
+ * adapter that quietly ignores most filters. Intended for use in tests —
+ * import from `@haverstack/core/testing`.
  */
 export class MemoryAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities = {
@@ -95,15 +98,51 @@ export class MemoryAdapter implements StackAdapter {
           ? results.filter((r) => !r.parentId)
           : results.filter((r) => r.parentId === f.parentId);
     }
+    if (f.appId !== undefined) {
+      const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
+      results = results.filter((r) => r.appId !== undefined && ids.includes(r.appId));
+    }
     if (f.entityId !== undefined) {
       const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
       results = results.filter((r) => r.entityId !== undefined && ids.includes(r.entityId));
+    }
+    if (f.createdAt?.after) results = results.filter((r) => r.createdAt > f.createdAt!.after!);
+    if (f.createdAt?.before) results = results.filter((r) => r.createdAt < f.createdAt!.before!);
+    if (f.updatedAt?.after) results = results.filter((r) => r.updatedAt > f.updatedAt!.after!);
+    if (f.updatedAt?.before) results = results.filter((r) => r.updatedAt < f.updatedAt!.before!);
+    if (f.tags?.length) {
+      const tags = f.tags;
+      results = results.filter((r) =>
+        tags.every((tag) =>
+          (r.associations ?? []).some((a) => a.kind === 'tag' && a.label === tag),
+        ),
+      );
+    }
+    if (f.hasAttachment) {
+      results = results.filter((r) =>
+        (r.associations ?? []).some((a) => a.kind === 'attachment' && a.label === f.hasAttachment),
+      );
     }
     if (f.attachmentFileId) {
       results = results.filter((r) =>
         (r.associations ?? []).some(
           (a) => a.kind === 'attachment' && a.fileId === f.attachmentFileId,
         ),
+      );
+    }
+    if (f.relatedTo) {
+      const { recordId, label } = f.relatedTo;
+      results = results.filter((r) =>
+        (r.associations ?? []).some(
+          (a) =>
+            a.kind === 'relationship' && a.recordId === recordId && (!label || a.label === label),
+        ),
+      );
+    }
+    if (f.content) {
+      const entries = Object.entries(f.content);
+      results = results.filter((r) =>
+        entries.every(([key, value]) => (r.content as Record<string, unknown>)[key] === value),
       );
     }
 
@@ -126,9 +165,7 @@ export class MemoryAdapter implements StackAdapter {
   async dissociate(id: string, association: Association) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
-    const assocs = (record.associations ?? []).filter(
-      (a) => !(a.kind === association.kind && a.label === association.label),
-    );
+    const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
     this.records.set(id, this.bump({ ...record, associations: assocs }));
   }
 
@@ -192,4 +229,16 @@ export class MemoryAdapter implements StackAdapter {
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;
+}
+
+/**
+ * Mirrors Stack's private associationEqual(): identity is (kind, label) plus
+ * fileId for attachments / recordId for relationships — mimeType is not
+ * part of an attachment association's identity.
+ */
+function associationEqual(a: Association, b: Association): boolean {
+  if (a.kind !== b.kind || a.label !== b.label) return false;
+  if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
+  if (a.kind === 'relationship' && b.kind === 'relationship') return a.recordId === b.recordId;
+  return true;
 }
