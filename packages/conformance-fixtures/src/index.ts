@@ -340,6 +340,25 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-failed-restore',
+    description:
+      'POST /records/:id/restore/:version against a drifted or corrupted snapshot — content ' +
+      'that no longer satisfies the schema of the type it claims — returns 422 with code ' +
+      '"validation", identically to a PATCH validation failure. Restore is not a backdoor ' +
+      'around schema validation (#62): the snapshot is validated against its own stored ' +
+      "typeId, not the record's current one.",
+    method: 'POST',
+    path: '/records/rec-1/restore/1',
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [{ path: 'title', message: 'expected string, got number' }],
+      },
+    },
+  },
+  {
     name: 'error-bad-request-malformed-cursor',
     description:
       'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +

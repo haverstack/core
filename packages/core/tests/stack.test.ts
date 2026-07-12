@@ -594,6 +594,62 @@ describe('migrateAll', () => {
 });
 
 // -------------------------------------------------------
+// restoreVersion — typeId and validation (#62)
+// -------------------------------------------------------
+
+describe('restoreVersion — typeId and validation', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+
+    stack.registerMigration({
+      from: NOTE_V1,
+      to: NOTE_V2,
+      migrate: (content) => ({ ...content, title: '' }),
+    });
+  });
+
+  test('restores the snapshot’s own typeId, leaving a stale record that migrateAll() subsequently heals', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.migrateAll('com.example.test/note'); // now @2, snapshot v1 is @1-shaped
+    expect((await stack.get(record.id))?.typeId).toBe(NOTE_V2);
+
+    const restored = await stack.restoreVersion(record.id, 1);
+
+    // Restoring the pre-migration snapshot brings its typeId back too —
+    // the record is legitimately stale at @1, not mislabeled @2.
+    expect(restored.typeId).toBe(NOTE_V1);
+    expect(restored.content).toEqual({ text: 'original' });
+
+    const healed = await stack.migrateAll('com.example.test/note');
+    expect(healed.migrated).toBe(1);
+    expect((await stack.get(record.id))?.typeId).toBe(NOTE_V2);
+  });
+
+  test('rejects a drifted/invalid snapshot with StackValidationError instead of restoring it', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    // Simulate schema drift or adapter corruption: a stored snapshot whose
+    // content no longer satisfies its own claimed type's schema.
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE_V1,
+      content: {}, // missing required "text"
+      updatedAt: new Date(),
+    });
+
+    await expect(stack.restoreVersion(record.id, 1)).rejects.toThrow(StackValidationError);
+    expect((await stack.get(record.id))?.content).toEqual({ text: 'hello' }); // untouched
+  });
+});
+
+// -------------------------------------------------------
 // Versions
 // -------------------------------------------------------
 

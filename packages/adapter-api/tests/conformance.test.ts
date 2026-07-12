@@ -260,6 +260,10 @@ describe('error response fixtures', () => {
         if (fixture.method === 'POST' && fixture.path === '/records/query') {
           return adapter.queryRecords(fixture.requestBody as never);
         }
+        if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
+          const version = Number(fixture.path.split('/').pop());
+          return adapter.restoreVersion(idFromPath(fixture.path), version);
+        }
         if (fixture.method === 'PATCH') {
           return adapter.patchContent(
             idFromPath(fixture.path),
