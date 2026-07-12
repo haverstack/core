@@ -146,6 +146,7 @@ await stack.grant(null, [{ typeId: 'com.example/comment@1', actions: ['create', 
 **Design decisions:**
 
 - **No wildcard `typeId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
+- **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This is what keeps a version bump from silently orphaning existing grants (previously, registering a migration broke every grant pinned to the old version, with no data change at all — grants are checked in memory _before_ any migration applies).
 - **Default grants** (grant record has no `entityId`): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. The combination `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
 - **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester — Records the entity authored. Records with no `entityId` (owner-created) do not satisfy any `-own` check.
@@ -234,6 +235,8 @@ Used by apps that want to work with Records regardless of exact Type, e.g. any T
 
 ### Type migrations
 
+A Type's defining app is the only serious writer of its own types, so migration is **explicit and owner-driven**, not something that happens as a side effect of a read or an unrelated write. Disk state changes version only via a deliberate `migrateAll()` pass — the invariant is that all Records of a family sit at version N until the owning app moves them, so `query({ filter: { typeId } })` and grants targeting a type never silently miss not-yet-migrated records (see [Queries](#queries) and [Grant](#grant)).
+
 Apps register migration functions between adjacent Type versions at startup. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
 
 ```ts
@@ -254,13 +257,32 @@ The migration registry is **per-stack-instance** — different stacks can be at 
 
 **What the library does with registered migrations:**
 
-- **Lazy migration on read** — `stack.get()` and `stack.query()` apply the migration chain in memory, returning Records as if they were the latest version. Nothing is written to disk.
-- **Migration committed on update** — when a record is next updated via `stack.update()`, the library migrates existing content first, then applies the patch, then writes at the latest typeId. This is when lazy migration is persisted.
+- **`get()` and `query()` return Records exactly as stored** — their own `typeId` and `content`, with no implicit migration. This is what makes `query()` a reliable way to find every record of a family regardless of migration state (previously a divergence from `get()`, which migrated in memory by default).
+- **`presentAt: 'latest'`** — an explicit opt-in on both `get()` and `query()` that applies the registered migration chain in memory before returning. Nothing is written to disk; this is a read-time convenience, never a persistence mechanism. Throws `StackMigrationError` rather than warning and returning a raw record when a matched Record's version can't be reconciled with what this app instance has registered (see stale-writer behavior, below).
+- **`update()` never migrates.** It validates the merge-patched content against the Record's _own current_ stored Type — never the latest — and writes back at the same `typeId`. An unrelated content edit can never fold an invisible schema rewrite into the same version-history entry.
 - **Path composition** — migrations between adjacent versions are automatically chained (v1→v2→v3), so apps only ever register one step at a time.
-- **Warn on unmigratable reads** — if a Record's Type version has no registered path to the latest, the library warns the app and returns the raw record.
-- **Batch migration** — `stack.migrateAll("com.example.myapp/note")` eagerly commits all pending migrations to disk in one deliberate pass. Version history is preserved before each write. Use before deployments or after major schema changes.
+- **`migrateAll("com.example.myapp/note")`** is the _only_ way disk state changes version. It eagerly commits all pending migrations for a type family in one deliberate pass — call it at app startup after registering migrations, or after a schema change. Sweeps soft-deleted Records unconditionally (`includeDeleted: true` is not a caller option in either direction — see [Deletion](#deletion)), validates each migrated result against the target Type's schema before writing, and aborts immediately on the first validation failure (a buggy migration function is a bug to surface, not to paper over by skipping the offending records) — anything already committed earlier in the pass stays committed. Previous content is snapshotted to version history before each write.
 
-> **Not yet implemented:** validation of migration function output against the target schema at registration time.
+**Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it's registered _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack: a stale binary encountering a record newer than it understands, or an app that's defined a later Type version but never registered the migration to reach it. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
+
+### Additive evolution within a version
+
+Not every schema change needs a version bump. **Additive-in-place** changes — new optional fields only — can be added to a Type's schema without minting a new version, and are the default path for evolving a type family:
+
+- **Readers ignore unknown fields** — validation already permits undeclared content fields.
+- **Writers preserve unknown fields** — the merge-patch semantics of `update()` retain any field the caller didn't touch.
+
+This is what makes duck-typed cross-app consumption (`isCompatible()`, see [Types](#types)) actually work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it.
+
+**A version bump is a consolidation point**, warranted when:
+
+- a field becomes _required_ (paired with a migration that backfills a real value for existing records),
+- a field's meaning changes, or
+- the shape is restructured.
+
+A schema accumulating many optional fields is a named smell that a consolidating bump is due — but the bump itself stays rare and semantic ("`@2` means `dueDate` is now guaranteed"), not a changelog entry for every field ever added. Bumping per addition costs a full-table rewrite per field, version-number noise, and — since records only reach a new version when the owning app next runs `migrateAll()` — doesn't even deliver per-record schema exactness in the interim; consumers face mixed-version data either way and need `baseId` queries plus duck typing regardless.
+
+> **Not yet implemented:** a drift guard that mechanically enforces this boundary (accepting additive-in-place diffs, rejecting anything else with "bump the version"), and validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
 
 ---
 
@@ -411,6 +433,7 @@ Version history is managed by the library as a side channel — apps do not mana
 ```ts
 type RecordVersion = {
   version: number;
+  typeId: string; // The Record's typeId at the moment this version was snapshotted
   content: object;
   updatedAt: Date;
   entityId?: string; // Who made this change
@@ -418,6 +441,8 @@ type RecordVersion = {
   permissions?: Permission[]; // Present if the record had permissions at snapshot time
 };
 ```
+
+`typeId` makes a version entry interpretable regardless of migration state: a snapshot taken before a migration records the pre-migration type, so restoring it later doesn't mislabel `@1`-shaped content as `@2` (see [restoreVersion](#type-migrations) and the `_grant` baseId matching this enables independent of exactly which version a snapshot predates).
 
 **API surface:**
 
@@ -560,6 +585,7 @@ Queries are expressed as a `Query` object passed to `stack.query()`. All adapter
 type Filter = {
   // Native fields
   typeId?: string | string[];
+  baseId?: string | string[]; // matches every version of a type family
   parentId?: string | null; // null = root records only
   appId?: string | string[];
   entityId?: string | string[];
@@ -584,6 +610,10 @@ type DateRange = {
   after?: Date;
 };
 ```
+
+`baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what fixes `typeId`-filtered queries silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set, so no adapter needs its own `baseId` concept. An unknown `baseId` returns an empty result set rather than throwing.
+
+By default, `query()` (like `get()`) returns Records exactly as stored — see [presentAt: 'latest'](#type-migrations) to migrate results in memory instead.
 
 ### Sorting and pagination
 

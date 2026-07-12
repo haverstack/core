@@ -242,10 +242,11 @@ describe('update', () => {
 });
 
 // -------------------------------------------------------
-// Lazy migration
+// Records at rest: get()/query() are stored-version by default,
+// migrateAll() is the only thing that ever changes disk state.
 // -------------------------------------------------------
 
-describe('lazy migration', () => {
+describe('records at rest', () => {
   beforeEach(async () => {
     await stack.defineType(
       NOTE_V2,
@@ -264,51 +265,190 @@ describe('lazy migration', () => {
     });
   });
 
-  test('get() returns migrated content in memory', async () => {
+  test('get() returns the record exactly as stored, no implicit migration', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const fetched = await stack.get(record.id);
+    expect(fetched?.typeId).toBe(NOTE_V1);
+    expect((fetched?.content as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  test('query() returns records exactly as stored, no implicit migration', async () => {
+    await stack.create(NOTE_V1, { text: 'hello' });
+    const result = await stack.query({ filter: { typeId: NOTE_V1 } });
+    expect(result.records[0]?.typeId).toBe(NOTE_V1);
+  });
+
+  test("update() validates against the record's own current typeId, never migrates it", async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const updated = await stack.update(record.id, { text: 'updated' });
+    expect(updated.typeId).toBe(NOTE_V1);
+    const raw = await adapter.getRecord(record.id);
+    expect(raw?.typeId).toBe(NOTE_V1); // still v1 on disk — update() never migrates
+    expect((raw?.content as Record<string, unknown>).text).toBe('updated');
+  });
+
+  test("update() validates only against v1's schema — a v2-only field passes through unchecked, and the record stays at v1", async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    // "title" isn't declared in v1's schema, so validateContent() doesn't
+    // check it (additive fields are ignored, not rejected) — but this is
+    // still a v1 record; only migrateAll() can move it to v2.
+    const updated = await stack.update(record.id, { title: 'not part of v1' });
+    expect(updated.typeId).toBe(NOTE_V1);
+    const raw = await adapter.getRecord(record.id);
+    expect(raw?.typeId).toBe(NOTE_V1);
+  });
+});
+
+describe('query — baseId filter', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+  });
+
+  test('matches records across every version of the family, including not-yet-migrated ones', async () => {
+    const v1 = await stack.create(NOTE_V1, { text: 'old' });
+    const v2 = await stack.create(NOTE_V2, { text: 'new', title: 'hi' });
+
+    const result = await stack.query({ filter: { baseId: 'com.example.test/note' } });
+
+    const ids = result.records.map((r) => r.id).sort();
+    expect(ids).toEqual([v1.id, v2.id].sort());
+  });
+
+  test('returns empty results for an unknown baseId rather than throwing', async () => {
+    const result = await stack.query({ filter: { baseId: 'com.example.test/nonexistent' } });
+    expect(result).toEqual({ records: [], cursor: null, total: 0 });
+  });
+
+  test('intersects with typeId when both are given', async () => {
+    await stack.create(NOTE_V1, { text: 'old' });
+    const v2 = await stack.create(NOTE_V2, { text: 'new', title: 'hi' });
+
+    const result = await stack.query({
+      filter: { baseId: 'com.example.test/note', typeId: NOTE_V2 },
+    });
+
+    expect(result.records.map((r) => r.id)).toEqual([v2.id]);
+  });
+
+  test('accepts an array of baseIds', async () => {
+    await stack.defineType('com.example.test/other@1', 'Other', {
+      text: { kind: 'text', required: true },
+    });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const other = await stack.create('com.example.test/other@1', { text: 'other' });
+
+    const result = await stack.query({
+      filter: { baseId: ['com.example.test/note', 'com.example.test/other'] },
+    });
+
+    const ids = result.records.map((r) => r.id).sort();
+    expect(ids).toEqual([note.id, other.id].sort());
+  });
+});
+
+describe("presentAt: 'latest' (explicit in-memory migration)", () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+
+    stack.registerMigration({
+      from: NOTE_V1,
+      to: NOTE_V2,
+      migrate: (content) => ({ ...content, title: '' }),
+    });
+  });
+
+  test("get({ presentAt: 'latest' }) returns migrated content in memory", async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const fetched = await stack.get(record.id, { presentAt: 'latest' });
     expect(fetched?.typeId).toBe(NOTE_V2);
     expect((fetched?.content as Record<string, unknown>).title).toBe('');
   });
 
-  test('get() does not write migrated content to disk', async () => {
+  test("get({ presentAt: 'latest' }) does not write migrated content to disk", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.get(record.id);
+    await stack.get(record.id, { presentAt: 'latest' });
     const raw = await adapter.getRecord(record.id);
     expect(raw?.typeId).toBe(NOTE_V1); // still v1 on disk
   });
 
-  test('get({ migrate: false }) returns raw stored record', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const raw = await stack.get(record.id, { migrate: false });
+  test("query({ presentAt: 'latest' }) migrates every result in memory", async () => {
+    await stack.create(NOTE_V1, { text: 'hello' });
+    const result = await stack.query({ filter: { typeId: NOTE_V1 }, presentAt: 'latest' });
+    expect(result.records[0]?.typeId).toBe(NOTE_V2);
+    expect((result.records[0]?.content as Record<string, unknown>).title).toBe('');
+    // Still not written to disk.
+    const raw = await adapter.getRecord(result.records[0]!.id);
     expect(raw?.typeId).toBe(NOTE_V1);
-    expect((raw?.content as Record<string, unknown>).title).toBeUndefined();
   });
 
-  test('update() commits migration to disk', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.update(record.id, { title: 'My Title' });
-    const raw = await adapter.getRecord(record.id);
-    expect(raw?.typeId).toBe(NOTE_V2);
-    expect((raw?.content as Record<string, unknown>).title).toBe('My Title');
-  });
-
-  test('update() merges patch against migrated content', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.update(record.id, {}); // empty patch, just commits migration
-    const raw = await adapter.getRecord(record.id);
-    expect((raw?.content as Record<string, unknown>).title).toBe(''); // migration default
-  });
-
-  test('warns when no migration path exists', async () => {
+  test('a single-version type with no migration history is trivially "latest" — no throw', async () => {
     const unmigratableType = 'com.example.test/other@1';
     await stack.defineType(unmigratableType, 'Other', {
       text: { kind: 'text', required: true },
     });
     const record = await stack.create(unmigratableType, { text: 'hello' });
-    // Should not throw — just warn and return raw
-    const fetched = await stack.get(record.id);
+    const fetched = await stack.get(record.id, { presentAt: 'latest' });
     expect(fetched?.typeId).toBe(unmigratableType);
+  });
+
+  test('stale-writer signal: a record newer than what this app instance has defined throws', async () => {
+    // stackA is fully up to date: knows v1 and v2, and writes a v2 record.
+    const stackA = await Stack.create(adapter);
+    await stackA.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await stackA.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    const record = await stackA.create(NOTE_V2, { text: 'hello', title: 'hi' });
+
+    // stackB simulates a stale binary sharing the same storage — its own
+    // startup code only ever defineType()'d v1, so it has no idea v2 exists.
+    const stackB = await Stack.create(adapter);
+    await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+
+    await expect(stackB.get(record.id, { presentAt: 'latest' })).rejects.toThrow(
+      StackMigrationError,
+    );
+    // Reading it as stored (the default) still works fine even for the stale app.
+    const fetched = await stackB.get(record.id);
+    expect(fetched?.typeId).toBe(NOTE_V2);
+  });
+
+  test('registration gap: an older record with no migration path to a type this app has defined throws', async () => {
+    const gapAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const gapStack = await Stack.create(gapAdapter);
+    await gapStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await gapStack.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    // Note: no registerMigration() call — this app knows v2 exists but has
+    // no path to reach it from a v1 record.
+    const record = await gapStack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(gapStack.get(record.id, { presentAt: 'latest' })).rejects.toThrow(
+      StackMigrationError,
+    );
   });
 
   test('chained migration: v1 → v2 → v3', async () => {
@@ -330,7 +470,7 @@ describe('lazy migration', () => {
     });
 
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const fetched = await stack.get(record.id);
+    const fetched = await stack.get(record.id, { presentAt: 'latest' });
     expect(fetched?.typeId).toBe(NOTE_V3);
     expect((fetched?.content as Record<string, unknown>).title).toBe('');
     expect((fetched?.content as Record<string, unknown>).pinned).toBe(false);
@@ -420,6 +560,36 @@ describe('migrateAll', () => {
     const versions = await stack.getVersions(record.id);
     expect(versions.length).toBe(1);
     expect(versions[0].content).toEqual({ text: 'original' });
+    expect(versions[0].typeId).toBe(NOTE_V1);
+  });
+
+  test('aborts immediately if a migration function produces invalid content, leaving that record unmigrated', async () => {
+    // Fresh stack so this test can register its own (deliberately buggy)
+    // migration instead of the valid one from the outer beforeEach.
+    const buggyAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const buggyStack = await Stack.create(buggyAdapter);
+    await buggyStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await buggyStack.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    buggyStack.registerMigration({
+      from: NOTE_V1,
+      to: NOTE_V2,
+      // Buggy migration: drops the required "text" field instead of carrying it forward.
+      migrate: () => ({ title: '' }),
+    });
+
+    const record = await buggyStack.create(NOTE_V1, { text: 'original' });
+    await expect(buggyStack.migrateAll('com.example.test/note')).rejects.toThrow(
+      StackValidationError,
+    );
+
+    const raw = await buggyAdapter.getRecord(record.id);
+    expect(raw?.typeId).toBe(NOTE_V1); // never committed
+    expect(await buggyStack.getVersions(record.id)).toEqual([]); // no snapshot either
   });
 });
 

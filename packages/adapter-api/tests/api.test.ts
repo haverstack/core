@@ -54,6 +54,7 @@ const NOTE_TYPE_RAW = {
 
 const VERSION_RAW = {
   version: 1,
+  typeId: 'com.example/note@1',
   content: { text: 'original' },
   updatedAt: '2024-01-01T00:00:00.000Z',
   entityId: 'entity-owner-123',
@@ -532,6 +533,7 @@ describe('getVersions', () => {
     const versions = await adapter.getVersions('rec-abc123');
     expect(versions).toHaveLength(1);
     expect(versions[0].version).toBe(1);
+    expect(versions[0].typeId).toBe('com.example/note@1');
     expect(versions[0].updatedAt).toBeInstanceOf(Date);
     expect(versions[0].entityId).toBe('entity-owner-123');
   });
@@ -594,7 +596,12 @@ describe('saveVersion', () => {
   test('is a no-op — does not make any HTTP requests', async () => {
     const adapter = await openAdapter();
     const callsBefore = mockFetch.mock.calls.length;
-    const v: RecordVersion = { version: 1, content: { text: 'v1' }, updatedAt: new Date() };
+    const v: RecordVersion = {
+      version: 1,
+      typeId: 'com.example/note@1',
+      content: { text: 'v1' },
+      updatedAt: new Date(),
+    };
     await expect(adapter.saveVersion('rec-abc123', v)).resolves.toBeUndefined();
     expect(mockFetch.mock.calls.length).toBe(callsBefore);
   });

@@ -254,6 +254,7 @@ describe('records — CRUD', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: record.content,
       updatedAt: record.updatedAt,
     });
@@ -771,6 +772,7 @@ describe('versions', () => {
     await adapter.createRecord(record);
     const version = {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date('2024-01-01'),
       entityId: 'entity-123',
@@ -788,11 +790,13 @@ describe('versions', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'v1' },
       updatedAt: new Date(),
     });
     await adapter.saveVersion(record.id, {
       version: 2,
+      typeId: record.typeId,
       content: { text: 'v2' },
       updatedAt: new Date(),
     });
@@ -813,7 +817,12 @@ describe('versions', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    const v = { version: 1, content: { text: 'original' }, updatedAt: new Date() };
+    const v = {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date(),
+    };
     await adapter.saveVersion(record.id, v);
     await adapter.saveVersion(record.id, v);
     const versions = await adapter.getVersions(record.id);
@@ -826,6 +835,7 @@ describe('versions', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date(),
       associations: [{ kind: 'tag', label: 'starred' }],
@@ -842,6 +852,7 @@ describe('versions', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date(),
     });
@@ -858,6 +869,7 @@ describe('restoreVersion', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date(),
     });
@@ -874,6 +886,7 @@ describe('restoreVersion', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date(),
       associations: [{ kind: 'tag', label: 'starred' }],
@@ -890,6 +903,7 @@ describe('restoreVersion', () => {
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: record.typeId,
       content: { text: 'original searchable text' },
       updatedAt: new Date(),
     });
@@ -1013,6 +1027,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     );
     await adapter.saveVersion('meta1', {
       version: 1,
+      typeId: ATTACHMENT_TYPE,
       content: { fileId: 'file-1' },
       updatedAt: new Date(),
     });

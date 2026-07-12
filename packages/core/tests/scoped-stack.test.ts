@@ -280,6 +280,7 @@ describe('ScopedStack — versions', () => {
     const record = await adapter.createRecord(makeRecord());
     await adapter.saveVersion(record.id, {
       version: 1,
+      typeId: NOTE,
       content: { text: 'old' },
       updatedAt: new Date(),
     });
@@ -292,7 +293,12 @@ describe('ScopedStack — versions', () => {
 
   test('getVersions/getVersion enforce read access', async () => {
     const record = await adapter.createRecord(makeRecord());
-    await adapter.saveVersion(record.id, { version: 1, content: {}, updatedAt: new Date() });
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE,
+      content: {},
+      updatedAt: new Date(),
+    });
     await expect(stack.asEntity(STRANGER).getVersions(record.id)).rejects.toThrow(
       StackPermissionError,
     );
@@ -561,6 +567,19 @@ describe('ScopedStack — grant-based read', () => {
     await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
       StackPermissionError,
     );
+  });
+
+  test('a grant on comment@1 covers comment@2 records — version bump does not orphan it', async () => {
+    const COMMENT_V2 = 'com.example.test/comment@2';
+    await stack.defineType(
+      COMMENT_V2,
+      'Comment',
+      { text: { kind: 'text', required: true }, edited: { kind: 'boolean' } },
+      { migratesFrom: COMMENT },
+    );
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT_V2, { text: 'hello', edited: false });
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
 });
 
