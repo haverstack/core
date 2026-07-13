@@ -128,6 +128,18 @@ describe('attachments', () => {
     await adapter.deleteAttachment(fileId);
     await expect(adapter.getAttachment(fileId)).rejects.toThrow();
   });
+
+  test('listFiles reports stored blobs with size and modifiedAt', async () => {
+    const adapter = await initAdapter();
+    const fileId = await adapter.putAttachment(Buffer.from('hello attachment'));
+
+    const files = await adapter.listFiles();
+
+    expect(files).toHaveLength(1);
+    expect(files[0].fileId).toBe(fileId);
+    expect(files[0].size).toBe(Buffer.from('hello attachment').byteLength);
+    expect(files[0].modifiedAt).toBeInstanceOf(Date);
+  });
 });
 
 // -------------------------------------------------------

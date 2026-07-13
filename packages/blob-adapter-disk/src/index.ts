@@ -9,9 +9,9 @@
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
-import { readFile, writeFile, unlink } from 'fs/promises';
+import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
 import { join } from 'path';
-import type { StackBlobAdapter, FileId } from '@haverstack/core';
+import type { StackBlobAdapter, BlobFileInfo, FileId } from '@haverstack/core';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -47,5 +47,16 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     } catch {
       // Non-fatal — file may already be gone.
     }
+  }
+
+  async listFiles(): Promise<BlobFileInfo[]> {
+    const entries = await readdir(this.dir);
+    const fileIds = entries.filter((name) => SHA256_HEX_RE.test(name));
+    return Promise.all(
+      fileIds.map(async (fileId) => {
+        const stats = await stat(join(this.dir, fileId));
+        return { fileId, size: stats.size, modifiedAt: stats.mtime };
+      }),
+    );
   }
 }

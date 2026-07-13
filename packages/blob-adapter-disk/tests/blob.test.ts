@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { DiskBlobAdapter } from '../src/index.js';
@@ -89,5 +89,44 @@ describe('DiskBlobAdapter', () => {
     expect(existsSync(newDir)).toBe(false);
     new DiskBlobAdapter(newDir);
     expect(existsSync(newDir)).toBe(true);
+  });
+
+  describe('listFiles', () => {
+    test('returns an empty array for an empty store', async () => {
+      expect(await adapter.listFiles()).toEqual([]);
+    });
+
+    test('lists every stored blob with fileId and size', async () => {
+      const id1 = await adapter.putAttachment(Buffer.from('hello'));
+      const id2 = await adapter.putAttachment(Buffer.from('a longer blob body'));
+
+      const files = await adapter.listFiles();
+      expect(files.map((f) => f.fileId).sort()).toEqual([id1, id2].sort());
+      expect(files.find((f) => f.fileId === id1)?.size).toBe(Buffer.from('hello').byteLength);
+      expect(files.find((f) => f.fileId === id2)?.size).toBe(
+        Buffer.from('a longer blob body').byteLength,
+      );
+    });
+
+    test('each entry carries a modifiedAt date', async () => {
+      const fileId = await adapter.putAttachment(Buffer.from('timestamped'));
+      const [file] = await adapter.listFiles();
+      expect(file.modifiedAt).toBeInstanceOf(Date);
+      expect(file.fileId).toBe(fileId);
+    });
+
+    test('deleted blobs no longer appear', async () => {
+      const fileId = await adapter.putAttachment(Buffer.from('temporary'));
+      await adapter.deleteAttachment(fileId);
+      expect(await adapter.listFiles()).toEqual([]);
+    });
+
+    test('ignores non-fileId entries in the storage directory', async () => {
+      const fileId = await adapter.putAttachment(Buffer.from('real blob'));
+      writeFileSync(join(testDir, '.DS_Store'), 'stray file');
+
+      const files = await adapter.listFiles();
+      expect(files.map((f) => f.fileId)).toEqual([fileId]);
+    });
   });
 });

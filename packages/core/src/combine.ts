@@ -43,9 +43,20 @@ export function combineAdapters(parts: {
     getType: (id) => parts.record.getType(id),
     listTypes: () => parts.record.listTypes(),
 
+    // Conditionally spread so an unimplemented optional capability stays
+    // absent on the combined adapter, rather than silently becoming
+    // "supported" via a wrapper that forwards to a missing method.
+    ...(parts.record.deleteUnreferencedAttachmentRecords && {
+      deleteUnreferencedAttachmentRecords: (fileId: string, metadataTypeId: string) =>
+        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeId),
+    }),
+
     putAttachment: (data) => parts.blob.putAttachment(data),
     getAttachment: (id) => parts.blob.getAttachment(id),
     deleteAttachment: (id) => parts.blob.deleteAttachment(id),
+    ...(parts.blob.listFiles && {
+      listFiles: () => parts.blob.listFiles!(),
+    }),
 
     async flush() {
       await parts.record.flush?.();

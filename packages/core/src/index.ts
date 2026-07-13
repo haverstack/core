@@ -25,6 +25,8 @@ export type {
   StackOptions,
   GetRecordOptions,
   DeleteRecordOptions,
+  CollectAttachmentGarbageOptions,
+  CollectAttachmentGarbageResult,
 } from './stack.js';
 
 // Permissions
@@ -62,6 +64,7 @@ export type {
   StackFeatures,
   StackRecordAdapter,
   StackBlobAdapter,
+  BlobFileInfo,
   StackAdapter,
   StackTokenStore,
   TokenInfo,

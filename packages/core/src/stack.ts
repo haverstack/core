@@ -74,6 +74,22 @@ export type StackOptions = {
   idTimestampSkewMs?: number | null;
 };
 
+export type CollectAttachmentGarbageOptions = {
+  /**
+   * How recent an unreferenced file must be to survive collection, covering
+   * the legitimate upload-then-associate window. Default: 24 hours (see
+   * DEFAULT_GC_GRACE_MS). Pass 0 to collect anything unreferenced right now.
+   */
+  graceMs?: number;
+  /** Compute what would be deleted without deleting anything. Default: false. */
+  dryRun?: boolean;
+};
+
+export type CollectAttachmentGarbageResult = {
+  deleted: string[];
+  reclaimedBytes: number;
+};
+
 export type GetRecordOptions = {
   /**
    * Records are returned exactly as stored by default ("stored"). Pass
@@ -160,6 +176,16 @@ const RESERVED_ID_PREFIX = '_';
 const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Default grace period for Stack.collectAttachmentGarbage(): how recent an
+ * unreferenced file's newest _attachment@1 metadata record (or, for bare
+ * bytes with none, the blob's own modifiedAt) must be to still protect it
+ * from collection — covering the legitimate upload-then-associate window.
+ * Same value and rationale as DEFAULT_ID_TIMESTAMP_SKEW_MS: a generous
+ * tolerance at personal-stack scale.
+ */
+const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Format and reserved-prefix checks — full-trust context (Stack.create()).
  * Checked before the format check: the Crockford charset already excludes
  * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
@@ -230,6 +256,9 @@ export interface StackClient {
   putAttachmentBytes(data: Uint8Array): Promise<string>;
   putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
   deleteAttachment(fileId: string): Promise<void>;
+  collectAttachmentGarbage(
+    opts?: CollectAttachmentGarbageOptions,
+  ): Promise<CollectAttachmentGarbageResult>;
 }
 
 // -------------------------------------------------------
@@ -944,7 +973,15 @@ export class Stack implements StackClient {
     fileId: string,
     metadataTypeId: string,
   ): Promise<string[]> {
-    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    // includeDeleted: a soft-deleted record is recoverable via undelete()
+    // (#59/#60), so it still counts as a reference — otherwise deleting the
+    // file now leaves that record's reference dangling the moment it's
+    // undeleted. Matches the atomic adapter path (record-logic.ts), which
+    // never filters on deleted_at at all.
+    const refResult = await this.query({
+      filter: { attachmentFileId: fileId, includeDeleted: true },
+      limit: 1,
+    });
     if (refResult.records.length > 0) {
       throw new StackConflictError('Attachment is still referenced by one or more records');
     }
@@ -952,10 +989,13 @@ export class Stack implements StackClient {
     // Cursor-walked: on adapters without contentFieldQuery, every
     // _attachment@1 record must be scanned in memory below, and a single
     // default page would leave metadata beyond page one un-deleted —
-    // exactly the orphan this method exists to prevent.
+    // exactly the orphan this method exists to prevent. includeDeleted here
+    // too, so a soft-deleted metadata record for this fileId is cleaned up
+    // rather than left behind pointing at bytes that no longer exist.
     const metaResults = await queryAllPages((q) => this.query(q), {
       filter: {
         typeId: metadataTypeId,
+        includeDeleted: true,
         ...(this.features.contentFieldQuery && { content: { fileId } }),
       },
     });
@@ -968,6 +1008,105 @@ export class Stack implements StackClient {
     }
 
     return metaRecords.map((r) => r.id);
+  }
+
+  /**
+   * Sweep for attachment bytes no longer reachable from any record — live
+   * or soft-deleted — and delete them (bytes + _attachment@1 metadata).
+   * "Reachable" is exactly what deleteAttachment()'s own reference check
+   * means: an `attachment` Association or a `file-ref` content field (#63)
+   * on a record in any state, since a soft-deleted record is recoverable
+   * via undelete() and must find its attachments intact (#59/#60).
+   *
+   * _attachment@1 metadata records never themselves count as references
+   * (else nothing would ever be garbage), but a file's newest metadata
+   * record — or, for bare bytes with no metadata at all, the blob's own
+   * modifiedAt — must be older than `graceMs` to be collected. This covers
+   * the legitimate upload-then-associate window.
+   *
+   * Bare-bytes orphans (bytes with zero metadata records, left by a
+   * putAttachment() that stored bytes but crashed before creating the
+   * metadata record) are only discoverable via StackBlobAdapter.listFiles()
+   * — optional, so this sweep simply can't find that orphan class on an
+   * adapter that doesn't implement it.
+   *
+   * Deletion goes through deleteAttachment() itself, so its usual conflict
+   * check runs once more per file at delete time; a file that turns out to
+   * be referenced or already gone by then is skipped, not treated as a
+   * sweep failure.
+   */
+  async collectAttachmentGarbage(
+    opts: CollectAttachmentGarbageOptions = {},
+  ): Promise<CollectAttachmentGarbageResult> {
+    const graceMs = opts.graceMs ?? DEFAULT_GC_GRACE_MS;
+    const dryRun = opts.dryRun ?? false;
+    const now = Date.now();
+
+    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
+    const metaRecords = await queryAllPages((q) => this.query(q), {
+      filter: { typeId: metadataTypeId, includeDeleted: true },
+    });
+
+    // Newest metadata record's createdAt per fileId, and its size (constant
+    // across records sharing a fileId, since content-addressing guarantees
+    // identical bytes) — used for the grace check and reclaimedBytes.
+    const metaByFile = new Map<string, { newestAt: number; size: number }>();
+    for (const record of metaRecords) {
+      const content = record.content as AttachmentContent;
+      const createdAt = record.createdAt.getTime();
+      const existing = metaByFile.get(content.fileId);
+      if (!existing || createdAt > existing.newestAt) {
+        metaByFile.set(content.fileId, { newestAt: createdAt, size: content.size });
+      }
+    }
+
+    // Bare-bytes orphans: blobs with zero metadata records, only
+    // discoverable if the blob adapter implements listFiles().
+    const blobByFile = new Map<string, { modifiedAt: number; size: number }>();
+    if (this.adapter.listFiles) {
+      for (const file of await this.adapter.listFiles()) {
+        blobByFile.set(file.fileId, { modifiedAt: file.modifiedAt.getTime(), size: file.size });
+      }
+    }
+
+    const candidateFileIds = new Set([...metaByFile.keys(), ...blobByFile.keys()]);
+
+    const deleted: string[] = [];
+    let reclaimedBytes = 0;
+
+    for (const fileId of candidateFileIds) {
+      const refResult = await this.query({
+        filter: { attachmentFileId: fileId, includeDeleted: true },
+        limit: 1,
+      });
+      if (refResult.records.length > 0) continue;
+
+      const meta = metaByFile.get(fileId);
+      const blob = blobByFile.get(fileId);
+      const newestAt = meta?.newestAt ?? blob?.modifiedAt;
+      if (newestAt !== undefined && now - newestAt < graceMs) continue;
+
+      const size = meta?.size ?? blob?.size ?? 0;
+
+      if (dryRun) {
+        deleted.push(fileId);
+        reclaimedBytes += size;
+        continue;
+      }
+
+      try {
+        await this.deleteAttachment(fileId);
+      } catch (err) {
+        // Raced with a new reference, or another sweep/call already removed
+        // it — not a sweep failure, just move on to the next candidate.
+        if (err instanceof StackConflictError || err instanceof StackNotFoundError) continue;
+        throw err;
+      }
+      deleted.push(fileId);
+      reclaimedBytes += size;
+    }
+
+    return { deleted, reclaimedBytes };
   }
 
   // -------------------------------------------------------
@@ -1473,5 +1612,18 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError('Only the stack owner can delete attachments');
     }
     return this.stack.deleteAttachment(fileId);
+  }
+
+  /**
+   * Sweep for unreferenced attachment bytes and delete them. Only the stack
+   * owner may run this. Delegates to Stack.collectAttachmentGarbage().
+   */
+  async collectAttachmentGarbage(
+    opts?: CollectAttachmentGarbageOptions,
+  ): Promise<CollectAttachmentGarbageResult> {
+    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+      throw new StackPermissionError('Only the stack owner can collect attachment garbage');
+    }
+    return this.stack.collectAttachmentGarbage(opts);
   }
 }
