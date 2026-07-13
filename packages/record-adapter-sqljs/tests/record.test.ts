@@ -697,6 +697,43 @@ describe('file-ref indexing', () => {
     ).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
+
+  // File-ref field names are cached per typeId (keyed off saveType()) so that
+  // syncFileRefs() doesn't re-query and re-parse the schema on every write —
+  // this guards against that cache going stale if a type is redefined.
+  test('redefining a type via saveType updates which fields are treated as file-ref', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(FILE_REF_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+    let result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+
+    // Redefine the same typeId so coverFileId is no longer a file-ref field.
+    await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
+    await adapter.patchContent('r1', { coverFileId: 'file-1' });
+
+    result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records).toEqual([]);
+  });
+
+  // A cold adapter (opened from persisted bytes) has an empty in-memory
+  // cache even though the `types` table already has the schema on disk —
+  // the lazy-fill fallback in getFileRefFields() must still find it.
+  test('indexes file-ref fields for a type saved before this adapter instance existed', async () => {
+    const { persist, calls } = capturingPersist();
+    const first = await initAdapter({ persist });
+    await first.saveType(FILE_REF_TYPE);
+
+    const reopened = await SQLiteRecordAdapter.open({ bytes: calls[calls.length - 1] });
+    await reopened.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+
+    const result = await reopened.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
 });
 
 // -------------------------------------------------------

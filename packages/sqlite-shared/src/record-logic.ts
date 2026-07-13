@@ -44,7 +44,21 @@ export type SharedSqlRecordLogicDeps = {
   onWrite?: () => void | Promise<void>;
 };
 
+/** Top-level field names in `schema` whose kind is 'file-ref'. */
+const fileRefFieldNames = (schema: Record<string, { kind?: string }>): string[] =>
+  Object.keys(schema).filter((field) => schema[field].kind === 'file-ref');
+
 export class SharedSqlRecordLogic {
+  /**
+   * Per-typeId cache of file-ref field names, so syncFileRefs() doesn't hit
+   * the `types` table and re-parse its schema JSON on every single write —
+   * most types have no file-ref fields, and this makes that the common case
+   * cost one lookup ever, not one per write. Populated eagerly in saveType()
+   * and lazily (via getFileRefFields) for types saved before this cache
+   * existed in the process, e.g. right after open().
+   */
+  private readonly fileRefFieldsByType = new Map<string, string[]>();
+
   constructor(private readonly deps: SharedSqlRecordLogicDeps) {}
 
   private get exec(): SqlExecutor {
@@ -335,6 +349,10 @@ export class SharedSqlRecordLogic {
         toMs(type.createdAt),
       ],
     );
+    this.fileRefFieldsByType.set(
+      type.id,
+      fileRefFieldNames(type.schema as Record<string, { kind?: string }>),
+    );
     await this.write();
   }
 
@@ -427,23 +445,39 @@ export class SharedSqlRecordLogic {
   }
 
   /**
+   * File-ref field names for typeId, from the in-memory cache — falling
+   * back to a `types` lookup (and populating the cache) only for a typeId
+   * this process hasn't seen via saveType() yet, e.g. right after open().
+   */
+  private getFileRefFields(typeId: string): string[] {
+    const cached = this.fileRefFieldsByType.get(typeId);
+    if (cached) return cached;
+
+    const typeRow = this.exec.get<{ schema: string }>('SELECT schema FROM types WHERE id = ?', [
+      typeId,
+    ]);
+    const fields = typeRow
+      ? fileRefFieldNames(JSON.parse(typeRow.schema) as Record<string, { kind?: string }>)
+      : [];
+    this.fileRefFieldsByType.set(typeId, fields);
+    return fields;
+  }
+
+  /**
    * Replace a record's file_refs rows with whatever its content currently
    * holds in top-level file-ref fields, per its type's schema. Called on
    * every write that can change content or typeId, so the index never
    * drifts from what's actually stored. Only top-level scalars are
    * indexed — same limit as content-field query filtering generally.
+   * The vast majority of types have no file-ref fields at all, so the
+   * schema lookup is cached (see fileRefFieldsByType) — only the cheap,
+   * indexed delete runs unconditionally on every write.
    */
   private syncFileRefs(recordId: string, typeId: string, content: Record<string, unknown>): void {
     this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [recordId]);
 
-    const typeRow = this.exec.get<{ schema: string }>('SELECT schema FROM types WHERE id = ?', [
-      typeId,
-    ]);
-    if (!typeRow) return;
-
-    const schema = JSON.parse(typeRow.schema) as Record<string, { kind?: string }>;
-    for (const [field, def] of Object.entries(schema)) {
-      if (def.kind !== 'file-ref') continue;
+    const fields = this.getFileRefFields(typeId);
+    for (const field of fields) {
       const value = content[field];
       if (typeof value === 'string') {
         this.exec.run(
