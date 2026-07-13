@@ -581,6 +581,23 @@ describe('ScopedStack — grant-based read', () => {
     const record = await stack.create(COMMENT_V2, { text: 'hello', edited: false });
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
+
+  // #50: the grant prefetch used to take a single unbounded query() page,
+  // so a grant past MemoryAdapter's 50-record default page went unseen —
+  // a legitimate grant silently stopped working with no error.
+  test('a grant beyond the first page (>50 _grant records) is still honored', async () => {
+    for (let i = 0; i < 55; i++) {
+      await stack.grant(STRANGER, [
+        { actions: ['read-any'], typeId: `com.example.test/filler${i}@1` },
+      ]);
+    }
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+    const result = await stack.asEntity(MEMBER).query({ filter: { typeId: COMMENT } });
+    expect(result.records.map((r) => r.id)).toContain(record.id);
+  });
 });
 
 // -------------------------------------------------------
@@ -785,5 +802,68 @@ describe('ScopedStack.putAttachmentBytes', () => {
     const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
     expect(result.records).toHaveLength(1);
     expect(result.records[0].content).toMatchObject({ fileId, mimeType: 'image/png' });
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack.getAttachment — owner, referencing-record, and uploader access
+// -------------------------------------------------------
+
+describe('ScopedStack.getAttachment', () => {
+  test('owner can always download', async () => {
+    const bytes = await stack.asEntity(OWNER).getAttachment('any-file-id');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('requester who can read a record referencing the file can download', async () => {
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
+    const record = await stack.create(NOTE, { text: 'has attachment' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId: 'file-referenced',
+      mimeType: 'image/png',
+    });
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment('file-referenced');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('uploader can download their own upload before it is associated with any record', async () => {
+    await stack.create(
+      '_attachment@1',
+      { fileId: 'file-mine', mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment('file-mine');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('requester with no relation to the file is denied', async () => {
+    await expect(stack.asEntity(STRANGER).getAttachment('file-nobody')).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // #50: on adapters without contentFieldQuery, the uploader check used
+  // limit: 1 even though matching happens in memory — it could only ever
+  // see one of the requester's uploads, false-denying every other one.
+  // MemoryAdapter returns records in insertion order with no sort applied,
+  // so under the old code this second upload was never even considered.
+  test('uploader can access an upload that is not their first (#50 regression)', async () => {
+    await stack.create(
+      '_attachment@1',
+      { fileId: 'file-first', mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+    await stack.create(
+      '_attachment@1',
+      { fileId: 'file-second', mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment('file-second');
+    expect(bytes).toBeInstanceOf(Uint8Array);
   });
 });

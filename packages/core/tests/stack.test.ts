@@ -1124,6 +1124,34 @@ describe('deleteAttachment', () => {
     );
   });
 
+  // #50: the fallback's metadata scan used to take a single unbounded
+  // query() page, so on adapters without contentFieldQuery — where matching
+  // happens in memory — metadata beyond page one was never found, leaving
+  // it orphaned once the bytes were deleted.
+  test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
+    const targetFileId = 'target-file-abc';
+    for (let i = 0; i < 55; i++) {
+      await stack.create('_attachment@1', {
+        fileId: `filler-${i}`,
+        mimeType: 'image/png',
+        size: 1,
+      });
+    }
+    const target = await stack.create('_attachment@1', {
+      fileId: targetFileId,
+      mimeType: 'image/png',
+      size: 1,
+    });
+
+    await stack.deleteAttachment(targetFileId);
+
+    expect(await stack.get(target.id)).toBeNull();
+    const remaining = await stack.query({ filter: { typeId: '_attachment@1' }, limit: 1000 });
+    expect(
+      remaining.records.some((r) => (r.content as Record<string, unknown>).fileId === targetFileId),
+    ).toBe(false);
+  });
+
   test('prefers the adapter atomic path over the fallback when the adapter implements it', async () => {
     const calls: string[] = [];
     class AtomicAdapter extends MemoryAdapter {
