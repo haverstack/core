@@ -530,6 +530,136 @@ describe('records — queries', () => {
 });
 
 // -------------------------------------------------------
+// file-ref indexing (#63)
+// -------------------------------------------------------
+
+describe('file-ref indexing', () => {
+  const FILE_REF_TYPE = {
+    id: 'com.example.test/photo-note@1',
+    baseId: 'com.example.test/photo-note',
+    version: 1,
+    name: 'Photo note',
+    schema: { coverFileId: { kind: 'file-ref' as const, required: true } },
+    schemaHash: 'abc123',
+    createdAt: new Date(),
+  };
+
+  const STRING_TYPE = {
+    id: 'com.example.test/photo-note-plain@1',
+    baseId: 'com.example.test/photo-note-plain',
+    version: 1,
+    name: 'Photo note (plain)',
+    schema: { coverFileId: { kind: 'string' as const, required: true } },
+    schemaHash: 'def456',
+    createdAt: new Date(),
+  };
+
+  test('attachmentFileId filter matches a record via a top-level file-ref field', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(FILE_REF_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+
+    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('attachmentFileId filter does not match a plain string field holding the same value', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(STRING_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: STRING_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+
+    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records).toEqual([]);
+  });
+
+  test('patchContent that changes the file-ref value updates the index', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(FILE_REF_TYPE);
+    const record = makeRecord({
+      id: 'r1',
+      typeId: FILE_REF_TYPE.id,
+      content: { coverFileId: 'file-1' },
+    });
+    await adapter.createRecord(record);
+    await adapter.patchContent('r1', { coverFileId: 'file-2' });
+
+    const oldMatch = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(oldMatch.records).toEqual([]);
+    const newMatch = await adapter.queryRecords({ filter: { attachmentFileId: 'file-2' } });
+    expect(newMatch.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('hard delete removes the record from file-ref matching', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(FILE_REF_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+    await adapter.deleteRecord('r1', { hard: true });
+
+    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records).toEqual([]);
+  });
+
+  test('deleteUnreferencedAttachmentRecords is blocked by a content-held file-ref field', async () => {
+    const adapter = await initAdapter();
+    const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+    await adapter.saveType(FILE_REF_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+
+    await expect(
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE),
+    ).rejects.toThrow(StackConflictError);
+    expect(await adapter.getRecord('meta1')).not.toBeNull();
+  });
+
+  // File-ref field names are cached per typeId (keyed off saveType()) so that
+  // syncFileRefs() doesn't re-query and re-parse the schema on every write —
+  // this guards against that cache going stale if a type is redefined.
+  test('redefining a type via saveType updates which fields are treated as file-ref', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(FILE_REF_TYPE);
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+    let result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+
+    // Redefine the same typeId so coverFileId is no longer a file-ref field.
+    await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
+    await adapter.patchContent('r1', { coverFileId: 'file-1' });
+
+    result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records).toEqual([]);
+  });
+
+  // A cold adapter has an empty in-memory cache even though the `types`
+  // table already has the schema on disk — the lazy-fill fallback in
+  // getFileRefFields() must still find it.
+  test('indexes file-ref fields for a type saved before this adapter instance existed', async () => {
+    const first = await initAdapter();
+    await first.saveType(FILE_REF_TYPE);
+
+    const reopened = await NativeSQLiteRecordAdapter.open({ path: dbPath });
+    await reopened.createRecord(
+      makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
+    );
+
+    const result = await reopened.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+});
+
+// -------------------------------------------------------
 // Associations
 // -------------------------------------------------------
 

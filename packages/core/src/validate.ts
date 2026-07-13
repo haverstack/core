@@ -12,6 +12,9 @@ import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 
 const MAX_VALIDATION_DEPTH = 32;
 
+/** fileId format: SHA-256 hex, lowercase — matches blob-adapter-disk's assertFileId(). */
+const FILE_ID_RE = /^[0-9a-f]{64}$/;
+
 // -------------------------------------------------------
 // Validation errors
 // -------------------------------------------------------
@@ -30,6 +33,7 @@ const jsTypeForScalar = (kind: ScalarFieldKind): string => {
     case 'string':
     case 'text':
     case 'record-ref':
+    case 'file-ref':
       return 'string';
     case 'number':
       return 'number';
@@ -79,6 +83,16 @@ const validateField = (
       errors.push({
         path,
         message: `Expected ISO 8601 date string, got ${typeof value}`,
+      });
+    }
+    return;
+  }
+
+  if (def.kind === 'file-ref') {
+    if (typeof value !== 'string' || !FILE_ID_RE.test(value)) {
+      errors.push({
+        path,
+        message: 'Expected a 64-character lowercase hex fileId (SHA-256)',
       });
     }
     return;

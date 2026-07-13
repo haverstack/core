@@ -54,6 +54,17 @@ export const RECORD_SCHEMA_SQL = `
     created_at    INTEGER NOT NULL
   ) STRICT;
 
+  -- One row per top-level file-ref content field on a record, kept in sync
+  -- on every content/typeId write. Lets the attachmentFileId query filter
+  -- and deleteAttachment()'s reference check see content-held file
+  -- references, not just attachment associations (see #63).
+  CREATE TABLE IF NOT EXISTS file_refs (
+    record_id TEXT NOT NULL REFERENCES records(id),
+    field     TEXT NOT NULL,
+    file_id   TEXT NOT NULL,
+    PRIMARY KEY (record_id, field)
+  ) STRICT;
+
   -- Indexes
   CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
@@ -66,6 +77,7 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
+  CREATE INDEX IF NOT EXISTS idx_file_refs_file_id  ON file_refs(file_id);
 `;
 
 /**
