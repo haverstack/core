@@ -68,6 +68,33 @@ describe('scalar field validation', () => {
     expect(errorsFor({ parentId: 'abc123' }, schema)).toEqual([]);
   });
 
+  const FILE_ID = 'a'.repeat(64);
+
+  test('file-ref field accepts a well-formed SHA-256 hex fileId', () => {
+    const schema: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(errorsFor({ fileId: FILE_ID }, schema)).toEqual([]);
+  });
+
+  test('file-ref field rejects a string of the wrong length', () => {
+    const schema: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(paths({ fileId: 'abc123' }, schema)).toContain('fileId');
+  });
+
+  test('file-ref field rejects uppercase hex', () => {
+    const schema: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(paths({ fileId: FILE_ID.toUpperCase() }, schema)).toContain('fileId');
+  });
+
+  test('file-ref field rejects non-hex characters', () => {
+    const schema: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(paths({ fileId: 'g'.repeat(64) }, schema)).toContain('fileId');
+  });
+
+  test('file-ref field rejects a number', () => {
+    const schema: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(paths({ fileId: 12345 }, schema)).toContain('fileId');
+  });
+
   test('date field accepts ISO 8601 string', () => {
     const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
     expect(errorsFor({ dueAt: '2024-01-15T14:30:00Z' }, schema)).toEqual([]);

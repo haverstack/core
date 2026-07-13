@@ -186,6 +186,24 @@ describe('isCompatible', () => {
     expect(isCompatible(candidate, required)).toBe(false);
   });
 
+  test('file-ref candidate satisfies a required file-ref field', () => {
+    const candidate: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    const required: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  test('string candidate does not satisfy a required file-ref field', () => {
+    const candidate: TypeSchema = { fileId: { kind: 'string', required: true } };
+    const required: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
+  test('file-ref candidate does not satisfy a required string field', () => {
+    const candidate: TypeSchema = { fileId: { kind: 'file-ref', required: true } };
+    const required: TypeSchema = { fileId: { kind: 'string', required: true } };
+    expect(isCompatible(candidate, required)).toBe(false);
+  });
+
   test('nested required object property mismatch is not compatible', () => {
     const candidate: TypeSchema = {
       author: {

@@ -867,3 +867,36 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack.getAttachment — file-ref content fields convey access (#63)
+// -------------------------------------------------------
+
+describe('ScopedStack.getAttachment — file-ref content fields', () => {
+  const PHOTO_NOTE = 'com.example.test/photo-note@1';
+  const PHOTO_NOTE_PLAIN = 'com.example.test/photo-note-plain@1';
+  const FILE_ID = 'b'.repeat(64);
+
+  test('requester who can read a record with a file-ref field referencing the file can download', async () => {
+    await stack.defineType(PHOTO_NOTE, 'Photo note', {
+      coverFileId: { kind: 'file-ref', required: true },
+    });
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: PHOTO_NOTE }]);
+    await stack.create(PHOTO_NOTE, { coverFileId: FILE_ID });
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment(FILE_ID);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('a plain string field holding the same-looking fileId conveys no access', async () => {
+    await stack.defineType(PHOTO_NOTE_PLAIN, 'Photo note (plain)', {
+      coverFileId: { kind: 'string', required: true },
+    });
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: PHOTO_NOTE_PLAIN }]);
+    await stack.create(PHOTO_NOTE_PLAIN, { coverFileId: FILE_ID });
+
+    await expect(stack.asEntity(MEMBER).getAttachment(FILE_ID)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+});

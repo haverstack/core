@@ -185,7 +185,8 @@ type ScalarFieldKind =
   | 'boolean'
   | 'date'
   | 'text' // Long-form string (e.g. markdown body)
-  | 'record-ref'; // Reference to another record by ID
+  | 'record-ref' // Reference to another record by ID
+  | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex)
 
 type FieldDef =
   | { kind: ScalarFieldKind; required?: boolean }
@@ -210,6 +211,8 @@ type StackType = {
 
 **Array and object fields** are schema-validated on write but opaque to the query engine in v1 — only top-level scalar fields support exact-match content filtering in queries.
 
+**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#queries), [`deleteAttachment()`'s reference check](#attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working, but gets **none** of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way (matching the content-filtering limit above); a `file-ref` nested in an array or object is validated but not indexed as a reference.
+
 **Type identity:** Two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
 
 **Schema drift detection:** If two Records share a `typeId` but their Type definitions have different `schemaHash` values, that is unambiguously a bug — intentional changes always produce a new version number.
@@ -218,14 +221,15 @@ type StackType = {
 
 A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
 
-| required →   | `string` | `text` | `number` | `boolean` | `date` | `record-ref` |
-| ------------ | -------- | ------ | -------- | --------- | ------ | ------------ |
-| `string`     | ✓        | ✓      |          |           |        |              |
-| `text`       | ✓        | ✓      |          |           |        |              |
-| `number`     |          |        | ✓        |           |        |              |
-| `boolean`    |          |        |          | ✓         |        |              |
-| `date`       |          |        |          |           | ✓      |              |
-| `record-ref` |          |        |          |           |        | ✓            |
+| required →   | `string` | `text` | `number` | `boolean` | `date` | `record-ref` | `file-ref` |
+| ------------ | -------- | ------ | -------- | --------- | ------ | ------------ | ---------- |
+| `string`     | ✓        | ✓      |          |           |        |              |            |
+| `text`       | ✓        | ✓      |          |           |        |              |            |
+| `number`     |          |        | ✓        |           |        |              |            |
+| `boolean`    |          |        |          | ✓         |        |              |            |
+| `date`       |          |        |          |           | ✓      |              |            |
+| `record-ref` |          |        |          |           |        | ✓            |            |
+| `file-ref`   |          |        |          |           |        |              | ✓          |
 
 `string` and `text` are mutually read-compatible — both are strings at the value level, and the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
 
@@ -570,7 +574,7 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
 
-- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file. Throws `StackConflictError` if any record still references the file. Throws `StackNotFoundError` if the file doesn't exist.
+- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file. Throws `StackConflictError` if any record still references the file — either via an `attachment` Association or via a top-level `file-ref` content field (see [Types](#types)). Throws `StackNotFoundError` if the file doesn't exist.
 - `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
 
 **Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
@@ -600,7 +604,7 @@ type Filter = {
   tags?: string[]; // records that have ALL of these tags
   hasAttachment?: string; // records with an attachment of this label
   relatedTo?: { recordId: string; label?: string };
-  attachmentFileId?: string; // records that reference a specific attachment file ID
+  attachmentFileId?: string; // records that reference a specific attachment file ID, via an `attachment` Association or a top-level `file-ref` content field
 
   // Content fields (exact match on top-level keys)
   content?: { [key: string]: unknown };

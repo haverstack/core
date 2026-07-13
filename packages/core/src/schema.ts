@@ -87,6 +87,7 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   boolean: ['boolean'],
   date: ['date'],
   'record-ref': ['record-ref'],
+  'file-ref': ['file-ref'],
 };
 
 // Candidate schemas can come from another app's Type definition (the

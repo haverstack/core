@@ -89,12 +89,14 @@ export const buildWhereClause = (
     params.push(f.hasAttachment);
   }
 
-  // Attachment file ID filter — find records that reference a specific file
+  // Attachment file ID filter — find records that reference a specific file,
+  // either via an attachment association or a top-level file-ref content field
   if (f.attachmentFileId) {
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)`,
+      `(EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)
+        OR EXISTS (SELECT 1 FROM file_refs fr WHERE fr.record_id = r.id AND fr.file_id = ?))`,
     );
-    params.push(f.attachmentFileId);
+    params.push(f.attachmentFileId, f.attachmentFileId);
   }
 
   // Relationship filter

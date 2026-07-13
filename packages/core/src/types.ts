@@ -108,7 +108,8 @@ export type ScalarFieldKind =
   | 'boolean'
   | 'date'
   | 'text' // Long-form string (e.g. markdown body)
-  | 'record-ref'; // Reference to another record by ID
+  | 'record-ref' // Reference to another record by ID
+  | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex) — indexed, unlike a plain `string` fileId
 
 export type ScalarFieldDef = {
   kind: ScalarFieldKind;

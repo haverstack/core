@@ -89,6 +89,7 @@ export class SharedSqlRecordLogic {
     }
 
     this.fts.insert(this.exec, record.id, JSON.stringify(record.content));
+    this.syncFileRefs(record.id, record.typeId, record.content);
     await this.write();
     return record;
   }
@@ -111,6 +112,7 @@ export class SharedSqlRecordLogic {
       [JSON.stringify(merged), toMs(new Date()), id],
     );
     this.fts.insert(this.exec, id, JSON.stringify(merged));
+    this.syncFileRefs(id, existing.typeId, merged);
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -130,11 +132,12 @@ export class SharedSqlRecordLogic {
     await this.write();
   }
 
-  /** Deletes a record's FTS entry, associations, versions, and row. No write() call — callers batch it. */
+  /** Deletes a record's FTS entry, associations, versions, file-refs, and row. No write() call — callers batch it. */
   private hardDeleteRecord(id: string): void {
     this.fts.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
+    this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
   }
 
@@ -172,6 +175,7 @@ export class SharedSqlRecordLogic {
       if (target.associations.length) this.insertAssociations(id, target.associations);
     }
     this.fts.insert(this.exec, id, JSON.stringify(target.content));
+    this.syncFileRefs(id, target.typeId, target.content);
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -190,6 +194,7 @@ export class SharedSqlRecordLogic {
       [toTypeId, JSON.stringify(content), toMs(new Date()), id],
     );
     this.fts.insert(this.exec, id, JSON.stringify(content));
+    this.syncFileRefs(id, toTypeId, content);
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -243,8 +248,11 @@ export class SharedSqlRecordLogic {
     this.exec.exec('BEGIN');
     try {
       const referenced = this.exec.all<{ found: number }>(
-        `SELECT 1 as found FROM associations WHERE kind = 'attachment' AND file_id = ? LIMIT 1`,
-        [fileId],
+        `SELECT 1 as found FROM associations WHERE kind = 'attachment' AND file_id = ?
+         UNION ALL
+         SELECT 1 FROM file_refs WHERE file_id = ?
+         LIMIT 1`,
+        [fileId, fileId],
       );
       if (referenced.length) {
         throw new StackConflictError('Attachment is still referenced by one or more records');
@@ -416,5 +424,33 @@ export class SharedSqlRecordLogic {
       [recordId],
     );
     return rows.map(rowToAssociation);
+  }
+
+  /**
+   * Replace a record's file_refs rows with whatever its content currently
+   * holds in top-level file-ref fields, per its type's schema. Called on
+   * every write that can change content or typeId, so the index never
+   * drifts from what's actually stored. Only top-level scalars are
+   * indexed — same limit as content-field query filtering generally.
+   */
+  private syncFileRefs(recordId: string, typeId: string, content: Record<string, unknown>): void {
+    this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [recordId]);
+
+    const typeRow = this.exec.get<{ schema: string }>('SELECT schema FROM types WHERE id = ?', [
+      typeId,
+    ]);
+    if (!typeRow) return;
+
+    const schema = JSON.parse(typeRow.schema) as Record<string, { kind?: string }>;
+    for (const [field, def] of Object.entries(schema)) {
+      if (def.kind !== 'file-ref') continue;
+      const value = content[field];
+      if (typeof value === 'string') {
+        this.exec.run(
+          'INSERT OR IGNORE INTO file_refs (record_id, field, file_id) VALUES (?, ?, ?)',
+          [recordId, field, value],
+        );
+      }
+    }
   }
 }

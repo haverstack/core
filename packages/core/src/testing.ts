@@ -56,6 +56,21 @@ export class MemoryAdapter implements StackAdapter {
     return { ...record, version: record.version + 1, updatedAt: new Date() };
   }
 
+  /**
+   * True if any top-level file-ref field in the record's registered type
+   * schema currently holds this fileId — the content-reference half of
+   * attachmentFileId matching (see #63). Mirrors sqlite-shared's file_refs
+   * index, computed on the fly since MemoryAdapter has no persisted index.
+   */
+  private hasFileRefTo(record: StackRecord, fileId: string): boolean {
+    const schema = this.types.get(record.typeId)?.schema;
+    if (!schema) return false;
+    const content = record.content as Record<string, unknown>;
+    return Object.entries(schema).some(
+      ([field, def]) => def.kind === 'file-ref' && content[field] === fileId,
+    );
+  }
+
   async patchContent(id: string, patch: Record<string, unknown | null>) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
@@ -124,10 +139,11 @@ export class MemoryAdapter implements StackAdapter {
       );
     }
     if (f.attachmentFileId) {
-      results = results.filter((r) =>
-        (r.associations ?? []).some(
-          (a) => a.kind === 'attachment' && a.fileId === f.attachmentFileId,
-        ),
+      const fileId = f.attachmentFileId;
+      results = results.filter(
+        (r) =>
+          (r.associations ?? []).some((a) => a.kind === 'attachment' && a.fileId === fileId) ||
+          this.hasFileRefTo(r, fileId),
       );
     }
     if (f.relatedTo) {
@@ -219,8 +235,12 @@ export class MemoryAdapter implements StackAdapter {
     return [...this.types.values()];
   }
 
-  async putAttachment(_data: Uint8Array): Promise<string> {
-    return 'file-123';
+  /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
+  async putAttachment(data: Uint8Array): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
   }
   async getAttachment(_fileId: string): Promise<Uint8Array> {
     return new Uint8Array();

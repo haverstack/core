@@ -1152,6 +1152,34 @@ describe('deleteAttachment', () => {
     ).toBe(false);
   });
 
+  // #63: a fileId held in a file-ref content field is a real reference —
+  // deleteAttachment()'s 409 check must see it, not just attachment associations.
+  test('throws StackConflictError when only a file-ref content field references the file (fallback path)', async () => {
+    const attachmentTypeId = 'com.example.test/photo-note@1';
+    await stack.defineType(attachmentTypeId, 'Photo note', {
+      coverFileId: { kind: 'file-ref', required: true },
+    });
+
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    await stack.create(attachmentTypeId, { coverFileId: fileId });
+
+    await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a plain string field holding a fileId conveys no delete protection', async () => {
+    const attachmentTypeId = 'com.example.test/photo-note-plain@1';
+    await stack.defineType(attachmentTypeId, 'Photo note (plain)', {
+      coverFileId: { kind: 'string', required: true },
+    });
+
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    await stack.create(attachmentTypeId, { coverFileId: fileId });
+
+    await expect(stack.deleteAttachment(fileId)).resolves.toBeUndefined();
+  });
+
   test('prefers the adapter atomic path over the fallback when the adapter implements it', async () => {
     const calls: string[] = [];
     class AtomicAdapter extends MemoryAdapter {
