@@ -425,6 +425,14 @@ export interface StackRecordAdapter {
   close?(): Promise<void>;
 }
 
+/** One stored blob, as reported by StackBlobAdapter.listFiles(). */
+export type BlobFileInfo = {
+  fileId: FileId;
+  size: number;
+  /** When the blob was written. Used to apply a GC grace period to fresh, not-yet-associated uploads. */
+  modifiedAt: Date;
+};
+
 /**
  * The blob-storage half of an adapter. Handles raw binary data only;
  * attachment metadata lives on _attachment@1 records in the record adapter.
@@ -434,6 +442,18 @@ export interface StackBlobAdapter {
   putAttachment(data: Uint8Array): Promise<FileId>;
   getAttachment(fileId: FileId): Promise<Uint8Array>;
   deleteAttachment(fileId: FileId): Promise<void>;
+
+  /**
+   * Enumerate every blob currently in storage. Optional — capability-flagged,
+   * like StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Without it,
+   * Stack.collectAttachmentGarbage() can still collect files that have
+   * _attachment@1 metadata but no live/soft-deleted referencing record; it
+   * just can't find bare-bytes orphans (bytes with zero metadata records at
+   * all, left by a putAttachment() that stored bytes but crashed before
+   * creating the metadata record) — enumerating the store directly is the
+   * only way to find those.
+   */
+  listFiles?(): Promise<BlobFileInfo[]>;
 
   // Lifecycle
   flush?(): Promise<void>;

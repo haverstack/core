@@ -8,6 +8,7 @@ import {
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
+import type { BlobFileInfo } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -1099,6 +1100,36 @@ describe('deleteAttachment', () => {
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
   });
 
+  // #64: a soft-deleted record is recoverable via undelete() — deleting the
+  // file it still references now would leave that reference dangling the
+  // moment the record comes back.
+  test('throws StackConflictError when only a soft-deleted record still references the file', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+    await stack.delete(note.id);
+
+    await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
+  });
+
+  test('hard-deletes a soft-deleted _attachment@1 metadata record too (fallback path)', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachment(data, 'image/png');
+    const [metaRecord] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+    await stack.delete(metaRecord.id);
+
+    await stack.deleteAttachment(fileId);
+
+    const result = await stack.query({ filter: { typeId: '_attachment@1', includeDeleted: true } });
+    expect(result.records).toHaveLength(0);
+  });
+
   test('deletes the _attachment@1 metadata record when unreferenced (fallback path)', async () => {
     const data = new Uint8Array([1, 2, 3]);
     const fileId = await stack.putAttachment(data, 'image/png');
@@ -1208,5 +1239,176 @@ describe('deleteAttachment', () => {
     await atomicStack.deleteAttachment(fileId);
 
     expect(calls).toEqual(['atomic']);
+  });
+});
+
+// -------------------------------------------------------
+// collectAttachmentGarbage
+// -------------------------------------------------------
+
+describe('collectAttachmentGarbage', () => {
+  test('collects a file whose only referencing record was hard-deleted', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+    await stack.delete(note.id, { hard: true });
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+    const meta = await stack.query({ filter: { typeId: '_attachment@1', includeDeleted: true } });
+    expect(meta.records).toHaveLength(0);
+  });
+
+  test('does not collect a file referenced by a live record', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([]);
+  });
+
+  // #64 rule 1: soft-deleted records are recoverable via undelete() (#59/#60)
+  // and must find their attachments intact — so they still count as references.
+  test('does not collect a file referenced only by a soft-deleted record', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+    await stack.delete(note.id);
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([]);
+  });
+
+  // #63: a file-ref content field is a real reference too, same as an
+  // attachment Association.
+  test('does not collect a file referenced only via a file-ref content field', async () => {
+    const photoType = 'com.example.test/photo-note@1';
+    await stack.defineType(photoType, 'Photo note', {
+      coverFileId: { kind: 'file-ref', required: true },
+    });
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    await stack.create(photoType, { coverFileId: fileId });
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([]);
+  });
+
+  test('default grace period protects a fresh unreferenced upload', async () => {
+    await stack.putAttachment(new Uint8Array([1]), 'image/png');
+
+    const result = await stack.collectAttachmentGarbage();
+
+    expect(result.deleted).toEqual([]);
+    const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(meta.records).toHaveLength(1);
+  });
+
+  test('graceMs: 0 collects an unreferenced upload immediately', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+  });
+
+  test('reports reclaimedBytes summed across deleted files', async () => {
+    const fileId1 = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const fileId2 = await stack.putAttachment(new Uint8Array([1, 2, 3, 4, 5]), 'image/png');
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted.sort()).toEqual([fileId1, fileId2].sort());
+    expect(result.reclaimedBytes).toBe(8);
+  });
+
+  test('dryRun reports what would be deleted without deleting anything', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0, dryRun: true });
+
+    expect(result.deleted).toEqual([fileId]);
+    expect(result.reclaimedBytes).toBe(3);
+    const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(meta.records).toHaveLength(1);
+  });
+
+  // A putAttachmentBytes() upload that never gets a metadata record (e.g. a
+  // crash between storing bytes and creating _attachment@1) is only
+  // discoverable via StackBlobAdapter.listFiles().
+  test('collects a bare-bytes orphan discovered via listFiles()', async () => {
+    const fileId = await stack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+    expect(result.reclaimedBytes).toBe(3);
+  });
+
+  test('adapter without listFiles() still collects metadata-tracked orphans', async () => {
+    class NoListFilesAdapter extends MemoryAdapter {
+      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+    }
+    const noListFilesStack = await Stack.create(
+      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    const fileId = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+
+    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+  });
+
+  test('adapter without listFiles() cannot find bare-bytes orphans', async () => {
+    class NoListFilesAdapter extends MemoryAdapter {
+      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+    }
+    const noListFilesStack = await Stack.create(
+      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await noListFilesStack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+
+    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([]);
+  });
+
+  // A concurrent associate() landing between the sweep's own scan and its
+  // per-file deleteAttachment() call would make that call throw
+  // StackConflictError — the sweep must skip that one file, not abort, and
+  // must keep collecting everything else it already found.
+  test('a file whose delete call races is skipped, not thrown, and the rest of the sweep still completes', async () => {
+    const racedFileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const okFileId = await stack.putAttachment(new Uint8Array([2, 2]), 'image/png');
+
+    const realDeleteAttachment = stack.deleteAttachment.bind(stack);
+    stack.deleteAttachment = async (fileId: string) => {
+      if (fileId === racedFileId) throw new StackConflictError('simulated race');
+      return realDeleteAttachment(fileId);
+    };
+
+    const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([okFileId]);
+    expect(result.reclaimedBytes).toBe(2);
   });
 });

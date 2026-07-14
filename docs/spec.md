@@ -33,7 +33,7 @@ stack.timezone; // from adapter.timezone
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 **Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store.
 
@@ -473,11 +473,13 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`StackRecordAdapter`** — structured storage: capabilities, stack identity (`ownerEntityId`, `timezone`), all record/association/version/type methods, and optional lifecycle hooks (`flush`, `close`).
 
-**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, and optional lifecycle hooks.
+**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
 
 ```ts
 type StackAdapter = StackRecordAdapter & StackBlobAdapter;
 ```
+
+**Optional capabilities**, present on some adapters and not others, follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check, [Attachments](#attachments)) and `StackBlobAdapter.listFiles()` (blob enumeration, used by [`collectAttachmentGarbage()`](#garbage-collection) to find bare-bytes orphans) are both this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
 
 ### Package naming convention
 
@@ -574,12 +576,38 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
 
-- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file. Throws `StackConflictError` if any record still references the file — either via an `attachment` Association or via a top-level `file-ref` content field (see [Types](#types)). Throws `StackNotFoundError` if the file doesn't exist.
+- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file (including soft-deleted ones). Throws `StackConflictError` if any record — **live or soft-deleted** — still references the file, either via an `attachment` Association or via a top-level `file-ref` content field (see [Types](#types)). A soft-deleted record is recoverable via `undelete()` (see [Deletion](#deletion)) and must find its attachments intact, so it counts as a reference exactly like a live one. Throws `StackNotFoundError` if the file doesn't exist.
 - `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
 
 **Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
 
 **Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record with its own `mimeType` and `filename`. The same `fileId` may have multiple `_attachment@1` records from separate uploads.
+
+### Garbage collection
+
+Attachment bytes are only ever removed by an explicit `deleteAttachment(fileId)` call — normal app flows delete _records_, and nothing notices when the last record referencing a file goes away. `collectAttachmentGarbage()` is an explicit, owner-invoked sweep that finds and removes those orphans. It is **not** automatic reference-counting: auto-delete on last dissociate/record-delete would coupling every record write to blob lifecycle and would race without a transactional adapter.
+
+```ts
+stack.collectAttachmentGarbage(opts?: {
+  graceMs?: number; // default: 24 hours
+  dryRun?: boolean; // default: false
+}): Promise<{ deleted: string[]; reclaimedBytes: number }>
+```
+
+**What counts as garbage:** a file is collectable only when _no_ record — live or soft-deleted — references it via an `attachment` Association or a `file-ref` content field. This is the same reference definition `deleteAttachment()` uses (above), and the same recoverability principle: nothing reachable from a soft-deleted (undelete-able) state gets destroyed.
+
+**`_attachment@1` metadata records never themselves count as references** — otherwise nothing would ever be garbage — but a file's _newest_ metadata record (or, for bare bytes with no metadata record at all, the blob's own storage timestamp) must be older than `graceMs` to be collected. This protects the legitimate upload-then-associate window: a file just uploaded and not yet attached to anything is not yet garbage, just new.
+
+**Bare-bytes orphans** — bytes stored by `putAttachmentBytes()`/`putAttachment()` with no `_attachment@1` record at all (e.g. a crash between storing bytes and writing metadata) — are only discoverable by enumerating the blob store directly, via the optional `StackBlobAdapter.listFiles()` capability (see [Adapters](#adapters)). An adapter that doesn't implement it still gets full protection for the common case (metadata-tracked files with no remaining reference); it simply can't find this rarer orphan class.
+
+Deletion goes through `deleteAttachment()` itself, so its usual conflict check runs once more per file at delete time. A file that turns out to be referenced again (or already gone) by then is skipped, not treated as a sweep failure — the sweep always completes and reports what it actually collected.
+
+`dryRun: true` computes and returns what _would_ be deleted, without deleting anything — useful for previewing a sweep before running it for real.
+
+**`Stack` vs `ScopedStack`:**
+
+- `Stack.collectAttachmentGarbage(opts?)` — owner-level, no permission check.
+- `ScopedStack.collectAttachmentGarbage(opts?)` — owner only. Throws `StackPermissionError` for non-owners (including anonymous requesters). Delegates to `Stack.collectAttachmentGarbage()`.
 
 ---
 

@@ -9,6 +9,7 @@ import type {
   Association,
   Permission,
   AdapterCapabilities,
+  BlobFileInfo,
 } from './types.js';
 import { applyMergePatch } from './merge.js';
 
@@ -33,6 +34,7 @@ export class MemoryAdapter implements StackAdapter {
   readonly order: string[] = [];
   readonly versions = new Map<string, RecordVersion[]>();
   readonly types = new Map<string, StackType>();
+  readonly blobs = new Map<string, { data: Uint8Array; modifiedAt: Date }>();
 
   constructor({
     ownerEntityId = '',
@@ -238,14 +240,34 @@ export class MemoryAdapter implements StackAdapter {
   /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
   async putAttachment(data: Uint8Array): Promise<string> {
     const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
-    return Array.from(new Uint8Array(hashBuffer))
+    const fileId = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
+    if (!this.blobs.has(fileId)) {
+      this.blobs.set(fileId, { data, modifiedAt: new Date() });
+    }
+    return fileId;
   }
-  async getAttachment(_fileId: string): Promise<Uint8Array> {
-    return new Uint8Array();
+  // Deliberately lenient for fileIds never actually put (returns empty bytes,
+  // not an error) — a lot of existing tests exercise permission logic with
+  // synthetic fileIds that were never uploaded. Subclass and override this
+  // method to test the genuinely-missing-file path (see stack.test.ts).
+  async getAttachment(fileId: string): Promise<Uint8Array> {
+    return this.blobs.get(fileId)?.data ?? new Uint8Array();
   }
-  async deleteAttachment(_fileId: string) {}
+  async deleteAttachment(fileId: string) {
+    this.blobs.delete(fileId);
+  }
+  // Declared as an optional field (not a fixed method) so a test subclass
+  // can override it to `undefined`, simulating an adapter that doesn't
+  // implement this capability (see stack.test.ts's NoListFilesAdapter).
+  listFiles?: () => Promise<BlobFileInfo[]> = async () => {
+    return [...this.blobs.entries()].map(([fileId, blob]) => ({
+      fileId,
+      size: blob.data.byteLength,
+      modifiedAt: blob.modifiedAt,
+    }));
+  };
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;

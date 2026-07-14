@@ -27,6 +27,7 @@ import type {
   AdapterCapabilities,
   RecordId,
   FileId,
+  BlobFileInfo,
   TokenInfo,
 } from '@haverstack/core';
 import {
@@ -242,6 +243,11 @@ export class LocalAdapter implements StackAdapter {
 
   async deleteAttachment(fileId: FileId): Promise<void> {
     return this.blob.deleteAttachment(fileId);
+  }
+
+  /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
+  async listFiles(): Promise<BlobFileInfo[]> {
+    return this.blob.listFiles!();
   }
 
   // -------------------------------------------------------

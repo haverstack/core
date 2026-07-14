@@ -900,3 +900,29 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
     );
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack.collectAttachmentGarbage — owner only (#64)
+// -------------------------------------------------------
+
+describe('ScopedStack.collectAttachmentGarbage', () => {
+  test('owner can run the sweep', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+
+    const result = await stack.asEntity(OWNER).collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+  });
+
+  test('non-owner is denied', async () => {
+    await expect(stack.asEntity(MEMBER).collectAttachmentGarbage({ graceMs: 0 })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('anonymous requester is denied', async () => {
+    await expect(stack.asEntity(null).collectAttachmentGarbage({ graceMs: 0 })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+});
