@@ -579,6 +579,10 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
+    if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
+      await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
+    }
+
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
       if (await this.adapter.getRecord(opts.id)) {
@@ -695,6 +699,14 @@ export class Stack implements StackClient {
     const errors = validateContent(merged, type.schema);
     if (errors.length > 0) {
       throw new StackValidationError(errors);
+    }
+
+    if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
+      this.checkAttachmentImmutableFields(
+        content,
+        existing.content as AttachmentContent,
+        merged as AttachmentContent,
+      );
     }
 
     // Snapshot the raw stored state before overwriting
@@ -912,6 +924,85 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
   // Attachments
   // -------------------------------------------------------
+
+  /**
+   * `_attachment@1` invariant (#65): mimeType is a property of the fileId,
+   * not the uploader's perspective — unlike filename, which is. Dedup means
+   * a second upload of identical bytes doesn't create a second file, it
+   * attaches a second execution claim to the first uploader's bytes; the
+   * first metadata record created for a given fileId fixes the type that
+   * gets served, so a later upload declaring a different mimeType is
+   * rejected rather than silently coexisting for the server to arbitrarily
+   * pick between. Cursor-walked (#50): a single unpaginated page could miss
+   * the fileId's earlier records and wrongly treat a conflicting upload as
+   * the first.
+   */
+  private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
+    const { fileId, mimeType } = content;
+    if (typeof fileId !== 'string') return; // schema validation already rejected this
+
+    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
+    const results = await queryAllPages((q) => this.query(q), {
+      filter: {
+        typeId: metadataTypeId,
+        includeDeleted: true,
+        ...(this.features.contentFieldQuery && { content: { fileId } }),
+      },
+    });
+    const existing = this.features.contentFieldQuery
+      ? results
+      : results.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+    if (existing.length === 0) return;
+
+    const first = existing.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+    const establishedMimeType = (first.content as AttachmentContent).mimeType;
+    if (mimeType !== establishedMimeType) {
+      throw new StackValidationError([
+        {
+          path: 'mimeType',
+          message:
+            `mimeType "${mimeType}" conflicts with the mimeType "${establishedMimeType}" ` +
+            `already established for fileId "${fileId}" by an earlier upload`,
+        },
+      ]);
+    }
+  }
+
+  /**
+   * `_attachment@1` invariant (#65): filename is the only mutable field
+   * once a metadata record exists. fileId and size describe the bytes
+   * themselves, so any change is rejected. mimeType's value was already
+   * pinned to the fileId's established type at create time (above) — even a
+   * same-value rewrite is refused, since first-recorded-wins leaves nothing
+   * legitimate for a later mimeType edit to do. The correction flow for a
+   * wrongly-declared type is delete + re-upload: identical bytes hash to
+   * the same fileId, and the fresh first record establishes the fix.
+   */
+  private checkAttachmentImmutableFields(
+    patch: Record<string, unknown | null>,
+    existing: AttachmentContent,
+    merged: AttachmentContent,
+  ): void {
+    const errors: ValidationError[] = [];
+    if (Object.prototype.hasOwnProperty.call(patch, 'mimeType')) {
+      errors.push({
+        path: 'mimeType',
+        message: 'mimeType is immutable after creation; delete and re-upload to change it',
+      });
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'fileId') &&
+      merged.fileId !== existing.fileId
+    ) {
+      errors.push({ path: 'fileId', message: 'fileId is immutable' });
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'size') && merged.size !== existing.size) {
+      errors.push({ path: 'size', message: 'size is immutable' });
+    }
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
+    }
+  }
 
   /**
    * Store raw bytes and return the content-addressed file ID.
