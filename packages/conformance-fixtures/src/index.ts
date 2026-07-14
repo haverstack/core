@@ -71,6 +71,34 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       version: 1,
     },
   },
+  {
+    name: 'create-attachment-record-matching-mimetype-succeeds',
+    description:
+      '(#65) mimeType is a property of the fileId, established by the first _attachment@1 ' +
+      'record ever created for it. A second upload of the same bytes that declares a matching ' +
+      'mimeType succeeds and gets its own record — its own id, entityId, and filename — rather ' +
+      'than being deduplicated away. Assumes an _attachment@1 record already exists for ' +
+      '"fileId": "abc123..." with "mimeType": "image/png".',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-attachment-2',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'second.png' },
+      version: 1,
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: 'rec-attachment-2',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'second.png' },
+      version: 1,
+    },
+  },
 ];
 
 // -------------------------------------------------------
@@ -355,6 +383,65 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [{ path: 'title', message: 'expected string, got number' }],
+      },
+    },
+  },
+  {
+    name: 'error-validation-attachment-mimetype-conflict-on-create',
+    description:
+      '(#65) POST /records creating an _attachment@1 record whose mimeType conflicts with the ' +
+      'mimeType already established (by the first-ever record) for the same fileId returns 422 ' +
+      'with code "validation" — reconstructed as StackValidationError. A matching mimeType ' +
+      'would instead succeed (see create-attachment-record-matching-mimetype-succeeds). Assumes ' +
+      'an _attachment@1 record already exists for "fileId": "abc123..." with ' +
+      '"mimeType": "image/png".',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-attachment-3',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'abc123', mimeType: 'text/html', size: 12345 },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'mimeType',
+            message:
+              'mimeType "text/html" conflicts with the mimeType "image/png" already ' +
+              'established for fileId "abc123" by an earlier upload',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-attachment-mimetype-immutable-on-update',
+    description:
+      '(#65) PATCH /records/:id against an _attachment@1 record is rejected with 422 / code ' +
+      '"validation" if the patch touches mimeType at all — even restating the current value. ' +
+      'filename is the only field an _attachment@1 update may change; fileId and size are ' +
+      'rejected the same way if the patch would actually change their stored value.',
+    method: 'PATCH',
+    path: '/records/rec-attachment-1',
+    requestBody: { mimeType: 'image/jpeg' },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'mimeType',
+            message: 'mimeType is immutable after creation; delete and re-upload to change it',
+          },
+        ],
       },
     },
   },
