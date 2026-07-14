@@ -168,7 +168,9 @@ type AttachmentContent = {
 };
 ```
 
-An `_attachment@1` record is created each time `stack.putAttachment()` or `scopedStack.putAttachment()` is called — even if the same bytes were previously uploaded. Multiple `_attachment@1` records may therefore exist for the same `fileId`, each with its own `mimeType` and `filename`. The binary is stored only once (content-addressed deduplication), but each upload gets its own metadata record.
+An `_attachment@1` record is created each time `stack.putAttachment()` or `scopedStack.putAttachment()` is called — even if the same bytes were previously uploaded. Multiple `_attachment@1` records may therefore exist for the same `fileId`, each with its own `filename`. The binary is stored only once (content-addressed deduplication), but each upload gets its own metadata record.
+
+`mimeType` is not a per-record perspective the way `filename` is: it's a property of the `fileId` established by the first `_attachment@1` record ever created for it. Later uploads of the same bytes must declare a matching `mimeType` — a conflicting one is rejected with `StackValidationError` (422) — and once a record exists, none of `fileId`, `size`, or `mimeType` can be changed by `update()`; `filename` is the only mutable field. See [Attachments](#attachments) for the full rule and rationale.
 
 When uploaded via `Stack.putAttachment()` (owner-level), the record carries no `entityId`. When uploaded via `ScopedStack.putAttachment()`, the `entityId` is set to the uploading entity.
 
@@ -581,7 +583,11 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 **Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
 
-**Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record with its own `mimeType` and `filename`. The same `fileId` may have multiple `_attachment@1` records from separate uploads.
+**Deduplication:** Bytes are deduplicated — uploading the same content twice stores the binary only once. However, each call to `putAttachment()` creates a new `_attachment@1` record, so the same `fileId` may have multiple `_attachment@1` records from separate uploads.
+
+**`mimeType` is a property of the `fileId`, not the uploader's perspective.** The first `_attachment@1` record created for a given `fileId` establishes its `mimeType`; this is the value later served as `Content-Type` when no `?contentType`/`?filename` override is given (see Download, below). A later upload of the same bytes is free to declare a matching `mimeType` — it creates its own record with its own `filename` and `entityId`, same as always — but a **conflicting `mimeType` is rejected with `StackValidationError` (422)** rather than stored: a contradictory execution claim (e.g. one uploader's `image/png` against another's `text/html` for byte-identical content) must not survive in the data to confuse the next reader or a downstream cache. `filename` has no such rule — it stays per-uploader, and the requester's own record's `filename` is what's served to them (see Download).
+
+**Once created, an `_attachment@1` record's `fileId`, `size`, and `mimeType` are immutable — `filename` is the only field `update()` may change.** `fileId` and `size` describe the bytes themselves, so any attempted change is rejected (`StackValidationError`, 422). `mimeType`'s value was already pinned to the `fileId`'s established type at create time, so `update()` rejects any patch that touches it at all, including one that restates the same value — there's nothing a legitimate `mimeType` edit could accomplish that isn't already covered by the create-time rule above. To correct a wrongly-declared type, delete the attachment and re-upload: identical bytes hash to the same `fileId`, and the fresh first record establishes the corrected type.
 
 ### Garbage collection
 
@@ -949,7 +955,7 @@ The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both
 GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 ```
 
-When neither parameter is provided the server queries the `_attachment@1` record: the stored `mimeType` becomes `Content-Type`, and the filename is taken from the requester's own `_attachment@1` record (if one exists). Falls back to `Content-Type: application/octet-stream` when no metadata record is found.
+When neither parameter is provided the server queries `_attachment@1` records for the file: the **first-recorded** `mimeType` (see [Attachments](#attachments)) becomes `Content-Type` — deterministic regardless of how many records exist for the `fileId` or which requester is asking, since conflicting `mimeType`s are rejected at write time and can never coexist. The filename is taken from the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise. Falls back to `Content-Type: application/octet-stream` when no metadata record is found.
 
 **Delete:** Owner only. Returns `409 Conflict` if any record in the stack still references the file (i.e. has it in an `attachment` association or its content references the `fileId`). The bytes and all `_attachment@1` metadata records for the file are removed atomically on success.
 

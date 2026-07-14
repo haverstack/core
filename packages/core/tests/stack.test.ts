@@ -1082,6 +1082,140 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
+// _attachment@1 mimeType invariant (#65): first-recorded wins for serving,
+// a conflicting later upload is rejected rather than silently coexisting.
+// -------------------------------------------------------
+
+describe('_attachment@1 mimeType conflict on create', () => {
+  test('second upload of identical bytes with a matching mimeType succeeds', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId1 = await stack.putAttachment(data, 'image/png', 'first.png');
+    const fileId2 = await stack.putAttachment(data, 'image/png', 'second.png');
+
+    expect(fileId2).toBe(fileId1);
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records).toHaveLength(2);
+  });
+
+  test('second upload of identical bytes with a conflicting mimeType is rejected', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'text/markdown');
+
+    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+
+    // The rejected upload's metadata record must not have been created.
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records).toHaveLength(1);
+  });
+
+  test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
+    for (let i = 0; i < 55; i++) {
+      await stack.create('_attachment@1', {
+        fileId: `filler-${i}`,
+        mimeType: 'image/png',
+        size: 1,
+      });
+    }
+    const data = new Uint8Array([9, 9, 9]);
+    await stack.putAttachment(data, 'text/markdown');
+
+    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+  });
+
+  test('a soft-deleted earlier record still establishes the mimeType', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'text/markdown');
+    const [metaRecord] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+    await stack.delete(metaRecord.id);
+
+    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+  });
+
+  test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.putAttachmentBytes(data);
+    await stack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'image/png', size: 3, filename: 'alice.png' },
+      { entityId: 'entity-alice' },
+    );
+    await stack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'image/png', size: 3, filename: 'bob.png' },
+      { entityId: 'entity-bob' },
+    );
+
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records).toHaveLength(2);
+    expect(
+      result.records.every((r) => (r.content as Record<string, unknown>).mimeType === 'image/png'),
+    ).toBe(true);
+    expect(
+      result.records.map((r) => (r.content as Record<string, unknown>).filename).sort(),
+    ).toEqual(['alice.png', 'bob.png']);
+  });
+});
+
+// -------------------------------------------------------
+// _attachment@1 immutable fields on update (#65): filename is the only
+// field that may change after a metadata record is created.
+// -------------------------------------------------------
+
+describe('_attachment@1 immutable fields on update', () => {
+  test('filename may be changed', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png', 'old.png');
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+
+    const updated = await stack.update(record.id, { filename: 'new.png' });
+
+    expect((updated.content as Record<string, unknown>).filename).toBe('new.png');
+  });
+
+  test('changing mimeType is rejected, even to the same value', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png');
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+
+    await expect(stack.update(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(stack.update(record.id, { mimeType: 'image/png' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('changing fileId is rejected', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png');
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+
+    await expect(stack.update(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('changing size is rejected', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png');
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+
+    await expect(stack.update(record.id, { size: 999 })).rejects.toThrow(StackValidationError);
+  });
+
+  test('setting fileId or size to their current value is a no-op, not an error', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'image/png');
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+    const content = record.content as Record<string, unknown>;
+
+    await expect(
+      stack.update(record.id, { fileId: content.fileId, size: content.size }),
+    ).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
 // deleteAttachment
 // -------------------------------------------------------
 
