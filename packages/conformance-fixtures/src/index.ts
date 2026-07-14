@@ -465,10 +465,120 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
 ];
 
 // -------------------------------------------------------
+// Attachment download: dangerous-type forcing (#66)
+// -------------------------------------------------------
+//
+// GET /attachments/:fileId doesn't fit ConformanceFixture: there's no JSON
+// request or response body (it's a binary download), and what's actually
+// being pinned here is response *headers* — Content-Type, Content-
+// Disposition, and X-Content-Type-Options — not a body shape. Hence a
+// separate, narrower fixture type.
+//
+// The candidate Content-Type is computed source-by-source (?contentType,
+// then extension inference from ?filename, then the stored _attachment@1
+// mimeType, then application/octet-stream) and the safe-list is applied to
+// *that result*, never to the source — so each fixture below pins one
+// (source, type) pair, and forcing must catch the dangerous ones
+// regardless of which source produced them. See
+// resolveAttachmentDownloadContentType() in @haverstack/core, which is the
+// canonical implementation of this same table.
+
+export type AttachmentDownloadFixture = {
+  /** Unique, stable name — usable as a test-case id. */
+  name: string;
+  /** What this fixture pins down, and why. Also states any assumed prior state (e.g. an existing _attachment@1 record), since GET takes no body. */
+  description: string;
+  /** Request path including query string, e.g. "/attachments/abc123?contentType=text/html". */
+  path: string;
+  /** Response headers this GET must produce. Only the headers a fixture pins are listed here; anything else about the response is unconstrained by it. */
+  responseHeaders: Record<string, string>;
+};
+
+const NOSNIFF = { 'X-Content-Type-Options': 'nosniff' };
+
+export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
+  {
+    name: 'attachment-download-contenttype-param-safe-passes-through',
+    description: 'A safe ?contentType is served as given.',
+    path: '/attachments/abc123?contentType=image/png',
+    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+  },
+  {
+    name: 'attachment-download-contenttype-param-dangerous-forced',
+    description:
+      'A dangerous ?contentType is forced to application/octet-stream — the one case the ' +
+      'pre-#66 spec already covered, kept here so the full three-source matrix is in one place.',
+    path: '/attachments/abc123?contentType=text/html',
+    responseHeaders: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment',
+      ...NOSNIFF,
+    },
+  },
+  {
+    name: 'attachment-download-filename-extension-safe-passes-through',
+    description:
+      'With no ?contentType, a safe type inferred from the ?filename extension is served as given.',
+    path: '/attachments/abc123?filename=photo.png',
+    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+  },
+  {
+    name: 'attachment-download-filename-extension-dangerous-forced',
+    description:
+      '(#66) With no ?contentType, a dangerous type inferred from the ?filename extension must ' +
+      "still be forced — this was the spec's silent gap: extension inference had no forcing " +
+      'language at all, so `?filename=payload.html` was the unhardened path into the same XSS ' +
+      'this policy exists to prevent.',
+    path: '/attachments/abc123?filename=payload.html',
+    responseHeaders: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment',
+      ...NOSNIFF,
+    },
+  },
+  {
+    name: 'attachment-download-stored-mimetype-safe-passes-through',
+    description:
+      'With no query params, a safe stored _attachment@1 mimeType is served as given. Assumes ' +
+      'an _attachment@1 record exists for "fileId": "abc123" with "mimeType": "image/png".',
+    path: '/attachments/abc123',
+    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+  },
+  {
+    name: 'attachment-download-stored-mimetype-dangerous-forced',
+    description:
+      '(#66) With no query params, a dangerous stored mimeType must still be forced — this was ' +
+      "the spec's other silent gap, and the one #65's escalation scenario depends on: a lying " +
+      'or dishonest _attachment@1 record must not reach the response header unforced just ' +
+      'because it came from storage rather than a query param. Assumes an _attachment@1 record ' +
+      'exists for "fileId": "def456" with "mimeType": "text/html".',
+    path: '/attachments/def456',
+    responseHeaders: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment',
+      ...NOSNIFF,
+    },
+  },
+  {
+    name: 'attachment-download-no-metadata-defaults-to-octet-stream',
+    description:
+      'With no query params and no _attachment@1 record for the fileId, the response falls ' +
+      'back to application/octet-stream — already the safe default, so unforced in the sense ' +
+      'that nothing needed overriding, but nosniff is still present.',
+    path: '/attachments/no-metadata-file',
+    responseHeaders: { 'Content-Type': 'application/octet-stream', ...NOSNIFF },
+  },
+];
+
+// -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
 
-/** Every fixture across every endpoint, for consumers that want to iterate uniformly. */
+/**
+ * Every fixture across every endpoint, for consumers that want to iterate
+ * uniformly. Excludes attachmentDownloadFixtures — a different shape
+ * (response headers, not a JSON body), imported separately.
+ */
 export const allConformanceFixtures: ConformanceFixture[] = [
   ...createRecordFixtures,
   ...patchContentFixtures,
