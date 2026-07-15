@@ -946,16 +946,31 @@ The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both
 
 **Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
 
-| Parameter      | Effect                                                                                                                         |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `?contentType` | Sets `Content-Type` on the response. Dangerous types (HTML, SVG, JS, XML) are forced to `application/octet-stream` regardless. |
-| `?filename`    | Sets the filename in `Content-Disposition`. Also infers `Content-Type` from the file extension when `?contentType` is omitted. |
+| Parameter      | Effect                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `?contentType` | Candidate `Content-Type` for the response.                                                                                           |
+| `?filename`    | Sets the filename in `Content-Disposition`. Also a candidate source for `Content-Type` (below), used when `?contentType` is omitted. |
 
 ```
 GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 ```
 
-When neither parameter is provided the server queries `_attachment@1` records for the file: the **first-recorded** `mimeType` (see [Attachments](#attachments)) becomes `Content-Type` — deterministic regardless of how many records exist for the `fileId` or which requester is asking, since conflicting `mimeType`s are rejected at write time and can never coexist. The filename is taken from the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise. Falls back to `Content-Type: application/octet-stream` when no metadata record is found.
+**Candidate `Content-Type` resolution**, in order — the first source that yields a value wins:
+
+1. `?contentType`, if given.
+2. Extension inference from `?filename`, if given and the extension is recognized.
+3. The **first-recorded** `mimeType` on an `_attachment@1` record for the file (see [Attachments](#attachments)) — deterministic regardless of how many records exist for the `fileId` or which requester is asking, since conflicting `mimeType`s are rejected at write time and can never coexist.
+4. `application/octet-stream`, if none of the above apply.
+
+**Dangerous-type forcing applies to the result of that resolution, not to whichever source produced it** (#66) — a server that forces only the `?contentType` case and leaves the other two sources unguarded has a spec-conformance gap, not a defensible partial implementation. Compute the candidate first, _then_ apply the policy below to whatever came out:
+
+- **Safe list** — passes through unforced: `image/*` (**except** `image/svg+xml`), `video/*`, `audio/*`, `application/pdf`, `text/plain`, `application/octet-stream`. Checked against the MIME type's base (parameters like `; charset=...` stripped, comparison case-insensitive), so neither casing nor a parameter can smuggle an unsafe type past the check.
+- **Everything else** is forced to `Content-Type: application/octet-stream` with `Content-Disposition: attachment` — forcing the content type alone is not sufficient, since disposition determines whether a browser treats the response as inline-renderable at all.
+- **`X-Content-Type-Options: nosniff` is sent on every attachment download response**, forced or not — without it, browsers may sniff an `application/octet-stream` body back into the dangerous type the forcing just removed, undoing the downgrade.
+
+`@haverstack/core` exports the canonical implementation of this resolution and policy — `resolveAttachmentDownloadContentType()`, `isSafeAttachmentContentType()`, `inferContentTypeFromFilename()`, and the `NOSNIFF_HEADER_NAME`/`NOSNIFF_HEADER_VALUE` constants — so server implementations share one safe-list rather than each re-deriving it.
+
+The filename in `Content-Disposition` is taken from `?filename` if given, else the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise.
 
 **Delete:** Owner only. Returns `409 Conflict` if any record in the stack still references the file (i.e. has it in an `attachment` association or its content references the `fileId`). The bytes and all `_attachment@1` metadata records for the file are removed atomically on success.
 

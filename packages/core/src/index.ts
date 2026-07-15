@@ -93,3 +93,12 @@ export { hashSchema, isCompatible, parseTypeId, buildTypeId, baseIdOf } from './
 export { validateContent, isValid } from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
+export {
+  isSafeAttachmentContentType,
+  inferContentTypeFromFilename,
+  resolveAttachmentDownloadContentType,
+  FORCED_CONTENT_TYPE,
+  NOSNIFF_HEADER_NAME,
+  NOSNIFF_HEADER_VALUE,
+} from './attachment-download.js';
+export type { AttachmentDownloadContentType } from './attachment-download.js';
