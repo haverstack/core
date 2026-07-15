@@ -7,9 +7,12 @@
  * control; exported standalone for callers that want the raw predicate.
  */
 
-import type { RecordId, StackRecord } from './types.js';
+import type { Association, RecordId, StackRecord } from './types.js';
 
 export type AccessMode = 'read' | 'write';
+
+/** An entity's standing within a `_group` Record's roster. `admin` implies `member` for ACL purposes. */
+export type GroupRole = 'member' | 'admin';
 
 /**
  * Resolves a Record by ID. Used to walk a `_group` Record's associations for
@@ -49,8 +52,9 @@ export async function checkAccess(
     }
 
     if (p.access === 'group' && requesterEntityId) {
-      const member = await isGroupMember(p.groupId, requesterEntityId, resolveRecord);
-      if (member) {
+      const role = await resolveGroupRole(p.groupId, requesterEntityId, resolveRecord);
+      const satisfiesRole = p.role === 'admin' ? role === 'admin' : role !== null;
+      if (satisfiesRole) {
         if (mode === 'read' && p.read) return true;
         if (mode === 'write' && p.write) return true;
       }
@@ -60,17 +64,32 @@ export async function checkAccess(
   return false;
 }
 
-async function isGroupMember(
+async function resolveGroupRole(
   groupRecordId: RecordId,
   entityId: string,
   resolveRecord: RecordResolver,
-): Promise<boolean> {
+): Promise<GroupRole | null> {
   const group = await resolveRecord(groupRecordId);
-  if (!group) return false;
-  return (group.associations ?? []).some(
-    (a) =>
-      a.kind === 'relationship' &&
-      (a.label === 'member' || a.label === 'admin') &&
-      a.recordId === entityId,
-  );
+  if (!group) return null;
+  return groupRoleFromAssociations(group.associations, entityId);
+}
+
+/**
+ * Determine an entity's role within a `_group` Record's roster from its
+ * relationship associations. `admin` short-circuits — it's strictly more
+ * privileged than `member`, so a matching admin association wins regardless
+ * of association order.
+ */
+export function groupRoleFromAssociations(
+  associations: Association[] | undefined,
+  entityId: string,
+): GroupRole | null {
+  let role: GroupRole | null = null;
+  for (const a of associations ?? []) {
+    if (a.kind === 'relationship' && a.recordId === entityId) {
+      if (a.label === 'admin') return 'admin';
+      if (a.label === 'member') role = 'member';
+    }
+  }
+  return role;
 }

@@ -103,9 +103,18 @@ type GroupContent = {
 { kind: "relationship", label: "admin",  recordId: "<entity record id>" }
 ```
 
-This gives roles (member vs. admin) for free via association labels, and membership is queryable and versioned like any other Record data.
+This gives roles for free via association labels, and membership is queryable and versioned like any other Record data. There is no role hierarchy beyond this single distinction — matching the scale a Group actually serves (a small, cohesive set of Entities), not a general-purpose permissions system:
+
+- **`member`** — counted by group ACLs (`{ access: 'group', groupId, ... }` permission entries, unless the entry names `role: 'admin'`).
+- **`admin`** — everything `member` gets, plus may manage the Group Record itself: update its content, add or remove roster (`member`/`admin`) associations, and delete it. An `admin` association implies `member` for every purpose.
+
+**Role-gated group management.** Mutating a `_group` Record — `update`, `associate`/`dissociate` of roster associations, `setPermissions`, `delete`, `undelete` — requires the requester to be an `admin` of that Group, or the stack owner. This replaces the ordinary write-bit/grant check for `_group` Records specifically: membership rosters live on the very Record that write access would otherwise let a write-holder rewrite, so "can write this record" is deliberately not sufficient to add or remove members. `ScopedStack` enforces this.
+
+**Bootstrap.** The creator of a `_group` Record is automatically stamped as its first `admin` (a `relationship` association added at create time) — no Group is ever management-orphaned. The stack owner can always manage any Group regardless of roster, per the owner's unconditional-access rule.
 
 **Implementation note for the API adapter:** When enforcing group-based permissions, the server must resolve group membership by fetching the `_group` Record and walking its `relationship` associations. This requires the server to have read access to the stack where the `_group` Record lives.
+
+**Open question, deliberately not resolved here:** the roles above describe who may manage the Group _Record_. A Group that holds its own key (a future direction for collaborative groups owning a Stack) will eventually need to answer "who may act _as_ the Group" — accept grants on its behalf, speak for it to other stacks. That's a distinct question from record management and isn't foreclosed by this definition.
 
 ---
 
@@ -371,17 +380,17 @@ All Records are **private by default** — readable only by the stack owner. The
 type Permission =
   | { access: 'public' }
   | { access: 'entity'; entityId: string; read: boolean; write: boolean }
-  | { access: 'group'; groupId: string; read: boolean; write: boolean };
+  | { access: 'group'; groupId: string; role?: 'admin'; read: boolean; write: boolean };
 ```
 
-Group permissions reference a `_group` Record by ID. The group may be a simple permission group (living in the stack owner's personal stack) or a collaborative group with its own stack — the permission model is the same either way.
+Group permissions reference a `_group` Record by ID. The group may be a simple permission group (living in the stack owner's personal stack) or a collaborative group with its own stack — the permission model is the same either way. `role` narrows a group entry to admins only; absent `role` means any member qualifies (an `admin` association satisfies this too — see [Group](#group)).
 
 **Permission resolution:**
 
 - `private` — owner only
 - `public` — any requester can read
 - `entity` — check the requester's entityId directly
-- `group` — fetch the referenced `_group` Record, walk its `relationship` associations to verify the requester is a member or admin
+- `group` — fetch the referenced `_group` Record, walk its `relationship` associations to determine the requester's role (`admin`, `member`, or none); the entry is satisfied if `role: 'admin'` is set and the requester is an admin, or if `role` is absent and the requester is a member or admin
 
 Cross-stack group resolution (where the `_group` Record lives in a different stack than the Record being accessed) requires the server to have read access to that stack.
 
@@ -403,6 +412,7 @@ Two operations sit outside the `write` bit entirely, regardless of grants:
 
 - **Hard delete** is owner-only (see [Deletion](#deletion)) — it destroys the Record and its version history, so there's nothing left to undo. An irreversible verb has no place in a bit whose entire safety argument is recoverability.
 - **`setPermissions()`** is owner-or-creator-only. A write-holder who is neither the owner nor the Record's creator cannot change who else can access it — otherwise a `write: true` grant would let its holder escalate to granting others access, defeating the point of scoping access in the first place. This is not a special case bolted onto `setPermissions` alone; it's the same pattern as hard delete: a privilege-bearing operation stays outside the coarse bit. (`restoreVersion()` reinforces this from the other direction — it restores `content` and `associations` but never `permissions`, so a content rollback can't silently change who has access either.)
+- **`_group` Records** opt out of the write bit (and type-level grants) entirely, for every mutating verb including `setPermissions`. A Group's own `permissions`/grants govern who can _read_ it, not who can _manage_ it — membership rosters live on the very Record that write access would otherwise let a write-holder rewrite. See [Group](#group) for the `admin`-or-owner rule that replaces it here.
 
 This is about the **served topology**: for `adapter-local`, direct adapter access is full trust and the permission model doesn't apply — `Stack` is unscoped by design. Record-level permissions exist for the requester on the far side of a server, who has no direct database access. For them, the `write` bit is the only fence, so what it permits has to hold up as a real policy surface — which is exactly why everything it reaches has to be undoable by the owner.
 

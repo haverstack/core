@@ -59,7 +59,14 @@ export type Association = TagAssociation | AttachmentAssociation | RelationshipA
 export type Permission =
   | { access: 'public' }
   | { access: 'entity'; entityId: RecordId; read: boolean; write: boolean }
-  | { access: 'group'; groupId: RecordId; read: boolean; write: boolean };
+  | {
+      access: 'group';
+      groupId: RecordId;
+      /** Restricts this entry to group admins. Absent = any member (member or admin). */
+      role?: 'admin';
+      read: boolean;
+      write: boolean;
+    };
 
 // -------------------------------------------------------
 // Records
