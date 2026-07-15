@@ -838,7 +838,7 @@ describe('error taxonomy reconstruction', () => {
     await expect(adapter.createRecord(record)).rejects.toThrow(StackConflictError);
   });
 
-  test('reconstructs StackVersionConflictError from a 409 version_conflict wire error body', async () => {
+  test('reconstructs StackVersionConflictError from a 412 version_conflict wire error body', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
@@ -851,7 +851,7 @@ describe('error taxonomy reconstruction', () => {
             actualVersion: 3,
           },
         },
-        409,
+        412,
       ),
     );
     let caught: unknown;
@@ -861,10 +861,21 @@ describe('error taxonomy reconstruction', () => {
       caught = err;
     }
     expect(caught).toBeInstanceOf(StackVersionConflictError);
-    expect(caught).toBeInstanceOf(StackConflictError);
+    expect(caught).not.toBeInstanceOf(StackConflictError);
     expect((caught as StackVersionConflictError).recordId).toBe('rec-1');
     expect((caught as StackVersionConflictError).expectedVersion).toBe(2);
     expect((caught as StackVersionConflictError).actualVersion).toBe(3);
+  });
+
+  test('reconstructs StackVersionConflictError from a bare 412 status with no parseable body', async () => {
+    // 412 maps 1:1 to version_conflict (unlike 409, which stays generic
+    // 'conflict') — status-only reconstruction recovers the precise type
+    // even without a body, from a legacy server or a body-stripping proxy.
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response('not json', { status: 412 }));
+    await expect(
+      adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 }),
+    ).rejects.toThrow(StackVersionConflictError);
   });
 
   test('reconstructs StackValidationError from a 422 wire error body, preserving details as .errors', async () => {

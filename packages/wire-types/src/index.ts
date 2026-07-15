@@ -146,11 +146,12 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
   permission: 403,
   not_found: 404,
   conflict: 409,
-  // Same status as 'conflict' — StackVersionConflictError is a
-  // StackConflictError subtype, so it shares the 409. Whether a client
-  // sees the specific or the generic code depends on the wire body being
-  // parseable (see STATUS_TO_CODE below for the degraded fallback).
-  version_conflict: 409,
+  // 412 (not 409): RFC 7232's status for a failed If-Match precondition,
+  // and distinct from 'conflict' — StackVersionConflictError is not a
+  // StackConflictError subtype (see its doc comment), so each code keeps
+  // its own unambiguous status, including for the status-only fallback
+  // below.
+  version_conflict: 412,
   validation: 422,
   /**
    * No core code path currently produces a StackMigrationError over the
@@ -170,19 +171,17 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
  * StackMigrationError specifically occurred — status-only reconstruction
  * would misclassify ordinary server bugs.
  *
- * 409 maps to the generic 'conflict' here, not 'version_conflict': a
- * single status can only point to one code, and a parseable body (the
- * normal case) already carries the precise code plus expectedVersion/
- * actualVersion. This fallback only fires when the body is missing, so a
- * version conflict degrading to the generic StackConflictError in that
- * case is an acceptable, rare degradation — not a lost distinction in
- * the common path.
+ * Every other status here maps to exactly one code, including 412 →
+ * 'version_conflict' — since it doesn't share a status with 'conflict',
+ * status-only reconstruction recovers the precise error even without a
+ * parseable body, not just the generic StackConflictError.
  */
 export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
   400: 'bad_request',
   403: 'permission',
   404: 'not_found',
   409: 'conflict',
+  412: 'version_conflict',
   422: 'validation',
 };
 

@@ -775,7 +775,6 @@ describe('ifVersion', () => {
       .update(record.id, { text: 'v3' }, { ifVersion: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StackVersionConflictError);
-    expect(err).toBeInstanceOf(StackConflictError);
     expect((err as StackVersionConflictError).recordId).toBe(record.id);
     expect((err as StackVersionConflictError).expectedVersion).toBe(1);
     expect((err as StackVersionConflictError).actualVersion).toBe(2);

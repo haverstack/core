@@ -264,7 +264,7 @@ export class APIAdapter implements StackAdapter {
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     // Opt-in optimistic-concurrency precondition (see Stack's ifVersion).
-    // A mismatch gets a 409 with a version_conflict wire body, which
+    // A mismatch gets a 412 with a version_conflict wire body, which
     // errorForResponse() below reconstructs as StackVersionConflictError.
     if (ifMatch !== undefined) headers['If-Match'] = `"${ifMatch}"`;
 

@@ -171,11 +171,14 @@ export class StackConflictError extends Error {
  * Thrown when an opt-in `ifVersion` precondition doesn't match a record's
  * current version — the one conflict type a caller can mechanically
  * recover from: re-fetch, look at `actualVersion`, decide whether to
- * retry. Still a StackConflictError (same 409, same base `instanceof`
- * check for callers that don't care about the distinction), but carries
- * the data a retry loop actually needs.
+ * retry. Deliberately not a StackConflictError subtype: the two have
+ * different recovery stories (fix your input vs. retry after re-reading)
+ * and, on the wire, different HTTP statuses (409 vs. 412) — sharing a
+ * base class would either force one status per subtype or blur the
+ * status↔code mapping for status-only error reconstruction.
  */
-export class StackVersionConflictError extends StackConflictError {
+export class StackVersionConflictError extends Error {
+  static readonly code = 'version_conflict' as const;
   constructor(
     message: string,
     readonly recordId: string,
