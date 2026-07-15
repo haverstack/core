@@ -95,8 +95,9 @@ class SqlJsExecutor implements SqlExecutor {
     this.db.run(sql);
   }
 
-  run(sql: string, params: readonly unknown[] = []): void {
+  run(sql: string, params: readonly unknown[] = []): number {
     this.db.run(sql, params as BindParams);
+    return this.db.getRowsModified();
   }
 
   get<T = Record<string, unknown>>(sql: string, params: readonly unknown[] = []): T | undefined {
@@ -212,24 +213,36 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     return this.record.getRecord(id);
   }
 
-  patchContent(id: string, patch: Record<string, unknown | null>): Promise<StackRecord> {
-    return this.record.patchContent(id, patch);
+  patchContent(
+    id: string,
+    patch: Record<string, unknown | null>,
+    opts?: { expectedVersion?: number },
+  ): Promise<StackRecord> {
+    return this.record.patchContent(id, patch, opts);
   }
 
-  deleteRecord(id: string, opts?: { hard?: boolean }): Promise<void> {
+  deleteRecord(id: string, opts?: { hard?: boolean; expectedVersion?: number }): Promise<void> {
     return this.record.deleteRecord(id, opts);
   }
 
-  undeleteRecord(id: string): Promise<StackRecord> {
-    return this.record.undeleteRecord(id);
+  undeleteRecord(id: string, opts?: { expectedVersion?: number }): Promise<StackRecord> {
+    return this.record.undeleteRecord(id, opts);
   }
 
-  setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    return this.record.setPermissions(id, permissions);
+  setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.setPermissions(id, permissions, opts);
   }
 
-  restoreVersion(id: string, version: number): Promise<StackRecord> {
-    return this.record.restoreVersion(id, version);
+  restoreVersion(
+    id: string,
+    version: number,
+    opts?: { expectedVersion?: number },
+  ): Promise<StackRecord> {
+    return this.record.restoreVersion(id, version, opts);
   }
 
   commitMigration(
@@ -284,12 +297,20 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   // Associations
   // -------------------------------------------------------
 
-  associate(recordId: string, association: Association): Promise<void> {
-    return this.record.associate(recordId, association);
+  associate(
+    recordId: string,
+    association: Association,
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.associate(recordId, association, opts);
   }
 
-  dissociate(recordId: string, association: Association): Promise<void> {
-    return this.record.dissociate(recordId, association);
+  dissociate(
+    recordId: string,
+    association: Association,
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.dissociate(recordId, association, opts);
   }
 
   // -------------------------------------------------------

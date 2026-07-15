@@ -158,16 +158,23 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getRecord(id);
   }
 
-  async patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord> {
-    return this.record.patchContent(id, patch);
+  async patchContent(
+    id: RecordId,
+    patch: Record<string, unknown | null>,
+    opts?: { expectedVersion?: number },
+  ): Promise<StackRecord> {
+    return this.record.patchContent(id, patch, opts);
   }
 
-  async deleteRecord(id: RecordId, opts?: { hard?: boolean }): Promise<void> {
+  async deleteRecord(
+    id: RecordId,
+    opts?: { hard?: boolean; expectedVersion?: number },
+  ): Promise<void> {
     return this.record.deleteRecord(id, opts);
   }
 
-  async undeleteRecord(id: RecordId): Promise<StackRecord> {
-    return this.record.undeleteRecord(id);
+  async undeleteRecord(id: RecordId, opts?: { expectedVersion?: number }): Promise<StackRecord> {
+    return this.record.undeleteRecord(id, opts);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -181,16 +188,28 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
   }
 
-  async associate(id: RecordId, association: Association): Promise<void> {
-    return this.record.associate(id, association);
+  async associate(
+    id: RecordId,
+    association: Association,
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.associate(id, association, opts);
   }
 
-  async dissociate(id: RecordId, association: Association): Promise<void> {
-    return this.record.dissociate(id, association);
+  async dissociate(
+    id: RecordId,
+    association: Association,
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.dissociate(id, association, opts);
   }
 
-  async setPermissions(id: RecordId, permissions: Permission[]): Promise<void> {
-    return this.record.setPermissions(id, permissions);
+  async setPermissions(
+    id: RecordId,
+    permissions: Permission[],
+    opts?: { expectedVersion?: number },
+  ): Promise<void> {
+    return this.record.setPermissions(id, permissions, opts);
   }
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
@@ -205,8 +224,12 @@ export class LocalAdapter implements StackAdapter {
     return this.record.saveVersion(id, version);
   }
 
-  async restoreVersion(id: RecordId, version: number): Promise<StackRecord> {
-    return this.record.restoreVersion(id, version);
+  async restoreVersion(
+    id: RecordId,
+    version: number,
+    opts?: { expectedVersion?: number },
+  ): Promise<StackRecord> {
+    return this.record.restoreVersion(id, version, opts);
   }
 
   async commitMigration(

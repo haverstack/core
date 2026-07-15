@@ -9,7 +9,12 @@
  * methods to it — see record-adapter-sqljs and record-adapter-sqlite.
  */
 
-import { StackConflictError, StackNotFoundError, applyMergePatch } from '@haverstack/core';
+import {
+  StackConflictError,
+  StackVersionConflictError,
+  StackNotFoundError,
+  applyMergePatch,
+} from '@haverstack/core';
 import type {
   StackRecord,
   StackType,
@@ -23,7 +28,7 @@ import type {
   Permission,
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
-import { isForeignKeyViolation } from './executor.js';
+import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import type { FtsStrategy } from './fts-strategy.js';
 import { buildWhereClause, buildOrderClause, getSortField } from './query.js';
 import type { SanitizeSearch } from './query.js';
@@ -73,6 +78,54 @@ export class SharedSqlRecordLogic {
     await this.deps.onWrite?.();
   }
 
+  /**
+   * SQL fragment (plus its bind params) that gates a records-table
+   * UPDATE/DELETE on the opt-in `expectedVersion` precondition. Empty when
+   * expectedVersion is omitted, keeping today's unconditional behavior.
+   */
+  private versionGuard(expectedVersion: number | undefined): { clause: string; params: unknown[] } {
+    return expectedVersion === undefined
+      ? { clause: '', params: [] }
+      : { clause: ' AND version = ?', params: [expectedVersion] };
+  }
+
+  /**
+   * Precondition check against an already-fetched record, for mutations
+   * that can't fold expectedVersion into their primary UPDATE's WHERE
+   * clause — specifically patchContent/restoreVersion, whose FTS4/FTS5
+   * external-content tables (content='records') require fts.remove() to
+   * run *before* the records-table content changes, so the check has to
+   * happen first, standalone, rather than as part of that UPDATE.
+   */
+  private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
+    if (expectedVersion === undefined || record.version === expectedVersion) return;
+    throw new StackVersionConflictError(
+      `Record "${record.id}" is at version ${record.version}, expected ${expectedVersion}`,
+      record.id,
+      expectedVersion,
+      record.version,
+    );
+  }
+
+  /**
+   * Called after a versionGuard()-gated statement affected zero rows.
+   * Distinguishes "record doesn't exist" (StackNotFoundError) from "it
+   * exists but isn't at expectedVersion" (StackVersionConflictError, with
+   * the actual current version for the caller to act on).
+   */
+  private throwVersionConflict(id: string, expectedVersion: number | undefined): never {
+    const row = this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [
+      id,
+    ]);
+    if (!row) throw new StackNotFoundError(`Record not found: "${id}"`);
+    throw new StackVersionConflictError(
+      `Record "${id}" is at version ${row.version}, expected ${expectedVersion}`,
+      id,
+      expectedVersion as number,
+      row.version,
+    );
+  }
+
   // -------------------------------------------------------
   // Records
   // -------------------------------------------------------
@@ -115,9 +168,14 @@ export class SharedSqlRecordLogic {
     return rowToRecord(row, associations);
   }
 
-  async patchContent(id: string, patch: Record<string, unknown | null>): Promise<StackRecord> {
+  async patchContent(
+    id: string,
+    patch: Record<string, unknown | null>,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
+    this.checkExpectedVersion(existing, opts.expectedVersion);
 
     const merged = applyMergePatch(existing.content, patch);
     this.fts.remove(this.exec, id);
@@ -134,20 +192,49 @@ export class SharedSqlRecordLogic {
     return updated;
   }
 
-  async deleteRecord(id: string, opts: { hard?: boolean } = {}): Promise<void> {
+  async deleteRecord(
+    id: string,
+    opts: { hard?: boolean; expectedVersion?: number } = {},
+  ): Promise<void> {
     if (opts.hard) {
-      this.hardDeleteRecord(id);
+      this.hardDeleteRecord(id, opts.expectedVersion);
     } else {
-      this.exec.run(
-        'UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?',
-        [toMs(new Date()), toMs(new Date()), id],
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const changed = this.exec.run(
+        `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+        [toMs(new Date()), toMs(new Date()), id, ...verParams],
       );
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
     }
     await this.write();
   }
 
-  /** Deletes a record's FTS entry, associations, versions, file-refs, and row. No write() call — callers batch it. */
-  private hardDeleteRecord(id: string): void {
+  /**
+   * Deletes a record's FTS entry, associations, versions, file-refs, and
+   * row. No write() call — callers batch it.
+   *
+   * expectedVersion is checked first, before any of the cascading deletes,
+   * so a lost CAS race leaves nothing touched — the records table has no
+   * ON DELETE CASCADE, so the row itself can't be the first thing deleted
+   * (children still reference it), which rules out folding the check into
+   * the final `DELETE FROM records` the way the other mutations fold it
+   * into their WHERE clause.
+   */
+  private hardDeleteRecord(id: string, expectedVersion?: number): void {
+    if (expectedVersion !== undefined) {
+      const row = this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [
+        id,
+      ]);
+      if (!row) throw new StackNotFoundError(`Record not found: "${id}"`);
+      if (row.version !== expectedVersion) {
+        throw new StackVersionConflictError(
+          `Record "${id}" is at version ${row.version}, expected ${expectedVersion}`,
+          id,
+          expectedVersion,
+          row.version,
+        );
+      }
+    }
     this.fts.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
@@ -155,11 +242,13 @@ export class SharedSqlRecordLogic {
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
   }
 
-  async undeleteRecord(id: string): Promise<StackRecord> {
-    this.exec.run(
-      'UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?',
-      [toMs(new Date()), id],
+  async undeleteRecord(id: string, opts: { expectedVersion?: number } = {}): Promise<StackRecord> {
+    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+    const changed = this.exec.run(
+      `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+      [toMs(new Date()), id, ...verParams],
     );
+    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -167,15 +256,29 @@ export class SharedSqlRecordLogic {
     return updated;
   }
 
-  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
-    this.exec.run(
-      'UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      [permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id],
+  async setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+    const changed = this.exec.run(
+      `UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+      [permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id, ...verParams],
     );
+    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
     await this.write();
   }
 
-  async restoreVersion(id: string, version: number): Promise<StackRecord> {
+  async restoreVersion(
+    id: string,
+    version: number,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
+    const existing = await this.getRecord(id);
+    if (!existing) throw new Error(`Record not found: "${id}"`);
+    this.checkExpectedVersion(existing, opts.expectedVersion);
+
     const target = await this.getVersion(id, version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
 
@@ -310,22 +413,46 @@ export class SharedSqlRecordLogic {
     return rows.length ? rowToVersion(rows[0]) : null;
   }
 
+  /**
+   * A version-number collision on (record_id, version) is a serious
+   * invariant violation — with expectedVersion/ifVersion in place it
+   * should be impossible, and if it happens anyway it must be loud, not a
+   * silently discarded snapshot leaving a hole in the rollback history.
+   * A plain INSERT throws on the UNIQUE constraint instead of swallowing
+   * it; mapped to StackConflictError so callers get a typed error instead
+   * of a raw SQLite exception. This also catches the case ifVersion is
+   * meant to prevent even when nobody opted into it: two last-writer-wins
+   * updates that both read the same stale version race to snapshot it,
+   * the loser's saveVersion() throws here before it ever reaches the
+   * actual content/association/permission write, so the loser's mutation
+   * never partially applies.
+   */
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
-    this.exec.run(
-      `INSERT OR IGNORE INTO versions
-        (record_id, version, type_id, content, updated_at, entity_id, associations, permissions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        version.version,
-        version.typeId,
-        JSON.stringify(version.content),
-        toMs(version.updatedAt),
-        version.entityId ?? null,
-        version.associations ? JSON.stringify(version.associations) : null,
-        version.permissions ? JSON.stringify(version.permissions) : null,
-      ],
-    );
+    try {
+      this.exec.run(
+        `INSERT INTO versions
+          (record_id, version, type_id, content, updated_at, entity_id, associations, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          version.version,
+          version.typeId,
+          JSON.stringify(version.content),
+          toMs(version.updatedAt),
+          version.entityId ?? null,
+          version.associations ? JSON.stringify(version.associations) : null,
+          version.permissions ? JSON.stringify(version.permissions) : null,
+        ],
+      );
+    } catch (err) {
+      if (isUniqueConstraintViolation(err)) {
+        throw new StackConflictError(
+          `Version ${version.version} already exists for record "${id}" — a concurrent ` +
+            `writer raced past this version. Use ifVersion to detect this before it happens.`,
+        );
+      }
+      throw err;
+    }
     await this.write();
   }
 
@@ -372,13 +499,24 @@ export class SharedSqlRecordLogic {
   // Associations
   // -------------------------------------------------------
 
-  async associate(recordId: string, association: Association): Promise<void> {
+  async associate(
+    recordId: string,
+    association: Association,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    // Bump (and CAS-check) first, before the associations-table write, so
+    // a lost race never partially applies.
+    this.bumpVersion(recordId, opts.expectedVersion);
     this.insertAssociations(recordId, [association]);
-    this.bumpVersion(recordId);
     await this.write();
   }
 
-  async dissociate(recordId: string, association: Association): Promise<void> {
+  async dissociate(
+    recordId: string,
+    association: Association,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    this.bumpVersion(recordId, opts.expectedVersion);
     this.exec.run(
       `DELETE FROM associations
        WHERE record_id = ?
@@ -394,15 +532,16 @@ export class SharedSqlRecordLogic {
         association.kind === 'relationship' ? association.recordId : '',
       ],
     );
-    this.bumpVersion(recordId);
     await this.write();
   }
 
-  private bumpVersion(id: string): void {
-    this.exec.run('UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?', [
-      toMs(new Date()),
-      id,
-    ]);
+  private bumpVersion(id: string, expectedVersion?: number): void {
+    const { clause, params: verParams } = this.versionGuard(expectedVersion);
+    const changed = this.exec.run(
+      `UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+      [toMs(new Date()), id, ...verParams],
+    );
+    if (changed === 0) this.throwVersionConflict(id, expectedVersion);
   }
 
   /**

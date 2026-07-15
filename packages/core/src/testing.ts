@@ -12,6 +12,7 @@ import type {
   BlobFileInfo,
 } from './types.js';
 import { applyMergePatch } from './merge.js';
+import { StackVersionConflictError, StackConflictError } from './stack.js';
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements the
@@ -58,6 +59,17 @@ export class MemoryAdapter implements StackAdapter {
     return { ...record, version: record.version + 1, updatedAt: new Date() };
   }
 
+  /** Opt-in CAS check mirroring the real adapters' expectedVersion contract. */
+  private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
+    if (expectedVersion === undefined || record.version === expectedVersion) return;
+    throw new StackVersionConflictError(
+      `Record "${record.id}" is at version ${record.version}, expected ${expectedVersion}`,
+      record.id,
+      expectedVersion,
+      record.version,
+    );
+  }
+
   /**
    * True if any top-level file-ref field in the record's registered type
    * schema currently holds this fileId — the content-reference half of
@@ -73,27 +85,38 @@ export class MemoryAdapter implements StackAdapter {
     );
   }
 
-  async patchContent(id: string, patch: Record<string, unknown | null>) {
+  async patchContent(
+    id: string,
+    patch: Record<string, unknown | null>,
+    opts: { expectedVersion?: number } = {},
+  ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(existing, opts.expectedVersion);
     const updated = this.bump({ ...existing, content: applyMergePatch(existing.content, patch) });
     this.records.set(id, updated);
     return updated;
   }
 
-  async deleteRecord(id: string, opts: { hard?: boolean } = {}) {
+  async deleteRecord(id: string, opts: { hard?: boolean; expectedVersion?: number } = {}) {
     if (opts.hard) {
+      const record = this.records.get(id);
+      if (record) this.checkExpectedVersion(record, opts.expectedVersion);
       this.records.delete(id);
       this.order.splice(this.order.indexOf(id), 1);
     } else {
       const record = this.records.get(id);
-      if (record) this.records.set(id, this.bump({ ...record, deletedAt: new Date() }));
+      if (record) {
+        this.checkExpectedVersion(record, opts.expectedVersion);
+        this.records.set(id, this.bump({ ...record, deletedAt: new Date() }));
+      }
     }
   }
 
-  async undeleteRecord(id: string) {
+  async undeleteRecord(id: string, opts: { expectedVersion?: number } = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     const { deletedAt: _deletedAt, ...rest } = record;
     const updated = this.bump(rest as StackRecord);
     this.records.set(id, updated);
@@ -173,23 +196,30 @@ export class MemoryAdapter implements StackAdapter {
     return { records: page, cursor, total: results.length };
   }
 
-  async associate(id: string, association: Association) {
+  async associate(id: string, association: Association, opts: { expectedVersion?: number } = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     const assocs = record.associations ?? [];
     this.records.set(id, this.bump({ ...record, associations: [...assocs, association] }));
   }
 
-  async dissociate(id: string, association: Association) {
+  async dissociate(id: string, association: Association, opts: { expectedVersion?: number } = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
     this.records.set(id, this.bump({ ...record, associations: assocs }));
   }
 
-  async setPermissions(id: string, permissions: Permission[]) {
+  async setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts: { expectedVersion?: number } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     this.records.set(id, this.bump({ ...record, permissions }));
   }
 
@@ -199,14 +229,22 @@ export class MemoryAdapter implements StackAdapter {
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
   }
+  /** Loud on a (record, version) collision, mirroring the real adapters' UNIQUE constraint. */
   async saveVersion(id: string, version: RecordVersion) {
     const existing = this.versions.get(id) ?? [];
+    if (existing.some((v) => v.version === version.version)) {
+      throw new StackConflictError(
+        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
+          `writer raced past this version. Use ifVersion to detect this before it happens.`,
+      );
+    }
     this.versions.set(id, [...existing, version]);
   }
 
-  async restoreVersion(id: string, version: number) {
+  async restoreVersion(id: string, version: number, opts: { expectedVersion?: number } = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     const target = (this.versions.get(id) ?? []).find((v) => v.version === version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
     const updated = this.bump({

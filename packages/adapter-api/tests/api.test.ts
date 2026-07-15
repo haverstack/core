@@ -10,6 +10,7 @@ import {
   StackPermissionError,
   StackNotFoundError,
   StackConflictError,
+  StackVersionConflictError,
   StackValidationError,
   StackQueryError,
   StackMigrationError,
@@ -304,6 +305,22 @@ describe('patchContent', () => {
     const result = await adapter.patchContent('rec-abc123', { text: 'Updated' });
     expect(result.content).toEqual({ text: 'Updated' });
     expect(result.updatedAt).toBeInstanceOf(Date);
+  });
+
+  test('sends If-Match when expectedVersion is given', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.patchContent('rec-abc123', { text: 'x' }, { expectedVersion: 5 });
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['If-Match']).toBe('"5"');
+  });
+
+  test('omits If-Match when expectedVersion is not given', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.patchContent('rec-abc123', { text: 'x' });
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
   });
 });
 
@@ -819,6 +836,44 @@ describe('error taxonomy reconstruction', () => {
       version: 1,
     };
     await expect(adapter.createRecord(record)).rejects.toThrow(StackConflictError);
+  });
+
+  test('reconstructs StackVersionConflictError from a 412 version_conflict wire error body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: 'version_conflict',
+            message: 'Record "rec-1" is at version 3, expected 2',
+            versionConflict: { recordId: 'rec-1', expectedVersion: 2, actualVersion: 3 },
+          },
+        },
+        412,
+      ),
+    );
+    let caught: unknown;
+    try {
+      await adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(StackVersionConflictError);
+    expect(caught).not.toBeInstanceOf(StackConflictError);
+    expect((caught as StackVersionConflictError).recordId).toBe('rec-1');
+    expect((caught as StackVersionConflictError).expectedVersion).toBe(2);
+    expect((caught as StackVersionConflictError).actualVersion).toBe(3);
+  });
+
+  test('reconstructs StackVersionConflictError from a bare 412 status with no parseable body', async () => {
+    // 412 maps 1:1 to version_conflict (unlike 409, which stays generic
+    // 'conflict') — status-only reconstruction recovers the precise type
+    // even without a body, from a legacy server or a body-stripping proxy.
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response('not json', { status: 412 }));
+    await expect(
+      adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 }),
+    ).rejects.toThrow(StackVersionConflictError);
   });
 
   test('reconstructs StackValidationError from a 422 wire error body, preserving details as .errors', async () => {

@@ -9,8 +9,8 @@
 export interface SqlExecutor {
   /** Run DDL, pragmas, or any statement(s) with no bound params and no results needed. */
   exec(sql: string): void;
-  /** Run a single parameterized statement, discarding any result rows. */
-  run(sql: string, params?: readonly unknown[]): void;
+  /** Run a single parameterized statement. Returns the number of rows affected (INSERT/UPDATE/DELETE). */
+  run(sql: string, params?: readonly unknown[]): number;
   /** Run a parameterized statement and return the first result row, or undefined. */
   get<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]): T | undefined;
   /** Run a parameterized statement and return all result rows. */
@@ -20,3 +20,7 @@ export interface SqlExecutor {
 /** Both sql.js's and node:sqlite's SQLite builds report FK violations with this exact message. */
 export const isForeignKeyViolation = (err: unknown): boolean =>
   err instanceof Error && err.message.includes('FOREIGN KEY constraint failed');
+
+/** Both engines report a PRIMARY KEY/UNIQUE collision with this exact message. */
+export const isUniqueConstraintViolation = (err: unknown): boolean =>
+  err instanceof Error && err.message.includes('UNIQUE constraint failed');

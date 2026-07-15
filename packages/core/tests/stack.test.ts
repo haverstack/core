@@ -5,6 +5,7 @@ import {
   StackMigrationError,
   StackNotFoundError,
   StackConflictError,
+  StackVersionConflictError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -751,6 +752,114 @@ describe('versioning rule — mixed mutations', () => {
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
+// ifVersion (opt-in optimistic concurrency)
+// -------------------------------------------------------
+
+describe('ifVersion', () => {
+  test('update() applies when ifVersion matches, and bumps as normal', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    const updated = await stack.update(record.id, { text: 'v2' }, { ifVersion: 1 });
+    expect(updated.version).toBe(2);
+    expect(updated.content.text).toBe('v2');
+  });
+
+  test('update() throws StackVersionConflictError when ifVersion is stale, and changes nothing', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2, no ifVersion — moves the record on
+
+    const err = await stack
+      .update(record.id, { text: 'v3' }, { ifVersion: 1 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackVersionConflictError);
+    expect((err as StackVersionConflictError).recordId).toBe(record.id);
+    expect((err as StackVersionConflictError).expectedVersion).toBe(1);
+    expect((err as StackVersionConflictError).actualVersion).toBe(2);
+
+    const current = await stack.get(record.id);
+    expect(current?.version).toBe(2);
+    expect(current?.content.text).toBe('v2');
+  });
+
+  test('omitting ifVersion keeps last-writer-wins behavior', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'from A' }); // v2
+    const updated = await stack.update(record.id, { text: 'from B' }); // v3, no precondition
+    expect(updated.version).toBe(3);
+    expect(updated.content.text).toBe('from B');
+  });
+
+  test('associate()/dissociate()/setPermissions() enforce ifVersion', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+
+    await expect(
+      stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackVersionConflictError);
+    await expect(
+      stack.setPermissions(record.id, [{ access: 'public' }], { ifVersion: 1 }),
+    ).rejects.toThrow(StackVersionConflictError);
+
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 2 }); // v3
+    await expect(
+      stack.dissociate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 2 }),
+    ).rejects.toThrow(StackVersionConflictError);
+    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 3 }); // v4
+
+    expect((await stack.get(record.id))?.version).toBe(4);
+  });
+
+  test('delete() (soft) and undelete() enforce ifVersion', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+
+    await expect(stack.delete(record.id, { ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    await stack.delete(record.id, { ifVersion: 2 }); // v3, soft-deleted
+
+    await expect(stack.undelete(record.id, { ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    const undeleted = await stack.undelete(record.id, { ifVersion: 3 }); // v4
+    expect(undeleted.version).toBe(4);
+    expect(undeleted.deletedAt).toBeUndefined();
+  });
+
+  test('delete() (hard) enforces ifVersion atomically at the adapter', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+
+    await expect(stack.delete(record.id, { hard: true, ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    // A rejected hard delete must leave the record fully intact.
+    expect(await stack.get(record.id)).not.toBeNull();
+
+    await stack.delete(record.id, { hard: true, ifVersion: 2 });
+    expect(await stack.get(record.id)).toBeNull();
+  });
+
+  test('restoreVersion() enforces ifVersion', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.update(record.id, { text: 'v3' }); // v3
+
+    await expect(stack.restoreVersion(record.id, 1, { ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    const restored = await stack.restoreVersion(record.id, 1, { ifVersion: 3 }); // v4
+    expect(restored.version).toBe(4);
+    expect(restored.content.text).toBe('hello');
+  });
+
+  test('ifVersion on a nonexistent record throws StackNotFoundError, not StackVersionConflictError', async () => {
+    await expect(stack.update('nonexistent', { text: 'x' }, { ifVersion: 1 })).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 });
 

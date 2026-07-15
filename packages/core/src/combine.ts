@@ -24,19 +24,19 @@ export function combineAdapters(parts: {
 
     createRecord: (r) => parts.record.createRecord(r),
     getRecord: (id) => parts.record.getRecord(id),
-    patchContent: (id, patch) => parts.record.patchContent(id, patch),
+    patchContent: (id, patch, opts) => parts.record.patchContent(id, patch, opts),
     deleteRecord: (id, opts) => parts.record.deleteRecord(id, opts),
-    undeleteRecord: (id) => parts.record.undeleteRecord(id),
+    undeleteRecord: (id, opts) => parts.record.undeleteRecord(id, opts),
     queryRecords: (q) => parts.record.queryRecords(q),
 
-    associate: (id, assoc) => parts.record.associate(id, assoc),
-    dissociate: (id, assoc) => parts.record.dissociate(id, assoc),
-    setPermissions: (id, permissions) => parts.record.setPermissions(id, permissions),
+    associate: (id, assoc, opts) => parts.record.associate(id, assoc, opts),
+    dissociate: (id, assoc, opts) => parts.record.dissociate(id, assoc, opts),
+    setPermissions: (id, permissions, opts) => parts.record.setPermissions(id, permissions, opts),
 
     getVersions: (id) => parts.record.getVersions(id),
     getVersion: (id, v) => parts.record.getVersion(id, v),
     saveVersion: (id, v) => parts.record.saveVersion(id, v),
-    restoreVersion: (id, v) => parts.record.restoreVersion(id, v),
+    restoreVersion: (id, v, opts) => parts.record.restoreVersion(id, v, opts),
     commitMigration: (id, toTypeId, content) => parts.record.commitMigration(id, toTypeId, content),
 
     saveType: (t) => parts.record.saveType(t),

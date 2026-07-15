@@ -9,8 +9,9 @@ export class NativeSqliteExecutor implements SqlExecutor {
     this.db.exec(sql);
   }
 
-  run(sql: string, params: readonly unknown[] = []): void {
-    this.db.prepare(sql).run(...(params as (string | number | null)[]));
+  run(sql: string, params: readonly unknown[] = []): number {
+    const result = this.db.prepare(sql).run(...(params as (string | number | null)[]));
+    return Number(result.changes);
   }
 
   get<T = Record<string, unknown>>(sql: string, params: readonly unknown[] = []): T | undefined {
