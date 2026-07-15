@@ -817,14 +817,12 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
     "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request",
     "message": "human-readable description",
     "details": [ { "path": "title", "message": "expected string, got number" } ],
-    "recordId": "rec-abc123",
-    "expectedVersion": 5,
-    "actualVersion": 7
+    "versionConflict": { "recordId": "rec-abc123", "expectedVersion": 5, "actualVersion": 7 }
   }
 }
 ```
 
-`details` is only present for `code: "validation"`, carrying `StackValidationError.errors`. `recordId`/`expectedVersion`/`actualVersion` are only present for `code: "version_conflict"`, carrying `StackVersionConflictError`'s fields — the data an `ifVersion` retry loop needs (which record, what it expected, what actually won the race).
+Each error code that carries extra structured data gets its own uniquely-named, uniquely-typed field, present only for that code — `details` for `code: "validation"` (`StackValidationError.errors`), `versionConflict` for `code: "version_conflict"` (`StackVersionConflictError`'s `recordId`/`expectedVersion`/`actualVersion` — the data an `ifVersion` retry loop needs: which record, what it expected, what actually won the race). This keeps each field's shape fixed rather than making any one field polymorphic across codes.
 
 `code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response. Every wire code maps to exactly one status — `version_conflict` gets its own **412**, deliberately not sharing **409** with `conflict` — so when a response has no parseable wire error body (a foreign or legacy server, or a proxy that strips bodies but preserves status), `APIAdapter` still recovers the precise error from status alone for the unambiguous statuses above (400/403/404/409/412/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
 

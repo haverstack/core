@@ -134,9 +134,11 @@ export type WireError = {
     /** Field-level validation failures. Only present for code: 'validation'. */
     details?: ValidationError[];
     /** ifVersion/If-Match precondition state. Only present for code: 'version_conflict'. */
-    recordId?: string;
-    expectedVersion?: number;
-    actualVersion?: number;
+    versionConflict?: {
+      recordId: string;
+      expectedVersion: number;
+      actualVersion: number;
+    };
   };
 };
 
@@ -228,9 +230,11 @@ export function serializeError(err: unknown): { status: number; body: WireError 
         error: {
           code: 'version_conflict',
           message: err.message,
-          recordId: err.recordId,
-          expectedVersion: err.expectedVersion,
-          actualVersion: err.actualVersion,
+          versionConflict: {
+            recordId: err.recordId,
+            expectedVersion: err.expectedVersion,
+            actualVersion: err.actualVersion,
+          },
         },
       },
     };
@@ -258,7 +262,7 @@ export function serializeError(err: unknown): { status: number; body: WireError 
 
 /** Reconstruct the core error a WireError body describes. */
 export function deserializeError(body: WireError): Error {
-  const { code, message, details, recordId, expectedVersion, actualVersion } = body.error;
+  const { code, message, details, versionConflict } = body.error;
   switch (code) {
     case 'validation':
       return new StackValidationError(details ?? []);
@@ -271,9 +275,9 @@ export function deserializeError(body: WireError): Error {
     case 'version_conflict':
       return new StackVersionConflictError(
         message,
-        recordId ?? '',
-        expectedVersion ?? -1,
-        actualVersion ?? -1,
+        versionConflict?.recordId ?? '',
+        versionConflict?.expectedVersion ?? -1,
+        versionConflict?.actualVersion ?? -1,
       );
     case 'bad_request':
       return new StackQueryError(message);

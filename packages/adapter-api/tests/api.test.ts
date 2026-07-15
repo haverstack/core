@@ -846,9 +846,7 @@ describe('error taxonomy reconstruction', () => {
           error: {
             code: 'version_conflict',
             message: 'Record "rec-1" is at version 3, expected 2',
-            recordId: 'rec-1',
-            expectedVersion: 2,
-            actualVersion: 3,
+            versionConflict: { recordId: 'rec-1', expectedVersion: 2, actualVersion: 3 },
           },
         },
         412,
