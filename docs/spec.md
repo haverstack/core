@@ -304,7 +304,7 @@ type StackRecord = {
   createdAt: Date;
   updatedAt: Date;
   content: Record<string, unknown>; // Validated against the Type's schema
-  version: number; // Increments on each write (for conflict detection)
+  version: number; // Increments on each write. Powers rollback and soft-delete recovery; can optionally gate writes via ifVersion (see Versions)
 
   // --- Optional native fields ---
   parentId?: string; // ID of a parent Record (for hierarchy/folders)
@@ -453,11 +453,28 @@ type RecordVersion = {
 **API surface:**
 
 - `stack.getVersions(recordId)` — retrieve version history
-- `stack.restoreVersion(recordId, version)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
+- `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
 
-  The snapshot's content is validated against **the type it claims** (`typeId` as stored in the snapshot), not the Record's current type — a snapshot taken before a migration is `@1`-shaped, and validating it against a since-migrated `@2` schema would wrongly reject a legitimate restore. A snapshot that fails validation against its own claimed type — in-place schema drift, or a corrupted/buggy adapter — throws `StackValidationError` instead of being written back; restore is a recovery path, so it is not a backdoor around content validation.
+### Optimistic concurrency (`ifVersion`)
 
-  Restoring a pre-migration snapshot therefore also restores its old `typeId`, leaving the Record legitimately **stale** rather than mislabeled. No forward-migration happens at restore time — migration functions are app code (see [Type migrations](#type-migrations)), so restore behaves the same locally as it does through the server-side restore endpoint, which cannot run them either. A stale restored Record self-heals the same way any other stale Record does: on the owning app's next `migrateAll()` sweep.
+`version` is not conflict detection by itself — it exists to power rollback and soft-delete recovery. Nothing reads or writes it unless a caller opts in. Every mutating method (`update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `restoreVersion`) accepts an optional `ifVersion`:
+
+```ts
+await stack.update(id, { title: 'New' }, { ifVersion: 5 });
+// throws StackVersionConflictError if the record's current version ≠ 5, and changes nothing
+```
+
+- **Omitting `ifVersion` keeps last-writer-wins** — the pre-existing, unconditional behavior. Apps that don't care about races don't pay for this.
+- On a mismatch, the call throws `StackVersionConflictError` (a `StackConflictError` subtype — existing `instanceof StackConflictError` handling still catches it) carrying `recordId`, `expectedVersion`, and `actualVersion`, so a caller can re-fetch, inspect what actually won the race, and decide whether to retry.
+- **The check is atomic at the adapter**, not a read-then-write in `Stack`: adapters implement it as part of the same write (e.g. `UPDATE ... WHERE id = ? AND version = ?`, inspecting the affected-row count) — doing the check in `Stack` alone would just move the race down a layer, since another writer could land between `Stack`'s read and its write.
+- This covers every mutation path per the one-rule-no-special-cases versioning model above: a lost race on an association or permission change is caught exactly like a lost race on content.
+- Over the wire, this is the `If-Match` header (see [API Adapter Wire Format § Records](#records)) — local and remote behave identically.
+
+**Never silently dropped:** two writers racing past the same version without `ifVersion` (or a server race that outpaces `ifVersion` entirely) can still collide on the same version number when both snapshot their prior state. Rather than silently discarding the second snapshot — which would leave a hole in rollback history exactly where a conflict happened — adapters reject the collision loudly (`StackConflictError`), so the losing write fails outright rather than corrupting history.
+
+The snapshot's content is validated against **the type it claims** (`typeId` as stored in the snapshot), not the Record's current type — a snapshot taken before a migration is `@1`-shaped, and validating it against a since-migrated `@2` schema would wrongly reject a legitimate restore. A snapshot that fails validation against its own claimed type — in-place schema drift, or a corrupted/buggy adapter — throws `StackValidationError` instead of being written back; restore is a recovery path, so it is not a backdoor around content validation.
+
+Restoring a pre-migration snapshot therefore also restores its old `typeId`, leaving the Record legitimately **stale** rather than mislabeled. No forward-migration happens at restore time — migration functions are app code (see [Type migrations](#type-migrations)), so restore behaves the same locally as it does through the server-side restore endpoint, which cannot run them either. A stale restored Record self-heals the same way any other stale Record does: on the owning app's next `migrateAll()` sweep.
 
 **Storage per adapter:**
 
@@ -782,7 +799,7 @@ Standard HTTP status codes are used throughout:
 | **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists)                                                                                                                                                                                                                                                                                                                     |
+| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists), or its subtype `StackVersionConflictError` (code `version_conflict`) when an `If-Match` precondition doesn't match the record's current version (see [Versions](#versions))                                                                                                                                        |
 | **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                                                                                                                                                                                                                                                                                                                                        |
 | **500** | Internal server error    | Reserved for `StackMigrationError` (code `migration`) — migration-graph corruption. No current code path produces this over the wire (migration-graph errors are thrown during client-side migration registration, never as a server response); the mapping exists for forward compatibility only. **Not** used as a generic catch-all: an unrelated server crash is a plain 500 with no wire error body, and clients must not infer `StackMigrationError` from status 500 alone (see below). |
@@ -796,14 +813,17 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 ```json
 {
   "error": {
-    "code": "permission" | "not_found" | "conflict" | "validation" | "migration" | "bad_request",
+    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request",
     "message": "human-readable description",
-    "details": [ { "path": "title", "message": "expected string, got number" } ]
+    "details": [ { "path": "title", "message": "expected string, got number" } ],
+    "recordId": "rec-abc123",
+    "expectedVersion": 5,
+    "actualVersion": 7
   }
 }
 ```
 
-`details` is only present for `code: "validation"`, carrying `StackValidationError.errors`.
+`details` is only present for `code: "validation"`, carrying `StackValidationError.errors`. `recordId`/`expectedVersion`/`actualVersion` are only present for `code: "version_conflict"`, carrying `StackVersionConflictError`'s fields — the data an `ifVersion` retry loop needs (which record, what it expected, what actually won the race). `version_conflict` shares status **409** with the plain `conflict` code (`StackVersionConflictError extends StackConflictError`); a status-only fallback reconstruction (see below) can only produce the generic `StackConflictError`, since one status can't disambiguate two codes — the precise subtype requires a parseable body, which is the normal case.
 
 `code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response. When a response has no parseable wire error body (a foreign or legacy server, or a proxy that strips bodies but preserves status), `APIAdapter` falls back to reconstructing from status alone for the unambiguous statuses above (400/403/404/409/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
 
@@ -850,6 +870,15 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 
 `PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints.
 
+**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, and the association/permission endpoints below all accept an optional `If-Match` header:
+
+```
+PATCH /records/abc123
+If-Match: "5"
+```
+
+When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **409** with a `version_conflict` wire error (see [Error responses](#error-responses)) and changes nothing. Omit the header to keep unconditional last-writer-wins behavior — this is opt-in, so callers that don't need it don't pay for it. See [Versions](#versions) for the corresponding `Stack`/`StackClient` API (`ifVersion`).
+
 `POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](#record-ids) for the validation and duplicate-conflict rules the server applies.
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass.
@@ -861,7 +890,7 @@ GET  /records/:id/permissions        — get current permissions
 PUT  /records/:id/permissions        — replace all permissions (empty array = private)
 ```
 
-Both endpoints use the envelope `{ "permissions": [...] }` as the request/response body.
+Both endpoints use the envelope `{ "permissions": [...] }` as the request/response body. `PUT` accepts the same optional `If-Match` precondition described under [Records](#records).
 
 **Response envelope:**
 
@@ -883,6 +912,8 @@ GET  /records/:id/versions/:version   — get a specific version
 POST /records/:id/restore/:version    — restore a version (creates new version, no rewrite)
 ```
 
+`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records).
+
 ### Associations
 
 Associations are always in the context of a Record:
@@ -896,6 +927,8 @@ GET    /records/:id/associations?label=avatar  — filter by label across all ki
 POST   /records/:id/associations               — add an association
 DELETE /records/:id/associations               — remove an association (by body)
 ```
+
+`POST`/`DELETE` accept the same optional `If-Match` precondition described under [Records](#records).
 
 Response shape is consistent regardless of kind:
 

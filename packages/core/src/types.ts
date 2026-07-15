@@ -346,6 +346,20 @@ export type StackFeatures = AdapterCapabilities;
  * The record-storage half of an adapter. Handles structured data, queries,
  * associations, versioning, type definitions, and stack identity.
  */
+/**
+ * Opt-in optimistic-concurrency precondition, accepted by every mutation
+ * that bumps a record's version. When set, the mutation only applies if
+ * the record's current version equals `expectedVersion`; otherwise the
+ * adapter throws StackVersionConflictError without applying any part of
+ * the mutation. The check happens atomically inside the adapter's write
+ * (e.g. `UPDATE ... WHERE id = ? AND version = ?`, checking the affected
+ * row count) — never as a read-then-write, which would just move the race
+ * down a layer. Omit to keep today's last-writer-wins behavior.
+ */
+export type ExpectedVersionOptions = {
+  expectedVersion?: number;
+};
+
 export interface StackRecordAdapter {
   readonly capabilities: AdapterCapabilities;
 
@@ -365,18 +379,26 @@ export interface StackRecordAdapter {
    * commitMigration() instead, since a content-only patch has no way to
    * carry a type change.
    */
-  patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord>;
-  deleteRecord(id: RecordId, opts?: { hard?: boolean }): Promise<void>;
+  patchContent(
+    id: RecordId,
+    patch: Record<string, unknown | null>,
+    opts?: ExpectedVersionOptions,
+  ): Promise<StackRecord>;
+  deleteRecord(id: RecordId, opts?: { hard?: boolean } & ExpectedVersionOptions): Promise<void>;
   /** Reverse a soft delete. Returns the record as it now stands. */
-  undeleteRecord(id: RecordId): Promise<StackRecord>;
+  undeleteRecord(id: RecordId, opts?: ExpectedVersionOptions): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations
-  associate(id: RecordId, association: Association): Promise<void>;
-  dissociate(id: RecordId, association: Association): Promise<void>;
+  associate(id: RecordId, association: Association, opts?: ExpectedVersionOptions): Promise<void>;
+  dissociate(id: RecordId, association: Association, opts?: ExpectedVersionOptions): Promise<void>;
 
   /** Replace all permissions on a record. Bumps version internally. */
-  setPermissions(id: RecordId, permissions: Permission[]): Promise<void>;
+  setPermissions(
+    id: RecordId,
+    permissions: Permission[],
+    opts?: ExpectedVersionOptions,
+  ): Promise<void>;
 
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
@@ -387,7 +409,11 @@ export interface StackRecordAdapter {
    * when the snapshot has them). Never restores permissions. Bumps version
    * internally. Throws StackNotFoundError if the version doesn't exist.
    */
-  restoreVersion(id: RecordId, version: number): Promise<StackRecord>;
+  restoreVersion(
+    id: RecordId,
+    version: number,
+    opts?: ExpectedVersionOptions,
+  ): Promise<StackRecord>;
 
   /**
    * Commit a migration: write new content under a new typeId in one step.

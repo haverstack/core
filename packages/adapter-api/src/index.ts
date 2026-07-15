@@ -9,8 +9,9 @@
  * Authentication uses a bearer token in the Authorization
  * header. Token issuance is server-defined and out of scope.
  *
- * v1 requires connectivity — offline queue and conflict
- * detection are deferred.
+ * v1 requires connectivity — offline queue is deferred. Opt-in
+ * optimistic concurrency (ifVersion → If-Match) is supported: see
+ * patchContent()/deleteRecord()/etc.'s expectedVersion option.
  */
 
 import type {
@@ -256,12 +257,16 @@ export class APIAdapter implements StackAdapter {
     method: string,
     path: string,
     body?: unknown,
-    { nullOn404 = false }: { nullOn404?: boolean } = {},
+    { nullOn404 = false, ifMatch }: { nullOn404?: boolean; ifMatch?: number } = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {};
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    // Opt-in optimistic-concurrency precondition (see Stack's ifVersion).
+    // A mismatch gets a 409 with a version_conflict wire body, which
+    // errorForResponse() below reconstructs as StackVersionConflictError.
+    if (ifMatch !== undefined) headers['If-Match'] = `"${ifMatch}"`;
 
     let res: Response;
     try {
@@ -339,12 +344,18 @@ export class APIAdapter implements StackAdapter {
     return raw ? parseRecord(raw) : null;
   }
 
-  async patchContent(id: RecordId, patch: Record<string, unknown | null>): Promise<StackRecord> {
+  async patchContent(
+    id: RecordId,
+    patch: Record<string, unknown | null>,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
     // Content-only RFC 7396 merge patch — no record fields (typeId, version,
     // updatedAt) travel in this body. The server merges against its own
     // current state and assigns the new version/updatedAt; the response is
     // authoritative.
-    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, patch);
+    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, patch, {
+      ifMatch: opts.expectedVersion,
+    });
     return parseRecord(raw);
   }
 
@@ -360,13 +371,21 @@ export class APIAdapter implements StackAdapter {
     return parseRecord(raw);
   }
 
-  async deleteRecord(id: RecordId, opts: { hard?: boolean } = {}): Promise<void> {
+  async deleteRecord(
+    id: RecordId,
+    opts: { hard?: boolean; expectedVersion?: number } = {},
+  ): Promise<void> {
     const path = opts.hard ? `/records/${id}?hard=true` : `/records/${id}`;
-    await this.request<void>('DELETE', path);
+    await this.request<void>('DELETE', path, undefined, { ifMatch: opts.expectedVersion });
   }
 
-  async undeleteRecord(id: RecordId): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', `/records/${id}/undelete`);
+  async undeleteRecord(
+    id: RecordId,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>('POST', `/records/${id}/undelete`, undefined, {
+      ifMatch: opts.expectedVersion,
+    });
     return parseRecord(raw);
   }
 
@@ -399,20 +418,43 @@ export class APIAdapter implements StackAdapter {
   // Associations
   // -------------------------------------------------------
 
-  async associate(id: RecordId, association: Association): Promise<void> {
-    await this.request<void>('POST', `/records/${id}/associations`, association);
+  async associate(
+    id: RecordId,
+    association: Association,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    await this.request<void>('POST', `/records/${id}/associations`, association, {
+      ifMatch: opts.expectedVersion,
+    });
   }
 
-  async dissociate(id: RecordId, association: Association): Promise<void> {
-    await this.request<void>('DELETE', `/records/${id}/associations`, association);
+  async dissociate(
+    id: RecordId,
+    association: Association,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    await this.request<void>('DELETE', `/records/${id}/associations`, association, {
+      ifMatch: opts.expectedVersion,
+    });
   }
 
   // -------------------------------------------------------
   // Permissions
   // -------------------------------------------------------
 
-  async setPermissions(id: RecordId, permissions: Permission[]): Promise<void> {
-    await this.request<void>('PUT', `/records/${id}/permissions`, { permissions });
+  async setPermissions(
+    id: RecordId,
+    permissions: Permission[],
+    opts: { expectedVersion?: number } = {},
+  ): Promise<void> {
+    await this.request<void>(
+      'PUT',
+      `/records/${id}/permissions`,
+      { permissions },
+      {
+        ifMatch: opts.expectedVersion,
+      },
+    );
   }
 
   // -------------------------------------------------------
@@ -440,8 +482,17 @@ export class APIAdapter implements StackAdapter {
     // in the wire protocol.
   }
 
-  async restoreVersion(id: RecordId, version: number): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', `/records/${id}/restore/${version}`);
+  async restoreVersion(
+    id: RecordId,
+    version: number,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>(
+      'POST',
+      `/records/${id}/restore/${version}`,
+      undefined,
+      { ifMatch: opts.expectedVersion },
+    );
     return parseRecord(raw);
   }
 

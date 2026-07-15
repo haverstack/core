@@ -100,7 +100,20 @@ export type GetRecordOptions = {
   presentAt?: 'stored' | 'latest';
 };
 
-export type DeleteRecordOptions = {
+/**
+ * Opt-in optimistic-concurrency precondition, accepted by every mutation
+ * that bumps a record's version (update, delete, undelete, associate,
+ * dissociate, setPermissions, restoreVersion). When set, the mutation
+ * only applies if the record's current version equals `ifVersion`;
+ * otherwise it throws StackVersionConflictError, with the record's actual
+ * current version, and nothing is changed. Omit to keep today's
+ * last-writer-wins behavior — apps that don't care don't pay.
+ */
+export type IfVersionOptions = {
+  ifVersion?: number;
+};
+
+export type DeleteRecordOptions = IfVersionOptions & {
   /** If true, permanently remove the record and all its history. Default: false */
   hard?: boolean;
 };
@@ -151,6 +164,26 @@ export class StackConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'StackConflictError';
+  }
+}
+
+/**
+ * Thrown when an opt-in `ifVersion` precondition doesn't match a record's
+ * current version — the one conflict type a caller can mechanically
+ * recover from: re-fetch, look at `actualVersion`, decide whether to
+ * retry. Still a StackConflictError (same 409, same base `instanceof`
+ * check for callers that don't care about the distinction), but carries
+ * the data a retry loop actually needs.
+ */
+export class StackVersionConflictError extends StackConflictError {
+  constructor(
+    message: string,
+    readonly recordId: string,
+    readonly expectedVersion: number,
+    readonly actualVersion: number,
+  ) {
+    super(message);
+    this.name = 'StackVersionConflictError';
   }
 }
 
@@ -243,15 +276,19 @@ export interface StackClient {
   ): Promise<StackRecord & { content: T }>;
   get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
   query(query?: StackQuery): Promise<QueryResult>;
-  update(id: string, content: Record<string, unknown | null>): Promise<StackRecord>;
-  associate(id: string, association: Association): Promise<void>;
-  dissociate(id: string, association: Association): Promise<void>;
-  setPermissions(id: string, permissions: Permission[]): Promise<void>;
+  update(
+    id: string,
+    content: Record<string, unknown | null>,
+    opts?: IfVersionOptions,
+  ): Promise<StackRecord>;
+  associate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
+  dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
+  setPermissions(id: string, permissions: Permission[], opts?: IfVersionOptions): Promise<void>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
-  undelete(id: string): Promise<StackRecord>;
+  undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
-  restoreVersion(id: string, version: number): Promise<StackRecord>;
+  restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
   putAttachmentBytes(data: Uint8Array): Promise<string>;
   putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
@@ -682,11 +719,16 @@ export class Stack implements StackClient {
    * For association or permission changes, use associate(), dissociate(),
    * and setPermissions() instead.
    */
-  async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
+  async update(
+    id: string,
+    content: Record<string, unknown | null>,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
 
     const type = await this.adapter.getType(existing.typeId);
     if (!type) {
@@ -712,7 +754,7 @@ export class Stack implements StackClient {
     // Snapshot the raw stored state before overwriting
     await this.saveVersion(existing);
 
-    return this.adapter.patchContent(id, content);
+    return this.adapter.patchContent(id, content, { expectedVersion: opts.ifVersion });
   }
 
   /**
@@ -721,30 +763,40 @@ export class Stack implements StackClient {
    * versioning rule as content.
    * If the association already exists (same kind, label, and payload), this is a no-op.
    */
-  async associate(id: string, association: Association): Promise<void> {
+  async associate(
+    id: string,
+    association: Association,
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
     if ((existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
     await this.saveVersion(existing);
-    await this.adapter.associate(id, association);
+    await this.adapter.associate(id, association, { expectedVersion: opts.ifVersion });
   }
 
   /**
    * Remove an association from a record. Snapshots and bumps version, same
    * as associate(). Matched by kind, label, and payload. No-op if not found.
    */
-  async dissociate(id: string, association: Association): Promise<void> {
+  async dissociate(
+    id: string,
+    association: Association,
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
     if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
     await this.saveVersion(existing);
-    await this.adapter.dissociate(id, association);
+    await this.adapter.dissociate(id, association, { expectedVersion: opts.ifVersion });
   }
 
   /**
@@ -752,15 +804,20 @@ export class Stack implements StackClient {
    * as associate(). Pass an empty array to make the record private (the
    * default). No-op if the new set is deep-equal to the current one.
    */
-  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
+  async setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
     if (permissionsEqual(existing.permissions ?? [], permissions)) return;
 
     await this.saveVersion(existing);
-    await this.adapter.setPermissions(id, permissions);
+    await this.adapter.setPermissions(id, permissions, { expectedVersion: opts.ifVersion });
   }
 
   /**
@@ -775,17 +832,18 @@ export class Stack implements StackClient {
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     if (opts.hard) {
-      return this.adapter.deleteRecord(id, opts);
+      return this.adapter.deleteRecord(id, { hard: true, expectedVersion: opts.ifVersion });
     }
 
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
     await this.saveVersion(existing);
-    await this.adapter.deleteRecord(id, opts);
+    await this.adapter.deleteRecord(id, { expectedVersion: opts.ifVersion });
   }
 
   /**
@@ -794,15 +852,16 @@ export class Stack implements StackClient {
    * throws StackNotFoundError for them just like any other missing record.
    * Snapshots and bumps version, same as delete().
    */
-  async undelete(id: string): Promise<StackRecord> {
+  async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
     await this.saveVersion(existing);
-    return this.adapter.undeleteRecord(id);
+    return this.adapter.undeleteRecord(id, { expectedVersion: opts.ifVersion });
   }
 
   /**
@@ -894,11 +953,16 @@ export class Stack implements StackClient {
    * content rollback would be a surprise nobody wants. Permissions in a
    * snapshot are for audit and deliberate owner action, not automatic restore.
    */
-  async restoreVersion(id: string, version: number): Promise<StackRecord> {
+  async restoreVersion(
+    id: string,
+    version: number,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
 
     const target = await this.adapter.getVersion(id, version);
     if (!target) {
@@ -918,7 +982,7 @@ export class Stack implements StackClient {
     // Snapshot current state before restoring
     await this.saveVersion(existing);
 
-    return this.adapter.restoreVersion(id, version);
+    return this.adapter.restoreVersion(id, version, { expectedVersion: opts.ifVersion });
   }
 
   // -------------------------------------------------------
@@ -1286,6 +1350,24 @@ export class Stack implements StackClient {
     });
   }
 
+  /**
+   * Fast-fail check for the opt-in ifVersion precondition, using the
+   * record already fetched for this operation. The adapter re-checks
+   * atomically at write time (the actual source of truth for concurrent
+   * writers — see StackRecordAdapter's ExpectedVersionOptions); this is
+   * just an early exit that skips validation/snapshotting work when the
+   * mismatch is already visible.
+   */
+  private checkIfVersion(existing: StackRecord, ifVersion: number | undefined): void {
+    if (ifVersion === undefined || existing.version === ifVersion) return;
+    throw new StackVersionConflictError(
+      `Record "${existing.id}" is at version ${existing.version}, expected ${ifVersion}`,
+      existing.id,
+      ifVersion,
+      existing.version,
+    );
+  }
+
   private async saveVersion(record: StackRecord): Promise<void> {
     const version: RecordVersion = {
       version: record.version,
@@ -1538,22 +1620,38 @@ export class ScopedStack implements StackClient {
     return { records, cursor: page.cursor, total: null };
   }
 
-  async update(id: string, content: Record<string, unknown | null>): Promise<StackRecord> {
+  async update(
+    id: string,
+    content: Record<string, unknown | null>,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
     await this.requireUpdatable(id);
-    return this.stack.update(id, content);
+    return this.stack.update(id, content, opts);
   }
 
-  async associate(id: string, association: Association): Promise<void> {
+  async associate(
+    id: string,
+    association: Association,
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     await this.requireUpdatable(id);
-    return this.stack.associate(id, association);
+    return this.stack.associate(id, association, opts);
   }
 
-  async dissociate(id: string, association: Association): Promise<void> {
+  async dissociate(
+    id: string,
+    association: Association,
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     await this.requireUpdatable(id);
-    return this.stack.dissociate(id, association);
+    return this.stack.dissociate(id, association, opts);
   }
 
-  async setPermissions(id: string, permissions: Permission[]): Promise<void> {
+  async setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts: IfVersionOptions = {},
+  ): Promise<void> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
 
@@ -1561,7 +1659,7 @@ export class ScopedStack implements StackClient {
     const isCreator = this.requesterEntityId === record.entityId;
     if (!isOwner && !isCreator) throw new StackPermissionError();
 
-    return this.stack.setPermissions(id, permissions);
+    return this.stack.setPermissions(id, permissions, opts);
   }
 
   /**
@@ -1582,9 +1680,9 @@ export class ScopedStack implements StackClient {
    * inverse of soft delete, so granting one direction without the other
    * would be backwards. Idempotent, per Stack.undelete().
    */
-  async undelete(id: string): Promise<StackRecord> {
+  async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
     await this.requireDeletable(id);
-    return this.stack.undelete(id);
+    return this.stack.undelete(id, opts);
   }
 
   async getVersions(id: string): Promise<RecordVersion[]> {
@@ -1601,9 +1699,13 @@ export class ScopedStack implements StackClient {
     return this.stack.getVersion(id, version);
   }
 
-  async restoreVersion(id: string, version: number): Promise<StackRecord> {
+  async restoreVersion(
+    id: string,
+    version: number,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
     await this.requireUpdatable(id);
-    return this.stack.restoreVersion(id, version);
+    return this.stack.restoreVersion(id, version, opts);
   }
 
   /**

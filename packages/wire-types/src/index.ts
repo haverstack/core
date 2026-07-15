@@ -11,6 +11,7 @@ import {
   StackPermissionError,
   StackNotFoundError,
   StackConflictError,
+  StackVersionConflictError,
   StackMigrationError,
   StackQueryError,
 } from '@haverstack/core';
@@ -109,18 +110,20 @@ export function parseDate(val: unknown): Date | undefined {
 //
 // core defines a typed error taxonomy (StackValidationError,
 // StackPermissionError, StackNotFoundError, StackConflictError,
-// StackMigrationError, StackQueryError), each with a static `code`. The
-// wire error body below is the round-trip contract: a server serializes a
-// caught core error to { status, body } via serializeError(), and
-// APIAdapter reconstructs the same class via deserializeError(). `code` is
-// the authoritative discriminator — status is a transport hint that
-// proxies and legacy servers are more likely to preserve than a body.
+// StackVersionConflictError, StackMigrationError, StackQueryError), each
+// with a static `code`. The wire error body below is the round-trip
+// contract: a server serializes a caught core error to { status, body }
+// via serializeError(), and APIAdapter reconstructs the same class via
+// deserializeError(). `code` is the authoritative discriminator — status
+// is a transport hint that proxies and legacy servers are more likely to
+// preserve than a body.
 
 export type WireErrorCode =
   | 'bad_request'
   | 'permission'
   | 'not_found'
   | 'conflict'
+  | 'version_conflict'
   | 'validation'
   | 'migration';
 
@@ -130,6 +133,10 @@ export type WireError = {
     message: string;
     /** Field-level validation failures. Only present for code: 'validation'. */
     details?: ValidationError[];
+    /** ifVersion/If-Match precondition state. Only present for code: 'version_conflict'. */
+    recordId?: string;
+    expectedVersion?: number;
+    actualVersion?: number;
   };
 };
 
@@ -139,6 +146,11 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
   permission: 403,
   not_found: 404,
   conflict: 409,
+  // Same status as 'conflict' — StackVersionConflictError is a
+  // StackConflictError subtype, so it shares the 409. Whether a client
+  // sees the specific or the generic code depends on the wire body being
+  // parseable (see STATUS_TO_CODE below for the degraded fallback).
+  version_conflict: 409,
   validation: 422,
   /**
    * No core code path currently produces a StackMigrationError over the
@@ -157,6 +169,14 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
  * "unhandled server exception" status, not a reliable signal that a
  * StackMigrationError specifically occurred — status-only reconstruction
  * would misclassify ordinary server bugs.
+ *
+ * 409 maps to the generic 'conflict' here, not 'version_conflict': a
+ * single status can only point to one code, and a parseable body (the
+ * normal case) already carries the precise code plus expectedVersion/
+ * actualVersion. This fallback only fires when the body is missing, so a
+ * version conflict degrading to the generic StackConflictError in that
+ * case is an acceptable, rare degradation — not a lost distinction in
+ * the common path.
  */
 export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
   400: 'bad_request',
@@ -202,6 +222,20 @@ export function serializeError(err: unknown): { status: number; body: WireError 
       body: { error: { code: 'not_found', message: err.message } },
     };
   }
+  if (err instanceof StackVersionConflictError) {
+    return {
+      status: WIRE_ERROR_STATUS.version_conflict,
+      body: {
+        error: {
+          code: 'version_conflict',
+          message: err.message,
+          recordId: err.recordId,
+          expectedVersion: err.expectedVersion,
+          actualVersion: err.actualVersion,
+        },
+      },
+    };
+  }
   if (err instanceof StackConflictError) {
     return {
       status: WIRE_ERROR_STATUS.conflict,
@@ -225,7 +259,7 @@ export function serializeError(err: unknown): { status: number; body: WireError 
 
 /** Reconstruct the core error a WireError body describes. */
 export function deserializeError(body: WireError): Error {
-  const { code, message, details } = body.error;
+  const { code, message, details, recordId, expectedVersion, actualVersion } = body.error;
   switch (code) {
     case 'validation':
       return new StackValidationError(details ?? []);
@@ -235,6 +269,13 @@ export function deserializeError(body: WireError): Error {
       return new StackNotFoundError(message);
     case 'conflict':
       return new StackConflictError(message);
+    case 'version_conflict':
+      return new StackVersionConflictError(
+        message,
+        recordId ?? '',
+        expectedVersion ?? -1,
+        actualVersion ?? -1,
+      );
     case 'bad_request':
       return new StackQueryError(message);
     case 'migration':

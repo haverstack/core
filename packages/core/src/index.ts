@@ -17,6 +17,7 @@ export {
   StackPermissionError,
   StackNotFoundError,
   StackConflictError,
+  StackVersionConflictError,
   StackQueryError,
 } from './stack.js';
 export type {
@@ -25,6 +26,7 @@ export type {
   StackOptions,
   GetRecordOptions,
   DeleteRecordOptions,
+  IfVersionOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
 } from './stack.js';
@@ -63,6 +65,7 @@ export type {
   AdapterCapabilities,
   StackFeatures,
   StackRecordAdapter,
+  ExpectedVersionOptions,
   StackBlobAdapter,
   BlobFileInfo,
   StackAdapter,

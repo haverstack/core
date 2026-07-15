@@ -4,7 +4,12 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
-import { StackConflictError, StackNotFoundError, StackQueryError } from '@haverstack/core';
+import {
+  StackConflictError,
+  StackVersionConflictError,
+  StackNotFoundError,
+  StackQueryError,
+} from '@haverstack/core';
 import type { StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -394,6 +399,145 @@ describe('records — CRUD', () => {
 });
 
 // -------------------------------------------------------
+// expectedVersion (opt-in optimistic concurrency)
+// -------------------------------------------------------
+
+describe('expectedVersion', () => {
+  test('patchContent applies when expectedVersion matches', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+    const updated = await adapter.patchContent(
+      record.id,
+      { text: 'Updated' },
+      { expectedVersion: 1 },
+    );
+    expect(updated.version).toBe(2);
+    expect(updated.content).toEqual({ text: 'Updated' });
+  });
+
+  test('patchContent throws StackVersionConflictError and changes nothing when stale', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+    await adapter.patchContent(record.id, { text: 'first' }); // -> v2
+
+    const err = await adapter
+      .patchContent(record.id, { text: 'second' }, { expectedVersion: 1 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackVersionConflictError);
+    expect((err as StackVersionConflictError).recordId).toBe(record.id);
+    expect((err as StackVersionConflictError).expectedVersion).toBe(1);
+    expect((err as StackVersionConflictError).actualVersion).toBe(2);
+
+    const current = await adapter.getRecord(record.id);
+    expect(current?.version).toBe(2);
+    expect(current?.content).toEqual({ text: 'first' });
+  });
+
+  test('a rejected patchContent leaves the FTS index consistent with stored content', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(
+      makeRecord({ content: { text: 'searchable original' } }),
+    );
+    await adapter
+      .patchContent(record.id, { text: 'rejected update' }, { expectedVersion: 999 })
+      .catch(() => {});
+
+    const stillFindsOriginal = await adapter.queryRecords({ filter: { search: 'original' } });
+    expect(stillFindsOriginal.records.map((r) => r.id)).toEqual([record.id]);
+    const doesNotFindRejected = await adapter.queryRecords({ filter: { search: 'rejected' } });
+    expect(doesNotFindRejected.records).toEqual([]);
+  });
+
+  test('soft deleteRecord and undeleteRecord enforce expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+
+    await expect(adapter.deleteRecord(record.id, { expectedVersion: 1 })).rejects.toBeInstanceOf(
+      StackVersionConflictError,
+    );
+    await adapter.deleteRecord(record.id, { expectedVersion: 2 }); // -> v3
+
+    await expect(adapter.undeleteRecord(record.id, { expectedVersion: 1 })).rejects.toBeInstanceOf(
+      StackVersionConflictError,
+    );
+    const undeleted = await adapter.undeleteRecord(record.id, { expectedVersion: 3 }); // -> v4
+    expect(undeleted.version).toBe(4);
+  });
+
+  test('hard deleteRecord enforces expectedVersion and leaves the record untouched on mismatch', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+
+    await expect(
+      adapter.deleteRecord(record.id, { hard: true, expectedVersion: 1 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    expect(await adapter.getRecord(record.id)).not.toBeNull();
+
+    await adapter.deleteRecord(record.id, { hard: true, expectedVersion: 2 });
+    expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+
+  test('associate and dissociate enforce expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+
+    await expect(
+      adapter.associate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 99 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+
+    await adapter.associate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 1 }); // -> v2
+
+    await expect(
+      adapter.dissociate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 1 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    await adapter.dissociate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 2 }); // -> v3
+
+    expect((await adapter.getRecord(record.id))?.version).toBe(3);
+  });
+
+  test('setPermissions enforces expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+
+    await expect(
+      adapter.setPermissions(record.id, [{ access: 'public' }], { expectedVersion: 99 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+
+    await adapter.setPermissions(record.id, [{ access: 'public' }], { expectedVersion: 1 });
+    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+  });
+
+  test('restoreVersion enforces expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: record.updatedAt,
+    });
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+
+    await expect(
+      adapter.restoreVersion(record.id, 1, { expectedVersion: 1 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+
+    const restored = await adapter.restoreVersion(record.id, 1, { expectedVersion: 2 }); // -> v3
+    expect(restored.version).toBe(3);
+    expect(restored.content).toEqual({ text: 'original' });
+  });
+
+  test('expectedVersion on a nonexistent record throws StackNotFoundError', async () => {
+    const adapter = await initAdapter();
+    await expect(
+      adapter.associate('nonexistent', { kind: 'tag', label: 'x' }, { expectedVersion: 1 }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+});
+
+// -------------------------------------------------------
 // Records — queries
 // -------------------------------------------------------
 
@@ -752,7 +896,7 @@ describe('versions', () => {
     expect(retrieved?.entityId).toBe('entity-123');
   });
 
-  test('saveVersion is idempotent for same version number', async () => {
+  test('saveVersion throws on a (record, version) collision instead of silently dropping the snapshot', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
@@ -763,7 +907,7 @@ describe('versions', () => {
       updatedAt: new Date(),
     };
     await adapter.saveVersion(record.id, v);
-    await adapter.saveVersion(record.id, v);
+    await expect(adapter.saveVersion(record.id, v)).rejects.toThrow(StackConflictError);
     const versions = await adapter.getVersions(record.id);
     expect(versions.length).toBe(1);
   });

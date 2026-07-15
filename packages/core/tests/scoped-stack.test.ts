@@ -277,7 +277,10 @@ describe('ScopedStack — write access', () => {
 
 describe('ScopedStack — versions', () => {
   test('restoreVersion enforces write access', async () => {
-    const record = await adapter.createRecord(makeRecord());
+    // version: 2 — the live record already moved past the v1 snapshot
+    // below (simulating a prior edit), so restoreVersion()'s own
+    // saveVersion(existing) snapshots version 2, not a colliding version 1.
+    const record = await adapter.createRecord(makeRecord({ version: 2 }));
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE,
