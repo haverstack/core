@@ -1584,6 +1584,99 @@ export class ScopedStack implements StackClient {
   }
 
   /**
+   * Whether the requester may create a reference to `recordId` (as a
+   * `parentId` or a `relationship` association target). Missing and
+   * unreadable both return false — indistinguishable, so this can't be used
+   * to probe for a record's existence (#51).
+   */
+  private async canReadReferent(recordId: string): Promise<boolean> {
+    const record = await this.stack.get(recordId);
+    if (!record) return false;
+    return this.canRead(record);
+  }
+
+  /**
+   * Whether the requester may create a reference (`attachment` association
+   * or file-ref content field) to `fileId` — the dual of getAttachment()'s
+   * access rule: reference creation requires exactly what reference
+   * possession would grant. A nonexistent fileId and an existing-but-
+   * inaccessible one are indistinguishable here (both false), so this can't
+   * become a confirmation oracle for guessed content hashes (#51).
+   */
+  private async canAccessFile(fileId: string): Promise<boolean> {
+    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+
+    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) return true;
+
+    if (!this.requesterEntityId) return false;
+
+    return this.stack.features.contentFieldQuery
+      ? (
+          await this.stack.query({
+            filter: {
+              typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+              entityId: this.requesterEntityId,
+              content: { fileId },
+            },
+            limit: 1,
+          })
+        ).records.length > 0
+      : (
+          await queryAllPages((q) => this.stack.query(q), {
+            filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, entityId: this.requesterEntityId },
+          })
+        ).some((r) => (r.content as AttachmentContent).fileId === fileId);
+  }
+
+  /** Names of the type's top-level file-ref fields — the content-reference half of attachmentFileId matching (#63). */
+  private async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
+    const type = await this.stack.getType(typeId);
+    if (!type) return [];
+    return Object.entries(type.schema)
+      .filter(([, def]) => def.kind === 'file-ref')
+      .map(([field]) => field);
+  }
+
+  /**
+   * Gates file-ref content fields on file access, mirroring the attachment-
+   * association gate below — #63 made a file-ref field convey attachment
+   * access exactly like an `attachment` association does, so it needs the
+   * same reference-creation check (#51). Only fields actually present in
+   * `content` are checked: on update() that's a merge patch, so untouched
+   * fields carry no new reference.
+   */
+  private async requireFileRefAccess(
+    typeId: TypeId,
+    content: Record<string, unknown | null>,
+  ): Promise<void> {
+    for (const field of await this.fileRefFieldNames(typeId)) {
+      const value = content[field];
+      if (typeof value !== 'string') continue;
+      if (!(await this.canAccessFile(value))) throw new StackPermissionError();
+    }
+  }
+
+  /**
+   * Gates a single association's reference-creation check per #51: an
+   * `attachment` association requires file access, a `relationship`
+   * association requires read access to its target, a `tag` carries no
+   * reference and is unchecked.
+   *
+   * `_group` roster associations are exempt from the relationship check —
+   * their `recordId` is an entity ID, not a readable record, and roster
+   * mutation is already gated by isGroupManager() (#58), which is strictly
+   * tighter than "can read the target".
+   */
+  private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
+    if (association.kind === 'attachment') {
+      if (!(await this.canAccessFile(association.fileId))) throw new StackPermissionError();
+    } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
+      if (!(await this.canReadReferent(association.recordId))) throw new StackPermissionError();
+    }
+  }
+
+  /**
    * Create a new record on behalf of the authenticated requester.
    * Requires either an entity-specific _grant or a default _grant for
    * the target type. Anonymous requesters (null entityId) are always denied.
@@ -1597,6 +1690,16 @@ export class ScopedStack implements StackClient {
    * `_group` records additionally get the creator stamped as their first
    * `admin` roster association, so a group is never management-orphaned —
    * without this, nobody could ever pass isGroupManager() to add themselves.
+   *
+   * `parentId`, `associations`, and file-ref content fields are all
+   * reference-creating options a caller could otherwise use to piggyback on
+   * a bare `create` grant: a `parentId` or `relationship` association
+   * requires read access to the target, and an `attachment` association or
+   * file-ref field requires file access — the same checks associate()
+   * applies post-create (#51). `permissions` and `appId` are deliberately
+   * left unchecked here: `permissions` is create-time-consistent with
+   * setPermissions() (owner/creator territory already), and `appId` is
+   * self-reported, untrusted metadata everywhere, not a permission input.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -1612,6 +1715,13 @@ export class ScopedStack implements StackClient {
       validateRecordId(opts.id);
       validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
     }
+    if (opts.parentId !== undefined && !(await this.canReadReferent(opts.parentId))) {
+      throw new StackPermissionError();
+    }
+    for (const assoc of opts.associations ?? []) {
+      await this.requireAssociationAccess(typeId, assoc);
+    }
+    await this.requireFileRefAccess(typeId, content);
     const createOpts =
       baseIdOf(typeId) === SYSTEM_TYPES.GROUP
         ? { ...opts, associations: stampGroupAdmin(opts.associations, requester) }
@@ -1672,7 +1782,8 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown | null>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    await this.requireUpdatable(id);
+    const record = await this.requireUpdatable(id);
+    await this.requireFileRefAccess(record.typeId, content);
     return this.stack.update(id, content, opts);
   }
 
@@ -1681,7 +1792,8 @@ export class ScopedStack implements StackClient {
     association: Association,
     opts: IfVersionOptions = {},
   ): Promise<void> {
-    await this.requireUpdatable(id);
+    const record = await this.requireUpdatable(id);
+    await this.requireAssociationAccess(record.typeId, association);
     return this.stack.associate(id, association, opts);
   }
 
@@ -1805,49 +1917,13 @@ export class ScopedStack implements StackClient {
   /**
    * Download attachment bytes. Accessible if the requester is the owner,
    * can read any record referencing the file, or uploaded the file themselves
-   * and it hasn't been associated with a record yet.
+   * and it hasn't been associated with a record yet. Shares its predicate
+   * with the reference-creation gate (canAccessFile, #51) — reference
+   * creation requires exactly what reference possession grants.
    */
   async getAttachment(fileId: string): Promise<Uint8Array> {
-    if (this.requesterEntityId === this.stack.ownerEntityId) {
-      return this.stack.getAttachment(fileId);
-    }
-
-    // Accessible if the requester can read any record that references this file
-    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
-    if (refResult.records.length > 0) {
-      return this.stack.getAttachment(fileId);
-    }
-
-    // Accessible if the requester uploaded it and it hasn't been associated yet.
-    // With contentFieldQuery, the filter narrows to this fileId server-side, so
-    // limit: 1 is a correct existence check. Without it, matching happens in
-    // memory below — limit: 1 there would only ever see the requester's single
-    // most recent upload, false-denying every earlier one, so that path
-    // cursor-walks all of the requester's uploads instead.
-    if (this.requesterEntityId) {
-      const hasUpload = this.stack.features.contentFieldQuery
-        ? (
-            await this.stack.query({
-              filter: {
-                typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-                entityId: this.requesterEntityId,
-                content: { fileId },
-              },
-              limit: 1,
-            })
-          ).records.length > 0
-        : (
-            await queryAllPages((q) => this.stack.query(q), {
-              filter: {
-                typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-                entityId: this.requesterEntityId,
-              },
-            })
-          ).some((r) => (r.content as AttachmentContent).fileId === fileId);
-      if (hasUpload) return this.stack.getAttachment(fileId);
-    }
-
-    throw new StackPermissionError();
+    if (!(await this.canAccessFile(fileId))) throw new StackPermissionError();
+    return this.stack.getAttachment(fileId);
   }
 
   /**

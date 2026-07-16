@@ -1111,3 +1111,359 @@ describe('Permission — group role restriction (#58)', () => {
     expect((await stack.asEntity(admin).get(record.id))?.id).toBe(record.id);
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack.create()/associate() — reference-creation gating (#51)
+// -------------------------------------------------------
+//
+// ScopedStack.create() forwards parentId/associations from an untrusted
+// caller. Creating a reference should require exactly what possessing that
+// reference would grant: an attachment association or file-ref field
+// requires file access, a relationship association or parentId requires
+// read access to the target. Both gates must produce the same error for a
+// nonexistent target as for an existing-but-forbidden one, so the check
+// itself can't be used to probe for a record or file's existence.
+
+describe('ScopedStack.create — attachment association gating (#51)', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+  });
+
+  test('attachment association referencing an inaccessible file is rejected', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [
+            { kind: 'attachment', label: 'x', fileId: 'unknown-file', mimeType: 'image/png' },
+          ],
+        },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('attachment association referencing a file the requester uploaded is allowed', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }],
+      },
+    );
+    expect(record.associations).toContainEqual({
+      kind: 'attachment',
+      label: 'x',
+      fileId,
+      mimeType: 'image/png',
+    });
+  });
+
+  test('attachment association referencing a file readable via another record is allowed', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const owned = await stack.create(NOTE, { text: 'owner note' });
+    await stack.associate(owned.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
+
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }],
+      },
+    );
+    expect(record.associations).toContainEqual({
+      kind: 'attachment',
+      label: 'x',
+      fileId,
+      mimeType: 'image/png',
+    });
+  });
+
+  test('nonexistent and existing-but-forbidden fileIds produce indistinguishable errors', async () => {
+    const forbiddenFileId = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    let nonexistentError: Error | undefined;
+    let forbiddenError: Error | undefined;
+    try {
+      await stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [
+            { kind: 'attachment', label: 'x', fileId: 'truly-nonexistent', mimeType: 'image/png' },
+          ],
+        },
+      );
+    } catch (e) {
+      nonexistentError = e as Error;
+    }
+    try {
+      await stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [
+            { kind: 'attachment', label: 'x', fileId: forbiddenFileId, mimeType: 'image/png' },
+          ],
+        },
+      );
+    } catch (e) {
+      forbiddenError = e as Error;
+    }
+    expect(nonexistentError).toBeInstanceOf(StackPermissionError);
+    expect(forbiddenError).toBeInstanceOf(StackPermissionError);
+    expect(nonexistentError?.message).toBe(forbiddenError?.message);
+  });
+
+  test('tag associations are never gated', async () => {
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [{ kind: 'tag', label: 'starred' }],
+      },
+    );
+    expect(record.associations).toContainEqual({ kind: 'tag', label: 'starred' });
+  });
+
+  test('the owner is exempt from the attachment-association gate', async () => {
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'x', fileId: 'anything', mimeType: 'image/png' },
+        ],
+      },
+    );
+    expect(record.associations).toHaveLength(1);
+  });
+});
+
+describe('ScopedStack.create — relationship association and parentId gating (#51)', () => {
+  let readableNote: StackRecord;
+  let unreadableNote: StackRecord;
+
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    readableNote = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
+    unreadableNote = await adapter.createRecord(makeRecord());
+  });
+
+  test('relationship association targeting an unreadable record is rejected', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+        },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('relationship association targeting a readable record is allowed', async () => {
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [{ kind: 'relationship', label: 'related', recordId: readableNote.id }],
+      },
+    );
+    expect(record.associations).toContainEqual({
+      kind: 'relationship',
+      label: 'related',
+      recordId: readableNote.id,
+    });
+  });
+
+  test('missing and unreadable relationship targets produce indistinguishable errors', async () => {
+    let missingError: Error | undefined;
+    let unreadableError: Error | undefined;
+    try {
+      await stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [
+            { kind: 'relationship', label: 'related', recordId: 'nonexistent-record' },
+          ],
+        },
+      );
+    } catch (e) {
+      missingError = e as Error;
+    }
+    try {
+      await stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+        },
+      );
+    } catch (e) {
+      unreadableError = e as Error;
+    }
+    expect(missingError).toBeInstanceOf(StackPermissionError);
+    expect(unreadableError).toBeInstanceOf(StackPermissionError);
+    expect(missingError?.message).toBe(unreadableError?.message);
+  });
+
+  test('_group roster relationship associations are exempt from the target-read check', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_group@1' }]);
+    // MEMBER's own entityId has no corresponding readable record in this stack.
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'New Group' });
+    expect(group.associations).toContainEqual({
+      kind: 'relationship',
+      label: 'admin',
+      recordId: MEMBER,
+    });
+  });
+
+  test('parentId requires read access to the parent', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' }, { parentId: unreadableNote.id }),
+    ).rejects.toThrow(StackPermissionError);
+
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { parentId: readableNote.id });
+    expect(record.parentId).toBe(readableNote.id);
+  });
+
+  test('the owner is exempt from parentId and relationship gates', async () => {
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        parentId: unreadableNote.id,
+        associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+      },
+    );
+    expect(record.parentId).toBe(unreadableNote.id);
+  });
+});
+
+describe('ScopedStack.associate — reference-creation gating (#51)', () => {
+  let ownedRecord: StackRecord;
+
+  beforeEach(async () => {
+    await stack.grant(MEMBER, [{ actions: ['create', 'update-own'], typeId: NOTE }]);
+    ownedRecord = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+  });
+
+  test('associate() rejects an attachment association to a file the requester cannot access', async () => {
+    await expect(
+      stack.asEntity(MEMBER).associate(ownedRecord.id, {
+        kind: 'attachment',
+        label: 'x',
+        fileId: 'unknown',
+        mimeType: 'image/png',
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('associate() allows an attachment association to a file the requester uploaded', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    await stack
+      .asEntity(MEMBER)
+      .associate(ownedRecord.id, { kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' });
+    expect((await adapter.getRecord(ownedRecord.id))?.associations).toContainEqual({
+      kind: 'attachment',
+      label: 'x',
+      fileId,
+      mimeType: 'image/png',
+    });
+  });
+
+  test('associate() rejects a relationship association to an unreadable record', async () => {
+    const unreadableNote = await adapter.createRecord(makeRecord());
+    await expect(
+      stack.asEntity(MEMBER).associate(ownedRecord.id, {
+        kind: 'relationship',
+        label: 'related',
+        recordId: unreadableNote.id,
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('associate() never gates tag associations', async () => {
+    await stack.asEntity(MEMBER).associate(ownedRecord.id, { kind: 'tag', label: 'starred' });
+    expect((await adapter.getRecord(ownedRecord.id))?.associations).toContainEqual({
+      kind: 'tag',
+      label: 'starred',
+    });
+  });
+});
+
+describe('ScopedStack — file-ref content field gating (#51, extends #63)', () => {
+  const PHOTO_NOTE = 'com.example.test/photo-note-gating@1';
+  const FILE_ID = 'c'.repeat(64);
+
+  beforeEach(async () => {
+    await stack.defineType(PHOTO_NOTE, 'Photo note', {
+      coverFileId: { kind: 'file-ref' },
+      title: { kind: 'string' },
+    });
+    await stack.grant(MEMBER, [{ actions: ['create', 'update-own'], typeId: PHOTO_NOTE }]);
+  });
+
+  test('create() rejects a file-ref field pointing at an inaccessible file', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(PHOTO_NOTE, { coverFileId: FILE_ID }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('create() allows a file-ref field pointing at a file the requester uploaded', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const record = await stack.asEntity(MEMBER).create(PHOTO_NOTE, { coverFileId: fileId });
+    expect(record.content.coverFileId).toBe(fileId);
+  });
+
+  test('update() rejects changing a file-ref field to an inaccessible file', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const record = await stack.asEntity(MEMBER).create(PHOTO_NOTE, { coverFileId: fileId });
+
+    await expect(
+      stack.asEntity(MEMBER).update(record.id, { coverFileId: FILE_ID }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('update() leaving the file-ref field untouched is unaffected by its accessibility', async () => {
+    // Owner-created record with a file-ref the MEMBER updater can't independently access;
+    // a patch that never mentions coverFileId carries no new reference and isn't gated.
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const record = await stack.create(
+      PHOTO_NOTE,
+      { coverFileId: fileId },
+      {
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      },
+    );
+
+    const updated = await stack.asEntity(MEMBER).update(record.id, { title: 'renamed' });
+    expect(updated.content.title).toBe('renamed');
+    expect(updated.content.coverFileId).toBe(fileId);
+  });
+
+  test('the owner is exempt from the file-ref gate', async () => {
+    const record = await stack.create(PHOTO_NOTE, { coverFileId: FILE_ID });
+    expect(record.content.coverFileId).toBe(FILE_ID);
+  });
+});
