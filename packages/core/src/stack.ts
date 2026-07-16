@@ -18,7 +18,7 @@ import { generateId, isValidIdFormat, idTimestamp } from './id.js';
 import { hashSchema, isCompatible, parseTypeId, baseIdOf } from './schema.js';
 import { validateContent } from './validate.js';
 import { applyMergePatch } from './merge.js';
-import { checkAccess } from './access.js';
+import { checkAccess, groupRoleFromAssociations } from './access.js';
 import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -1426,6 +1426,20 @@ const DEFAULT_QUERY_LIMIT = 50;
 const MAX_QUERY_LIMIT = 1000;
 
 /**
+ * Ensures `creator` carries an `admin` relationship association, adding one
+ * if it's not already present. Used to bootstrap a `_group` record's first
+ * admin at create time.
+ */
+function stampGroupAdmin(associations: Association[] | undefined, creator: string): Association[] {
+  const list = associations ?? [];
+  const alreadyAdmin = list.some(
+    (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === creator,
+  );
+  if (alreadyAdmin) return list;
+  return [...list, { kind: 'relationship', label: 'admin', recordId: creator }];
+}
+
+/**
  * A permission-enforcing view of a Stack for a single requester. Obtained
  * via `stack.asEntity(entityId)` — see there for when to use it.
  *
@@ -1525,10 +1539,28 @@ export class ScopedStack implements StackClient {
     return this.hasGrant(typeId, ['create']);
   }
 
+  /**
+   * `_group` records are managed, not merely written: the owner or a
+   * requester holding an `admin` roster association may mutate them.
+   * Ordinary write permissions/grants don't apply — membership rosters live
+   * on the very record they'd otherwise let a write-holder rewrite, so the
+   * generic write bit would let anyone who can write the record add or
+   * remove members (see #58).
+   */
+  private isGroupManager(record: StackRecord): boolean {
+    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+    if (!this.requesterEntityId) return false;
+    return groupRoleFromAssociations(record.associations, this.requesterEntityId) === 'admin';
+  }
+
   /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
   private async requireUpdatable(id: string): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+      if (!this.isGroupManager(record)) throw new StackPermissionError();
+      return record;
+    }
     const allowed =
       (await this.checkWrite(record)) ||
       (await this.hasGrant(record.typeId, ['update-own', 'update-any'], record));
@@ -1540,6 +1572,10 @@ export class ScopedStack implements StackClient {
   private async requireDeletable(id: string): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+      if (!this.isGroupManager(record)) throw new StackPermissionError();
+      return record;
+    }
     const allowed =
       (await this.checkWrite(record)) ||
       (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], record));
@@ -1557,6 +1593,10 @@ export class ScopedStack implements StackClient {
    * Stack.create() plus a timestamp-skew check — the requester here is an
    * untrusted actor who could otherwise mint an ID that forges its sort
    * position. See StackOptions.idTimestampSkewMs.
+   *
+   * `_group` records additionally get the creator stamped as their first
+   * `admin` roster association, so a group is never management-orphaned —
+   * without this, nobody could ever pass isGroupManager() to add themselves.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -1572,7 +1612,11 @@ export class ScopedStack implements StackClient {
       validateRecordId(opts.id);
       validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
     }
-    return this.stack.create(typeId, content, { ...opts, entityId: requester });
+    const createOpts =
+      baseIdOf(typeId) === SYSTEM_TYPES.GROUP
+        ? { ...opts, associations: stampGroupAdmin(opts.associations, requester) }
+        : opts;
+    return this.stack.create(typeId, content, { ...createOpts, entityId: requester });
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
@@ -1658,9 +1702,16 @@ export class ScopedStack implements StackClient {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
 
-    const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
-    const isCreator = this.requesterEntityId === record.entityId;
-    if (!isOwner && !isCreator) throw new StackPermissionError();
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+      // Group management, not authorship: a creator later demoted from the
+      // admin roster shouldn't retain a side door to reassign who can read
+      // or write the group record. Same gate as update/associate/delete.
+      if (!this.isGroupManager(record)) throw new StackPermissionError();
+    } else {
+      const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
+      const isCreator = this.requesterEntityId === record.entityId;
+      if (!isOwner && !isCreator) throw new StackPermissionError();
+    }
 
     return this.stack.setPermissions(id, permissions, opts);
   }

@@ -32,8 +32,8 @@ export type {
 } from './stack.js';
 
 // Permissions
-export { checkAccess } from './access.js';
-export type { AccessMode, RecordResolver } from './access.js';
+export { checkAccess, groupRoleFromAssociations } from './access.js';
+export type { AccessMode, RecordResolver, GroupRole } from './access.js';
 
 // Types
 export type {

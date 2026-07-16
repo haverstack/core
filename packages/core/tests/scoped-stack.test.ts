@@ -929,3 +929,185 @@ describe('ScopedStack.collectAttachmentGarbage', () => {
     );
   });
 });
+
+// -------------------------------------------------------
+// ScopedStack — group role gating (#58)
+// -------------------------------------------------------
+
+describe('ScopedStack — group role gating (#58)', () => {
+  const ADMIN = 'group-admin-1';
+
+  function makeGroup(overrides: Partial<StackRecord> = {}): Promise<StackRecord> {
+    return adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'admin', recordId: ADMIN },
+          { kind: 'relationship', label: 'member', recordId: MEMBER },
+        ],
+        ...overrides,
+      }),
+    );
+  }
+
+  test('plain member cannot update group content', async () => {
+    const group = await makeGroup();
+    await expect(stack.asEntity(MEMBER).update(group.id, { name: 'renamed' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('plain member cannot add or remove roster associations', async () => {
+    const group = await makeGroup();
+    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
+      StackPermissionError,
+    );
+    const existingMember: Association = {
+      kind: 'relationship',
+      label: 'member',
+      recordId: MEMBER,
+    };
+    await expect(stack.asEntity(MEMBER).dissociate(group.id, existingMember)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('plain member cannot delete the group', async () => {
+    const group = await makeGroup();
+    await expect(stack.asEntity(MEMBER).delete(group.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('admin can update content, manage the roster, and delete the group', async () => {
+    const group = await makeGroup();
+
+    const updated = await stack.asEntity(ADMIN).update(group.id, { name: 'renamed' });
+    expect(updated.content.name).toBe('renamed');
+
+    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    await stack.asEntity(ADMIN).associate(group.id, newMember);
+    expect((await adapter.getRecord(group.id))?.associations).toContainEqual(newMember);
+
+    await stack.asEntity(ADMIN).dissociate(group.id, newMember);
+    expect((await adapter.getRecord(group.id))?.associations).not.toContainEqual(newMember);
+
+    await stack.asEntity(ADMIN).delete(group.id);
+    expect((await adapter.getRecord(group.id))?.deletedAt).toBeDefined();
+  });
+
+  test('stack owner can manage the group regardless of roster membership', async () => {
+    const group = await makeGroup();
+    const updated = await stack.asEntity(OWNER).update(group.id, { name: 'renamed' });
+    expect(updated.content.name).toBe('renamed');
+    await stack.asEntity(OWNER).delete(group.id);
+    expect((await adapter.getRecord(group.id))?.deletedAt).toBeDefined();
+  });
+
+  test('a stranger with no roster entry cannot manage the group', async () => {
+    const group = await makeGroup();
+    await expect(stack.asEntity(STRANGER).update(group.id, { name: 'renamed' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('record-level write:true permission does not substitute for admin status', async () => {
+    // The self-amplifying-roster hole this issue closes: a group with a
+    // generic write grant must not let that grantee touch the roster.
+    const group = await makeGroup({
+      permissions: [{ access: 'entity', entityId: STRANGER, read: true, write: true }],
+    });
+    await expect(stack.asEntity(STRANGER).update(group.id, { name: 'renamed' })).rejects.toThrow(
+      StackPermissionError,
+    );
+    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    await expect(stack.asEntity(STRANGER).associate(group.id, newMember)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('setPermissions on a group requires admin, not just record authorship', async () => {
+    const group = await makeGroup({ entityId: MEMBER });
+    const perms: Permission[] = [{ access: 'public' }];
+    // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
+    await expect(stack.asEntity(MEMBER).setPermissions(group.id, perms)).rejects.toThrow(
+      StackPermissionError,
+    );
+    await stack.asEntity(ADMIN).setPermissions(group.id, perms);
+    expect((await adapter.getRecord(group.id))?.permissions).toEqual(perms);
+  });
+
+  test('creator is stamped as admin at create time and can manage the group afterward', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_group@1' }]);
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'New Group' });
+    expect(group.associations).toContainEqual({
+      kind: 'relationship',
+      label: 'admin',
+      recordId: MEMBER,
+    });
+
+    const updated = await stack.asEntity(MEMBER).update(group.id, { name: 'renamed' });
+    expect(updated.content.name).toBe('renamed');
+  });
+
+  test('create-time bootstrap does not duplicate an explicitly supplied admin association', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_group@1' }]);
+    const group = await stack
+      .asEntity(MEMBER)
+      .create(
+        '_group@1',
+        { name: 'New Group' },
+        { associations: [{ kind: 'relationship', label: 'admin', recordId: MEMBER }] },
+      );
+    const adminAssociations = (group.associations ?? []).filter(
+      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === MEMBER,
+    );
+    expect(adminAssociations).toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
+// Permission — group `role` (#58)
+// -------------------------------------------------------
+
+describe('Permission — group role restriction (#58)', () => {
+  test('role: "admin" ACL entry excludes a plain member', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [
+          { kind: 'relationship', label: 'admin', recordId: 'group-admin-2' },
+          { kind: 'relationship', label: 'member', recordId: MEMBER },
+        ],
+      }),
+    );
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [
+          { access: 'group', groupId: group.id, role: 'admin', read: true, write: false },
+        ],
+      }),
+    );
+    await expect(stack.asEntity(MEMBER).get(record.id)).rejects.toThrow(StackPermissionError);
+    expect((await stack.asEntity('group-admin-2').get(record.id))?.id).toBe(record.id);
+  });
+
+  test('absent role behaves exactly as today — any member (or admin) qualifies', async () => {
+    const admin = 'group-admin-3';
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [
+          { kind: 'relationship', label: 'admin', recordId: admin },
+          { kind: 'relationship', label: 'member', recordId: MEMBER },
+        ],
+      }),
+    );
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+      }),
+    );
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+    expect((await stack.asEntity(admin).get(record.id))?.id).toBe(record.id);
+  });
+});
