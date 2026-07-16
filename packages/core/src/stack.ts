@@ -1300,6 +1300,10 @@ export class Stack implements StackClient {
    * for specific record types. Pass null as entityId for a default grant
    * that applies to any authenticated entity.
    *
+   * The grantee lives in `GrantContent.granteeEntityId`, not `record.entityId`
+   * — `entityId` means "author" everywhere else, and the owner (who calls
+   * grant()) authored this record, never the entity it names (#57).
+   *
    * The _grant@1 type is defined automatically on first use.
    */
   async grant(
@@ -1309,14 +1313,64 @@ export class Stack implements StackClient {
     const records: StackRecord[] = [];
     for (const g of grants) {
       records.push(
-        await this.create(
-          `${SYSTEM_TYPES.GRANT}@1`,
-          { typeId: g.typeId, actions: g.actions },
-          entityId ? { entityId } : {},
-        ),
+        await this.create(`${SYSTEM_TYPES.GRANT}@1`, {
+          typeId: g.typeId,
+          actions: g.actions,
+          ...(entityId && { granteeEntityId: entityId }),
+        }),
       );
     }
     return records;
+  }
+
+  /**
+   * List _grant records. Omit `entityId` for every grant regardless of
+   * grantee. Pass `null` for only default grants (no `granteeEntityId` —
+   * apply to any authenticated entity). Pass a specific entityId for the
+   * grants that currently apply to that entity: ones naming them, plus
+   * every default grant — the same resolution ScopedStack's hasGrant()
+   * uses internally.
+   */
+  async listGrants(entityId?: string | null): Promise<StackRecord[]> {
+    const all = await queryAllPages((q) => this.query(q), {
+      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+    });
+    if (entityId === undefined) return all;
+    return all.filter((r) => {
+      const granteeEntityId = (r.content as GrantContent).granteeEntityId;
+      return entityId === null
+        ? !granteeEntityId
+        : !granteeEntityId || granteeEntityId === entityId;
+    });
+  }
+
+  /**
+   * The inverse of grant(): soft-deletes _grant records exactly matching
+   * `entityId` (null for default grants) and each `{ typeId, actions }`
+   * pair — matched by typeId baseId and action set, the same granularity
+   * grant() writes at. A soft delete like any other mutation: the owner can
+   * undelete a revocation the same as any other write (#59/#61).
+   */
+  async revoke(
+    entityId: string | null,
+    grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
+  ): Promise<void> {
+    const all = await queryAllPages((q) => this.query(q), {
+      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+    });
+    for (const g of grants) {
+      const familyId = baseIdOf(g.typeId);
+      const actionSet = new Set(g.actions);
+      const matches = all.filter((r) => {
+        const c = r.content as GrantContent;
+        if (baseIdOf(c.typeId) !== familyId) return false;
+        if ((c.granteeEntityId ?? null) !== entityId) return false;
+        return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
+      });
+      for (const match of matches) {
+        await this.delete(match.id);
+      }
+    }
   }
 
   // -------------------------------------------------------
@@ -1344,6 +1398,7 @@ export class Stack implements StackClient {
     await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
       typeId: { kind: 'string', required: true },
       actions: { kind: 'array', items: { kind: 'string' }, required: true },
+      granteeEntityId: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
       fileId: { kind: 'string', required: true },
@@ -1518,7 +1573,7 @@ export class ScopedStack implements StackClient {
     return grantRecords.some((r) => {
       const c = r.content as GrantContent;
       if (baseIdOf(c.typeId) !== familyId) return false;
-      if (r.entityId && r.entityId !== this.requesterEntityId) return false;
+      if (c.granteeEntityId && c.granteeEntityId !== this.requesterEntityId) return false;
       return actions.some((action) => {
         if (!(c.actions as string[]).includes(action)) return false;
         if (action.endsWith('-own')) return record?.entityId === this.requesterEntityId;

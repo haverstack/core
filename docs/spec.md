@@ -128,6 +128,7 @@ A Grant authorises one or more Entities to perform specific actions on Records o
 type GrantContent = {
   typeId: TypeId; // Which record type this grant covers
   actions: GrantAction[]; // Which actions are permitted
+  granteeEntityId?: string; // Who the grant applies to. Absent = default grant (any authenticated entity).
 };
 
 type GrantAction =
@@ -140,6 +141,8 @@ type GrantAction =
   | 'delete-any'; // Delete all records of this type
 ```
 
+The grantee lives in `content.granteeEntityId`, not `record.entityId`. `entityId` means "author" on every other Record in the system, and a `_grant` Record is always authored by the stack owner (the only caller of `grant()`) — never by the entity it names. A grant Record therefore carries no `entityId` of its own, consistent with the owner-authored-records invariant, and "everything this entity authored" queries (`filter: { entityId }`) don't pick up grants that merely name that entity.
+
 `Stack.grant()` is the owner-facing helper for creating grant records:
 
 ```ts
@@ -148,15 +151,30 @@ await stack.grant('bob-entity-id', [
   { typeId: 'com.example/comment@1', actions: ['create', 'read-own', 'update-own', 'delete-own'] },
 ]);
 
-// Default grant — applies to any authenticated entity (null entityId on the grant record)
+// Default grant — applies to any authenticated entity (no granteeEntityId in content)
 await stack.grant(null, [{ typeId: 'com.example/comment@1', actions: ['create', 'read-own'] }]);
 ```
+
+`Stack.listGrants(entityId?)` and `Stack.revoke(entityId, grants)` are the read/undo counterparts, both owner-facing like `grant()`:
+
+```ts
+await stack.listGrants(); // every grant record, any grantee
+await stack.listGrants(null); // only default grants
+await stack.listGrants('bob-entity-id'); // grants naming Bob, plus every default grant — what currently applies to him
+
+// The inverse of grant(): soft-deletes the _grant record(s) matching entityId
+// (null for a default grant) and each { typeId, actions } pair, matched by
+// typeId baseId and action set — the same granularity grant() writes at.
+await stack.revoke('bob-entity-id', [{ typeId: 'com.example/comment@1', actions: ['create'] }]);
+```
+
+A revocation is a soft delete like any other mutation — the owner can `undelete()` it the same as an accidental delete anywhere else (see [Versions](#versions)).
 
 **Design decisions:**
 
 - **No wildcard `typeId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
-- **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This is what keeps a version bump from silently orphaning existing grants (previously, registering a migration broke every grant pinned to the old version, with no data change at all — grants are checked in memory _before_ any migration applies).
-- **Default grants** (grant record has no `entityId`): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
+- **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This is what keeps a version bump from silently orphaning existing grants (previously, registering a migration broke every grant pinned to the old version, with no data change at all — grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
+- **Default grants** (grant content has no `granteeEntityId`): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. The combination `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
 - **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester — Records the entity authored. Records with no `entityId` (owner-created) do not satisfy any `-own` check.
 
