@@ -365,6 +365,8 @@ type Association =
 
 **Note:** `parentId` is a separate native field (not an Association) because hierarchical containment is fundamental enough to warrant indexing at the library level. Associations are for metadata and cross-references.
 
+**Reference creation is gated on `ScopedStack`:** an `attachment` association or file-ref content field requires file access, and a `relationship` association or `parentId` requires read access to the target — see Reference-creation gating under [Permissions](#permissions) for the full rule and its `_group`-roster carve-out. Plain `Stack` is unscoped and does not apply this.
+
 ---
 
 ## Permissions
@@ -429,6 +431,17 @@ The two layers deliberately use different granularities. Record-level `write` is
 The core library ships a permission-enforcing wrapper so server implementations don't need to reimplement this resolution logic. `stack.asEntity(entityId)` — `entityId` is `null` for an anonymous/unauthenticated requester — returns a `ScopedStack`: the same surface as `Stack`, but every operation is checked against both permission layers.
 
 **`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the requester, so `-own` grants apply to it immediately.
+
+**Reference-creation gating.** A `create` grant on a type authorizes writing Records of that type — it does not, by itself, authorize referencing arbitrary other Records or files through that Record. `ScopedStack.create()` and `ScopedStack.associate()` both additionally check that the requester may create the specific reference being written, since a reference elsewhere confers access (an `attachment` association or file-ref content field makes the referenced file downloadable via `getAttachment`; see [Attachment](#attachment)):
+
+- **`attachment` associations and file-ref content fields** require file access: the requester is the owner, uploaded the file themselves (holds an `_attachment@1` Record for it), or can already read some Record referencing it. This is exactly `getAttachment()`'s own access rule — reference creation requires what reference possession would grant.
+- **`relationship` associations and `parentId`** require read access to the target Record.
+- **`tag` associations** carry no reference and are never gated.
+- **`_group` roster associations are exempt** from the `relationship` check above — a roster association's `recordId` names an Entity, not a readable Record (see [Group](#group)), and roster mutation is already gated by the stricter admin-or-owner rule there.
+
+A missing target and an existing-but-inaccessible one **always produce the same `StackPermissionError`**, with no distinguishing detail — otherwise the check itself becomes a confirmation oracle (e.g. for a guessed file hash: content-addressed `fileId`s mean a successful attach-then-read round-trip would otherwise confirm the stack holds those exact bytes). On `update()`, only file-ref fields actually present in the patch are checked — untouched fields carry no new reference.
+
+`appId` and `permissions` are deliberately **not** gated by this: `appId` is self-reported, untrusted metadata everywhere (no verification mechanism exists yet — a foundation for future enforcement, per [App](#app)), never a permission input. `permissions` at create time is consistent with `setPermissions()`'s existing owner-or-creator policy — a contributor authoring a Record in your Stack can already widen its access up to and including `public`; create-time is not a new capability, just the same one exercised earlier.
 
 Reading or writing a Record that exists but isn't accessible throws `StackPermissionError`; a missing Record throws `StackNotFoundError`, so callers can distinguish "not found" from "forbidden" (typically 404 vs 403 at the HTTP layer).
 
