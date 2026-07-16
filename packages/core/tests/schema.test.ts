@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { hashSchema, isCompatible, parseTypeId, buildTypeId } from '../src/schema.js';
+import { hashSchema, isCompatible, diffSchemas, parseTypeId, buildTypeId } from '../src/schema.js';
 import type { TypeSchema } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -303,6 +303,174 @@ describe('isCompatible', () => {
     const candidate = buildNested(10);
     const required = buildNested(10);
     expect(isCompatible(candidate, required)).toBe(true);
+  });
+});
+
+// -------------------------------------------------------
+// diffSchemas (#68)
+// -------------------------------------------------------
+
+describe('diffSchemas', () => {
+  test('identical schemas produce no violations', () => {
+    const schema: TypeSchema = { text: { kind: 'text', required: true } };
+    expect(diffSchemas(schema, schema)).toEqual([]);
+  });
+
+  test('a new optional field is additive-legal', () => {
+    const stored: TypeSchema = { text: { kind: 'text', required: true } };
+    const candidate: TypeSchema = {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    };
+    expect(diffSchemas(stored, candidate)).toEqual([]);
+  });
+
+  test('a new required field is drift', () => {
+    const stored: TypeSchema = { text: { kind: 'text', required: true } };
+    const candidate: TypeSchema = {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string', required: true },
+    };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([
+      { path: 'title', message: 'new field is required; new fields must be optional' },
+    ]);
+  });
+
+  test('removing a field is drift', () => {
+    const stored: TypeSchema = {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    };
+    const candidate: TypeSchema = { text: { kind: 'text', required: true } };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([{ path: 'title', message: 'field removed' }]);
+  });
+
+  test('changing a field’s kind is drift, even to a read-compatible kind (text/string)', () => {
+    const stored: TypeSchema = { body: { kind: 'text', required: true } };
+    const candidate: TypeSchema = { body: { kind: 'string', required: true } };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([{ path: 'body', message: 'kind changed from "text" to "string"' }]);
+  });
+
+  test('flipping an existing field from optional to required is drift', () => {
+    const stored: TypeSchema = { title: { kind: 'string' } };
+    const candidate: TypeSchema = { title: { kind: 'string', required: true } };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([{ path: 'title', message: 'required changed from false to true' }]);
+  });
+
+  test('flipping an existing field from required to optional is drift', () => {
+    const stored: TypeSchema = { title: { kind: 'string', required: true } };
+    const candidate: TypeSchema = { title: { kind: 'string' } };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([{ path: 'title', message: 'required changed from true to false' }]);
+  });
+
+  test('a new optional field nested inside an existing object is additive-legal', () => {
+    const stored: TypeSchema = {
+      author: { kind: 'object', required: true, properties: { name: { kind: 'string' } } },
+    };
+    const candidate: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: { name: { kind: 'string' }, email: { kind: 'string' } },
+      },
+    };
+    expect(diffSchemas(stored, candidate)).toEqual([]);
+  });
+
+  test('removing a nested object field is drift, with a dotted path', () => {
+    const stored: TypeSchema = {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: { name: { kind: 'string', required: true } },
+      },
+    };
+    const candidate: TypeSchema = {
+      author: { kind: 'object', required: true, properties: {} },
+    };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([{ path: 'author.name', message: 'field removed' }]);
+  });
+
+  test('changing an array item field is drift, with a bracketed path', () => {
+    const stored: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'string' } },
+    };
+    const candidate: TypeSchema = {
+      tags: { kind: 'array', required: true, items: { kind: 'number' } },
+    };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([
+      { path: 'tags[]', message: 'kind changed from "string" to "number"' },
+    ]);
+  });
+
+  test('a field changing kind from object to array (or vice versa) is drift, not a recursion', () => {
+    const stored: TypeSchema = {
+      data: { kind: 'object', required: true, properties: { x: { kind: 'string' } } },
+    };
+    const candidate: TypeSchema = {
+      data: { kind: 'array', required: true, items: { kind: 'string' } },
+    };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toEqual([
+      { path: 'data', message: 'kind changed from "object" to "array"' },
+    ]);
+  });
+
+  test('multiple independent violations are all reported', () => {
+    const stored: TypeSchema = {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    };
+    const candidate: TypeSchema = {
+      text: { kind: 'string', required: true }, // kind change
+      newRequired: { kind: 'string', required: true }, // new required field
+      // title removed entirely
+    };
+    const violations = diffSchemas(stored, candidate);
+    expect(violations).toContainEqual({
+      path: 'text',
+      message: 'kind changed from "text" to "string"',
+    });
+    expect(violations).toContainEqual({ path: 'title', message: 'field removed' });
+    expect(violations).toContainEqual({
+      path: 'newRequired',
+      message: 'new field is required; new fields must be optional',
+    });
+    expect(violations).toHaveLength(3);
+  });
+
+  test('exceeding the max diff depth fails closed (reported as drift, not silently accepted)', () => {
+    const buildNested = (depth: number, leafKind: 'string' | 'number'): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: leafKind, required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const stored = buildNested(1000, 'string');
+    const candidate = buildNested(1000, 'string');
+    expect(() => diffSchemas(stored, candidate)).not.toThrow();
+    expect(diffSchemas(stored, candidate).length).toBeGreaterThan(0);
+  });
+
+  test('matching schemas within the depth limit produce no violations', () => {
+    const buildNested = (depth: number): TypeSchema => {
+      let schema: TypeSchema = { leaf: { kind: 'string', required: true } };
+      for (let i = 0; i < depth; i++) {
+        schema = { nested: { kind: 'object', required: true, properties: schema } };
+      }
+      return schema;
+    };
+    const stored = buildNested(10);
+    const candidate = buildNested(10);
+    expect(diffSchemas(stored, candidate)).toEqual([]);
   });
 });
 

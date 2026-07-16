@@ -250,9 +250,17 @@ type StackType = {
 
 **Type identity:** Two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
 
-**Schema drift detection:** If two Records share a `typeId` but their Type definitions have different `schemaHash` values, that is unambiguously a bug — intentional changes always produce a new version number.
+**Schema drift detection:** `defineType()` on an `id` that already has a stored Type is checked against it, rather than silently replacing it — same `schemaHash` as stored is unambiguously the same schema (a different `schemaHash` for the same `typeId` with no version bump is the exact corruption `schemaHash` exists to catch):
+
+- **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
+- **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved from the stored Type.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType('...@n+1', ...)` + `registerMigration()`), never redefining the same `id` in place.
+
+`POST /types` (see [Types](#types-1) under the wire format) applies the same check server-side, so the wire path can't silently replace a Type either.
 
 **Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses _consuming_ Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
+
+**Two distinct relations, easy to conflate:** schema drift detection (above) answers _"may this schema replace that one under the same `id`?"_ — evolution legality. Type compatibility (below) answers _"may a consumer expecting this shape read Records of that Type?"_ — read compatibility. They deliberately disagree on `text`/`string`: read-compatible (both are strings at the value level) but **not** evolution-legal (changing a field's declared `kind` is drift, even to a read-compatible one) — a stored `kind: 'string'` field silently becoming `kind: 'text'` is exactly the kind of change a version bump should surface, even though every existing reader could still consume the value.
 
 A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
 
@@ -321,7 +329,9 @@ This is what makes duck-typed cross-app consumption (`isCompatible()`, see [Type
 
 A schema accumulating many optional fields is a named smell that a consolidating bump is due — but the bump itself stays rare and semantic ("`@2` means `dueDate` is now guaranteed"), not a changelog entry for every field ever added. Bumping per addition costs a full-table rewrite per field, version-number noise, and — since records only reach a new version when the owning app next runs `migrateAll()` — doesn't even deliver per-record schema exactness in the interim; consumers face mixed-version data either way and need `baseId` queries plus duck typing regardless.
 
-> **Not yet implemented:** a drift guard that mechanically enforces this boundary (accepting additive-in-place diffs, rejecting anything else with "bump the version"), and validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
+The boundary between "accept in place" and "bump the version" above is exactly what `defineType()`'s schema drift detection ([Types](#types)) mechanically enforces — a diff, not the hash alone, since the hash necessarily changes on any legal additive diff too.
+
+> **Not yet implemented:** validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
 
 ---
 
@@ -848,7 +858,7 @@ Standard HTTP status codes are used throughout:
 | **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists, deleting `_config` or changing its `entityId` — see [Stack initialization](#stack-initialization))                                                                                                                                                                                                                  |
+| **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists, deleting `_config` or changing its `entityId` — see [Stack initialization](#stack-initialization)); or `StackSchemaDriftError` (code `schema_drift`) — `POST /types` redefining an existing `id` with a non-additive schema change (see [Types](#types))                                                            |
 | **412** | Precondition failed      | `StackVersionConflictError` (code `version_conflict`) — an `If-Match` precondition doesn't match the record's current version (see [Versions](#versions)). A distinct error type and status from `StackConflictError`/409, not a subtype of it — the two have different recovery stories                                                                                                                                                                                                      |
 | **413** | Request entity too large | Attachment upload exceeds the server's size limit                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **422** | Unprocessable entity     | `StackValidationError` — request is syntactically valid but content fails schema validation (e.g. a required field has the wrong type)                                                                                                                                                                                                                                                                                                                                                        |
@@ -863,17 +873,18 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 ```json
 {
   "error": {
-    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request",
+    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request" | "schema_drift",
     "message": "human-readable description",
     "details": [ { "path": "title", "message": "expected string, got number" } ],
-    "versionConflict": { "recordId": "rec-abc123", "expectedVersion": 5, "actualVersion": 7 }
+    "versionConflict": { "recordId": "rec-abc123", "expectedVersion": 5, "actualVersion": 7 },
+    "schemaDrift": { "typeId": "com.example.myapp/note@1", "violations": [ { "path": "title", "message": "field removed" } ] }
   }
 }
 ```
 
-Each error code that carries extra structured data gets its own uniquely-named, uniquely-typed field, present only for that code — `details` for `code: "validation"` (`StackValidationError.errors`), `versionConflict` for `code: "version_conflict"` (`StackVersionConflictError`'s `recordId`/`expectedVersion`/`actualVersion` — the data an `ifVersion` retry loop needs: which record, what it expected, what actually won the race). This keeps each field's shape fixed rather than making any one field polymorphic across codes.
+Each error code that carries extra structured data gets its own uniquely-named, uniquely-typed field, present only for that code — `details` for `code: "validation"` (`StackValidationError.errors`), `versionConflict` for `code: "version_conflict"` (`StackVersionConflictError`'s `recordId`/`expectedVersion`/`actualVersion` — the data an `ifVersion` retry loop needs: which record, what it expected, what actually won the race), `schemaDrift` for `code: "schema_drift"` (`StackSchemaDriftError`'s `typeId`/`violations` — which Type, and which specific fields made the change non-additive). This keeps each field's shape fixed rather than making any one field polymorphic across codes.
 
-`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response. Every wire code maps to exactly one status — `version_conflict` gets its own **412**, deliberately not sharing **409** with `conflict` — so when a response has no parseable wire error body (a foreign or legacy server, or a proxy that strips bodies but preserves status), `APIAdapter` still recovers the precise error from status alone for the unambiguous statuses above (400/403/404/409/412/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
+`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response. Most wire codes map to exactly one status — `version_conflict` gets its own **412**, deliberately not sharing **409** with `conflict` — so when a response has no parseable wire error body (a foreign or legacy server, or a proxy that strips bodies but preserves status), `APIAdapter` still recovers the precise error from status alone for the unambiguous statuses (400/403/404/412/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. `schema_drift` is the one deliberate exception: it shares **409** with `conflict` (both are "operation conflicts with a constraint" in HTTP terms, and unlike `version_conflict` there's no competing convention pulling it to its own status), so status-only reconstruction of a bodyless 409 degrades to the generic `StackConflictError` rather than recovering `StackSchemaDriftError` specifically — the precise class is only recoverable with a parseable body. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
 
 This mapping is pinned by the shared conformance fixtures (`@haverstack/conformance-fixtures`) so `APIAdapter` and any server implementation can't drift on it independently.
 
@@ -995,8 +1006,10 @@ Response shape is consistent regardless of kind:
 ```
 GET  /types        — list all types known to this stack
 GET  /types/:id    — get one type definition (id is URL-encoded)
-POST /types        — register or replace a type
+POST /types        — register a type, or evolve an existing one in place
 ```
+
+`POST /types` on an `id` that already has a stored Type runs the same schema drift check as `Stack.defineType()` (see [Types](#types) under the data model, and [Error responses](#error-responses) for the `schema_drift` wire code) — the server-side storage layer never blindly overwrites a Type definition; legality is decided once, in the same invariant layer both the local and wire paths share.
 
 ### Attachments
 

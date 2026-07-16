@@ -151,6 +151,126 @@ export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSc
   isCompatibleAtDepth(candidateSchema, requiredSchema, 0);
 
 // -------------------------------------------------------
+// Schema evolution legality (drift detection)
+// -------------------------------------------------------
+//
+// Deliberately distinct from isCompatible() above, despite both walking a
+// TypeSchema pair recursively:
+//
+//   - isCompatible()  — read compatibility: may a consumer of this shape
+//                        read records of that type? (`text` and `string`
+//                        interchange; a candidate may have *extra* required
+//                        fields the consumer doesn't ask about.)
+//   - diffSchemas()   — evolution legality: may this schema replace that one
+//                        in place, under the same typeId? (`text` and
+//                        `string` are NOT interchangeable — changing a
+//                        field's declared kind is drift regardless of value-
+//                        level overlap; nothing about the *other* schema's
+//                        extra fields is relevant, every field on both sides
+//                        matters.)
+//
+// Conflating them is the obvious future bug: a read-compatible schema
+// (e.g. one that merely has extra optional fields) is not necessarily a
+// legal in-place evolution, and vice versa.
+
+export type SchemaDriftViolation = {
+  /** Field path where the drift was detected, e.g. "title" or "author.name". Empty string means array-item context. */
+  path: string;
+  message: string;
+};
+
+// Same rationale and bound as MAX_COMPATIBILITY_DEPTH: a pathological or
+// circular schema shouldn't be walked forever. Past the limit we can't
+// verify the change is additive, so we fail closed — report it as drift
+// rather than silently accept.
+const MAX_DIFF_DEPTH = 32;
+
+const diffField = (
+  path: string,
+  stored: FieldDef,
+  candidate: FieldDef,
+  depth: number,
+  violations: SchemaDriftViolation[],
+): void => {
+  if (depth > MAX_DIFF_DEPTH) {
+    violations.push({ path, message: 'exceeds max nesting depth; cannot verify additive change' });
+    return;
+  }
+  if (stored.kind !== candidate.kind) {
+    violations.push({
+      path,
+      message: `kind changed from "${stored.kind}" to "${candidate.kind}"`,
+    });
+    return; // kinds differ — nested comparison (properties/items) is meaningless
+  }
+  if (!!stored.required !== !!candidate.required) {
+    violations.push({
+      path,
+      message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
+    });
+  }
+  if (stored.kind === 'array' && candidate.kind === 'array') {
+    diffField(`${path}[]`, stored.items, candidate.items, depth + 1, violations);
+  }
+  if (stored.kind === 'object' && candidate.kind === 'object') {
+    diffFields(path, stored.properties, candidate.properties, depth + 1, violations);
+  }
+};
+
+const diffFields = (
+  prefix: string,
+  stored: TypeSchema,
+  candidate: TypeSchema,
+  depth: number,
+  violations: SchemaDriftViolation[],
+): void => {
+  if (depth > MAX_DIFF_DEPTH) {
+    violations.push({
+      path: prefix,
+      message: 'exceeds max nesting depth; cannot verify additive change',
+    });
+    return;
+  }
+  for (const [key, storedDef] of Object.entries(stored)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const candidateDef = candidate[key];
+    if (!candidateDef) {
+      violations.push({ path, message: 'field removed' });
+      continue;
+    }
+    diffField(path, storedDef, candidateDef, depth, violations);
+  }
+  for (const [key, candidateDef] of Object.entries(candidate)) {
+    if (key in stored) continue; // already compared above
+    if (candidateDef.required) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      violations.push({ path, message: 'new field is required; new fields must be optional' });
+    }
+    // A new optional field is exactly what additive evolution allows — no violation.
+  }
+};
+
+/**
+ * Check whether `candidate` is a legal in-place evolution of `stored` — the
+ * same typeId, a new schemaHash. Legal iff every existing field is
+ * unchanged (same kind, same required-ness, recursively into object
+ * properties and array items) and every field `candidate` adds beyond
+ * `stored` is optional. Returns the list of violations; empty means legal.
+ *
+ * This is the callable-facing sibling of isCompatible() but answers a
+ * different question — see the note above. Removing a field, changing a
+ * field's kind, or flipping required either direction (optional→required or
+ * required→optional) is drift: a version bump communicates that a consumer
+ * pinned to the old shape needs to notice, in a way an in-place change
+ * cannot.
+ */
+export const diffSchemas = (stored: TypeSchema, candidate: TypeSchema): SchemaDriftViolation[] => {
+  const violations: SchemaDriftViolation[] = [];
+  diffFields('', stored, candidate, 0, violations);
+  return violations;
+};
+
+// -------------------------------------------------------
 // Type ID parsing
 // -------------------------------------------------------
 
