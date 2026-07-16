@@ -39,6 +39,7 @@ import type {
   GrantAction,
   GrantContent,
   AttachmentContent,
+  ConfigContent,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -754,6 +755,13 @@ export class Stack implements StackClient {
       );
     }
 
+    if (id === SYSTEM_TYPES.CONFIG) {
+      this.checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (merged as ConfigContent).entityId,
+      );
+    }
+
     // Snapshot the raw stored state before overwriting
     await this.saveVersion(existing);
 
@@ -832,8 +840,18 @@ export class Stack implements StackClient {
    * as update(); it's a no-op if the record is already deleted. Hard delete
    * destroys the record (and its version history) outright — there's
    * nothing to snapshot.
+   *
+   * `_config` can never be deleted, soft or hard (#67): it's the stack's
+   * identity record, read at open and consulted by every permission check.
+   * A soft-deleted `_config` is unreadable through normal paths; a
+   * hard-deleted one bricks the stack outright (nothing to reopen against).
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
+    if (id === SYSTEM_TYPES.CONFIG) {
+      throw new StackConflictError(
+        "Cannot delete the _config record: it holds the stack's identity and is required for every permission check.",
+      );
+    }
     if (opts.hard) {
       return this.adapter.deleteRecord(id, { hard: true, expectedVersion: opts.ifVersion });
     }
@@ -982,6 +1000,13 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
+    if (id === SYSTEM_TYPES.CONFIG) {
+      this.checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (target.content as ConfigContent).entityId,
+      );
+    }
+
     // Snapshot current state before restoring
     await this.saveVersion(existing);
 
@@ -1068,6 +1093,26 @@ export class Stack implements StackClient {
     }
     if (errors.length > 0) {
       throw new StackValidationError(errors);
+    }
+  }
+
+  /**
+   * `_config.entityId` defines stack ownership — read once at open and
+   * consulted by every permission check thereafter (#67). Neither update()
+   * nor restoreVersion() may change it: a write that silently re-anchors
+   * ownership would desync every already-running owner check from the next
+   * reopen onward. This is a conflict with stack integrity, not a schema
+   * violation (the new value is a perfectly valid string) — hence
+   * StackConflictError, matching delete()'s guard on the same record.
+   * Ownership transfer, if it ever exists, is a deliberate future API with
+   * key-custody semantics (#49), not a field write.
+   */
+  private checkConfigEntityIdUnchanged(existingEntityId: string, newEntityId: string): void {
+    if (newEntityId !== existingEntityId) {
+      throw new StackConflictError(
+        'Cannot change _config.entityId: it defines stack ownership. ' +
+          'Ownership transfer is not a supported operation.',
+      );
     }
   }
 
