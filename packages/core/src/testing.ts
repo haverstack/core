@@ -11,6 +11,7 @@ import type {
   AdapterCapabilities,
   BlobFileInfo,
 } from './types.js';
+import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
 import { StackVersionConflictError, StackConflictError } from './stack.js';
 
@@ -127,6 +128,9 @@ export class MemoryAdapter implements StackAdapter {
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
+    // _config is addressable only by ID (getRecord), never returned by a
+    // generic query — mirroring the real SQL adapters' WHERE exclusion (#67).
+    results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);
     if (!f.includeDeleted) results = results.filter((r) => !r.deletedAt);
     if (f.typeId) {
       const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
