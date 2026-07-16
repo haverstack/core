@@ -208,6 +208,8 @@ export type GrantContent = {
   typeId: TypeId;
   /** Which actions are permitted. */
   actions: GrantAction[];
+  /** Who the grant applies to. Absent = default grant, applies to any authenticated entity. */
+  granteeEntityId?: string;
 };
 
 /** Content for _attachment records — one per upload, tracks file metadata. */
