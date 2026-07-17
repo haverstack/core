@@ -15,7 +15,8 @@
  */
 
 import { generateId, isValidIdFormat, idTimestamp } from './id.js';
-import { hashSchema, isCompatible, parseTypeId, baseIdOf } from './schema.js';
+import { hashSchema, isCompatible, parseTypeId, baseIdOf, diffSchemas } from './schema.js';
+import type { SchemaDriftViolation } from './schema.js';
 import { validateContent } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
@@ -202,6 +203,29 @@ export class StackQueryError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'StackQueryError';
+  }
+}
+
+/**
+ * Thrown by defineType() when redefining an existing typeId with a schema
+ * change that isn't a legal in-place evolution (see diffSchemas() in
+ * schema.ts) — same typeId, a shape change beyond "new optional fields
+ * added." The remedy is always the same: register a new version instead of
+ * redefining this one in place.
+ */
+export class StackSchemaDriftError extends Error {
+  static readonly code = 'schema_drift' as const;
+  constructor(
+    public readonly typeId: TypeId,
+    public readonly violations: SchemaDriftViolation[],
+  ) {
+    super(
+      `Schema drift detected for type "${typeId}": the stored schema and the new definition ` +
+        `differ beyond additive evolution (new optional fields only). Bump the version instead ` +
+        `of redefining "${typeId}" in place — e.g. defineType(\`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ...) plus registerMigration().\n` +
+        violations.map((v) => `  ${v.path || '(root)'}: ${v.message}`).join('\n'),
+    );
+    this.name = 'StackSchemaDriftError';
   }
 }
 
@@ -413,8 +437,27 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Define and persist a new Type. Computes the schemaHash automatically.
+   * Define and persist a Type. Computes the schemaHash automatically.
    * Should be called at app startup before creating any records of this type.
+   *
+   * Redefining an existing typeId is checked against the stored schema
+   * (#68), instead of silently replacing it (the exact corruption
+   * schemaHash exists to catch, previously undetected since nothing ever
+   * compared it):
+   *
+   * - Identical schema and name — fully idempotent no-op, `createdAt`
+   *   untouched. This is what makes calling defineType() for every system
+   *   type on every `Stack.create()` (seedSystemTypes()) cheap instead of
+   *   six unconditional rewrites per open.
+   * - Identical schema, different name — name is display metadata, not
+   *   schema, so this always persists; `createdAt` is preserved from the
+   *   stored type either way.
+   * - Different schema — legal only if the change is a pure additive
+   *   evolution (diffSchemas(): new *optional* fields only, nothing
+   *   removed/retyped/re-required). Otherwise throws StackSchemaDriftError
+   *   naming each violation; the remedy is a new version
+   *   (`defineType('...@n+1', ...)` + `registerMigration()`), never an
+   *   in-place rewrite.
    */
   async defineType(
     id: TypeId,
@@ -429,7 +472,28 @@ export class Stack implements StackClient {
       );
     }
 
+    // This instance now knows this version exists, independent of whether
+    // the adapter write below turns out to be a no-op — presentAtLatest()'s
+    // stale-writer detection depends on every defineType() call registering
+    // here, including the idempotent-no-op path.
+    const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
+    if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
+
     const schemaHash = await hashSchema(schema);
+    const existing = await this.adapter.getType(id);
+
+    if (existing) {
+      if (existing.schemaHash === schemaHash) {
+        if (existing.name === name) return existing;
+        // else: name-only change — falls through to the write below,
+        // schema/hash/createdAt all carried over unchanged.
+      } else {
+        const violations = diffSchemas(existing.schema, schema);
+        if (violations.length > 0) {
+          throw new StackSchemaDriftError(id, violations);
+        }
+      }
+    }
 
     const type: StackType = {
       id,
@@ -438,12 +502,9 @@ export class Stack implements StackClient {
       name,
       schema,
       schemaHash,
-      createdAt: new Date(),
+      createdAt: existing?.createdAt ?? new Date(),
       ...(opts.migratesFrom && { migratesFrom: opts.migratesFrom }),
     };
-
-    const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
-    if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
     await this.adapter.saveType(type);
     return type;

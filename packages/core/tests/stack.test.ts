@@ -6,6 +6,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
+  StackSchemaDriftError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -95,6 +96,129 @@ describe('defineType', () => {
     );
     const type = await stack.getType(NOTE_V2);
     expect(type?.migratesFrom).toBe(NOTE_V1);
+  });
+
+  // -------------------------------------------------------
+  // Schema drift detection (#68)
+  // -------------------------------------------------------
+
+  test('redefining with an identical schema is a no-op — createdAt does not churn', async () => {
+    const before = await stack.getType(NOTE_V1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await stack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    const after = await stack.getType(NOTE_V1);
+    expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
+  });
+
+  test('a name-only change persists, preserving createdAt', async () => {
+    const before = await stack.getType(NOTE_V1);
+    await stack.defineType(NOTE_V1, 'Renamed Note', {
+      text: { kind: 'text', required: true },
+    });
+    const after = await stack.getType(NOTE_V1);
+    expect(after?.name).toBe('Renamed Note');
+    expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
+  });
+
+  test('adding a new optional field in place is accepted, preserving createdAt', async () => {
+    const before = await stack.getType(NOTE_V1);
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    const after = await stack.getType(NOTE_V1);
+    expect(after?.schema.title).toEqual({ kind: 'string' });
+    expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
+    expect(after?.schemaHash).not.toBe(before?.schemaHash);
+  });
+
+  test('adding a new optional field nested inside an existing object is accepted', async () => {
+    const nested = 'com.example.test/nested@1';
+    await stack.defineType(nested, 'Nested', {
+      author: { kind: 'object', required: true, properties: { name: { kind: 'string' } } },
+    });
+    await stack.defineType(nested, 'Nested', {
+      author: {
+        kind: 'object',
+        required: true,
+        properties: { name: { kind: 'string' }, email: { kind: 'string' } },
+      },
+    });
+    const type = await stack.getType(nested);
+    expect((type?.schema.author as { properties: unknown }).properties).toHaveProperty('email');
+  });
+
+  test('adding a new required field is rejected with StackSchemaDriftError', async () => {
+    await expect(
+      stack.defineType(NOTE_V1, 'Note', {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string', required: true },
+      }),
+    ).rejects.toThrow(StackSchemaDriftError);
+  });
+
+  test('removing a field is rejected with StackSchemaDriftError', async () => {
+    await stack.defineType(NOTE_V2, 'Note', {
+      text: { kind: 'text', required: true },
+      title: { kind: 'string' },
+    });
+    await expect(
+      stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } }),
+    ).rejects.toThrow(StackSchemaDriftError);
+  });
+
+  test('changing a field kind is rejected with StackSchemaDriftError, even text/string', async () => {
+    await expect(
+      stack.defineType(NOTE_V1, 'Note', { text: { kind: 'string', required: true } }),
+    ).rejects.toThrow(StackSchemaDriftError);
+  });
+
+  test('flipping an existing field required is rejected with StackSchemaDriftError', async () => {
+    await expect(stack.defineType(NOTE_V1, 'Note', { text: { kind: 'text' } })).rejects.toThrow(
+      StackSchemaDriftError,
+    );
+  });
+
+  test('StackSchemaDriftError names the specific violation', async () => {
+    try {
+      await stack.defineType(NOTE_V1, 'Note', {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string', required: true },
+      });
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(StackSchemaDriftError);
+      const err = e as StackSchemaDriftError;
+      expect(err.typeId).toBe(NOTE_V1);
+      expect(err.violations).toEqual([
+        { path: 'title', message: 'new field is required; new fields must be optional' },
+      ]);
+      expect(err.message).toContain('title');
+      expect(err.message).toContain('Bump the version');
+    }
+  });
+
+  test('an illegal redefinition does not overwrite the stored type', async () => {
+    const before = await stack.getType(NOTE_V1);
+    await expect(
+      stack.defineType(NOTE_V1, 'Note', {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string', required: true },
+      }),
+    ).rejects.toThrow(StackSchemaDriftError);
+    const after = await stack.getType(NOTE_V1);
+    expect(after).toEqual(before);
+  });
+
+  test('repeated seedSystemTypes()-style redefinition across Stack.create() calls stays idempotent', async () => {
+    // Simulates the every-open churn this issue closes: a second Stack
+    // instance (e.g. a fresh process reopening the same adapter) redefines
+    // the same types on the same underlying storage.
+    const before = await stack.getType(NOTE_V1);
+    const stackB = await Stack.create(adapter);
+    await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    const after = await stackB.getType(NOTE_V1);
+    expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
   });
 });
 

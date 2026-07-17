@@ -19,6 +19,7 @@ export {
   StackConflictError,
   StackVersionConflictError,
   StackQueryError,
+  StackSchemaDriftError,
 } from './stack.js';
 export type {
   StackClient,
@@ -92,7 +93,15 @@ export {
   isValidIdFormat,
   idTimestamp,
 } from './id.js';
-export { hashSchema, isCompatible, parseTypeId, buildTypeId, baseIdOf } from './schema.js';
+export {
+  hashSchema,
+  isCompatible,
+  diffSchemas,
+  parseTypeId,
+  buildTypeId,
+  baseIdOf,
+} from './schema.js';
+export type { SchemaDriftViolation } from './schema.js';
 export { validateContent, isValid } from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';

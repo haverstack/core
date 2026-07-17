@@ -5,6 +5,7 @@ import type {
   Association,
   Permission,
   ValidationError,
+  SchemaDriftViolation,
 } from '@haverstack/core';
 import {
   StackValidationError,
@@ -14,6 +15,7 @@ import {
   StackVersionConflictError,
   StackMigrationError,
   StackQueryError,
+  StackSchemaDriftError,
 } from '@haverstack/core';
 
 export type WireRecord = {
@@ -125,7 +127,8 @@ export type WireErrorCode =
   | 'conflict'
   | 'version_conflict'
   | 'validation'
-  | 'migration';
+  | 'migration'
+  | 'schema_drift';
 
 export type WireError = {
   error: {
@@ -138,6 +141,11 @@ export type WireError = {
       recordId: string;
       expectedVersion: number;
       actualVersion: number;
+    };
+    /** The rejected defineType() call's target and violations. Only present for code: 'schema_drift'. */
+    schemaDrift?: {
+      typeId: string;
+      violations: SchemaDriftViolation[];
     };
   };
 };
@@ -162,6 +170,14 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
    * future server-side migration-graph check has a defined status to use.
    */
   migration: 500,
+  // Shares 409 with 'conflict' — both are "operation conflicts with a
+  // constraint" in HTTP terms, and unlike version_conflict there's no
+  // competing convention pulling schema_drift to its own status. The
+  // shared status means STATUS_TO_CODE below can only pick one canonical
+  // code for status-only reconstruction (see its doc comment) — that's
+  // 'conflict'; a schema-drift response without a parseable body degrades
+  // to a generic StackConflictError rather than being lost entirely.
+  schema_drift: 409,
 };
 
 /**
@@ -257,12 +273,24 @@ export function serializeError(err: unknown): { status: number; body: WireError 
       body: { error: { code: 'migration', message: err.message } },
     };
   }
+  if (err instanceof StackSchemaDriftError) {
+    return {
+      status: WIRE_ERROR_STATUS.schema_drift,
+      body: {
+        error: {
+          code: 'schema_drift',
+          message: err.message,
+          schemaDrift: { typeId: err.typeId, violations: err.violations },
+        },
+      },
+    };
+  }
   return null;
 }
 
 /** Reconstruct the core error a WireError body describes. */
 export function deserializeError(body: WireError): Error {
-  const { code, message, details, versionConflict } = body.error;
+  const { code, message, details, versionConflict, schemaDrift } = body.error;
   switch (code) {
     case 'validation':
       return new StackValidationError(details ?? []);
@@ -283,6 +311,8 @@ export function deserializeError(body: WireError): Error {
       return new StackQueryError(message);
     case 'migration':
       return new StackMigrationError(message);
+    case 'schema_drift':
+      return new StackSchemaDriftError(schemaDrift?.typeId ?? '', schemaDrift?.violations ?? []);
   }
 }
 
