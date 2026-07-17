@@ -39,6 +39,7 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
+    maxAttachmentBytes: 52428800,
   },
 };
 

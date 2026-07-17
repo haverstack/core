@@ -126,6 +126,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     fullTextSearch: true,
     contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
+    maxAttachmentBytes: null,
   };
 
   ownerEntityId!: string;

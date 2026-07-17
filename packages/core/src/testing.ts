@@ -27,6 +27,7 @@ export class MemoryAdapter implements StackAdapter {
     fullTextSearch: false,
     contentFieldQuery: false,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
+    maxAttachmentBytes: null,
   };
 
   readonly ownerEntityId: string;

@@ -4,6 +4,7 @@ import {
   APIAdapterAuthError,
   APIAdapterConnectionError,
   APIAdapterError,
+  APIAdapterCapabilityError,
 } from '../src/index.js';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
 import {
@@ -31,6 +32,7 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
+    maxAttachmentBytes: 52428800,
   },
 };
 
@@ -117,6 +119,7 @@ describe('open', () => {
     expect(adapter.capabilities.fullTextSearch).toBe(true);
     expect(adapter.capabilities.contentFieldQuery).toBe(true);
     expect(adapter.capabilities.sortableFields).toEqual(['createdAt', 'updatedAt', 'version']);
+    expect(adapter.capabilities.maxAttachmentBytes).toBe(52428800);
   });
 
   test('populates ownerEntityId from discovery response', async () => {
@@ -488,6 +491,64 @@ describe('queryRecords', () => {
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('parentId=null');
   });
+
+  test('GET params include relatedToLabel alongside relatedTo (#56)', async () => {
+    const limitedDiscovery = {
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    };
+    const adapter = await openAdapter(limitedDiscovery);
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await adapter.queryRecords({ filter: { relatedTo: { recordId: 'rec-1', label: 'author' } } });
+    const [url] = mockFetch.mock.lastCall as [string];
+    expect(url).toContain('relatedTo=rec-1');
+    expect(url).toContain('relatedToLabel=author');
+  });
+
+  test('GET params omit relatedToLabel when no label is given', async () => {
+    const limitedDiscovery = {
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    };
+    const adapter = await openAdapter(limitedDiscovery);
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await adapter.queryRecords({ filter: { relatedTo: { recordId: 'rec-1' } } });
+    const [url] = mockFetch.mock.lastCall as [string];
+    expect(url).toContain('relatedTo=rec-1');
+    expect(url).not.toContain('relatedToLabel');
+  });
+
+  test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery (#56)', async () => {
+    const limitedDiscovery = {
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    };
+    const adapter = await openAdapter(limitedDiscovery);
+    await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('throws APIAdapterCapabilityError for filter.search without fullTextSearch (#56)', async () => {
+    const limitedDiscovery = {
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, fullTextSearch: false },
+    };
+    const adapter = await openAdapter(limitedDiscovery);
+    await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('does not throw for filter.content when contentFieldQuery is true', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(
+      adapter.queryRecords({ filter: { content: { slug: 'hello' } } }),
+    ).resolves.toBeDefined();
+  });
 });
 
 // -------------------------------------------------------
@@ -517,15 +578,25 @@ describe('associate', () => {
 });
 
 describe('dissociate', () => {
-  test('sends DELETE /records/:id/associations', async () => {
+  // POST, not DELETE — a DELETE body has no defined wire semantics (#56).
+  test('sends POST /records/:id/associations/delete', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
     const assoc: Association = { kind: 'tag', label: 'starred' };
     await adapter.dissociate('rec-abc123', assoc);
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123/associations`,
-      expect.objectContaining({ method: 'DELETE' }),
+      `${BASE_URL}/records/rec-abc123/associations/delete`,
+      expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  test('sends the association as JSON body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    const assoc: Association = { kind: 'tag', label: 'starred' };
+    await adapter.dissociate('rec-abc123', assoc);
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual(assoc);
   });
 });
 

@@ -203,9 +203,12 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, unde
 export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, undefined>[] = [
   {
     name: 'dissociate-tag',
-    description: 'DELETE /records/:id/associations removes an association and bumps version.',
-    method: 'DELETE',
-    path: '/records/rec-1/associations',
+    description:
+      'POST /records/:id/associations/delete removes an association and bumps version. POST, ' +
+      'not DELETE — a DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a ' +
+      'portability landmine for proxies/gateways that drop or reject it (#56).',
+    method: 'POST',
+    path: '/records/rec-1/associations/delete',
     requestBody: { kind: 'tag', label: 'starred' },
     responseStatus: 204,
   },

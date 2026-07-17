@@ -72,6 +72,24 @@ export class APIAdapterConnectionError extends APIAdapterError {
   }
 }
 
+/**
+ * Thrown locally — before any request is sent — when a query uses a filter
+ * the connected server has declared it doesn't support (`capabilities.
+ * contentFieldQuery` or `capabilities.fullTextSearch` is false). Servers
+ * without these capabilities have no endpoint that honors the filter at
+ * all, so silently sending it anyway would return an unfiltered superset
+ * presented as the filtered result (see #56) rather than erroring.
+ */
+export class APIAdapterCapabilityError extends APIAdapterError {
+  constructor(
+    public readonly capability: keyof AdapterCapabilities,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'APIAdapterCapabilityError';
+  }
+}
+
 // -------------------------------------------------------
 // Discovery response shape
 // -------------------------------------------------------
@@ -160,7 +178,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.tags) for (const tag of f.tags) p.append('tag', tag);
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
   if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
-  if (f.relatedTo) p.set('relatedTo', f.relatedTo.recordId);
+  if (f.relatedTo) {
+    p.set('relatedTo', f.relatedTo.recordId);
+    if (f.relatedTo.label) p.set('relatedToLabel', f.relatedTo.label);
+  }
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
   if (query.sort?.field) p.set('sort', query.sort.field);
@@ -396,6 +417,25 @@ export class APIAdapter implements StackAdapter {
       total: number | null;
     };
 
+    // Fail loudly rather than silently widening the result set: a server
+    // that hasn't declared these capabilities has no endpoint that honors
+    // the corresponding filter, so sending it anyway would drop the filter
+    // without signal (see #56).
+    if (query.filter?.content && !this.capabilities.contentFieldQuery) {
+      throw new APIAdapterCapabilityError(
+        'contentFieldQuery',
+        'Query uses filter.content, but this server does not declare the contentFieldQuery ' +
+          'capability — there is no endpoint that would honor it.',
+      );
+    }
+    if (query.filter?.search && !this.capabilities.fullTextSearch) {
+      throw new APIAdapterCapabilityError(
+        'fullTextSearch',
+        'Query uses filter.search, but this server does not declare the fullTextSearch ' +
+          'capability — there is no endpoint that would honor it.',
+      );
+    }
+
     let raw: Envelope;
     if (this.capabilities.contentFieldQuery) {
       // POST /records/query supports the full query shape including content field filters
@@ -433,7 +473,9 @@ export class APIAdapter implements StackAdapter {
     association: Association,
     opts: { expectedVersion?: number } = {},
   ): Promise<void> {
-    await this.request<void>('DELETE', `/records/${id}/associations`, association, {
+    // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
+    // §9.3.5) and proxies/gateways are free to drop or reject it. See #56.
+    await this.request<void>('POST', `/records/${id}/associations/delete`, association, {
       ifMatch: opts.expectedVersion,
     });
   }

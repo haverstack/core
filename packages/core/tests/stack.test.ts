@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   Stack,
   StackValidationError,
@@ -314,6 +314,59 @@ describe('create — client-supplied id', () => {
     const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
     const record = await stack.create(NOTE_V1, { text: 'hello' }, { id: ancientId });
     expect(record.id).toBe(ancientId);
+  });
+});
+
+// -------------------------------------------------------
+// Type cache (#56) — create()/update()/etc. shouldn't pay a getType()
+// round trip on every write for a value that can't change.
+// -------------------------------------------------------
+
+describe('type cache', () => {
+  // A type saved straight through the adapter, bypassing stack.defineType()
+  // (and its cache write) so the first getTypeCached() call is a genuine
+  // cache miss — the scenario a real app hits on first use of a type an
+  // earlier process already defined.
+  const COLD_TYPE_ID = 'com.example.test/cold@1';
+  const seedColdType = async (): Promise<void> => {
+    await adapter.saveType({
+      id: COLD_TYPE_ID,
+      baseId: 'com.example.test/cold',
+      version: 1,
+      name: 'Cold',
+      schema: { text: { kind: 'text', required: true } },
+      schemaHash: 'irrelevant-for-this-test',
+      createdAt: new Date(),
+    });
+  };
+
+  test('create() x N against a not-yet-cached type calls adapter.getType() exactly once', async () => {
+    await seedColdType();
+    const getTypeSpy = vi.spyOn(adapter, 'getType');
+
+    await stack.create(COLD_TYPE_ID, { text: 'one' });
+    await stack.create(COLD_TYPE_ID, { text: 'two' });
+    await stack.create(COLD_TYPE_ID, { text: 'three' });
+
+    expect(getTypeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('defineType() populates the cache — a later create() never calls adapter.getType()', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const getTypeSpy = vi.spyOn(adapter, 'getType');
+
+    await stack.create(NOTE_V2, { text: 'hello' });
+
+    expect(getTypeSpy).not.toHaveBeenCalled();
+  });
+
+  test('update() reuses the type cached by an earlier create() — no getType() round trip', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const getTypeSpy = vi.spyOn(adapter, 'getType');
+
+    await stack.update(record.id, { text: 'updated' });
+
+    expect(getTypeSpy).not.toHaveBeenCalled();
   });
 });
 

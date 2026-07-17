@@ -342,6 +342,13 @@ export type AdapterCapabilities = {
   fullTextSearch: boolean;
   contentFieldQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
+  /**
+   * Maximum attachment upload size in bytes this adapter/server will
+   * accept, or `null` if unbounded. Lets apps pre-check and surface limits
+   * in UI before burning the upload, rather than learning the ceiling only
+   * from a 413 after sending the whole payload.
+   */
+  maxAttachmentBytes: number | null;
 };
 
 /** What a Stack can do, as seen by app and plugin code. */
