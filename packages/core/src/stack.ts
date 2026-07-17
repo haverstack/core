@@ -427,7 +427,7 @@ export class Stack implements StackClient {
     return this.adapter.ownerEntityId;
   }
 
-  get timezone(): string {
+  get timezone(): string | undefined {
     return this.adapter.timezone;
   }
 
@@ -1509,7 +1509,8 @@ export class Stack implements StackClient {
   private async seedSystemTypes(): Promise<void> {
     await this.defineType(`${SYSTEM_TYPES.CONFIG}@1`, 'Config', {
       entityId: { kind: 'string', required: true },
-      timezone: { kind: 'string', required: true },
+      // Optional passthrough app metadata — see ConfigContent.timezone (#69).
+      timezone: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
       name: { kind: 'string', required: true },
@@ -1864,7 +1865,12 @@ export class ScopedStack implements StackClient {
    * Create a new record on behalf of the authenticated requester.
    * Requires either an entity-specific _grant or a default _grant for
    * the target type. Anonymous requesters (null entityId) are always denied.
-   * The created record's entityId is always set to the requester.
+   * The created record's entityId is set to the requester — unless the
+   * requester *is* the owner, in which case entityId is omitted, matching
+   * the spec's "owner-created records carry no entityId" invariant (#69).
+   * Without this, the owner writing through asEntity(ownerEntityId) would
+   * produce a differently-shaped record than Stack.create() for the exact
+   * same author.
    *
    * A client-supplied `opts.id` gets the same format validation as
    * Stack.create() plus a timestamp-skew check — the requester here is an
@@ -1910,7 +1916,11 @@ export class ScopedStack implements StackClient {
       baseIdOf(typeId) === SYSTEM_TYPES.GROUP
         ? { ...opts, associations: stampGroupAdmin(opts.associations, requester) }
         : opts;
-    return this.stack.create(typeId, content, { ...createOpts, entityId: requester });
+    const isOwner = requester === this.stack.ownerEntityId;
+    return this.stack.create(typeId, content, {
+      ...createOpts,
+      entityId: isOwner ? undefined : requester,
+    });
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {

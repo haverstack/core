@@ -100,6 +100,16 @@ describe('scalar field validation', () => {
     expect(errorsFor({ dueAt: '2024-01-15T14:30:00Z' }, schema)).toEqual([]);
   });
 
+  test('date field accepts ISO 8601 with fractional seconds and a numeric offset', () => {
+    const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
+    expect(errorsFor({ dueAt: '2024-01-15T14:30:00.123+05:00' }, schema)).toEqual([]);
+  });
+
+  test('date field accepts a date-only ISO 8601 string', () => {
+    const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
+    expect(errorsFor({ dueAt: '2024-01-15' }, schema)).toEqual([]);
+  });
+
   test('date field rejects non-date string', () => {
     const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
     expect(paths({ dueAt: 'not-a-date' }, schema)).toContain('dueAt');
@@ -108,6 +118,23 @@ describe('scalar field validation', () => {
   test('date field rejects number', () => {
     const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
     expect(paths({ dueAt: 1704067200000 }, schema)).toContain('dueAt');
+  });
+
+  // #69: bare Date.parse accepted these — engine-dependent, non-ISO formats
+  // that contradicted the "Expected ISO 8601 date string" error message.
+  test('date field rejects a long-form date previously accepted by bare Date.parse', () => {
+    const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
+    expect(paths({ dueAt: 'March 1 2020' }, schema)).toContain('dueAt');
+  });
+
+  test('date field rejects a slash-formatted date previously accepted by bare Date.parse', () => {
+    const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
+    expect(paths({ dueAt: '3/1/2020' }, schema)).toContain('dueAt');
+  });
+
+  test('date field rejects an ISO-shaped string with an invalid month', () => {
+    const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
+    expect(paths({ dueAt: '2024-13-01' }, schema)).toContain('dueAt');
   });
 
   test('multiple errors are all collected', () => {

@@ -132,9 +132,11 @@ describe('open', () => {
     expect(adapter.timezone).toBe('America/New_York');
   });
 
-  test('defaults timezone to UTC when not in discovery response', async () => {
+  // #69: timezone is passthrough metadata only — no 'UTC' default, which
+  // would claim knowledge the discovery response didn't actually provide.
+  test('timezone is undefined when not in discovery response — no default', async () => {
     const adapter = await openAdapter({ ...DISCOVERY, timezone: undefined });
-    expect(adapter.timezone).toBe('UTC');
+    expect(adapter.timezone).toBeUndefined();
   });
 
   test('omits Authorization header when no token provided', async () => {
