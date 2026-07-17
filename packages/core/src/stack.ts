@@ -380,11 +380,30 @@ export class Stack implements StackClient {
    * Used to detect the stale-writer case in presentAtLatest().
    */
   private readonly maxDefinedVersion = new Map<string, number>();
+  /**
+   * In-memory cache of Types this instance has fetched or defined, keyed by
+   * versioned id. A Type's schema is immutable once defined — schemaHash
+   * only changes via a version bump, which is a different id and thus a
+   * different cache entry — so entries are never invalidated, only added
+   * (by getTypeCached() on first fetch, and by defineType() on write).
+   * listTypes() also refreshes it wholesale. This is what removes the
+   * GET /types/:id round trip that create()/update()/restoreVersion() would
+   * otherwise pay on every write for a value that cannot change.
+   */
+  private readonly typeCache = new Map<TypeId, StackType>();
 
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
   ) {}
+
+  private async getTypeCached(id: TypeId): Promise<StackType | null> {
+    const cached = this.typeCache.get(id);
+    if (cached) return cached;
+    const type = await this.adapter.getType(id);
+    if (type) this.typeCache.set(id, type);
+    return type;
+  }
 
   /**
    * Create a Stack instance. Reads ownerEntityId and timezone from the adapter.
@@ -480,7 +499,7 @@ export class Stack implements StackClient {
     if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
     const schemaHash = await hashSchema(schema);
-    const existing = await this.adapter.getType(id);
+    const existing = await this.getTypeCached(id);
 
     if (existing) {
       if (existing.schemaHash === schemaHash) {
@@ -507,15 +526,19 @@ export class Stack implements StackClient {
     };
 
     await this.adapter.saveType(type);
+    this.typeCache.set(id, type);
     return type;
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
-    return this.adapter.getType(id);
+    return this.getTypeCached(id);
   }
 
+  /** Refreshes typeCache wholesale — the explicit way to see a rename made by another writer. */
   async listTypes(): Promise<StackType[]> {
-    return this.adapter.listTypes();
+    const types = await this.adapter.listTypes();
+    for (const type of types) this.typeCache.set(type.id, type);
+    return types;
   }
 
   /**
@@ -523,7 +546,7 @@ export class Stack implements StackClient {
    * Useful for duck-typed consumption across types.
    */
   async typeIsCompatible(typeId: TypeId, requiredSchema: TypeSchema): Promise<boolean> {
-    const type = await this.adapter.getType(typeId);
+    const type = await this.getTypeCached(typeId);
     if (!type) return false;
     return isCompatible(type.schema, requiredSchema);
   }
@@ -627,7 +650,7 @@ export class Stack implements StackClient {
       const migrateFn = this.resolveMigrationPath(typeId, latestId);
       if (!migrateFn) continue;
 
-      const latestType = await this.adapter.getType(latestId);
+      const latestType = await this.getTypeCached(latestId);
       if (!latestType) {
         throw new StackMigrationError(`migrateAll: target type "${latestId}" is not defined.`);
       }
@@ -671,7 +694,7 @@ export class Stack implements StackClient {
     content: T,
     opts: CreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
-    const type = await this.adapter.getType(typeId);
+    const type = await this.getTypeCached(typeId);
     if (!type) {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
     }
@@ -795,7 +818,7 @@ export class Stack implements StackClient {
     }
     this.checkIfVersion(existing, opts.ifVersion);
 
-    const type = await this.adapter.getType(existing.typeId);
+    const type = await this.getTypeCached(existing.typeId);
     if (!type) {
       throw new Error(`Unknown type: "${existing.typeId}"`);
     }
@@ -1051,7 +1074,7 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Version ${version} not found for record "${id}"`);
     }
 
-    const type = await this.adapter.getType(target.typeId);
+    const type = await this.getTypeCached(target.typeId);
     if (!type) {
       throw new Error(`Unknown type: "${target.typeId}"`);
     }

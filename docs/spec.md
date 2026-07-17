@@ -258,6 +258,8 @@ type StackType = {
 
 `POST /types` (see [Types](#types-1) under the wire format) applies the same check server-side, so the wire path can't silently replace a Type either.
 
+**Type cache.** `Stack` caches every Type it fetches or defines in memory, keyed by versioned `id` — populated by `getType()`, `defineType()`, and `listTypes()`. Since a Type's schema is immutable once defined (a legal schema change always gets a new `id` via a version bump; see schema drift above), the cache is never invalidated, only added to — `create()`, `update()`, and `restoreVersion()` validate against the cached entry instead of re-fetching the Type on every write. Over the API adapter this removes a `GET /types/:id` round trip from every write after a type's first use in the process. `listTypes()` refreshes the cache wholesale, which is the explicit way to pick up a `name`-only rename made by another writer (the one field `defineType()` permits changing without a version bump) since the cache otherwise has no way to learn of it.
+
 **Type compatibility:** Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses _consuming_ Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
 
 **Two distinct relations, easy to conflate:** schema drift detection (above) answers _"may this schema replace that one under the same `id`?"_ — evolution legality. Type compatibility (below) answers _"may a consumer expecting this shape read Records of that Type?"_ — read compatibility. They deliberately disagree on `text`/`string`: read-compatible (both are strings at the value level) but **not** evolution-legal (changing a field's declared `kind` is drift, even to a read-compatible one) — a stored `kind: 'string'` field silently becoming `kind: 'text'` is exactly the kind of change a version bump should surface, even though every existing reader could still consume the value.
@@ -760,6 +762,7 @@ type AdapterCapabilities = {
   fullTextSearch: boolean;
   contentFieldQuery: boolean;
   sortableFields: string[];
+  maxAttachmentBytes: number | null; // upload size ceiling, or null = unbounded
 };
 ```
 
@@ -771,6 +774,8 @@ type AdapterCapabilities = {
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
 - **sql.js adapter** (`record-adapter-sqljs`, browser-only) — same query support as the native adapter, but full-text search via FTS4 (the sql.js WASM build's dialect)
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint
+
+Local, embedded adapters (JSON, native SQLite, sql.js) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
 
 ---
 
@@ -833,7 +838,8 @@ GET /.well-known/stack
   "capabilities": {
     "fullTextSearch": true,
     "contentFieldQuery": true,
-    "sortableFields": ["createdAt", "updatedAt", "version"]
+    "sortableFields": ["createdAt", "updatedAt", "version"],
+    "maxAttachmentBytes": 52428800
   }
 }
 ```
@@ -917,6 +923,7 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 ?hasAttachment=
 ?attachmentFileId=
 ?relatedTo=
+?relatedToLabel=   (only meaningful alongside ?relatedTo; narrows to that label)
 ?search=
 ?sort=createdAt|updatedAt|version
 ?direction=asc|desc
@@ -926,6 +933,8 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 ```
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
+
+**Filters gated by a capability fail loudly, not silently.** A `content` filter has no representation in `GET /records`' query params, and `search` behaves however the server does with an unsupported param — so `APIAdapter` checks `capabilities.contentFieldQuery`/`capabilities.fullTextSearch` before dispatching and throws `APIAdapterCapabilityError` locally, without sending a request, when the corresponding filter is used against a server that hasn't declared the capability. The alternative — degrading to an unfiltered (or partially filtered) result and returning it as if it were the requested query — is a superset silently presented as the filtered result, which is worse than an error for anything that trusts the filter (dedup checks, existence checks, selection-sensitive logic).
 
 `PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints.
 
@@ -984,10 +993,12 @@ GET    /records/:id/associations?kind=attachment
 GET    /records/:id/associations?kind=relationship
 GET    /records/:id/associations?label=avatar  — filter by label across all kinds
 POST   /records/:id/associations               — add an association
-DELETE /records/:id/associations               — remove an association (by body)
+POST   /records/:id/associations/delete        — remove an association (by body)
 ```
 
-`POST`/`DELETE` accept the same optional `If-Match` precondition described under [Records](#records).
+Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5: "has no generally defined semantics; ... might lead some implementations to reject the request"), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
+
+Both endpoints accept the same optional `If-Match` precondition described under [Records](#records).
 
 Response shape is consistent regardless of kind:
 
@@ -1034,7 +1045,7 @@ Authorization: Bearer <token>
 
 `POST /attachments` requires the same authorization as creating an `_attachment@1` record: `401` for anonymous/missing tokens, `403` if the requester lacks a `create` grant on `_attachment@1`. A bytes upload is only meaningful as a precursor to metadata creation, so the two share one authorization requirement.
 
-Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`).
+Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`). The same limit is exposed ahead of time as `maxAttachmentBytes` in [discovery](#discovery), so clients can pre-check and surface it in UI rather than learning the ceiling only by uploading the whole payload and getting a 413 back.
 
 The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both steps automatically. Direct HTTP callers must create the `_attachment@1` record separately if metadata is needed.
 
