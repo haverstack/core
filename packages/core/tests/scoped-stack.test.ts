@@ -385,7 +385,35 @@ describe('ScopedStack.create', () => {
   test('owner can always create records via ScopedStack', async () => {
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
     expect(record.typeId).toBe(COMMENT);
-    expect(record.entityId).toBe(OWNER);
+  });
+
+  // #69: the spec says owner-created records carry no entityId — that must
+  // hold whether the owner writes through Stack.create() directly or
+  // through ScopedStack.asEntity(ownerEntityId). Before this fix, only the
+  // former was true.
+  test('owner writing through asEntity(ownerEntityId) omits entityId, matching Stack.create()', async () => {
+    const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
+    expect(record.entityId).toBeUndefined();
+  });
+
+  test('a non-owner entity still gets entityId stamped as the author', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
+    expect(record.entityId).toBe(MEMBER);
+  });
+
+  // Owner bypasses grants entirely (checkAccess's owner shortcut), so an
+  // owner-authored record carrying no entityId can never accidentally
+  // satisfy a *different* requester's -own grant check — pinning the claim
+  // from #69 that this normalization doesn't regress -own semantics.
+  test('a stranger with a -own grant cannot use it against an owner-authored record', async () => {
+    const ownerRecord = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
+    await stack.grant(STRANGER, [{ actions: ['read-own', 'update-own'], typeId: COMMENT }]);
+    const view = stack.asEntity(STRANGER);
+    await expect(view.get(ownerRecord.id)).rejects.toThrow(StackPermissionError);
+    await expect(view.update(ownerRecord.id, { text: 'hijacked' })).rejects.toThrow(
+      StackPermissionError,
+    );
   });
 
   test('anonymous requester cannot create records', async () => {

@@ -228,8 +228,13 @@ export type AttachmentContent = {
 export type ConfigContent = {
   /** Entity ID of the stack owner. */
   entityId: string;
-  /** IANA timezone string e.g. "America/New_York". */
-  timezone: string;
+  /**
+   * IANA timezone string e.g. "America/New_York". Optional passthrough app
+   * metadata — nothing in core reads it for behavior. Absent means unset;
+   * there is no default, since defaulting to a real timezone would claim
+   * knowledge the stack doesn't have (#69).
+   */
+  timezone?: string;
 };
 
 /** Reserved system type IDs */
@@ -381,8 +386,13 @@ export interface StackRecordAdapter {
 
   /** Entity ID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: string;
-  /** IANA timezone string for this stack e.g. "America/New_York". */
-  readonly timezone: string;
+  /**
+   * IANA timezone string for this stack e.g. "America/New_York", or
+   * undefined if never set. Passthrough app metadata — no core behavior
+   * reads it, and there is no 'UTC' default, since defaulting would claim
+   * knowledge the stack doesn't have (#69).
+   */
+  readonly timezone: string | undefined;
 
   // Records
   createRecord(record: StackRecord): Promise<StackRecord>;

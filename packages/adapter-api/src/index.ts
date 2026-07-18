@@ -199,13 +199,13 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
 export class APIAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities;
   readonly ownerEntityId: string;
-  readonly timezone: string;
+  readonly timezone: string | undefined;
 
   private constructor(
     private readonly baseUrl: string,
     private readonly token: string | undefined,
     ownerEntityId: string,
-    timezone: string,
+    timezone: string | undefined,
     capabilities: AdapterCapabilities,
   ) {
     this.capabilities = capabilities;
@@ -244,7 +244,9 @@ export class APIAdapter implements StackAdapter {
       baseUrl,
       opts.token,
       discovery.entityId,
-      discovery.timezone ?? 'UTC',
+      // Passthrough metadata only — no 'UTC' default, which would claim
+      // knowledge the discovery response didn't actually provide (#69).
+      discovery.timezone,
       discovery.capabilities,
     );
   }
