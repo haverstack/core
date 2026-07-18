@@ -23,6 +23,16 @@ export type TypeId = string;
 /** Opaque file identifier returned by putAttachment */
 export type FileId = string;
 
+/**
+ * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". Distinct from
+ * RecordId: an entity is never a record within *this* stack the way a
+ * RecordId's uniqueness scope implies — it's a self-certifying identifier
+ * that means the same thing in every stack. did:key is the mandatory
+ * floor method (see did.ts); did:web, did:plc, etc. are also valid values
+ * here. See docs/spec.md § Identity.
+ */
+export type EntityId = string;
+
 // -------------------------------------------------------
 // Associations
 // -------------------------------------------------------
@@ -58,7 +68,7 @@ export type Association = TagAssociation | AttachmentAssociation | RelationshipA
  */
 export type Permission =
   | { access: 'public' }
-  | { access: 'entity'; entityId: RecordId; read: boolean; write: boolean }
+  | { access: 'entity'; entityId: EntityId; read: boolean; write: boolean }
   | {
       access: 'group';
       groupId: RecordId;
@@ -83,7 +93,7 @@ export type StackRecord = {
 
   // Optional native fields
   parentId?: RecordId; // Parent record (hierarchy/folders)
-  entityId?: RecordId; // Author entity, if different from stack owner
+  entityId?: EntityId; // Author entity, if different from stack owner
   appId?: RecordId; // App that created this record
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[];
@@ -100,7 +110,7 @@ export type RecordVersion = {
   typeId: TypeId;
   content: Record<string, unknown>;
   updatedAt: Date;
-  entityId?: RecordId; // Who made this change
+  entityId?: EntityId; // Who made this change
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -162,8 +172,17 @@ export type StackType = {
 // System type content shapes
 // -------------------------------------------------------
 
-/** Content for _entity records */
+/**
+ * Content for _entity records. An _entity record is a stack-local profile
+ * card *about* a DID — not the identity itself, the identity is the `did`
+ * value. `name`/`handle` are this stack owner's local labels for that DID
+ * (the petname pattern) — two stacks may hold different `_entity` cards
+ * with different display names for the same DID, and that's correct: it's
+ * each owner's own contact card for that identity.
+ */
 export type EntityContent = {
+  /** The identity this profile is about. e.g. "did:key:z6Mk..." */
+  did: string;
   /** Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith" */
   name: string;
   /** Short unique identifier within a namespace — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities. */
@@ -209,7 +228,7 @@ export type GrantContent = {
   /** Which actions are permitted. */
   actions: GrantAction[];
   /** Who the grant applies to. Absent = default grant, applies to any authenticated entity. */
-  granteeEntityId?: string;
+  granteeEntityId?: EntityId;
 };
 
 /** Content for _attachment records — one per upload, tracks file metadata. */
@@ -226,8 +245,11 @@ export type AttachmentContent = {
 
 /** Content for _config records — one singleton per stack, created on initialization. */
 export type ConfigContent = {
-  /** Entity ID of the stack owner. */
-  entityId: string;
+  /**
+   * DID of the stack owner. Immutable — see docs/spec.md § Stack
+   * initialization for why ownership transfer isn't a field write.
+   */
+  entityId: EntityId;
   /** IANA timezone string e.g. "America/New_York". */
   timezone: string;
 };
@@ -267,7 +289,7 @@ export type RecordFilter = {
   baseId?: string | string[];
   parentId?: RecordId | null; // null = root records only
   appId?: RecordId | RecordId[];
-  entityId?: RecordId | RecordId[];
+  entityId?: EntityId | EntityId[];
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
@@ -379,8 +401,8 @@ export type ExpectedVersionOptions = {
 export interface StackRecordAdapter {
   readonly capabilities: AdapterCapabilities;
 
-  /** Entity ID of the stack owner. Set during adapter initialization. */
-  readonly ownerEntityId: string;
+  /** DID of the stack owner. Set during adapter initialization. */
+  readonly ownerEntityId: EntityId;
   /** IANA timezone string for this stack e.g. "America/New_York". */
   readonly timezone: string;
 
@@ -511,7 +533,7 @@ export type StackAdapter = StackRecordAdapter & StackBlobAdapter;
 
 export type TokenInfo = {
   id: string;
-  entityId: string;
+  entityId: EntityId;
   label?: string;
   createdAt: Date;
   expiresAt?: Date;
@@ -525,6 +547,14 @@ export type TokenInfo = {
  * accept storage and tokens as separate parts (`{ adapter, tokens }`)
  * rather than sniffing an adapter for token methods.
  *
+ * `createToken(entityId)` trusts its caller about who that DID is —
+ * verifying that the caller actually controls the private key behind it
+ * is the server's job, done once, before calling createToken(), via a
+ * challenge-response handshake (server nonce, signed by the requester's
+ * key, verified with verifyDidSignature() — see docs/spec.md §
+ * Authentication). This interface doesn't change shape for that; it's
+ * where issuance lands once verification has already happened.
+ *
  * Token storage is deliberately decoupled from record storage: the
  * portable stack file is "your data, take it with you," and auth
  * material shouldn't travel with it (an export/backup shouldn't also
@@ -534,13 +564,13 @@ export type TokenInfo = {
  */
 export interface StackTokenStore {
   createToken(
-    entityId: string,
+    entityId: EntityId,
     opts?: { label?: string; expiresAt?: Date },
   ): Promise<{
     id: string;
     token: string;
   }>;
-  lookupToken(token: string): Promise<{ entityId: string } | null>;
+  lookupToken(token: string): Promise<{ entityId: EntityId } | null>;
   listTokens(): Promise<TokenInfo[]>;
   revokeToken(id: string): Promise<void>;
 }

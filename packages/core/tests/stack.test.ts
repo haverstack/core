@@ -62,6 +62,64 @@ describe('Stack.create', () => {
     const s = await Stack.create(adapter);
     expect(s.timezone).toBe('UTC');
   });
+
+  describe('ownerProfile', () => {
+    test('does nothing when omitted', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter);
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      expect(records).toHaveLength(0);
+    });
+
+    test('creates the owner _entity record on first init', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, {
+        ownerProfile: { name: 'Jane Smith', handle: 'janesmith' },
+      });
+
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      expect(records).toHaveLength(1);
+      expect(records[0].content).toEqual({
+        did: 'did:key:owner',
+        name: 'Jane Smith',
+        handle: 'janesmith',
+      });
+    });
+
+    test('omits handle when not provided', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      expect(records[0].content).toEqual({ did: 'did:key:owner', name: 'Jane Smith' });
+    });
+
+    test('is idempotent across reopen — does not duplicate the owner record', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      // Simulate a later run against the same (still-open) adapter/data.
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+
+      const { records } = await reopened.query({ filter: { typeId: '_entity@1' } });
+      expect(records).toHaveLength(1);
+    });
+
+    test('does not overwrite an existing owner record with different content', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      await Stack.create(emptyAdapter, { ownerProfile: { name: 'Original Name' } });
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'New Name' } });
+
+      const { records } = await reopened.query({ filter: { typeId: '_entity@1' } });
+      expect(records).toHaveLength(1);
+      expect(records[0].content).toMatchObject({ name: 'Original Name' });
+    });
+
+    test('leaves the created record unauthored (no entityId), matching owner-attributed convention', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      expect(records[0].entityId).toBeUndefined();
+    });
+  });
 });
 
 // -------------------------------------------------------

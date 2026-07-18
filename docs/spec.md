@@ -15,18 +15,24 @@ A **Stack** is a structured, portable personal or organizational data store. It 
 A Stack is created via an async factory that reads identity and timezone from the adapter.
 
 ```ts
-// First run — create a new database with initial config
+// First run — generate an identity keypair and create a new database.
+// `did` is a "did:key:z6Mk..." string — that's the owner entityId.
+// Persist `privateKey` yourself (OS keychain, encrypted file, ...); the
+// stack never stores it. See Identity below.
+const { did, privateKey } = await generateDidKeypair();
 const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
-  entityId: 'abc123', // required — owner entity ID
+  entityId: did, // required — owner entity ID (a DID)
   timezone: 'America/New_York', // required — IANA timezone string
 });
 
 // Subsequent runs — open an existing database
 const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
-// Always the same — reads identity and timezone from the adapter
-const stack = await Stack.create(adapter);
+// Always the same — reads identity and timezone from the adapter.
+// ownerProfile creates the owner's own _entity profile record on first
+// run; a no-op on every later call once that record exists.
+const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
 stack.ownerEntityId; // from adapter.ownerEntityId
 stack.timezone; // from adapter.timezone
 ```
@@ -42,27 +48,66 @@ Plugin and extension code that doesn't need to know the underlying backend shoul
 **`_config` is protected** (#67), by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:
 
 - **Addressable only by ID.** `get('_config')` works; a generic `query()` never returns it, regardless of filter — matching every other reserved-ID system record, but load-bearing here since `_config` is read at open and consulted by every permission check.
-- **`entityId` is immutable.** `update('_config', { entityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and the stakes only rise once identity becomes a DID. Other fields (`timezone` today) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `entityId` disagrees with the live record's cannot be restored. Ownership transfer, if it's ever added, is a deliberate future API with key-custody semantics — not a field write.
+- **`entityId` is immutable.** `update('_config', { entityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and the stakes are higher now that identity is a DID: the field isn't a label, it's the key the whole stack answers to. Other fields (`timezone` today) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `entityId` disagrees with the live record's cannot be restored. Ownership transfer, if it's ever added, is a deliberate future API with key-custody semantics — not a field write.
 - **Never deletable**, soft or hard. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a hard-deleted one leaves nothing to reopen the stack against.
 
 ---
 
-### Entity
+### Identity
+
+Everywhere the system means "who" — `Permission`, `GrantContent.granteeEntityId`, group membership associations, `StackTokenStore`, `record.entityId`, `_config.entityId` — the value is a **DID** ([Decentralized Identifier](https://www.w3.org/TR/did-core/)) string, e.g. `did:key:z6Mk...`.
+
+**Why DIDs, why no provider.** Stacks are for individuals and small groups with cohesive identity, not a global directory of principals — that scale changes what identity needs to be. It must be *verifiable without a provider*, but doesn't need global discovery infrastructure. Once central providers are ruled out and a domain is undesirable as a hard requirement (a domain is rented identity with a renewal-date failure mode), one primitive remains: cryptographic self-certification. An identity is a keypair; claims are signatures; anyone can verify without asking anyone.
+
+**`did:key` is the mandatory floor.** Adopting DID *syntax*, rather than inventing a bespoke identifier format, means not having to pick a winner among self-certifying schemes — the field just needs a `did:` prefix, and every method is distinguishable by it without the data model caring:
+
+| Method     | What it is                       | Role here                                              |
+| ---------- | --------------------------------- | ------------------------------------------------------- |
+| `did:key`  | a public key, encoded — nothing else | **the floor — mandatory to implement**                |
+| `did:web`  | a domain in DID clothing          | optional, for those who *want* domain identity           |
+| `did:plc`  | ATProto's rotation directory      | optional, for a future ATProto bridge                    |
+
+`@haverstack/core` generates and verifies `did:key` (Ed25519) via `generateDidKeypair()` / `verifyDidSignature()` / etc. (`did.ts`) using Web Crypto only — zero infrastructure, zero resolution, zero registry, no dependency. Other methods are valid `entityId` values but core doesn't mint or resolve them.
+
+**Key custody is not this library's job.** `generateDidKeypair()` returns a `privateKey`; nothing in `@haverstack/core` or any adapter stores it — only the public DID travels with stack data. Where the private key lives (OS keychain, encrypted file, hardware key) and how it's backed up is an app/UX concern.
+
+#### Entity
 
 An Entity represents the owner or author of a Stack — a person or organization. Entities are modeled as **Records** of the built-in system type `_entity`, rather than as a separate object type. This means Entities can have attachments (e.g. an avatar), relationships, and all other Record capabilities for free.
 
-The Stack has a designated owner Entity, stored as a config value pointing to an `_entity` Record's ID.
-
-**Content fields:**
+Crucially, an `_entity` record is a **stack-local profile card about a DID** — not the identity itself:
 
 ```ts
 type EntityContent = {
+  did: string; // The identity this profile is about, e.g. "did:key:z6Mk..."
   name: string; // Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith"
   handle?: string; // Short unique identifier — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities.
 };
 ```
 
-An Entity record's `entityId` may point to itself (the owner Entity authored its own record).
+`name`/`handle` are *this stack owner's* labels for that DID — the petname pattern (Zooko's triangle: global, human-readable, decentralized — pick two; the escape is names local to the observer). Two stacks holding different `_entity` cards with different display names for the same `did:key:...` is correct behavior: it's each owner's own contact card for that identity. Cross-stack ID collisions are a non-issue mechanically — DIDs are globally unique by construction, unlike a `RecordId` (unique within a stack only; see [Record IDs](#record-ids)).
+
+The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's own `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open — closing what was previously a gap where nothing created it. An Entity record's `entityId` (author) may point to itself (the owner Entity authored its own record) but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the "owner-attributed, no `entityId`" convention used elsewhere (see [Attachment](#attachment)).
+
+#### Groups
+
+"A group with cohesive identity" is anything that controls a key: a group can be given its own keypair (held by its admins), so it can be granted access, own a collaborative stack (`stackUrl`), and sign as itself. No new machinery beyond what [Group](#group) already describes below — membership associations list member DIDs, same as any other entity reference. Group key generation/custody is deferred; nothing here blocks it.
+
+#### Authentication: challenge–response
+
+Token issuance (see [Authentication](#authentication)) stops being an out-of-band secret handoff. Sketch of the handshake a server implements — not a normative wire contract, since the concrete HTTP endpoint lives in server implementations (`@haverstack/core` verifies signatures; it doesn't run a server):
+
+1. Client requests a nonce for its DID: `POST /auth/challenge { did }` → server responds `{ nonce, expiresAt }`.
+2. Client signs the nonce with the private key behind its DID (`signWithDid()`) and sends it back: `POST /auth/token { did, nonce, signature }`.
+3. Server verifies (`verifyDidSignature()` — for `did:key` this requires no lookup at all, the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken(did)` and returns the bearer token.
+
+"Access granted to the holder of key X" is verifiable with no provider, no email loop, no OAuth.
+
+**Verified-but-ungranted is distinguishable from anonymous.** The server always knows which case it's in — verification establishes "this requester controls the key behind this identifier, and will be the same someone next time," which is exactly the line `Permission`/`Grant`'s "any authenticated entity" already depends on. Concretely: anonymous → **401**; verified-but-ungranted → **403** (see [Error responses](#error-responses)). Verified ≠ trusted, or even human — DIDs are free to mint, so this is about stability and accountability of the identifier, not vetting of the person. Default grants remain appropriate only for low-stakes actions; anything of consequence should be granted to specific known DIDs. Servers SHOULD log the requester DID on denied-but-verified requests — actionable signal that plain anonymous noise isn't.
+
+#### Deferred: key rotation
+
+With pure `did:key`, identity *is* the key: lose it and you're a new identity. For individuals and small groups who know each other, that's a recoverable social event ("new key, it's me" over a trusted channel; contacts update their `_entity` cards), not a protocol failure. Rotation — a signed chain of "key A hands off to key B" records, hosted by the stack itself — is a native fit for a future RFC, but nothing here blocks it: a rotated identity is either a new DID *documented by* that log, or a method upgrade (`did:key` → stack-hosted method) for those who opt in. Multi-device works without rotation in the meantime: the identity key bootstraps a session per device via challenge–response; devices hold revocable tokens, never the key.
 
 ---
 
@@ -105,9 +150,11 @@ type GroupContent = {
 **Membership** is expressed via associations on the `_group` Record, using the existing Association model:
 
 ```ts
-{ kind: "relationship", label: "member", recordId: "<entity record id>" }
-{ kind: "relationship", label: "admin",  recordId: "<entity record id>" }
+{ kind: "relationship", label: "member", recordId: "<entity DID>" }
+{ kind: "relationship", label: "admin",  recordId: "<entity DID>" }
 ```
+
+(`recordId` here names an Entity by DID, not a Record within the target stack — the field is reused rather than duplicated; see [Identity](#identity).)
 
 This gives roles for free via association labels, and membership is queryable and versioned like any other Record data. There is no role hierarchy beyond this single distinction — matching the scale a Group actually serves (a small, cohesive set of Entities), not a general-purpose permissions system:
 
@@ -134,7 +181,7 @@ A Grant authorises one or more Entities to perform specific actions on Records o
 type GrantContent = {
   typeId: TypeId; // Which record type this grant covers
   actions: GrantAction[]; // Which actions are permitted
-  granteeEntityId?: string; // Who the grant applies to. Absent = default grant (any authenticated entity).
+  granteeEntityId?: string; // Who the grant applies to — a DID. Absent = default grant (any authenticated entity).
 };
 
 type GrantAction =
@@ -417,7 +464,7 @@ All Records are **private by default** — readable only by the stack owner. The
 // Absence of permissions (empty or undefined) = private, owner only.
 type Permission =
   | { access: 'public' }
-  | { access: 'entity'; entityId: string; read: boolean; write: boolean }
+  | { access: 'entity'; entityId: string; read: boolean; write: boolean } // entityId is a DID
   | { access: 'group'; groupId: string; role?: 'admin'; read: boolean; write: boolean };
 ```
 
@@ -833,7 +880,7 @@ GET /.well-known/stack
 ```json
 {
   "version": "1.0",
-  "entityId": "abc123",
+  "entityId": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
   "timezone": "America/New_York",
   "capabilities": {
     "fullTextSearch": true,
@@ -846,13 +893,13 @@ GET /.well-known/stack
 
 ### Authentication
 
-Bearer token in the `Authorization` header. Token issuance is out of scope for the spec — that is the server's concern. The adapter sends the token if configured; the server returns `401` if missing or invalid.
+Bearer token in the `Authorization` header. Token issuance itself is out of scope for this spec — that is the server's concern — but *how a token is earned* now has a shape worth stating: see [Authentication: challenge–response](#authentication-challengeresponse) under [Identity](#identity) for the nonce/signature handshake a server implements before calling `createToken()`. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).
 
 ```
 Authorization: Bearer <token>
 ```
 
-(As a non-normative example, `@haverstack/core` defines a `StackTokenStore` contract — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol; other adapters and servers are free to manage tokens however they like, or not at all.)
+(As a non-normative example, `@haverstack/core` defines a `StackTokenStore` contract — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol; other adapters and servers are free to manage tokens however they like, or not at all. Its `entityId` values are DIDs, same as everywhere else — see [Identity](#identity).)
 
 ### Error responses
 
@@ -861,8 +908,8 @@ Standard HTTP status codes are used throughout:
 | Status  | Meaning                  | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **400** | Bad request              | `StackQueryError` (code `bad_request`) where the library can identify the malformed input itself — e.g. an undecodable pagination cursor; otherwise a lower-level parse failure (missing required field, invalid JSON) with no core-taxonomy equivalent                                                                                                                                                                                                                                       |
-| **401** | Unauthorized             | Missing or invalid bearer token                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **403** | Forbidden                | `StackPermissionError` — record exists but the requester lacks access                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **401** | Unauthorized             | Missing or invalid bearer token — no verified DID behind the request at all ("who are you?")                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **403** | Forbidden                | `StackPermissionError` — the requester's DID verified (a valid bearer token identifies them) but they lack access ("your claim is genuine; no") — record exists but permissions/grants don't cover them                                                                                                                                                                                                                                                                                    |
 | **404** | Not found                | `StackNotFoundError` — record or version does not exist                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **409** | Conflict                 | `StackConflictError` — operation blocked by a constraint violation (e.g. deleting an attachment still referenced by a record, a client-supplied `id` that already exists, deleting `_config` or changing its `entityId` — see [Stack initialization](#stack-initialization)); or `StackSchemaDriftError` (code `schema_drift`) — `POST /types` redefining an existing `id` with a non-additive schema change (see [Types](#types))                                                            |
 | **412** | Precondition failed      | `StackVersionConflictError` (code `version_conflict`) — an `If-Match` precondition doesn't match the record's current version (see [Versions](#versions)). A distinct error type and status from `StackConflictError`/409, not a subtype of it — the two have different recovery stories                                                                                                                                                                                                      |
