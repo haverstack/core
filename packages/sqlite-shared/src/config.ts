@@ -1,9 +1,14 @@
 import type { SqlExecutor } from './executor.js';
 
-export type StackConfig = { entityId: string; timezone: string };
+/** timezone is optional passthrough app metadata — no default (#69). */
+export type StackConfig = { entityId: string; timezone: string | undefined };
 
 /** Inserts the singleton _config@1 record. Only valid on a freshly-created database. */
-export const insertConfigRecord = (exec: SqlExecutor, entityId: string, timezone: string): void => {
+export const insertConfigRecord = (
+  exec: SqlExecutor,
+  entityId: string,
+  timezone: string | undefined,
+): void => {
   const now = Date.now();
   exec.run(
     `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
@@ -17,5 +22,5 @@ export const readStackConfig = (exec: SqlExecutor): StackConfig => {
   const row = exec.get<{ content: string }>(`SELECT content FROM records WHERE id = '_config'`);
   if (!row) throw new Error('Stack database is missing its config record.');
   const content = JSON.parse(row.content) as { entityId: string; timezone?: string };
-  return { entityId: content.entityId, timezone: content.timezone ?? 'UTC' };
+  return { entityId: content.entityId, timezone: content.timezone };
 };

@@ -67,8 +67,8 @@ import type {
 export type PersistFn = (bytes: Uint8Array) => Promise<void>;
 
 export type SQLiteRecordInitializeOptions = {
-  /** IANA timezone string e.g. "America/New_York". */
-  timezone: string;
+  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
+  timezone?: string;
   /** Entity ID of the stack owner. */
   entityId: string;
   /** Called after every write. Omit for a purely in-memory, non-persisted database. */
@@ -137,7 +137,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   };
 
   ownerEntityId!: string;
-  timezone!: string;
+  timezone: string | undefined;
 
   private db!: Database;
   private exec!: SqlExecutor;

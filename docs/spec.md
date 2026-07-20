@@ -12,7 +12,7 @@ A **Stack** is a structured, portable personal or organizational data store. It 
 
 ## Stack initialization
 
-A Stack is created via an async factory that reads identity and timezone from the adapter.
+A Stack is created via an async factory that reads identity (and, optionally, timezone) from the adapter.
 
 ```ts
 // First run — generate an identity keypair and create a new database.
@@ -22,8 +22,8 @@ A Stack is created via an async factory that reads identity and timezone from th
 const { did, privateKey } = await generateDidKeypair();
 const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
-  entityId: did, // required — owner entity ID (a DID)
-  timezone: 'America/New_York', // required — IANA timezone string
+  entityId: 'abc123', // required — owner entity ID
+  timezone: 'America/New_York', // optional — IANA timezone string, passthrough metadata
 });
 
 // Subsequent runs — open an existing database
@@ -34,7 +34,7 @@ const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 // run; a no-op on every later call once that record exists.
 const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
 stack.ownerEntityId; // from adapter.ownerEntityId
-stack.timezone; // from adapter.timezone
+stack.timezone; // from adapter.timezone — string | undefined
 ```
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
@@ -42,6 +42,8 @@ stack.timezone; // from adapter.timezone
 Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. `StackClient` is the passable interface covering the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 **Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store.
+
+**`timezone` is optional, passthrough app metadata — nothing in core reads it for behavior** (#69). It's a presentation concern (an app might use it to format dates for display) that happens to live at the data layer because `_config` is the natural place to store one fact per stack. There is no default: an absent `timezone` stays `undefined` end to end (`ConfigContent.timezone`, `adapter.timezone`, discovery's `timezone` field) rather than being defaulted to `'UTC'` — a default would assert knowledge the stack was never actually given, and a stack initialized without a timezone in one place shouldn't silently acquire a wrong one somewhere downstream. Apps that want a display default apply it themselves, explicitly, at the point they format something.
 
 **For the API adapter**, identity values are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session as adapter properties.
 
@@ -292,6 +294,8 @@ type StackType = {
 ```
 
 **Array and object fields** are schema-validated on write but opaque to the query engine in v1 — only top-level scalar fields support exact-match content filtering in queries.
+
+**`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** (#69) — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catches e.g. an invalid month). This is stricter than `Date.parse` alone, which also accepts engine-dependent, non-ISO formats ("March 1 2020", "3/1/2020") that the "Expected ISO 8601 date string" validation error already claimed to reject — those formats let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
 
 **`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#queries), [`deleteAttachment()`'s reference check](#attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working, but gets **none** of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way (matching the content-filtering limit above); a `file-ref` nested in an array or object is validated but not indexed as a reference.
 
@@ -775,6 +779,8 @@ type DateRange = {
   after?: Date;
 };
 ```
+
+**A `content` filter value of `null` means "the field is absent or stored as `null`"** (#69) — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which used to make `{ content: { x: null } }` silently return an empty result — the same silent-subset shape as #56's wire-level gaps, just one layer down. Every adapter, including `MemoryAdapter`, implements `IS NULL` / missing-path semantics for a `null` filter value: it matches a record whose content omits the key entirely and one that stores the key with a literal `null` value alike, since from the caller's side both mean "no value here."
 
 `baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what fixes `typeId`-filtered queries silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set, so no adapter needs its own `baseId` concept. An unknown `baseId` returns an empty result set rather than throwing.
 

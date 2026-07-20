@@ -31,7 +31,7 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
-  readonly timezone: string;
+  readonly timezone: string | undefined;
 
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
@@ -41,7 +41,7 @@ export class MemoryAdapter implements StackAdapter {
 
   constructor({
     ownerEntityId = '',
-    timezone = 'UTC',
+    timezone,
   }: { ownerEntityId?: string; timezone?: string } = {}) {
     this.ownerEntityId = ownerEntityId;
     this.timezone = timezone;
@@ -185,10 +185,16 @@ export class MemoryAdapter implements StackAdapter {
         ),
       );
     }
+    // A `null` filter value means "field absent or null" — not "match
+    // nothing" (#69). Plain `===` would miss an absent field, since
+    // `undefined === null` is false; treat both as satisfying a null filter.
     if (f.content) {
       const entries = Object.entries(f.content);
       results = results.filter((r) =>
-        entries.every(([key, value]) => (r.content as Record<string, unknown>)[key] === value),
+        entries.every(([key, value]) => {
+          const actual = (r.content as Record<string, unknown>)[key];
+          return value === null ? actual === null || actual === undefined : actual === value;
+        }),
       );
     }
 

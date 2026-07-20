@@ -110,11 +110,21 @@ export const buildWhereClause = (
     if (f.relatedTo.label) params.push(f.relatedTo.label);
   }
 
-  // Content field filters (top-level scalar exact match)
+  // Content field filters (top-level scalar exact match). A `null` value
+  // means "field absent or null" (IS NULL / missing-path semantics), not
+  // "match nothing" — plain SQL `= NULL` is never true, which would make
+  // `{ content: { x: null } }` silently return an empty result with no
+  // signal (#69). json_extract() already returns SQL NULL for both a
+  // missing path and a stored JSON null, so IS NULL captures both.
   if (f.content) {
     for (const [key, value] of Object.entries(f.content)) {
-      conditions.push(`json_extract(r.content, ?) = ?`);
-      params.push(`$.${key}`, value);
+      if (value === null) {
+        conditions.push(`json_extract(r.content, ?) IS NULL`);
+        params.push(`$.${key}`);
+      } else {
+        conditions.push(`json_extract(r.content, ?) = ?`);
+        params.push(`$.${key}`, value);
+      }
     }
   }
 

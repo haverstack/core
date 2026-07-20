@@ -558,6 +558,29 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
+  // #69: a null content filter means "field absent or null," never "match
+  // nothing" — plain SQL `= NULL` is always false, which used to make this
+  // silently return zero records with no signal.
+  test('content filter with a null value matches records where the field is absent', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'no priority set' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
+    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    expect(result.records.length).toBe(1);
+    expect(result.records[0].id).toBe('r1');
+  });
+
+  test('content filter with a null value matches records where the field is stored as null', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'explicit null', priority: null } }),
+    );
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
+    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    expect(result.records.length).toBe(1);
+    expect(result.records[0].id).toBe('r1');
+  });
+
   test('full-text search', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));

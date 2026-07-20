@@ -72,8 +72,8 @@ import { NativeSqliteExecutor } from './executor.js';
 export type NativeRecordInitializeOptions = {
   /** Absolute path to the .db file. Must not already exist. */
   path: string;
-  /** IANA timezone string e.g. "America/New_York". */
-  timezone: string;
+  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
+  timezone?: string;
   /** Entity ID of the stack owner. */
   entityId: string;
   /** Bypass the storage-ownership lock check. See NativeRecordOpenOptions.force. */
@@ -130,7 +130,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
   };
 
   ownerEntityId!: string;
-  timezone!: string;
+  timezone: string | undefined;
 
   private db!: DatabaseSync;
   private record!: SharedSqlRecordLogic;

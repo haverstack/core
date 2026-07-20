@@ -58,8 +58,8 @@ export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 export type LocalInitializeOptions = {
   /** Absolute path to the .db file. Must not already exist. */
   path: string;
-  /** IANA timezone string e.g. "America/New_York". */
-  timezone: string;
+  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
+  timezone?: string;
   /** Entity ID of the stack owner. */
   entityId: string;
   /** Bypass the storage-ownership lock check. See LocalOpenOptions.force. */
@@ -146,7 +146,7 @@ export class LocalAdapter implements StackAdapter {
     return this.record.ownerEntityId;
   }
 
-  get timezone(): string {
+  get timezone(): string | undefined {
     return this.record.timezone;
   }
 

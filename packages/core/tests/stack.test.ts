@@ -57,10 +57,13 @@ describe('Stack.create', () => {
     );
   });
 
-  test('timezone defaults to UTC when not specified', async () => {
+  // #69: timezone is optional passthrough metadata, nothing more — no
+  // default, since defaulting to a real timezone would claim knowledge the
+  // stack doesn't have.
+  test('timezone is undefined when not specified — no default', async () => {
     const adapter = new MemoryAdapter({ ownerEntityId: 'entity-without-timezone' });
     const s = await Stack.create(adapter);
-    expect(s.timezone).toBe('UTC');
+    expect(s.timezone).toBeUndefined();
   });
 
   describe('ownerProfile', () => {
@@ -425,6 +428,29 @@ describe('type cache', () => {
     await stack.update(record.id, { text: 'updated' });
 
     expect(getTypeSpy).not.toHaveBeenCalled();
+  });
+});
+
+// -------------------------------------------------------
+// content filter null semantics (#69) — MemoryAdapter's own
+// implementation, mirroring the SQL adapters' shared buildWhereClause fix.
+// -------------------------------------------------------
+
+describe('query — content filter null semantics', () => {
+  test('a null content filter matches records where the field is absent', async () => {
+    await stack.create(NOTE_V1, { text: 'no priority set' });
+    await stack.create(NOTE_V1, { text: 'has one', priority: 1 });
+    const result = await stack.query({ filter: { content: { priority: null } } });
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].content.text).toBe('no priority set');
+  });
+
+  test('a null content filter matches records where the field is stored as null', async () => {
+    await stack.create(NOTE_V1, { text: 'explicit null', priority: null });
+    await stack.create(NOTE_V1, { text: 'has one', priority: 1 });
+    const result = await stack.query({ filter: { content: { priority: null } } });
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].content.text).toBe('explicit null');
   });
 });
 
