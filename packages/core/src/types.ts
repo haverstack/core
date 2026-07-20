@@ -250,10 +250,6 @@ export type ConfigContent = {
    * initialization for why ownership transfer isn't a field write.
    */
   entityId: EntityId;
-  /** IANA timezone string e.g. "America/New_York". */
-  timezone: string;
-  /** Entity ID of the stack owner. */
-  entityId: string;
   /**
    * IANA timezone string e.g. "America/New_York". Optional passthrough app
    * metadata — nothing in core reads it for behavior. Absent means unset;
@@ -412,10 +408,6 @@ export interface StackRecordAdapter {
 
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
-  /** IANA timezone string for this stack e.g. "America/New_York". */
-  readonly timezone: string;
-  /** Entity ID of the stack owner. Set during adapter initialization. */
-  readonly ownerEntityId: string;
   /**
    * IANA timezone string for this stack e.g. "America/New_York", or
    * undefined if never set. Passthrough app metadata — no core behavior

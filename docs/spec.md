@@ -22,7 +22,7 @@ A Stack is created via an async factory that reads identity (and, optionally, ti
 const { did, privateKey } = await generateDidKeypair();
 const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
-  entityId: 'abc123', // required — owner entity ID
+  entityId: did, // required — owner entity ID (a DID)
   timezone: 'America/New_York', // optional — IANA timezone string, passthrough metadata
 });
 
