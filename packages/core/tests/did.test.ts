@@ -84,9 +84,7 @@ describe('publicKeyFromDidKey', () => {
     const publicKey = await publicKeyFromDidKey(did);
     const data = new TextEncoder().encode('hello');
     const sig = await signWithDid(privateKey, data);
-    expect(await crypto.subtle.verify('Ed25519', publicKey, new Uint8Array(sig), data)).toBe(
-      true,
-    );
+    expect(await crypto.subtle.verify('Ed25519', publicKey, new Uint8Array(sig), data)).toBe(true);
   });
 
   test('throws InvalidDidError for a malformed did:key', async () => {
