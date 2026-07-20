@@ -49,20 +49,27 @@ Planned:
 ## Quick start
 
 ```ts
-import { Stack } from '@haverstack/core';
+import { Stack, generateDidKeypair } from '@haverstack/core';
 import { LocalAdapter } from '@haverstack/adapter-local';
 
-// First run — initialize a new stack
+// First run — generate an identity keypair. `did` is a "did:key:z6Mk..."
+// string derived from the public key — that's your entityId. Persist
+// `privateKey` yourself somewhere safe (OS keychain, encrypted file, ...);
+// the stack never stores it, only the public identity.
+const { did, privateKey } = await generateDidKeypair();
+
 const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
-  entityId: 'my-entity-id',
+  entityId: did,
   timezone: 'America/New_York',
 });
 
 // Subsequent runs — open the existing stack
 // const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
-const stack = await Stack.create(adapter);
+// ownerProfile creates your own _entity profile record on first run —
+// safe to keep passing on every open, it's a no-op once the record exists.
+const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
 // Define a type
 await stack.defineType('com.example.myapp/note@1', 'Note', {
@@ -105,6 +112,14 @@ The fundamental unit of data. Every record has:
 - A **type** — defined by the app that created it
 - **Content** — a JSON object validated against the type's schema
 - Optional: `parentId`, `entityId`, `appId`, `permissions`, `associations`
+
+### Identity
+
+`entityId` — on records, permissions, grants, group membership, the stack owner — is a [DID](https://www.w3.org/TR/did-core/) string, e.g. `did:key:z6Mk...`. An identity is a keypair; there's no provider, directory, or domain to trust. `did:key` (a public key, encoded — nothing else) is the mandatory floor; `generateDidKeypair()` mints one. Other DID methods (`did:web`, `did:plc`, ...) are valid `entityId` values too.
+
+The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.create(adapter, { ownerProfile })` creates the owner's own card on first run.
+
+See [Identity](./docs/spec.md#identity) in the spec for the full model, including authentication (challenge–response, not a shared secret) and what's deliberately deferred (key rotation).
 
 ### Types
 

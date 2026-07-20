@@ -41,6 +41,7 @@ export type {
   RecordId,
   TypeId,
   FileId,
+  EntityId,
   AttachmentContent,
   StackRecord,
   RecordVersion,
@@ -105,6 +106,20 @@ export type { SchemaDriftViolation } from './schema.js';
 export { validateContent, isValid } from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
+export {
+  InvalidDidError,
+  generateDidKeypair,
+  didFromPublicKey,
+  parseDidKey,
+  isValidDidKey,
+  publicKeyFromDidKey,
+  isValidDid,
+  signWithDid,
+  verifyDidSignature,
+  exportDidPrivateKeyJwk,
+  importDidPrivateKeyJwk,
+} from './did.js';
+export type { DidKeypair } from './did.js';
 export {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,

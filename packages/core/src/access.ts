@@ -7,7 +7,7 @@
  * control; exported standalone for callers that want the raw predicate.
  */
 
-import type { Association, RecordId, StackRecord } from './types.js';
+import type { Association, EntityId, RecordId, StackRecord } from './types.js';
 
 export type AccessMode = 'read' | 'write';
 
@@ -30,8 +30,8 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
  */
 export async function checkAccess(
   record: StackRecord,
-  requesterEntityId: string | null,
-  ownerEntityId: string | null,
+  requesterEntityId: EntityId | null,
+  ownerEntityId: EntityId | null,
   mode: AccessMode,
   resolveRecord: RecordResolver,
 ): Promise<boolean> {
@@ -66,7 +66,7 @@ export async function checkAccess(
 
 async function resolveGroupRole(
   groupRecordId: RecordId,
-  entityId: string,
+  entityId: EntityId,
   resolveRecord: RecordResolver,
 ): Promise<GroupRole | null> {
   const group = await resolveRecord(groupRecordId);
@@ -82,7 +82,7 @@ async function resolveGroupRole(
  */
 export function groupRoleFromAssociations(
   associations: Association[] | undefined,
-  entityId: string,
+  entityId: EntityId,
 ): GroupRole | null {
   let role: GroupRole | null = null;
   for (const a of associations ?? []) {

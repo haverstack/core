@@ -41,6 +41,8 @@ import type {
   GrantContent,
   AttachmentContent,
   ConfigContent,
+  EntityId,
+  EntityContent,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -59,13 +61,23 @@ export type CreateRecordOptions = {
    */
   id?: string;
   parentId?: string;
-  entityId?: string;
+  entityId?: EntityId;
   appId?: string;
   permissions?: Permission[];
   associations?: Association[];
 };
 
 export type StackOptions = {
+  /**
+   * Ensures the owner's own `_entity` profile record exists, creating it
+   * (`did: ownerEntityId`, plus `name`/`handle`) if this is the first
+   * Stack.create() call against a freshly initialized adapter. No-ops if a
+   * record with this DID already exists, so it's safe to pass on every
+   * open, not just the first one — this is what closes the gap where
+   * nothing used to create the owner's `_entity` record at all. See
+   * docs/spec.md § Identity.
+   */
+  ownerProfile?: { name: string; handle?: string };
   /**
    * Clock-skew tolerance (ms) for the timestamp-prefix plausibility check
    * ScopedStack.create() runs on a grantee-supplied `id` — a grantee is an
@@ -420,10 +432,35 @@ export class Stack implements StackClient {
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
     );
     await stack.seedSystemTypes();
+    if (opts.ownerProfile) {
+      await stack.ensureOwnerEntity(opts.ownerProfile);
+    }
     return stack;
   }
 
-  get ownerEntityId(): string {
+  /**
+   * Idempotent bootstrap for StackOptions.ownerProfile: creates the owner's
+   * `_entity` record if none exists yet for their DID. Queries by typeId
+   * only (a universally-supported native filter) and matches `content.did`
+   * in memory, rather than relying on RecordFilter.content — which is
+   * capability-gated and not every adapter implements. `_entity` records
+   * are stack-local petname cards, not a global directory, so the result
+   * set here stays small by design (see docs/spec.md § Identity).
+   */
+  private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
+    const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
+    const { records } = await this.adapter.queryRecords({ filter: { typeId: entityTypeId } });
+    const exists = records.some((r) => (r.content as EntityContent).did === this.ownerEntityId);
+    if (exists) return;
+
+    await this.create<EntityContent>(entityTypeId, {
+      did: this.ownerEntityId,
+      name: profile.name,
+      ...(profile.handle && { handle: profile.handle }),
+    });
+  }
+
+  get ownerEntityId(): EntityId {
     return this.adapter.ownerEntityId;
   }
 
@@ -447,7 +484,7 @@ export class Stack implements StackClient {
    * serves requests from multiple, possibly untrusted, entities (e.g. a
    * multi-tenant API server).
    */
-  asEntity(entityId: string | null): ScopedStack {
+  asEntity(entityId: EntityId | null): ScopedStack {
     return new ScopedStack(this, entityId, this.idTimestampSkewMsValue);
   }
 
@@ -1191,7 +1228,7 @@ export class Stack implements StackClient {
    * Ownership transfer, if it ever exists, is a deliberate future API with
    * key-custody semantics (#49), not a field write.
    */
-  private checkConfigEntityIdUnchanged(existingEntityId: string, newEntityId: string): void {
+  private checkConfigEntityIdUnchanged(existingEntityId: EntityId, newEntityId: EntityId): void {
     if (newEntityId !== existingEntityId) {
       throw new StackConflictError(
         'Cannot change _config.entityId: it defines stack ownership. ' +
@@ -1436,7 +1473,7 @@ export class Stack implements StackClient {
    * The _grant@1 type is defined automatically on first use.
    */
   async grant(
-    entityId: string | null,
+    entityId: EntityId | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
     const records: StackRecord[] = [];
@@ -1460,7 +1497,7 @@ export class Stack implements StackClient {
    * every default grant — the same resolution ScopedStack's hasGrant()
    * uses internally.
    */
-  async listGrants(entityId?: string | null): Promise<StackRecord[]> {
+  async listGrants(entityId?: EntityId | null): Promise<StackRecord[]> {
     const all = await queryAllPages((q) => this.query(q), {
       filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
     });
@@ -1481,7 +1518,7 @@ export class Stack implements StackClient {
    * undelete a revocation the same as any other write (#59/#61).
    */
   async revoke(
-    entityId: string | null,
+    entityId: EntityId | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<void> {
     const all = await queryAllPages((q) => this.query(q), {
@@ -1513,6 +1550,7 @@ export class Stack implements StackClient {
       timezone: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
+      did: { kind: 'string', required: true },
       name: { kind: 'string', required: true },
       handle: { kind: 'string' },
     });
@@ -1637,7 +1675,7 @@ function stampGroupAdmin(associations: Association[] | undefined, creator: strin
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
-    private readonly requesterEntityId: string | null,
+    private readonly requesterEntityId: EntityId | null,
     private readonly idTimestampSkewMs: number | null,
   ) {}
 
