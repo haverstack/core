@@ -77,8 +77,12 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       '(#65) mimeType is a property of the fileId, established by the first _attachment@1 ' +
       'record ever created for it. A second upload of the same bytes that declares a matching ' +
       'mimeType succeeds and gets its own record — its own id, entityId, and filename — rather ' +
-      'than being deduplicated away. Assumes an _attachment@1 record already exists for ' +
-      '"fileId": "abc123..." with "mimeType": "image/png".',
+      'than being deduplicated away. Assumes the requester is the owner (#106 restricts generic ' +
+      'POST /records for _attachment@1 to owner-only — see ' +
+      'error-permission-denied-attachment-non-owner-create and ' +
+      'create-attachment-record-non-owner-carve-out-succeeds for the non-owner cases) and that ' +
+      'an _attachment@1 record already exists for "fileId": "abc123..." with ' +
+      '"mimeType": "image/png".',
     method: 'POST',
     path: '/records',
     requestBody: {
@@ -96,6 +100,36 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'second.png' },
+      version: 1,
+    },
+  },
+  {
+    name: 'create-attachment-record-non-owner-carve-out-succeeds',
+    description:
+      '(#106 residual decision 1) A non-owner who can already read some record referencing ' +
+      'fileId "abc123..." may create an additional _attachment@1 record for it — e.g. their own ' +
+      'filename — without re-uploading bytes, since this conveys no access they did not already ' +
+      'have. Assumes a record readable by this requester already carries an attachment ' +
+      'association or file-ref field for "fileId": "abc123...". The carve-out is satisfied only ' +
+      "by that readable reference, never by the requester's own prior _attachment@1 record for " +
+      'the same fileId — see create-attachment-record-non-owner-without-carve-out-refused.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-attachment-carveout',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'mine.png' },
+      version: 1,
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: 'rec-attachment-carveout',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'mine.png' },
       version: 1,
     },
   },
@@ -318,6 +352,55 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
   {
+    name: 'error-permission-denied-attachment-non-owner-create',
+    description:
+      '(#106) POST /records creating an _attachment@1 record is refused for any non-owner ' +
+      'requester with 403 / code "permission" — even one holding an otherwise-sufficient ' +
+      '"create" grant on the type, and even for a fileId nobody has ever uploaded or referenced. ' +
+      'This is not the ordinary missing-grant case (see error-permission-denied): _attachment@1 ' +
+      'is access-conveying, and generic create() accepts a caller-supplied fileId with no proof ' +
+      'it was ever derived from real bytes, unlike POST /attachments (see Attachments), which ' +
+      'computes fileId from bytes it just hashed. Non-owners must use POST /attachments instead. ' +
+      'Owner requests for the same body succeed (see create-attachment-record-matching-mimetype-' +
+      'succeeds, which assumes an owner requester).',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-attachment-guessed',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'guessed-sha256-hash', mimeType: 'image/png', size: 12345 },
+      version: 1,
+    },
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'create-attachment-record-non-owner-without-carve-out-refused',
+    description:
+      '(#106 residual decision 1) The carve-out (see ' +
+      'create-attachment-record-non-owner-carve-out-succeeds) is satisfied only by a readable ' +
+      "record referencing the fileId — never by the requester's own prior _attachment@1 record " +
+      'for the same fileId (the "uploaded it themselves" clause of the getAttachment() access ' +
+      'rule). Allowing that would let one successful guess bootstrap unlimited further metadata ' +
+      'records for the same fileId, reintroducing the circularity #106 closes. Assumes the ' +
+      'requester already holds an _attachment@1 record for "fileId": "file-mine" (e.g. from a ' +
+      'prior putAttachment() upload) but no readable record references it.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'rec-attachment-second-name',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { fileId: 'file-mine', mimeType: 'image/png', size: 1, filename: 'second-name.png' },
+      version: 1,
+    },
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
     name: 'error-not-found',
     description:
       'A write (e.g. PATCH) against a record id that does not exist — deleted or never ' +
@@ -392,12 +475,16 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-attachment-mimetype-conflict-on-create',
     description:
-      '(#65) POST /records creating an _attachment@1 record whose mimeType conflicts with the ' +
-      'mimeType already established (by the first-ever record) for the same fileId returns 422 ' +
-      'with code "validation" — reconstructed as StackValidationError. A matching mimeType ' +
-      'would instead succeed (see create-attachment-record-matching-mimetype-succeeds). Assumes ' +
-      'an _attachment@1 record already exists for "fileId": "abc123..." with ' +
-      '"mimeType": "image/png".',
+      '(#65, message genericized by #106) POST /records creating an _attachment@1 record whose ' +
+      'mimeType conflicts with the mimeType already established (by the first-ever record) for ' +
+      'the same fileId returns 422 with code "validation" — reconstructed as ' +
+      'StackValidationError. A matching mimeType would instead succeed (see ' +
+      'create-attachment-record-matching-mimetype-succeeds). The message never names the ' +
+      "established mimeType (anti-oracle, #106): stating it would confirm an existing fileId's " +
+      'content type to a caller who only guessed the fileId. Assumes the requester is the owner ' +
+      '(non-owner POST /records for _attachment@1 is refused outright — see ' +
+      'error-permission-denied-attachment-non-owner-create) and that an _attachment@1 record ' +
+      'already exists for "fileId": "abc123..." with "mimeType": "image/png".',
     method: 'POST',
     path: '/records',
     requestBody: {
@@ -416,9 +503,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'mimeType',
-            message:
-              'mimeType "text/html" conflicts with the mimeType "image/png" already ' +
-              'established for fileId "abc123" by an earlier upload',
+            message: 'mimeType conflicts with the mimeType already established for this fileId',
           },
         ],
       },
@@ -574,13 +659,115 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
 ];
 
 // -------------------------------------------------------
+// Attachment upload: POST /attachments creates the record (#106)
+// -------------------------------------------------------
+//
+// Like attachmentDownloadFixtures, POST /attachments doesn't fit
+// ConformanceFixture: the request body is raw bytes, not JSON. What's
+// pinned here is the request Content-Type/Content-Disposition headers going
+// in and the created _attachment@1 record coming out — the wire shape of
+// the combined, non-owner-safe upload primitive described in the spec's
+// Attachments section. This is not an efficiency shortcut: fileId must be
+// established from bytes the server actually received in this request, so
+// there is no seam where a caller-supplied string could substitute for
+// them (see error-permission-denied-attachment-non-owner-create, which
+// pins the generic-create path this closes).
+
+export type AttachmentUploadFixture = {
+  /** Unique, stable name — usable as a test-case id. */
+  name: string;
+  /** What this fixture pins down, and why. */
+  description: string;
+  /** Request headers this POST must send. Authorization is omitted — every fixture here assumes a valid bearer token for the described requester. */
+  requestHeaders: Record<string, string>;
+  /** Raw request body bytes, as an array of byte values (0-255), so the fixture stays plain data with no binary encoding. */
+  requestBodyBytes: number[];
+  /** Expected HTTP status code. */
+  responseStatus: number;
+  /** Expected JSON response body: the created _attachment@1 record, or a WireError. */
+  responseBody: WireRecord | WireError;
+};
+
+// SHA-256 of the byte sequence below (the ASCII string "hello").
+const HELLO_FILE_ID = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+const HELLO_BYTES = [104, 101, 108, 108, 111];
+
+export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
+  {
+    name: 'attachment-upload-creates-metadata-record',
+    description:
+      '(#106) POST /attachments carries Content-Type and Content-Disposition (filename) and ' +
+      'stores the bytes and creates the _attachment@1 record in the same request — the wire ' +
+      'counterpart of ScopedStack.putAttachment()/Stack.putAttachment(). The response is the ' +
+      'created record (same shape as POST /records), not just { fileId }. fileId is the SHA-256 ' +
+      'hex hash of the request body.',
+    requestHeaders: {
+      'Content-Type': 'text/plain',
+      'Content-Disposition': "attachment; filename*=UTF-8''hello.txt",
+    },
+    requestBodyBytes: HELLO_BYTES,
+    responseStatus: 200,
+    responseBody: {
+      id: 'rec-attachment-upload-1',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        fileId: HELLO_FILE_ID,
+        mimeType: 'text/plain',
+        size: HELLO_BYTES.length,
+        filename: 'hello.txt',
+      },
+      version: 1,
+    },
+  },
+  {
+    name: 'attachment-upload-no-content-type-defaults-to-octet-stream',
+    description:
+      '(#106) Content-Type is optional on upload — when omitted, the server defaults the ' +
+      "created record's mimeType to application/octet-stream rather than rejecting the request, " +
+      'matching the download-side default (see attachment-download-no-metadata-defaults-to-' +
+      'octet-stream).',
+    requestHeaders: {},
+    requestBodyBytes: HELLO_BYTES,
+    responseStatus: 200,
+    responseBody: {
+      id: 'rec-attachment-upload-2',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        fileId: HELLO_FILE_ID,
+        mimeType: 'application/octet-stream',
+        size: HELLO_BYTES.length,
+      },
+      version: 1,
+    },
+  },
+  {
+    name: 'attachment-upload-non-owner-without-create-grant-forbidden',
+    description:
+      'POST /attachments requires the same authorization as creating an _attachment@1 record: ' +
+      '403 / code "permission" if the requester lacks a create grant on _attachment@1. Unlike ' +
+      'generic POST /records (see error-permission-denied-attachment-non-owner-create), a ' +
+      'non-owner *with* a create grant succeeds here — that grant is exactly what makes this the ' +
+      'sanctioned non-owner path.',
+    requestHeaders: { 'Content-Type': 'text/plain' },
+    requestBodyBytes: HELLO_BYTES,
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+];
+
+// -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
 
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
- * uniformly. Excludes attachmentDownloadFixtures — a different shape
- * (response headers, not a JSON body), imported separately.
+ * uniformly. Excludes attachmentDownloadFixtures and attachmentUploadFixtures
+ * — both a different shape (binary body and/or header-focused, not a plain
+ * JSON request/response pair), imported separately.
  */
 export const allConformanceFixtures: ConformanceFixture[] = [
   ...createRecordFixtures,

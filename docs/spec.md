@@ -716,6 +716,14 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 **Once created, an `_attachment@1` record's `fileId`, `size`, and `mimeType` are immutable — `filename` is the only field `update()` may change.** `fileId` and `size` describe the bytes themselves, so any attempted change is rejected (`StackValidationError`, 422). `mimeType`'s value was already pinned to the `fileId`'s established type at create time, so `update()` rejects any patch that touches it at all, including one that restates the same value — there's nothing a legitimate `mimeType` edit could accomplish that isn't already covered by the create-time rule above. To correct a wrongly-declared type, delete the attachment and re-upload: identical bytes hash to the same `fileId`, and the fresh first record establishes the corrected type.
 
+**Creating `_attachment@1` records directly (#106).** `_attachment@1` records are access-conveying: `getAttachment()` and reference-creation (above) both grant access to a `fileId` a requester merely names in a readable record. `putAttachment()` is safe to expose to non-owners because it never lets the caller name that `fileId` — it computes one from bytes it just hashed, so possession is proven by construction. Generic `create()` has no such proof: its `fileId` is a plain caller-supplied string. So `ScopedStack.create()` refuses to create an `_attachment@1` record for any non-owner requester — `StackPermissionError` — even with an otherwise-sufficient `create` grant on the type. Without this, a bare `create` grant on `_attachment@1` (held by every uploader, by design) would let a requester name an arbitrary guessed `fileId` and, via `getAttachment()`'s uploader clause, turn a correct guess into a read.
+
+One carve-out: a non-owner who can already read some record referencing `fileId` may create an additional `_attachment@1` record for it (e.g. to record their own `filename`) without re-uploading bytes — this conveys no access they didn't already have. The carve-out is satisfied only by a readable referencing record, never by the requester's own prior `_attachment@1` record for the same `fileId` (the uploader clause of `getAttachment()`'s access rule) — allowing that would let one successful guess unlock unlimited further metadata records for the same guessed `fileId`.
+
+The owner and unscoped `Stack` are unaffected by this restriction — it applies to `ScopedStack.create()` only. `ScopedStack.putAttachment()` is unaffected too: having already derived `fileId` from bytes it hashed itself, it creates its record directly, bypassing this gate rather than satisfying it.
+
+**Anti-oracle.** The `mimeType`-conflict message (above) never names the established `mimeType` — doing so would confirm an existing `fileId`'s content type to a caller who only guessed the `fileId`, exactly the confirmation oracle the create refusal above is designed to close.
+
 ### Garbage collection
 
 Attachment bytes are only ever removed by an explicit `deleteAttachment(fileId)` call — normal app flows delete _records_, and nothing notices when the last record referencing a file goes away. `collectAttachmentGarbage()` is an explicit, owner-invoked sweep that finds and removes those orphans. It is **not** automatic reference-counting: auto-delete on last dissociate/record-delete would coupling every record write to blob lifecycle and would race without a transactional adapter.
@@ -1000,7 +1008,7 @@ If-Match: "5"
 
 When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **412** with a `version_conflict` wire error (see [Error responses](#error-responses)) and changes nothing. Omit the header to keep unconditional last-writer-wins behavior — this is opt-in, so callers that don't need it don't pay for it. See [Versions](#versions) for the corresponding `Stack`/`StackClient` API (`ifVersion`).
 
-`POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](#record-ids) for the validation and duplicate-conflict rules the server applies.
+`POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](#record-ids) for the validation and duplicate-conflict rules the server applies. For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of grants (#106) — see [Attachments](#attachments) for the refusal, its carve-out, and `POST /attachments` as the non-owner-safe combined path.
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass.
 
@@ -1078,29 +1086,33 @@ POST /types        — register a type, or evolve an existing one in place
 ### Attachments
 
 ```
-POST   /attachments           — store raw file bytes, returns { fileId }
+POST   /attachments           — store raw file bytes and create the _attachment@1 record, returns the record
 GET    /attachments/:fileId   — download a file
 DELETE /attachments/:fileId   — delete a file
 ```
 
-Attachments are uploaded first to get a `fileId`, then referenced in an Association when creating or updating a Record. This keeps all Record endpoints JSON-only.
+Attachments are uploaded first, then referenced in an Association when creating or updating a Record. This keeps all other Record endpoints JSON-only — `POST /attachments` is the one endpoint that also accepts a binary body.
 
 File IDs are SHA-256 hashes of the content. Uploading identical bytes twice returns the same `fileId` without writing a second copy.
 
-**Upload:** Send the raw binary as the request body. `Content-Type` and `Content-Disposition` headers are ignored — `POST /attachments` stores bytes only and does **not** create an `_attachment@1` record. To record metadata (MIME type, filename, size), create an `_attachment@1` record via `POST /records` after upload.
+**Upload (#106):** Send the raw binary as the request body, with `Content-Type` set to the MIME type and, optionally, `Content-Disposition` carrying a filename. The server stores the bytes and creates the `_attachment@1` record in the same request — implemented as `scopedStack.putAttachment(bytes, mimeType, filename)`, the same combined primitive described in [Attachments](#attachments) above. `Content-Type` defaults to `application/octet-stream` if omitted.
 
 ```
 POST /attachments
 Authorization: Bearer <token>
+Content-Type: image/png
+Content-Disposition: attachment; filename*=UTF-8''photo.png
 
 <binary data>
 ```
 
-`POST /attachments` requires the same authorization as creating an `_attachment@1` record: `401` for anonymous/missing tokens, `403` if the requester lacks a `create` grant on `_attachment@1`. A bytes upload is only meaningful as a precursor to metadata creation, so the two share one authorization requirement.
+Response: the created `_attachment@1` record (`200`), not just `{ fileId }` — same shape as `POST /records`.
+
+This is not an efficiency shortcut — it's the security boundary itself (#106). The record's `fileId` must be established from bytes the server actually received in _this_ request, with no seam where a caller-supplied string could stand in for them. That's why generic `POST /records` for `_attachment@1` is no longer available to non-owners at all (see [Attachments](#attachments) above): a separate two-step "upload bytes, then claim a fileId in a record" is indistinguishable, server-side, from an attacker who never uploaded anything and only guessed the fileId.
+
+`POST /attachments` requires the same authorization as creating an `_attachment@1` record: `401` for anonymous/missing tokens, `403` if the requester lacks a `create` grant on `_attachment@1`.
 
 Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`). The same limit is exposed ahead of time as `maxAttachmentBytes` in [discovery](#discovery), so clients can pre-check and surface it in UI rather than learning the ceiling only by uploading the whole payload and getting a 413 back.
-
-The SDK's `Stack.putAttachment()` and `ScopedStack.putAttachment()` perform both steps automatically. Direct HTTP callers must create the `_attachment@1` record separately if metadata is needed.
 
 **Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
 

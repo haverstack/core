@@ -1683,6 +1683,26 @@ describe('_attachment@1 mimeType conflict on create', () => {
     expect(result.records).toHaveLength(1);
   });
 
+  // Anti-oracle (#106): the established mimeType must never appear in the
+  // conflict message — naming it would confirm the fileId's existing
+  // content type to a caller who only guessed the fileId, reintroducing the
+  // confirmation-oracle #51's anti-oracle rule exists to prevent.
+  test('the conflict message never names the established mimeType', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'text/markdown');
+
+    let error: StackValidationError | undefined;
+    try {
+      await stack.putAttachment(data, 'text/plain');
+    } catch (e) {
+      error = e as StackValidationError;
+    }
+    expect(error).toBeInstanceOf(StackValidationError);
+    const message = JSON.stringify(error?.errors);
+    expect(message).not.toContain('text/markdown');
+    expect(message).not.toContain('text/plain');
+  });
+
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
     for (let i = 0; i < 55; i++) {
       await stack.create('_attachment@1', {
