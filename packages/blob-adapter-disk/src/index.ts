@@ -34,6 +34,11 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     return fileId;
   }
 
+  /** Bytes storage only — this adapter has no access to record creation, a different backend. */
+  async putAttachmentWithMetadata(data: Uint8Array): Promise<{ fileId: FileId }> {
+    return { fileId: await this.putAttachment(data) };
+  }
+
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
     assertFileId(fileId);
     if (!existsSync(join(this.dir, fileId))) throw new Error(`Attachment not found: "${fileId}"`);

@@ -260,6 +260,14 @@ export class LocalAdapter implements StackAdapter {
     return this.blob.putAttachment(data);
   }
 
+  async putAttachmentWithMetadata(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<{ fileId: FileId }> {
+    return this.blob.putAttachmentWithMetadata(data, mimeType, filename);
+  }
+
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
     return this.blob.getAttachment(fileId);
   }

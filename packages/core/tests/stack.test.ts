@@ -10,7 +10,7 @@ import {
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { BlobFileInfo } from '../src/types.js';
+import type { BlobFileInfo, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -1653,6 +1653,49 @@ describe('putAttachment', () => {
     await stack.putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records[0].entityId).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// putAttachment — atomic path (#106): when the adapter creates the record
+// as part of putAttachmentWithMetadata() (the API adapter, over one POST
+// /attachments request), Stack.putAttachment() must not also make its own
+// create() call — that would double-create (and, for a mismatched
+// mimeType, conflict). Local adapters like MemoryAdapter return no record,
+// so the pre-existing create() fallback is exercised by every other test
+// in this describe block above.
+// -------------------------------------------------------
+
+describe('putAttachment — atomic adapter path (#106)', () => {
+  test('skips the separate create() call when the adapter already created the record', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fabricatedRecord: StackRecord = {
+      id: generateId(),
+      typeId: '_attachment@1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      content: { fileId: 'atomic-file-id', mimeType: 'image/png', size: 3, filename: 'photo.png' },
+      version: 1,
+    };
+    vi.spyOn(adapter, 'putAttachmentWithMetadata').mockResolvedValue({
+      fileId: 'atomic-file-id',
+      record: fabricatedRecord,
+    });
+    const createSpy = vi.spyOn(stack, 'create');
+
+    const fileId = await stack.putAttachment(data, 'image/png', 'photo.png');
+
+    expect(fileId).toBe('atomic-file-id');
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  test('falls back to its own create() call when the adapter returns no record', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const createSpy = vi.spyOn(stack, 'create');
+
+    await stack.putAttachment(data, 'image/png', 'photo.png');
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
   });
 });
 

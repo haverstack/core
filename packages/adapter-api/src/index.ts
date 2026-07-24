@@ -326,12 +326,13 @@ export class APIAdapter implements StackAdapter {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachment()/putAttachmentWithMetadata() below. */
   private async uploadBinary(
     path: string,
     data: Uint8Array,
     mimeType: string,
     filename?: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<WireRecord> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
@@ -348,7 +349,7 @@ export class APIAdapter implements StackAdapter {
 
     if (res.status === 401) throw new APIAdapterAuthError();
     if (!res.ok) throw await this.errorForResponse(res, 'POST', path);
-    return res.json() as Promise<Record<string, unknown>>;
+    return res.json() as Promise<WireRecord>;
   }
 
   // -------------------------------------------------------
@@ -567,9 +568,41 @@ export class APIAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
+  /**
+   * Bytes only, per the StackBlobAdapter contract — but POST /attachments
+   * always creates the accompanying _attachment@1 record now (#106): there
+   * is no bytes-only wire mode, since the whole point of this endpoint is
+   * that the record's fileId must come from bytes the server received in
+   * the same request. This call still ends up creating a record, with a
+   * default mimeType (application/octet-stream) and no filename, as a side
+   * effect. Stack.putAttachmentBytes()'s documented "no record created"
+   * contract holds for local storage adapters; over this adapter it's
+   * approximate. Stack.putAttachmentBytes() remains intended for owner/
+   * server-internal use (spec §Attachments) — remote, non-owner callers
+   * should use putAttachmentWithMetadata() (Stack.putAttachment()) instead.
+   */
   async putAttachment(data: Uint8Array): Promise<FileId> {
-    const result = await this.uploadBinary('/attachments', data, 'application/octet-stream');
-    return result.fileId as string;
+    const record = parseRecord(
+      await this.uploadBinary('/attachments', data, 'application/octet-stream'),
+    );
+    return record.content.fileId as string;
+  }
+
+  /**
+   * Store bytes and create the _attachment@1 record in one POST
+   * /attachments request — the wire counterpart of Stack.putAttachment()
+   * (#106). Not an efficiency shortcut: the record's fileId is established
+   * from bytes the server received in *this* request, which is what makes
+   * the operation safe for a non-owner requester — see
+   * StackBlobAdapter.putAttachmentWithMetadata().
+   */
+  async putAttachmentWithMetadata(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<{ fileId: FileId; record: StackRecord }> {
+    const record = parseRecord(await this.uploadBinary('/attachments', data, mimeType, filename));
+    return { fileId: record.content.fileId as string, record };
   }
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {

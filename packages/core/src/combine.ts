@@ -52,6 +52,8 @@ export function combineAdapters(parts: {
     }),
 
     putAttachment: (data) => parts.blob.putAttachment(data),
+    putAttachmentWithMetadata: (data, mimeType, filename) =>
+      parts.blob.putAttachmentWithMetadata(data, mimeType, filename),
     getAttachment: (id) => parts.blob.getAttachment(id),
     deleteAttachment: (id) => parts.blob.deleteAttachment(id),
     ...(parts.blob.listFiles && {

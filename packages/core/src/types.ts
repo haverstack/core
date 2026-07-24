@@ -518,6 +518,33 @@ export interface StackBlobAdapter {
   deleteAttachment(fileId: FileId): Promise<void>;
 
   /**
+   * Store bytes and, when the adapter can, create the accompanying
+   * _attachment@1 record in the same operation. Required on every adapter —
+   * not capability-flagged — because there is exactly one correct answer
+   * for each: local storage adapters (disk, sqljs, memory) cannot create a
+   * record themselves (that's the record adapter's job, a different
+   * backend reached through a different object), so they always store
+   * bytes only and return `record: undefined`; `Stack.putAttachment()`
+   * falls back to its own create() call in that case, unchanged from
+   * before this method existed.
+   *
+   * The API adapter is the one implementation that can genuinely do both in
+   * one operation — a single POST /attachments request the server fulfills
+   * atomically — and populates `record`. This is not an efficiency
+   * shortcut: fileId must be established from bytes the server actually
+   * received in *this* request, or a separate record-creation call is
+   * indistinguishable, server-side, from a caller who never uploaded
+   * anything and only guessed the fileId (#106). `Stack.putAttachment()`
+   * skips its own create() call whenever `record` is present, trusting it
+   * as authoritative rather than re-validating client-side.
+   */
+  putAttachmentWithMetadata(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<{ fileId: FileId; record?: StackRecord }>;
+
+  /**
    * Enumerate every blob currently in storage. Optional — capability-flagged,
    * like StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Without it,
    * Stack.collectAttachmentGarbage() can still collect files that have

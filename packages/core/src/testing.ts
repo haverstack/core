@@ -297,6 +297,11 @@ export class MemoryAdapter implements StackAdapter {
     }
     return fileId;
   }
+
+  /** Local storage: bytes only, no record — Stack.putAttachment() supplies the create() step. */
+  async putAttachmentWithMetadata(data: Uint8Array): Promise<{ fileId: string }> {
+    return { fileId: await this.putAttachment(data) };
+  }
   // Deliberately lenient for fileIds never actually put (returns empty bytes,
   // not an error) — a lot of existing tests exercise permission logic with
   // synthetic fileIds that were never uploaded. Subclass and override this

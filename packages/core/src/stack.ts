@@ -1253,9 +1253,26 @@ export class Stack implements StackClient {
    * Store bytes and create an _attachment@1 metadata record (owner-attributed,
    * no entityId). Use ScopedStack.putAttachment() when the uploader is a
    * specific entity rather than the stack owner.
+   *
+   * Delegates to the adapter's putAttachmentWithMetadata() first. Adapters
+   * that can create the record as part of the same operation (the API
+   * adapter, via one POST /attachments request the server fulfills
+   * atomically — #106) return it directly here, skipping the separate
+   * create() call below entirely — not for efficiency, but because a
+   * second, independent record-creation call would be indistinguishable,
+   * server-side, from a non-owner who never uploaded anything and only
+   * guessed the fileId. Local storage adapters can't create a record
+   * themselves (a different backend, reached through a different object),
+   * so they return no record and this falls back to the create() call that
+   * was always here.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
-    const fileId = await this.putAttachmentBytes(data);
+    const { fileId, record } = await this.adapter.putAttachmentWithMetadata(
+      data,
+      mimeType,
+      filename,
+    );
+    if (record) return fileId;
     await this.create(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
       fileId,
       mimeType,

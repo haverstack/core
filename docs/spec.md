@@ -602,13 +602,15 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`StackRecordAdapter`** — structured storage: capabilities, stack identity (`ownerEntityId`, `timezone`), all record/association/version/type methods, and optional lifecycle hooks (`flush`, `close`).
 
-**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
+**`StackBlobAdapter`** — binary storage: `putAttachment`, `putAttachmentWithMetadata`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
 
 ```ts
 type StackAdapter = StackRecordAdapter & StackBlobAdapter;
 ```
 
 **Optional capabilities**, present on some adapters and not others, follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check, [Attachments](#attachments)) and `StackBlobAdapter.listFiles()` (blob enumeration, used by [`collectAttachmentGarbage()`](#garbage-collection) to find bare-bytes orphans) are both this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
+
+`StackBlobAdapter.putAttachmentWithMetadata(data, mimeType, filename?)` (#106) is **not** part of that optional-capability pattern — it's required on every adapter, because there's exactly one correct answer for each: local storage adapters store bytes only and return `{ fileId }` with no `record`, since creating one is the record adapter's job, a different backend reached through a different object; the API adapter, backed by a single `POST /attachments` request the server fulfills in one call, returns `{ fileId, record }`. `Stack.putAttachment()` branches on whether `record` came back — present means skip its own `create()` call, absent means make it, exactly as `Stack.putAttachment()` always has. See [Attachments](#attachments) for why this is a correctness requirement (#106's anti-oracle fix), not an efficiency optimization.
 
 ### Package naming convention
 
@@ -1113,6 +1115,10 @@ This is not an efficiency shortcut — it's the security boundary itself (#106).
 `POST /attachments` requires the same authorization as creating an `_attachment@1` record: `401` for anonymous/missing tokens, `403` if the requester lacks a `create` grant on `_attachment@1`.
 
 Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`). The same limit is exposed ahead of time as `maxAttachmentBytes` in [discovery](#discovery), so clients can pre-check and surface it in UI rather than learning the ceiling only by uploading the whole payload and getting a 413 back.
+
+**SDK usage.** `Stack.putAttachment()`, when backed by `@haverstack/adapter-api`'s `APIAdapter`, calls this endpoint directly — one request, carrying the real `mimeType`/`filename` — rather than a bytes call followed by a separate `POST /records`. `StackBlobAdapter.putAttachmentWithMetadata()` is the adapter-level primitive this relies on: local storage adapters (disk, sqljs, memory) can't create a record themselves — that's the record adapter's job, a different backend — so they store bytes only and `Stack.putAttachment()` falls back to its own `create()` call, exactly as before this endpoint existed. Only the API adapter, backed by a single atomic request, returns the created record directly.
+
+One consequence: `StackBlobAdapter.putAttachment()` (the bytes-only primitive behind `Stack.putAttachmentBytes()`) still maps to this same endpoint over the wire, and this endpoint always creates a record now — so `Stack.putAttachmentBytes()`'s documented "no record created" contract holds for local storage but is only approximate over `APIAdapter` (a record with a default `mimeType` is created as a side effect). `Stack.putAttachmentBytes()` remains intended for owner/server-internal use against local storage; remote, non-owner callers should use `Stack.putAttachment()`.
 
 **Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
 
