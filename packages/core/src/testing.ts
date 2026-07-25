@@ -299,7 +299,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** Local storage: bytes only, no record — Stack.putAttachment() supplies the create() step. */
-  async putAttachmentWithMetadata(
+  async tryPutAttachmentWithMetadata(
     data: Uint8Array,
     _mimeType: string,
     _filename?: string,

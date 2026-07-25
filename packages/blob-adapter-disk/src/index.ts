@@ -35,7 +35,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   /** Bytes storage only — this adapter has no access to record creation, a different backend. */
-  async putAttachmentWithMetadata(
+  async tryPutAttachmentWithMetadata(
     data: Uint8Array,
     _mimeType: string,
     _filename?: string,

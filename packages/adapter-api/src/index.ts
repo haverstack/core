@@ -326,7 +326,7 @@ export class APIAdapter implements StackAdapter {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachment()/putAttachmentWithMetadata() below. */
+  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachment()/tryPutAttachmentWithMetadata() below. */
   private async uploadBinary(
     path: string,
     data: Uint8Array,
@@ -575,16 +575,16 @@ export class APIAdapter implements StackAdapter {
    * that the record's fileId must come from bytes the server received in
    * the same request. This call still ends up creating a record, with a
    * default mimeType (application/octet-stream) and no filename, as a side
-   * effect — the same request putAttachmentWithMetadata() makes, just with
+   * effect — the same request tryPutAttachmentWithMetadata() makes, just with
    * the record discarded to satisfy this method's narrower return type.
    * Stack.putAttachmentBytes()'s documented "no record created" contract
    * holds for local storage adapters; over this adapter it's approximate.
    * Stack.putAttachmentBytes() remains intended for owner/server-internal
    * use (spec §Attachments) — remote, non-owner callers should use
-   * putAttachmentWithMetadata() (Stack.putAttachment()) instead.
+   * tryPutAttachmentWithMetadata() (Stack.putAttachment()) instead.
    */
   async putAttachment(data: Uint8Array): Promise<FileId> {
-    const { fileId } = await this.putAttachmentWithMetadata(data, 'application/octet-stream');
+    const { fileId } = await this.tryPutAttachmentWithMetadata(data, 'application/octet-stream');
     return fileId;
   }
 
@@ -594,9 +594,9 @@ export class APIAdapter implements StackAdapter {
    * (#106). Not an efficiency shortcut: the record's fileId is established
    * from bytes the server received in *this* request, which is what makes
    * the operation safe for a non-owner requester — see
-   * StackBlobAdapter.putAttachmentWithMetadata().
+   * StackBlobAdapter.tryPutAttachmentWithMetadata().
    */
-  async putAttachmentWithMetadata(
+  async tryPutAttachmentWithMetadata(
     data: Uint8Array,
     mimeType: string,
     filename?: string,

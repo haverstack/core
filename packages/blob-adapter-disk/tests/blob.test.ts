@@ -45,8 +45,8 @@ describe('DiskBlobAdapter', () => {
   // Bytes storage only — this adapter has no access to record creation
   // (that's the record adapter's job, a different backend). Stack.putAttachment()
   // relies on `record` being absent here to fall back to its own create() call.
-  test('putAttachmentWithMetadata stores bytes and returns fileId only, no record', async () => {
-    const result = await adapter.putAttachmentWithMetadata(Buffer.from('hello'), 'text/plain');
+  test('tryPutAttachmentWithMetadata stores bytes and returns fileId only, no record', async () => {
+    const result = await adapter.tryPutAttachmentWithMetadata(Buffer.from('hello'), 'text/plain');
     expect(result.fileId).toMatch(/^[0-9a-f]{64}$/);
     expect(result.record).toBeUndefined();
     const retrieved = await adapter.getAttachment(result.fileId);

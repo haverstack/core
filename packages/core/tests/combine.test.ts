@@ -60,7 +60,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
 function makeBlobAdapter(overrides: Partial<StackBlobAdapter> = {}): StackBlobAdapter {
   return {
     putAttachment: async () => 'file-id',
-    putAttachmentWithMetadata: async () => ({ fileId: 'file-id-with-metadata' }),
+    tryPutAttachmentWithMetadata: async () => ({ fileId: 'file-id-with-metadata' }),
     getAttachment: async () => new Uint8Array(),
     deleteAttachment: async () => {},
     ...overrides,
@@ -113,12 +113,12 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
-  test('forwards putAttachmentWithMetadata to the blob part with all arguments', async () => {
+  test('forwards tryPutAttachmentWithMetadata to the blob part with all arguments', async () => {
     let calledWith: [Uint8Array, string, string | undefined] | undefined;
     const adapter = combineAdapters({
       record: makeRecordAdapter(),
       blob: makeBlobAdapter({
-        putAttachmentWithMetadata: async (data, mimeType, filename) => {
+        tryPutAttachmentWithMetadata: async (data, mimeType, filename) => {
           calledWith = [data, mimeType, filename];
           return { fileId: 'computed-id' };
         },
@@ -126,7 +126,7 @@ describe('combineAdapters', () => {
     });
 
     const bytes = new Uint8Array([1, 2, 3]);
-    const result = await adapter.putAttachmentWithMetadata(bytes, 'image/png', 'photo.png');
+    const result = await adapter.tryPutAttachmentWithMetadata(bytes, 'image/png', 'photo.png');
     expect(calledWith).toEqual([bytes, 'image/png', 'photo.png']);
     expect(result).toEqual({ fileId: 'computed-id' });
   });

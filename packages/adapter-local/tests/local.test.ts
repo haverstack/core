@@ -144,9 +144,9 @@ describe('attachments', () => {
   // LocalAdapter delegates to its DiskBlobAdapter, which can't create a
   // record itself (a different backend) — Stack.putAttachment() relies on
   // `record` being absent here to fall back to its own create() call.
-  test('putAttachmentWithMetadata stores bytes and returns fileId only, no record', async () => {
+  test('tryPutAttachmentWithMetadata stores bytes and returns fileId only, no record', async () => {
     const adapter = await initAdapter();
-    const result = await adapter.putAttachmentWithMetadata(Buffer.from('hello'), 'text/plain');
+    const result = await adapter.tryPutAttachmentWithMetadata(Buffer.from('hello'), 'text/plain');
     expect(result.fileId).toMatch(/^[0-9a-f]{64}$/);
     expect(result.record).toBeUndefined();
   });

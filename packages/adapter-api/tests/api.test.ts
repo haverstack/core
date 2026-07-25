@@ -804,7 +804,7 @@ describe('putAttachment', () => {
   });
 });
 
-describe('putAttachmentWithMetadata', () => {
+describe('tryPutAttachmentWithMetadata', () => {
   test('sends POST /attachments with the given Content-Type and Content-Disposition, returns fileId and the parsed record', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
@@ -815,7 +815,7 @@ describe('putAttachmentWithMetadata', () => {
       ),
     );
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const result = await adapter.putAttachmentWithMetadata(data, 'image/png', 'photo.png');
+    const result = await adapter.tryPutAttachmentWithMetadata(data, 'image/png', 'photo.png');
 
     expect(result.fileId).toBe('file-xyz');
     expect(result.record.id).toBe('rec-attachment-1');
@@ -832,7 +832,7 @@ describe('putAttachmentWithMetadata', () => {
   test('omits Content-Disposition when no filename is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
-    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'application/octet-stream');
+    await adapter.tryPutAttachmentWithMetadata(new Uint8Array([1]), 'application/octet-stream');
 
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['Content-Disposition']).toBeUndefined();

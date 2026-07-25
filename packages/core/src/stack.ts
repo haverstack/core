@@ -1254,7 +1254,7 @@ export class Stack implements StackClient {
    * no entityId). Use ScopedStack.putAttachment() when the uploader is a
    * specific entity rather than the stack owner.
    *
-   * Delegates to the adapter's putAttachmentWithMetadata() first. Adapters
+   * Delegates to the adapter's tryPutAttachmentWithMetadata() first. Adapters
    * that can create the record as part of the same operation (the API
    * adapter, via one POST /attachments request the server fulfills
    * atomically — #106) return it directly here, skipping the separate
@@ -1267,7 +1267,7 @@ export class Stack implements StackClient {
    * was always here.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
-    const { fileId, record } = await this.adapter.putAttachmentWithMetadata(
+    const { fileId, record } = await this.adapter.tryPutAttachmentWithMetadata(
       data,
       mimeType,
       filename,
