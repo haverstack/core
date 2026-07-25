@@ -575,17 +575,17 @@ export class APIAdapter implements StackAdapter {
    * that the record's fileId must come from bytes the server received in
    * the same request. This call still ends up creating a record, with a
    * default mimeType (application/octet-stream) and no filename, as a side
-   * effect. Stack.putAttachmentBytes()'s documented "no record created"
-   * contract holds for local storage adapters; over this adapter it's
-   * approximate. Stack.putAttachmentBytes() remains intended for owner/
-   * server-internal use (spec §Attachments) — remote, non-owner callers
-   * should use putAttachmentWithMetadata() (Stack.putAttachment()) instead.
+   * effect — the same request putAttachmentWithMetadata() makes, just with
+   * the record discarded to satisfy this method's narrower return type.
+   * Stack.putAttachmentBytes()'s documented "no record created" contract
+   * holds for local storage adapters; over this adapter it's approximate.
+   * Stack.putAttachmentBytes() remains intended for owner/server-internal
+   * use (spec §Attachments) — remote, non-owner callers should use
+   * putAttachmentWithMetadata() (Stack.putAttachment()) instead.
    */
   async putAttachment(data: Uint8Array): Promise<FileId> {
-    const record = parseRecord(
-      await this.uploadBinary('/attachments', data, 'application/octet-stream'),
-    );
-    return record.content.fileId as string;
+    const { fileId } = await this.putAttachmentWithMetadata(data, 'application/octet-stream');
+    return fileId;
   }
 
   /**
