@@ -264,7 +264,7 @@ export class LocalAdapter implements StackAdapter {
     data: Uint8Array,
     mimeType: string,
     filename?: string,
-  ): Promise<{ fileId: FileId }> {
+  ): Promise<{ fileId: FileId; record?: StackRecord }> {
     return this.blob.putAttachmentWithMetadata(data, mimeType, filename);
   }
 

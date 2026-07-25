@@ -318,8 +318,8 @@ describe('attachment upload fixtures', () => {
         await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
       } else {
         const result = await dispatch();
-        const expectedFileId = (fixture.responseBody as { content: { fileId: string } }).content
-          .fileId;
+        const expectedFileId = (fixture.responseBody as unknown as { content: { fileId: string } })
+          .content.fileId;
         expect(result.fileId).toBe(expectedFileId);
       }
 

@@ -299,7 +299,11 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** Local storage: bytes only, no record — Stack.putAttachment() supplies the create() step. */
-  async putAttachmentWithMetadata(data: Uint8Array): Promise<{ fileId: string }> {
+  async putAttachmentWithMetadata(
+    data: Uint8Array,
+    _mimeType: string,
+    _filename?: string,
+  ): Promise<{ fileId: string; record?: StackRecord }> {
     return { fileId: await this.putAttachment(data) };
   }
   // Deliberately lenient for fileIds never actually put (returns empty bytes,

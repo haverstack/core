@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
 import { join } from 'path';
-import type { StackBlobAdapter, BlobFileInfo, FileId } from '@haverstack/core';
+import type { StackBlobAdapter, BlobFileInfo, FileId, StackRecord } from '@haverstack/core';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -35,7 +35,11 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   /** Bytes storage only — this adapter has no access to record creation, a different backend. */
-  async putAttachmentWithMetadata(data: Uint8Array): Promise<{ fileId: FileId }> {
+  async putAttachmentWithMetadata(
+    data: Uint8Array,
+    _mimeType: string,
+    _filename?: string,
+  ): Promise<{ fileId: FileId; record?: StackRecord }> {
     return { fileId: await this.putAttachment(data) };
   }
 
