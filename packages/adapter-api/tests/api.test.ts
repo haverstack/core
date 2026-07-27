@@ -789,18 +789,18 @@ const attachmentRecordResponse = (overrides: Partial<Record<string, unknown>> = 
 });
 
 describe('putAttachment', () => {
-  test('sends POST /attachments with binary body and Content-Type: application/octet-stream, returns fileId from the created record', async () => {
+  // Bytes-only upload has no wire mode: POST /attachments always creates
+  // the _attachment@1 record (#106), so implementing this method would
+  // silently mint a default-mimeType record while claiming "no record
+  // created". It must throw — without ever reaching the network — rather
+  // than approximately honor the contract.
+  test('throws APIAdapterError and never issues a request', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
+    mockFetch.mockClear();
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const fileId = await adapter.putAttachment(data);
-    expect(fileId).toBe('file-xyz');
-    const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(url).toBe(`${BASE_URL}/attachments`);
-    expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
-      'application/octet-stream',
-    );
+    await expect(adapter.putAttachment(data)).rejects.toThrow(APIAdapterError);
+    await expect(adapter.putAttachment(data)).rejects.toThrow(/not supported over the wire/);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

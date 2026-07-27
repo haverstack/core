@@ -326,7 +326,7 @@ export class APIAdapter implements StackAdapter {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachment()/putAttachmentWithMetadata() below. */
+  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachmentWithMetadata() below. */
   private async uploadBinary(
     path: string,
     data: Uint8Array,
@@ -569,23 +569,24 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
-   * Bytes only, per the StackBlobAdapter contract — but POST /attachments
-   * always creates the accompanying _attachment@1 record now (#106): there
-   * is no bytes-only wire mode, since the whole point of this endpoint is
-   * that the record's fileId must come from bytes the server received in
-   * the same request. This call still ends up creating a record, with a
-   * default mimeType (application/octet-stream) and no filename, as a side
-   * effect — the same request putAttachmentWithMetadata() makes, just with
-   * the record discarded to satisfy this method's narrower return type.
-   * Stack.putAttachmentBytes()'s documented "no record created" contract
-   * holds for local storage adapters; over this adapter it's approximate.
-   * Stack.putAttachmentBytes() remains intended for owner/server-internal
-   * use (spec §Attachments) — remote, non-owner callers should use
+   * Unsupported over the wire — always throws. POST /attachments is the
+   * only upload endpoint, and it always creates the accompanying
+   * _attachment@1 record (#106): the whole point of the endpoint is that
+   * the record's fileId comes from bytes the server received in the same
+   * request, so there is no bytes-only wire mode for this method to map
+   * to. Implementing it anyway would silently mint a record with a default
+   * mimeType and no filename — violating Stack.putAttachmentBytes()'s
+   * documented "no record created" contract while appearing to honor it.
+   * Throwing keeps the contract honest: bytes-only upload is a local
+   * storage primitive (spec §Attachments), and remote callers use
    * putAttachmentWithMetadata() (Stack.putAttachment()) instead.
    */
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    const record = await this.putAttachmentWithMetadata(data, 'application/octet-stream');
-    return record.content.fileId as string;
+  async putAttachment(_data: Uint8Array): Promise<FileId> {
+    throw new APIAdapterError(
+      'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
+        'an _attachment@1 record (#106). Use Stack.putAttachment(data, mimeType, filename?) ' +
+        'instead of Stack.putAttachmentBytes(data).',
+    );
   }
 
   /**

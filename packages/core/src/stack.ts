@@ -1244,6 +1244,10 @@ export class Stack implements StackClient {
    * Store raw bytes and return the content-addressed file ID.
    * Does not create an _attachment@1 record — use putAttachment() or
    * ScopedStack.putAttachment() for the full upload flow.
+   *
+   * A local-storage primitive: over the API adapter this throws, because
+   * the wire has no bytes-only upload — POST /attachments always creates
+   * the record (#106). Remote callers use putAttachment().
    */
   async putAttachmentBytes(data: Uint8Array): Promise<string> {
     return this.adapter.putAttachment(data);

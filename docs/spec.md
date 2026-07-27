@@ -709,7 +709,7 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 - `Stack.putAttachment(data, mimeType, filename?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
 - `ScopedStack.putAttachment(data, mimeType, filename?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is set to the uploading entity.
-- `Stack.putAttachmentBytes(data)` — owner-level, bytes only. Stores the file and returns its `fileId` without creating an `_attachment@1` record. No grant check.
+- `Stack.putAttachmentBytes(data)` — owner-level, bytes only. Stores the file and returns its `fileId` without creating an `_attachment@1` record. No grant check. A **local-storage primitive**: over `APIAdapter` it throws, because the wire has no bytes-only upload — `POST /attachments` always creates the record (#106; see [Attachments wire format](#attachments-1)).
 - `ScopedStack.putAttachmentBytes(data)` — entity-scoped, bytes only. Gated identically to `ScopedStack.putAttachment()` (a `create` grant on `_attachment@1`): a bytes upload is only meaningful as a precursor to metadata creation, so the two share one authorization check. Anonymous requesters are always denied.
 
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
@@ -1126,7 +1126,7 @@ Returns `413 Request Entity Too Large` if the payload exceeds the server's confi
 
 **SDK usage.** `Stack.putAttachment()`, when backed by `@haverstack/adapter-api`'s `APIAdapter`, calls this endpoint directly — one request, carrying the real `mimeType`/`filename` — rather than a bytes call followed by a separate `POST /records`. `StackAdapter.putAttachmentWithMetadata()` is the optional atomic-upload capability this rides on ([Interface split](#interface-split)): the API adapter implements it as this single request; local storage adapters don't implement it — bytes and records are different backends there, with no shared transaction — so `Stack.putAttachment()` falls back to its own `create()` call, exactly as before this endpoint existed.
 
-One consequence: `StackBlobAdapter.putAttachment()` (the bytes-only primitive behind `Stack.putAttachmentBytes()`) still maps to this same endpoint over the wire, and this endpoint always creates a record now — so `Stack.putAttachmentBytes()`'s documented "no record created" contract holds for local storage but is only approximate over `APIAdapter` (a record with a default `mimeType` is created as a side effect). `Stack.putAttachmentBytes()` remains intended for owner/server-internal use against local storage; remote, non-owner callers should use `Stack.putAttachment()`.
+One consequence: there is no longer a bytes-only upload anywhere on the wire — this endpoint always creates a record. So `StackBlobAdapter.putAttachment()` (the bytes-only primitive behind `Stack.putAttachmentBytes()`) is **unsupported over `APIAdapter` and throws** rather than mapping to this endpoint: implementing it anyway would silently create a record with a default `mimeType`, violating `Stack.putAttachmentBytes()`'s documented "no record created" contract while appearing to honor it. Bytes-only upload is a local-storage primitive for owner/server-internal use; remote callers use `Stack.putAttachment()`.
 
 **Download:** Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
 
