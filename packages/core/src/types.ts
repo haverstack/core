@@ -518,35 +518,6 @@ export interface StackBlobAdapter {
   deleteAttachment(fileId: FileId): Promise<void>;
 
   /**
-   * *Try* to store bytes and create the accompanying _attachment@1 record
-   * in the same operation — `mimeType`/`filename` are not guaranteed to be
-   * used. Required on every adapter, but only ever fully honored by one:
-   * local storage adapters (disk, sqljs, memory) cannot create a record
-   * themselves (that's the record adapter's job, a different backend
-   * reached through a different object), so they always store bytes only,
-   * silently ignore `mimeType`/`filename`, and return `record: undefined`;
-   * `Stack.putAttachment()` falls back to its own create() call in that
-   * case, unchanged from before this method existed. Check `record` in the
-   * result, not the method name, to know whether metadata was actually
-   * applied.
-   *
-   * The API adapter is the one implementation that can genuinely do both in
-   * one operation — a single POST /attachments request the server fulfills
-   * atomically — and populates `record`. This is not an efficiency
-   * shortcut: fileId must be established from bytes the server actually
-   * received in *this* request, or a separate record-creation call is
-   * indistinguishable, server-side, from a caller who never uploaded
-   * anything and only guessed the fileId (#106). `Stack.putAttachment()`
-   * skips its own create() call whenever `record` is present, trusting it
-   * as authoritative rather than re-validating client-side.
-   */
-  tryPutAttachmentWithMetadata(
-    data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-  ): Promise<{ fileId: FileId; record?: StackRecord }>;
-
-  /**
    * Enumerate every blob currently in storage. Optional — capability-flagged,
    * like StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Without it,
    * Stack.collectAttachmentGarbage() can still collect files that have
@@ -568,7 +539,37 @@ export interface StackBlobAdapter {
  * Pass this to Stack.create(). Build one with combineAdapters() when you
  * want different backends for records and blobs (e.g. SQLite + S3).
  */
-export type StackAdapter = StackRecordAdapter & StackBlobAdapter;
+export type StackAdapter = StackRecordAdapter &
+  StackBlobAdapter & {
+    /**
+     * Store bytes and create the accompanying _attachment@1 record as one
+     * atomic operation. Optional — capability-flagged, like
+     * StackRecordAdapter.deleteUnreferencedAttachmentRecords(): implement it
+     * only when bytes and records genuinely live behind a single boundary
+     * that can do both in one operation. Today that is APIAdapter alone, via
+     * one POST /attachments request the server fulfills atomically (#106).
+     * It lives here on the composed type, not on either half, because
+     * neither half can ever have it: a blob adapter has no record store and
+     * a record adapter has no byte store. Accordingly, combineAdapters()
+     * never synthesizes it from parts — a record backend and a blob backend
+     * glued together have no shared transaction.
+     *
+     * This is not an efficiency shortcut: the record's fileId must be
+     * established from bytes the backend actually received in *this*
+     * operation, or a separate record-creation call is indistinguishable,
+     * server-side, from a caller who never uploaded anything and only
+     * guessed the fileId (#106). Stack.putAttachment() uses this when
+     * present — trusting the returned record as backend-authoritative,
+     * without re-running client-side validation — and otherwise falls back
+     * to its own bytes-then-create() sequence, unchanged from before this
+     * method existed.
+     */
+    putAttachmentWithMetadata?(
+      data: Uint8Array,
+      mimeType: string,
+      filename?: string,
+    ): Promise<StackRecord>;
+  };
 
 export type TokenInfo = {
   id: string;

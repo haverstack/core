@@ -10,7 +10,7 @@ import {
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { BlobFileInfo, StackRecord } from '../src/types.js';
+import type { BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -1657,17 +1657,18 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
-// putAttachment — atomic path (#106): when the adapter creates the record
-// as part of tryPutAttachmentWithMetadata() (the API adapter, over one POST
-// /attachments request), Stack.putAttachment() must not also make its own
+// putAttachment — atomic path (#106): when the adapter implements the
+// optional StackAdapter.putAttachmentWithMetadata() capability (the API
+// adapter, over one POST /attachments request), Stack.putAttachment()
+// delegates the whole operation to it and must not also make its own
 // create() call — that would double-create (and, for a mismatched
-// mimeType, conflict). Local adapters like MemoryAdapter return no record,
-// so the pre-existing create() fallback is exercised by every other test
-// in this describe block above.
+// mimeType, conflict). Local adapters like MemoryAdapter don't implement
+// the capability, so the pre-existing create() fallback is exercised by
+// every other test in this describe block above.
 // -------------------------------------------------------
 
 describe('putAttachment — atomic adapter path (#106)', () => {
-  test('skips the separate create() call when the adapter already created the record', async () => {
+  test('delegates to putAttachmentWithMetadata() when present, skipping its own create() call', async () => {
     const data = new Uint8Array([1, 2, 3]);
     const fabricatedRecord: StackRecord = {
       id: generateId(),
@@ -1677,19 +1678,25 @@ describe('putAttachment — atomic adapter path (#106)', () => {
       content: { fileId: 'atomic-file-id', mimeType: 'image/png', size: 3, filename: 'photo.png' },
       version: 1,
     };
-    vi.spyOn(adapter, 'tryPutAttachmentWithMetadata').mockResolvedValue({
-      fileId: 'atomic-file-id',
-      record: fabricatedRecord,
-    });
-    const createSpy = vi.spyOn(stack, 'create');
+    const atomicAdapter: StackAdapter = Object.assign(
+      new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
+    );
+    const atomicStack = await Stack.create(atomicAdapter);
+    const createSpy = vi.spyOn(atomicStack, 'create');
 
-    const fileId = await stack.putAttachment(data, 'image/png', 'photo.png');
+    const fileId = await atomicStack.putAttachment(data, 'image/png', 'photo.png');
 
     expect(fileId).toBe('atomic-file-id');
+    expect(atomicAdapter.putAttachmentWithMetadata).toHaveBeenCalledWith(
+      data,
+      'image/png',
+      'photo.png',
+    );
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  test('falls back to its own create() call when the adapter returns no record', async () => {
+  test('falls back to its own create() call when the adapter lacks the capability', async () => {
     const data = new Uint8Array([1, 2, 3]);
     const createSpy = vi.spyOn(stack, 'create');
 

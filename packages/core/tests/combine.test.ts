@@ -60,7 +60,6 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
 function makeBlobAdapter(overrides: Partial<StackBlobAdapter> = {}): StackBlobAdapter {
   return {
     putAttachment: async () => 'file-id',
-    tryPutAttachmentWithMetadata: async () => ({ fileId: 'file-id-with-metadata' }),
     getAttachment: async () => new Uint8Array(),
     deleteAttachment: async () => {},
     ...overrides,
@@ -113,22 +112,18 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
-  test('forwards tryPutAttachmentWithMetadata to the blob part with all arguments', async () => {
-    let calledWith: [Uint8Array, string, string | undefined] | undefined;
+  // putAttachmentWithMetadata (#106) promises bytes + record as one atomic
+  // operation — something a record backend glued to a blob backend can
+  // never honor, so combineAdapters() must not synthesize it. Its absence
+  // is what routes Stack.putAttachment() to the bytes-then-create()
+  // fallback.
+  test('never synthesizes putAttachmentWithMetadata from parts', () => {
     const adapter = combineAdapters({
       record: makeRecordAdapter(),
-      blob: makeBlobAdapter({
-        tryPutAttachmentWithMetadata: async (data, mimeType, filename) => {
-          calledWith = [data, mimeType, filename];
-          return { fileId: 'computed-id' };
-        },
-      }),
+      blob: makeBlobAdapter(),
     });
-
-    const bytes = new Uint8Array([1, 2, 3]);
-    const result = await adapter.tryPutAttachmentWithMetadata(bytes, 'image/png', 'photo.png');
-    expect(calledWith).toEqual([bytes, 'image/png', 'photo.png']);
-    expect(result).toEqual({ fileId: 'computed-id' });
+    expect('putAttachmentWithMetadata' in adapter).toBe(false);
+    expect(adapter.putAttachmentWithMetadata).toBeUndefined();
   });
 
   // Optional capabilities must round-trip exactly: present when the

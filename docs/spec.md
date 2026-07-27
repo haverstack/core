@@ -602,15 +602,23 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`StackRecordAdapter`** — structured storage: capabilities, stack identity (`ownerEntityId`, `timezone`), all record/association/version/type methods, and optional lifecycle hooks (`flush`, `close`).
 
-**`StackBlobAdapter`** — binary storage: `putAttachment`, `tryPutAttachmentWithMetadata`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
+**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
 
 ```ts
-type StackAdapter = StackRecordAdapter & StackBlobAdapter;
+type StackAdapter = StackRecordAdapter &
+  StackBlobAdapter & {
+    // Optional: bytes + _attachment@1 record as one atomic operation (#106)
+    putAttachmentWithMetadata?(
+      data: Uint8Array,
+      mimeType: string,
+      filename?: string,
+    ): Promise<StackRecord>;
+  };
 ```
 
-**Optional capabilities**, present on some adapters and not others, follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check, [Attachments](#attachments)) and `StackBlobAdapter.listFiles()` (blob enumeration, used by [`collectAttachmentGarbage()`](#garbage-collection) to find bare-bytes orphans) are both this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
+**Optional capabilities**, present on some adapters and not others, follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check, [Attachments](#attachments)), `StackBlobAdapter.listFiles()` (blob enumeration, used by [`collectAttachmentGarbage()`](#garbage-collection) to find bare-bytes orphans), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
 
-`StackBlobAdapter.tryPutAttachmentWithMetadata(data, mimeType, filename?)` (#106) is **not** part of that optional-capability pattern — it's required on every adapter, because there's exactly one correct answer for each: local storage adapters store bytes only and return `{ fileId }` with no `record`, since creating one is the record adapter's job, a different backend reached through a different object; the API adapter, backed by a single `POST /attachments` request the server fulfills in one call, returns `{ fileId, record }`. The `try` prefix is deliberate: `mimeType`/`filename` are accepted by every implementation but only ever _acted on_ by the one that can — callers must check `record` in the result, not the method name, to know whether metadata was actually applied. `Stack.putAttachment()` branches on it — present means skip its own `create()` call, absent means make it, exactly as `Stack.putAttachment()` always has. See [Attachments](#attachments) for why this is a correctness requirement (#106's anti-oracle fix), not an efficiency optimization.
+`StackAdapter.putAttachmentWithMetadata(data, mimeType, filename?)` (#106) stores bytes and creates the accompanying `_attachment@1` record as **one atomic operation**, returning the created record. It is declared on the composed `StackAdapter` type rather than on either half, because neither half can ever have it: a blob adapter has no record store and a record adapter has no byte store — "bytes + record in one operation" is a property only a whole adapter can offer. Today exactly one does: the API adapter, backed by a single `POST /attachments` request the server fulfills atomically. Local storage adapters don't implement it, and `combineAdapters()` never synthesizes it from parts (a record backend and a blob backend glued together have no shared transaction). `Stack.putAttachment()` checks for it — present means delegate the whole operation and trust the returned record as backend-authoritative; absent means the bytes-then-`create()` sequence `Stack.putAttachment()` has always used. See [Attachments](#attachments) for why the atomic form is a correctness requirement (#106's anti-oracle fix), not an efficiency optimization.
 
 ### Package naming convention
 
@@ -1116,7 +1124,7 @@ This is not an efficiency shortcut — it's the security boundary itself (#106).
 
 Returns `413 Request Entity Too Large` if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`). The same limit is exposed ahead of time as `maxAttachmentBytes` in [discovery](#discovery), so clients can pre-check and surface it in UI rather than learning the ceiling only by uploading the whole payload and getting a 413 back.
 
-**SDK usage.** `Stack.putAttachment()`, when backed by `@haverstack/adapter-api`'s `APIAdapter`, calls this endpoint directly — one request, carrying the real `mimeType`/`filename` — rather than a bytes call followed by a separate `POST /records`. `StackBlobAdapter.tryPutAttachmentWithMetadata()` is the adapter-level primitive this relies on: local storage adapters (disk, sqljs, memory) can't create a record themselves — that's the record adapter's job, a different backend — so they store bytes only and `Stack.putAttachment()` falls back to its own `create()` call, exactly as before this endpoint existed. Only the API adapter, backed by a single atomic request, returns the created record directly.
+**SDK usage.** `Stack.putAttachment()`, when backed by `@haverstack/adapter-api`'s `APIAdapter`, calls this endpoint directly — one request, carrying the real `mimeType`/`filename` — rather than a bytes call followed by a separate `POST /records`. `StackAdapter.putAttachmentWithMetadata()` is the optional atomic-upload capability this rides on ([Interface split](#interface-split)): the API adapter implements it as this single request; local storage adapters don't implement it — bytes and records are different backends there, with no shared transaction — so `Stack.putAttachment()` falls back to its own `create()` call, exactly as before this endpoint existed.
 
 One consequence: `StackBlobAdapter.putAttachment()` (the bytes-only primitive behind `Stack.putAttachmentBytes()`) still maps to this same endpoint over the wire, and this endpoint always creates a record now — so `Stack.putAttachmentBytes()`'s documented "no record created" contract holds for local storage but is only approximate over `APIAdapter` (a record with a default `mimeType` is created as a side effect). `Stack.putAttachmentBytes()` remains intended for owner/server-internal use against local storage; remote, non-owner callers should use `Stack.putAttachment()`.
 

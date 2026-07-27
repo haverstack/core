@@ -51,9 +51,13 @@ export function combineAdapters(parts: {
         parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeId),
     }),
 
+    // StackAdapter.putAttachmentWithMetadata is deliberately never
+    // synthesized here: it promises bytes + record as one atomic operation,
+    // and a record backend glued to a blob backend has no shared
+    // transaction to honor that with (#106). Stack.putAttachment() falls
+    // back to its own bytes-then-create() sequence when the method is
+    // absent.
     putAttachment: (data) => parts.blob.putAttachment(data),
-    tryPutAttachmentWithMetadata: (data, mimeType, filename) =>
-      parts.blob.tryPutAttachmentWithMetadata(data, mimeType, filename),
     getAttachment: (id) => parts.blob.getAttachment(id),
     deleteAttachment: (id) => parts.blob.deleteAttachment(id),
     ...(parts.blob.listFiles && {

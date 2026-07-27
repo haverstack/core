@@ -289,7 +289,7 @@ describe('error response fixtures', () => {
 // -------------------------------------------------------
 // Attachment upload fixtures (#106) — POST /attachments carries Content-Type
 // and creates the record. Only fixtures with a Content-Type header are
-// dispatched here: tryPutAttachmentWithMetadata()'s mimeType is required, so
+// dispatched here: putAttachmentWithMetadata()'s mimeType is required, so
 // there is no way to drive the "header omitted" fixture through it — that
 // one documents the raw wire contract for non-SDK callers only, same as
 // attachmentDownloadFixtures aren't all exercised via APIAdapter either.
@@ -309,7 +309,7 @@ describe('attachment upload fixtures', () => {
       const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : undefined;
       const data = new Uint8Array(fixture.requestBodyBytes);
 
-      const dispatch = () => adapter.tryPutAttachmentWithMetadata(data, contentType, filename);
+      const dispatch = () => adapter.putAttachmentWithMetadata(data, contentType, filename);
 
       if (fixture.responseStatus >= 400) {
         const code = (
@@ -317,10 +317,10 @@ describe('attachment upload fixtures', () => {
         ).error.code;
         await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
       } else {
-        const result = await dispatch();
+        const record = await dispatch();
         const expectedFileId = (fixture.responseBody as unknown as { content: { fileId: string } })
           .content.fileId;
-        expect(result.fileId).toBe(expectedFileId);
+        expect(record.content.fileId).toBe(expectedFileId);
       }
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
