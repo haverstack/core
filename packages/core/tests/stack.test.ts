@@ -1778,7 +1778,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachmentBytes(data);
+    const fileId = await adapter.putAttachment(data);
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 3, filename: 'alice.png' },
@@ -2131,11 +2131,12 @@ describe('collectAttachmentGarbage', () => {
     expect(meta.records).toHaveLength(1);
   });
 
-  // A putAttachmentBytes() upload that never gets a metadata record (e.g. a
-  // crash between storing bytes and creating _attachment@1) is only
-  // discoverable via StackBlobAdapter.listFiles().
+  // Bytes with no metadata record (a putAttachment() that stored bytes but
+  // crashed before creating _attachment@1 — simulated here by writing
+  // through the adapter directly, since no Stack method produces this
+  // state on purpose) are only discoverable via StackBlobAdapter.listFiles().
   test('collects a bare-bytes orphan discovered via listFiles()', async () => {
-    const fileId = await stack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+    const fileId = await adapter.putAttachment(new Uint8Array([9, 9, 9]));
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -2161,10 +2162,12 @@ describe('collectAttachmentGarbage', () => {
     class NoListFilesAdapter extends MemoryAdapter {
       override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.create(
-      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-    );
-    await noListFilesStack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+    const noListFilesAdapter = new NoListFilesAdapter({
+      ownerEntityId: 'owner-123',
+      timezone: 'UTC',
+    });
+    const noListFilesStack = await Stack.create(noListFilesAdapter);
+    await noListFilesAdapter.putAttachment(new Uint8Array([9, 9, 9]));
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
 

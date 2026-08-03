@@ -575,17 +575,17 @@ export class APIAdapter implements StackAdapter {
    * the record's fileId comes from bytes the server received in the same
    * request, so there is no bytes-only wire mode for this method to map
    * to. Implementing it anyway would silently mint a record with a default
-   * mimeType and no filename — violating Stack.putAttachmentBytes()'s
-   * documented "no record created" contract while appearing to honor it.
-   * Throwing keeps the contract honest: bytes-only upload is a local
-   * storage primitive (spec §Attachments), and remote callers use
-   * putAttachmentWithMetadata() (Stack.putAttachment()) instead.
+   * mimeType and no filename — a bytes-only upload that isn't. Bytes-only
+   * storage is a local-adapter primitive with no public Stack surface
+   * (spec §Attachments); Stack.putAttachment() never reaches this method
+   * on this adapter (it takes the putAttachmentWithMetadata() path), so
+   * this throw is a guard against direct adapter-level callers, not a
+   * reachable Stack code path.
    */
   async putAttachment(_data: Uint8Array): Promise<FileId> {
     throw new APIAdapterError(
       'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
-        'an _attachment@1 record (#106). Use Stack.putAttachment(data, mimeType, filename?) ' +
-        'instead of Stack.putAttachmentBytes(data).',
+        'an _attachment@1 record (#106). Use Stack.putAttachment(data, mimeType, filename?).',
     );
   }
 
