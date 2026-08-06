@@ -782,57 +782,15 @@ describe('ScopedStack.putAttachment', () => {
     const fileId = await stack.asEntity(STRANGER).putAttachment(data, 'image/png');
     expect(typeof fileId).toBe('string');
   });
-});
 
-// -------------------------------------------------------
-// ScopedStack.putAttachmentBytes — bytes-only upload, gated like putAttachment
-// -------------------------------------------------------
-
-describe('ScopedStack.putAttachmentBytes', () => {
-  const data = new Uint8Array([1, 2, 3]);
-
-  test('owner can always upload without a grant', async () => {
-    const fileId = await stack.asEntity(OWNER).putAttachmentBytes(data);
-    expect(typeof fileId).toBe('string');
-  });
-
-  test('anonymous requester cannot upload', async () => {
-    await expect(stack.asEntity(null).putAttachmentBytes(data)).rejects.toThrow(
-      StackPermissionError,
-    );
-  });
-
-  test('authenticated entity without a grant cannot upload', async () => {
-    await expect(stack.asEntity(MEMBER).putAttachmentBytes(data)).rejects.toThrow(
-      StackPermissionError,
-    );
-  });
-
-  test('entity with create grant on _attachment@1 can upload', async () => {
-    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachmentBytes(data);
-    expect(typeof fileId).toBe('string');
-  });
-
-  test('default grant allows any authenticated entity to upload', async () => {
-    await stack.grant(null, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(STRANGER).putAttachmentBytes(data);
-    expect(typeof fileId).toBe('string');
-  });
-
-  test('does not create an _attachment@1 record', async () => {
-    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    await stack.asEntity(MEMBER).putAttachmentBytes(data);
+  // #106 E1: owner uploads carry no entityId, matching create()'s existing
+  // normalization — same author, same shape, whether writing directly or
+  // through asEntity(ownerEntityId).
+  test('owner upload via asEntity(ownerEntityId) produces a record with no entityId', async () => {
+    await stack.asEntity(OWNER).putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
-    expect(result.records).toHaveLength(0);
-  });
-
-  test('putAttachment() still succeeds and creates its metadata record via the shared gate', async () => {
-    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
-    const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
     expect(result.records).toHaveLength(1);
-    expect(result.records[0].content).toMatchObject({ fileId, mimeType: 'image/png' });
+    expect(result.records[0].entityId).toBeUndefined();
   });
 });
 
@@ -1273,6 +1231,154 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
       },
     );
     expect(record.associations).toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack.create — non-owner _attachment@1 refusal (#106)
+// -------------------------------------------------------
+//
+// putAttachment() derives fileId from bytes it just hashed — possession is
+// proven by construction. Generic create() accepts a caller-supplied
+// fileId string with no such proof, so a non-owner holding nothing but a
+// bare `create` grant on _attachment@1 could otherwise name an arbitrary
+// guessed fileId and, via canAccessFile()'s uploader clause, turn a correct
+// guess into a read. These tests pin the guard that closes this path.
+
+describe('ScopedStack.create — non-owner _attachment@1 refusal (#106)', () => {
+  beforeEach(async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+  });
+
+  test('non-owner create() with a guessed fileId is refused even with a create grant', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create('_attachment@1', {
+        fileId: 'guessed-sha256-hash',
+        mimeType: 'image/png',
+        size: 12345,
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('owner is exempt from the refusal', async () => {
+    const record = await stack.asEntity(OWNER).create('_attachment@1', {
+      fileId: 'anything',
+      mimeType: 'image/png',
+      size: 1,
+    });
+    expect(record.typeId).toBe('_attachment@1');
+  });
+
+  test('unscoped Stack.create() is unaffected (full trust)', async () => {
+    const record = await stack.create('_attachment@1', {
+      fileId: 'anything',
+      mimeType: 'image/png',
+      size: 1,
+    });
+    expect(record.typeId).toBe('_attachment@1');
+  });
+
+  // The exploit this guard closes: a non-owner cannot turn a guessed fileId
+  // into a read by first failing to create a metadata record for it, then
+  // trying to download it anyway.
+  test('exploit regression: a refused create leaves getAttachment() denied too', async () => {
+    const guessedFileId = 'guessed-sha256-hash';
+    await expect(
+      stack.asEntity(MEMBER).create('_attachment@1', {
+        fileId: guessedFileId,
+        mimeType: 'image/png',
+        size: 12345,
+      }),
+    ).rejects.toThrow(StackPermissionError);
+
+    await expect(stack.asEntity(MEMBER).getAttachment(guessedFileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('non-owner putAttachment(bytes, mime, filename) still works end-to-end', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
+
+    // The upload is now accessible to them...
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
+    expect(bytes).toEqual(data);
+
+    // ...and they can reference it from a new record.
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(
+        COMMENT,
+        { text: 'hi' },
+        { associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }] },
+      );
+    expect(record.associations).toContainEqual({
+      kind: 'attachment',
+      label: 'x',
+      fileId,
+      mimeType: 'image/png',
+    });
+  });
+
+  // Residual decision 1: a non-owner who can already read a record
+  // referencing F may add their own _attachment@1 (e.g. a second filename)
+  // without re-uploading bytes — this conveys no access they didn't already
+  // have via the readable record.
+  test('carve-out: a non-owner with a readable referencing record can add a second metadata record', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'owner.png');
+    const owned = await stack.create(NOTE, { text: 'owner note' });
+    await stack.associate(owned.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId,
+      mimeType: 'image/png',
+    });
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
+
+    const record = await stack.asEntity(MEMBER).create('_attachment@1', {
+      fileId,
+      mimeType: 'image/png',
+      size: 1,
+      filename: 'members-name.png',
+    });
+    expect(record.content).toMatchObject({ fileId, filename: 'members-name.png' });
+  });
+
+  // The carve-out must never fall back to the uploader clause: a non-owner
+  // who has an *existing* _attachment@1 record for F (but no readable
+  // record referencing F) does not get to bootstrap a second one from it —
+  // that would let one successful guess unlock unlimited further records
+  // for the same fileId.
+  test('carve-out does not extend to the uploader clause', async () => {
+    await stack.create(
+      '_attachment@1',
+      { fileId: 'file-mine', mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+
+    await expect(
+      stack.asEntity(MEMBER).create('_attachment@1', {
+        fileId: 'file-mine',
+        mimeType: 'image/png',
+        size: 1,
+        filename: 'second-name.png',
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner without a readable referencing record is refused even for a real, existing fileId', async () => {
+    const fileId = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    // fileId is real and exists, but MEMBER has no readable record referencing it.
+    await expect(
+      stack.asEntity(MEMBER).create('_attachment@1', {
+        fileId,
+        mimeType: 'image/png',
+        size: 1,
+        filename: 'sneaky.png',
+      }),
+    ).rejects.toThrow(StackPermissionError);
   });
 });
 

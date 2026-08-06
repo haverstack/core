@@ -330,7 +330,6 @@ export interface StackClient {
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
-  putAttachmentBytes(data: Uint8Array): Promise<string>;
   putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
   deleteAttachment(fileId: string): Promise<void>;
   collectAttachmentGarbage(
@@ -485,7 +484,7 @@ export class Stack implements StackClient {
    * multi-tenant API server).
    */
   asEntity(entityId: EntityId | null): ScopedStack {
-    return new ScopedStack(this, entityId, this.idTimestampSkewMsValue);
+    return new ScopedStack(this, entityId, this.idTimestampSkewMsValue, this.adapter);
   }
 
   // -------------------------------------------------------
@@ -1170,12 +1169,15 @@ export class Stack implements StackClient {
     const first = existing.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
     const establishedMimeType = (first.content as AttachmentContent).mimeType;
     if (mimeType !== establishedMimeType) {
+      // Anti-oracle (#106): the established mimeType is deliberately not
+      // interpolated into the message. Naming it would confirm the fileId's
+      // existing content type to a caller who only guessed the fileId,
+      // reintroducing the exact confirmation-oracle #51's anti-oracle rule
+      // exists to prevent.
       throw new StackValidationError([
         {
           path: 'mimeType',
-          message:
-            `mimeType "${mimeType}" conflicts with the mimeType "${establishedMimeType}" ` +
-            `already established for fileId "${fileId}" by an earlier upload`,
+          message: 'mimeType conflicts with the mimeType already established for this fileId',
         },
       ]);
     }
@@ -1238,21 +1240,30 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Store raw bytes and return the content-addressed file ID.
-   * Does not create an _attachment@1 record — use putAttachment() or
-   * ScopedStack.putAttachment() for the full upload flow.
-   */
-  async putAttachmentBytes(data: Uint8Array): Promise<string> {
-    return this.adapter.putAttachment(data);
-  }
-
-  /**
    * Store bytes and create an _attachment@1 metadata record (owner-attributed,
    * no entityId). Use ScopedStack.putAttachment() when the uploader is a
    * specific entity rather than the stack owner.
+   *
+   * When the adapter implements the optional putAttachmentWithMetadata()
+   * capability (the API adapter, via one POST /attachments request the
+   * server fulfills atomically — #106), the whole operation is delegated to
+   * it and the separate create() call below is skipped — not for
+   * efficiency, but because a second, independent record-creation call
+   * would be indistinguishable, server-side, from a non-owner who never
+   * uploaded anything and only guessed the fileId. On that path the
+   * returned record is trusted as backend-authoritative: client-side schema
+   * validation and the mimeType-conflict check don't run here — the server
+   * runs both (a client-side conflict check against remote state would be
+   * both racy and itself a mini-oracle). Adapters without the capability
+   * (all local storage) fall back to the create() call that was always
+   * here.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
-    const fileId = await this.putAttachmentBytes(data);
+    if (this.adapter.putAttachmentWithMetadata) {
+      const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
+      return (record.content as AttachmentContent).fileId;
+    }
+    const fileId = await this.adapter.putAttachment(data);
     await this.create(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
       fileId,
       mimeType,
@@ -1677,6 +1688,14 @@ export class ScopedStack implements StackClient {
     private readonly stack: Stack,
     private readonly requesterEntityId: EntityId | null,
     private readonly idTimestampSkewMs: number | null,
+    // The bytes-storage primitive for putAttachment()'s upload step. Held
+    // directly (passed by Stack.asEntity()) because Stack's adapter is
+    // private and the bytes-only upload is no longer part of Stack's
+    // public API (#106 follow-up): the record ScopedStack creates carries
+    // the requester's entityId, which the adapter-level atomic capability
+    // has no parameter for, so this class always composes bytes + its own
+    // create() rather than delegating to putAttachmentWithMetadata().
+    private readonly adapter: StackAdapter,
   ) {}
 
   get features(): StackFeatures {
@@ -1819,6 +1838,20 @@ export class ScopedStack implements StackClient {
   }
 
   /**
+   * Whether the requester can already read some record referencing `fileId`
+   * — the "possession via a readable referencing record" clause shared by
+   * canAccessFile() and the non-owner _attachment@1 create() carve-out
+   * (#106, residual decision 1). Deliberately excludes the uploader clause:
+   * using "I hold a metadata record for F" to justify creating *another*
+   * metadata record for F would let one successful guess bootstrap
+   * unlimited further ones — the exact circularity #106 closes.
+   */
+  private async hasReadableReference(fileId: string): Promise<boolean> {
+    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    return refResult.records.length > 0;
+  }
+
+  /**
    * Whether the requester may create a reference (`attachment` association
    * or file-ref content field) to `fileId` — the dual of getAttachment()'s
    * access rule: reference creation requires exactly what reference
@@ -1829,8 +1862,7 @@ export class ScopedStack implements StackClient {
   private async canAccessFile(fileId: string): Promise<boolean> {
     if (this.requesterEntityId === this.stack.ownerEntityId) return true;
 
-    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
-    if (refResult.records.length > 0) return true;
+    if (await this.hasReadableReference(fileId)) return true;
 
     if (!this.requesterEntityId) return false;
 
@@ -1928,6 +1960,21 @@ export class ScopedStack implements StackClient {
    * left unchecked here: `permissions` is create-time-consistent with
    * setPermissions() (owner/creator territory already), and `appId` is
    * self-reported, untrusted metadata everywhere, not a permission input.
+   *
+   * `_attachment@1` (matched by baseId, like `_group`) is refused outright
+   * for non-owners, with one carve-out (#106): a readable record already
+   * referencing `content.fileId` may get a second metadata record (e.g. a
+   * second filename) without re-uploading. Otherwise, a bare `create` grant
+   * — held by every uploader — would let a requester name an arbitrary
+   * guessed fileId and, via canAccessFile()'s uploader clause, turn that
+   * guess into a read: creating an access-conveying record without ever
+   * proving possession of the bytes. `putAttachment()` is the only
+   * non-owner path left: it derives fileId from bytes it just hashed, so
+   * possession is proven by construction rather than asserted by the
+   * caller. The carve-out deliberately excludes the uploader clause of
+   * canAccessFile() — using an existing metadata record to justify creating
+   * another would let one successful guess bootstrap unlimited further
+   * ones, the same circularity this guard exists to close.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -1938,6 +1985,13 @@ export class ScopedStack implements StackClient {
     if (!requester) throw new StackPermissionError('Anonymous requesters cannot create records');
     if (!(await this.checkCreateGrant(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
+    const isOwner = requester === this.stack.ownerEntityId;
+    if (!isOwner && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
+      const fileId = (content as Record<string, unknown>).fileId;
+      if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
+        throw new StackPermissionError();
+      }
     }
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -1954,7 +2008,6 @@ export class ScopedStack implements StackClient {
       baseIdOf(typeId) === SYSTEM_TYPES.GROUP
         ? { ...opts, associations: stampGroupAdmin(opts.associations, requester) }
         : opts;
-    const isOwner = requester === this.stack.ownerEntityId;
     return this.stack.create(typeId, content, {
       ...createOpts,
       entityId: isOwner ? undefined : requester,
@@ -2107,13 +2160,15 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Store raw bytes only — no _attachment@1 record. Gated identically to
-   * putAttachment(): a bytes upload is only meaningful as a precursor to
-   * metadata creation, so the two share one authorization check.
-   * Requires a `create` grant on `_attachment@1`. Anonymous requesters are
-   * always denied.
+   * Store bytes and create an _attachment@1 metadata record. Requires a
+   * `create` grant on `_attachment@1`. Anonymous requesters are always
+   * denied. The record's entityId is set to the requester — unless the
+   * requester is the owner, in which case entityId is omitted, matching the
+   * normalization create() applies (#69, #106 E1): without it, the owner
+   * uploading through asEntity(ownerEntityId) would produce a differently-
+   * shaped record than Stack.putAttachment() for the exact same author.
    */
-  async putAttachmentBytes(data: Uint8Array): Promise<string> {
+  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
     const requester = this.requesterEntityId;
     if (!requester) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
@@ -2121,18 +2176,8 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
-    return this.stack.putAttachmentBytes(data);
-  }
-
-  /**
-   * Store bytes and create an _attachment@1 metadata record owned by the
-   * requester. Requires a `create` grant on `_attachment@1`.
-   * Anonymous requesters are always denied.
-   */
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
-    const fileId = await this.putAttachmentBytes(data);
-    // putAttachmentBytes() above throws if requesterEntityId is null.
-    const requester = this.requesterEntityId as string;
+    const fileId = await this.adapter.putAttachment(data);
+    const isOwner = requester === this.stack.ownerEntityId;
     await this.stack.create(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {
@@ -2141,7 +2186,7 @@ export class ScopedStack implements StackClient {
         size: data.byteLength,
         ...(filename && { filename }),
       } satisfies AttachmentContent,
-      { entityId: requester },
+      { entityId: isOwner ? undefined : requester },
     );
     return fileId;
   }

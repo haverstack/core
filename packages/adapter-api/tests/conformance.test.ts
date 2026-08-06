@@ -19,6 +19,7 @@ import {
   restoreVersionFixtures,
   commitMigrationFixtures,
   errorResponseFixtures,
+  attachmentUploadFixtures,
 } from '@haverstack/conformance-fixtures';
 import type { Association } from '@haverstack/core';
 import {
@@ -281,6 +282,53 @@ describe('error response fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
+    });
+  }
+});
+
+// -------------------------------------------------------
+// Attachment upload fixtures (#106) — POST /attachments carries Content-Type
+// and creates the record. Only fixtures with a Content-Type header are
+// dispatched here: putAttachmentWithMetadata()'s mimeType is required, so
+// there is no way to drive the "header omitted" fixture through it — that
+// one documents the raw wire contract for non-SDK callers only, same as
+// attachmentDownloadFixtures aren't all exercised via APIAdapter either.
+// -------------------------------------------------------
+
+describe('attachment upload fixtures', () => {
+  for (const fixture of attachmentUploadFixtures) {
+    const contentType = fixture.requestHeaders['Content-Type'];
+    if (!contentType) continue;
+
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const disposition = fixture.requestHeaders['Content-Disposition'];
+      const filenameMatch = disposition?.match(/filename\*=UTF-8''(.+)$/);
+      const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : undefined;
+      const data = new Uint8Array(fixture.requestBodyBytes);
+
+      const dispatch = () => adapter.putAttachmentWithMetadata(data, contentType, filename);
+
+      if (fixture.responseStatus >= 400) {
+        const code = (
+          fixture.responseBody as { error: { code: keyof typeof ERROR_CLASS_FOR_CODE } }
+        ).error.code;
+        await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
+      } else {
+        const record = await dispatch();
+        const expectedFileId = (fixture.responseBody as unknown as { content: { fileId: string } })
+          .content.fileId;
+        expect(record.content.fileId).toBe(expectedFileId);
+      }
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/attachments`);
+      expect(init.method).toBe('POST');
+      const headers = init.headers as Record<string, string>;
+      expect(headers['Content-Type']).toBe(contentType);
+      if (disposition) expect(headers['Content-Disposition']).toBe(disposition);
     });
   }
 });

@@ -10,7 +10,7 @@ import {
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { BlobFileInfo } from '../src/types.js';
+import type { BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -1657,6 +1657,56 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
+// putAttachment — atomic path (#106): when the adapter implements the
+// optional StackAdapter.putAttachmentWithMetadata() capability (the API
+// adapter, over one POST /attachments request), Stack.putAttachment()
+// delegates the whole operation to it and must not also make its own
+// create() call — that would double-create (and, for a mismatched
+// mimeType, conflict). Local adapters like MemoryAdapter don't implement
+// the capability, so the pre-existing create() fallback is exercised by
+// every other test in this describe block above.
+// -------------------------------------------------------
+
+describe('putAttachment — atomic adapter path (#106)', () => {
+  test('delegates to putAttachmentWithMetadata() when present, skipping its own create() call', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fabricatedRecord: StackRecord = {
+      id: generateId(),
+      typeId: '_attachment@1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      content: { fileId: 'atomic-file-id', mimeType: 'image/png', size: 3, filename: 'photo.png' },
+      version: 1,
+    };
+    const atomicAdapter: StackAdapter = Object.assign(
+      new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
+    );
+    const atomicStack = await Stack.create(atomicAdapter);
+    const createSpy = vi.spyOn(atomicStack, 'create');
+
+    const fileId = await atomicStack.putAttachment(data, 'image/png', 'photo.png');
+
+    expect(fileId).toBe('atomic-file-id');
+    expect(atomicAdapter.putAttachmentWithMetadata).toHaveBeenCalledWith(
+      data,
+      'image/png',
+      'photo.png',
+    );
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  test('falls back to its own create() call when the adapter lacks the capability', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const createSpy = vi.spyOn(stack, 'create');
+
+    await stack.putAttachment(data, 'image/png', 'photo.png');
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// -------------------------------------------------------
 // _attachment@1 mimeType invariant (#65): first-recorded wins for serving,
 // a conflicting later upload is rejected rather than silently coexisting.
 // -------------------------------------------------------
@@ -1681,6 +1731,26 @@ describe('_attachment@1 mimeType conflict on create', () => {
     // The rejected upload's metadata record must not have been created.
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records).toHaveLength(1);
+  });
+
+  // Anti-oracle (#106): the established mimeType must never appear in the
+  // conflict message — naming it would confirm the fileId's existing
+  // content type to a caller who only guessed the fileId, reintroducing the
+  // confirmation-oracle #51's anti-oracle rule exists to prevent.
+  test('the conflict message never names the established mimeType', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, 'text/markdown');
+
+    let error: StackValidationError | undefined;
+    try {
+      await stack.putAttachment(data, 'text/plain');
+    } catch (e) {
+      error = e as StackValidationError;
+    }
+    expect(error).toBeInstanceOf(StackValidationError);
+    const message = JSON.stringify(error?.errors);
+    expect(message).not.toContain('text/markdown');
+    expect(message).not.toContain('text/plain');
   });
 
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
@@ -1708,7 +1778,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachmentBytes(data);
+    const fileId = await adapter.putAttachment(data);
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 3, filename: 'alice.png' },
@@ -2061,11 +2131,12 @@ describe('collectAttachmentGarbage', () => {
     expect(meta.records).toHaveLength(1);
   });
 
-  // A putAttachmentBytes() upload that never gets a metadata record (e.g. a
-  // crash between storing bytes and creating _attachment@1) is only
-  // discoverable via StackBlobAdapter.listFiles().
+  // Bytes with no metadata record (a putAttachment() that stored bytes but
+  // crashed before creating _attachment@1 — simulated here by writing
+  // through the adapter directly, since no Stack method produces this
+  // state on purpose) are only discoverable via StackBlobAdapter.listFiles().
   test('collects a bare-bytes orphan discovered via listFiles()', async () => {
-    const fileId = await stack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+    const fileId = await adapter.putAttachment(new Uint8Array([9, 9, 9]));
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -2091,10 +2162,12 @@ describe('collectAttachmentGarbage', () => {
     class NoListFilesAdapter extends MemoryAdapter {
       override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.create(
-      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-    );
-    await noListFilesStack.putAttachmentBytes(new Uint8Array([9, 9, 9]));
+    const noListFilesAdapter = new NoListFilesAdapter({
+      ownerEntityId: 'owner-123',
+      timezone: 'UTC',
+    });
+    const noListFilesStack = await Stack.create(noListFilesAdapter);
+    await noListFilesAdapter.putAttachment(new Uint8Array([9, 9, 9]));
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
 

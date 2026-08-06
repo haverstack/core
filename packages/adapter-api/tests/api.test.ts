@@ -776,19 +776,65 @@ describe('listTypes', () => {
 // Attachments
 // -------------------------------------------------------
 
+// POST /attachments always creates the _attachment@1 record now (#106) —
+// the response is a full WireRecord, not { fileId }.
+const attachmentRecordResponse = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  id: 'rec-attachment-1',
+  typeId: '_attachment@1',
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+  content: { fileId: 'file-xyz', mimeType: 'application/octet-stream', size: 4 },
+  version: 1,
+  ...overrides,
+});
+
 describe('putAttachment', () => {
-  test('sends POST /attachments with binary body and Content-Type: application/octet-stream', async () => {
+  // Bytes-only upload has no wire mode: POST /attachments always creates
+  // the _attachment@1 record (#106), so implementing this method would
+  // silently mint a default-mimeType record while claiming "no record
+  // created". It must throw — without ever reaching the network — rather
+  // than approximately honor the contract.
+  test('throws APIAdapterError and never issues a request', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse({ fileId: 'file-xyz' }));
+    mockFetch.mockClear();
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const fileId = await adapter.putAttachment(data);
-    expect(fileId).toBe('file-xyz');
+    await expect(adapter.putAttachment(data)).rejects.toThrow(APIAdapterError);
+    await expect(adapter.putAttachment(data)).rejects.toThrow(/not supported over the wire/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('putAttachmentWithMetadata', () => {
+  test('sends POST /attachments with the given Content-Type and Content-Disposition, returns the parsed record', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(
+        attachmentRecordResponse({
+          content: { fileId: 'file-xyz', mimeType: 'image/png', size: 4, filename: 'photo.png' },
+        }),
+      ),
+    );
+    const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const record = await adapter.putAttachmentWithMetadata(data, 'image/png', 'photo.png');
+
+    expect(record.id).toBe('rec-attachment-1');
+    expect(record.content).toMatchObject({ fileId: 'file-xyz', mimeType: 'image/png' });
+
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/attachments`);
     expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
-      'application/octet-stream',
-    );
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('image/png');
+    expect(headers['Content-Disposition']).toBe("attachment; filename*=UTF-8''photo.png");
+  });
+
+  test('omits Content-Disposition when no filename is given', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
+    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'application/octet-stream');
+
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['Content-Disposition']).toBeUndefined();
   });
 });
 

@@ -326,12 +326,13 @@ export class APIAdapter implements StackAdapter {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachmentWithMetadata() below. */
   private async uploadBinary(
     path: string,
     data: Uint8Array,
     mimeType: string,
     filename?: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<WireRecord> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
@@ -348,7 +349,7 @@ export class APIAdapter implements StackAdapter {
 
     if (res.status === 401) throw new APIAdapterAuthError();
     if (!res.ok) throw await this.errorForResponse(res, 'POST', path);
-    return res.json() as Promise<Record<string, unknown>>;
+    return res.json() as Promise<WireRecord>;
   }
 
   // -------------------------------------------------------
@@ -567,9 +568,43 @@ export class APIAdapter implements StackAdapter {
   // Attachments
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    const result = await this.uploadBinary('/attachments', data, 'application/octet-stream');
-    return result.fileId as string;
+  /**
+   * Unsupported over the wire — always throws. POST /attachments is the
+   * only upload endpoint, and it always creates the accompanying
+   * _attachment@1 record (#106): the whole point of the endpoint is that
+   * the record's fileId comes from bytes the server received in the same
+   * request, so there is no bytes-only wire mode for this method to map
+   * to. Implementing it anyway would silently mint a record with a default
+   * mimeType and no filename — a bytes-only upload that isn't. Bytes-only
+   * storage is a local-adapter primitive with no public Stack surface
+   * (spec §Attachments); Stack.putAttachment() never reaches this method
+   * on this adapter (it takes the putAttachmentWithMetadata() path), so
+   * this throw is a guard against direct adapter-level callers, not a
+   * reachable Stack code path.
+   */
+  async putAttachment(_data: Uint8Array): Promise<FileId> {
+    throw new APIAdapterError(
+      'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
+        'an _attachment@1 record (#106). Use Stack.putAttachment(data, mimeType, filename?).',
+    );
+  }
+
+  /**
+   * StackAdapter's optional atomic-upload capability: store bytes and
+   * create the _attachment@1 record in one POST /attachments request — the
+   * wire counterpart of Stack.putAttachment() (#106). This adapter is the
+   * one implementation that can offer it, because bytes and records live
+   * behind the same boundary here (the server). Not an efficiency
+   * shortcut: the record's fileId is established from bytes the server
+   * received in *this* request, which is what makes the operation safe for
+   * a non-owner requester — see StackAdapter.putAttachmentWithMetadata.
+   */
+  async putAttachmentWithMetadata(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<StackRecord> {
+    return parseRecord(await this.uploadBinary('/attachments', data, mimeType, filename));
   }
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {

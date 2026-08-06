@@ -112,6 +112,20 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
+  // putAttachmentWithMetadata (#106) promises bytes + record as one atomic
+  // operation — something a record backend glued to a blob backend can
+  // never honor, so combineAdapters() must not synthesize it. Its absence
+  // is what routes Stack.putAttachment() to the bytes-then-create()
+  // fallback.
+  test('never synthesizes putAttachmentWithMetadata from parts', () => {
+    const adapter = combineAdapters({
+      record: makeRecordAdapter(),
+      blob: makeBlobAdapter(),
+    });
+    expect('putAttachmentWithMetadata' in adapter).toBe(false);
+    expect(adapter.putAttachmentWithMetadata).toBeUndefined();
+  });
+
   // Optional capabilities must round-trip exactly: present when the
   // underlying part implements them, absent otherwise. A wrapper that
   // always defines the key (even forwarding to a missing method) would
