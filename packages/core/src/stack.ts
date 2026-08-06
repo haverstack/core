@@ -1642,9 +1642,7 @@ function permissionEqual(a: Permission, b: Permission): boolean {
     return a.entityId === b.entityId && a.read === b.read && a.write === b.write;
   }
   if (a.access === 'group' && b.access === 'group') {
-    return (
-      a.groupId === b.groupId && a.role === b.role && a.read === b.read && a.write === b.write
-    );
+    return a.groupId === b.groupId && a.role === b.role && a.read === b.read && a.write === b.write;
   }
   return false;
 }
