@@ -326,6 +326,17 @@ describe('records — CRUD', () => {
     expect(retrieved?.appId).toBe('app-123');
   });
 
+  test('createRecord throws StackConflictError on a duplicate id instead of an unmapped engine error', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await expect(adapter.createRecord({ ...record, content: { text: 'second' } })).rejects.toThrow(
+      StackConflictError,
+    );
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.content).toEqual({ text: 'Hello world' });
+  });
+
   test('patchContent changes content and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
