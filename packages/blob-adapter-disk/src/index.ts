@@ -5,11 +5,15 @@
  * blobs on the local filesystem. File IDs are SHA-256 hashes
  * of the content, enabling deduplication: if a file with the
  * same hash already exists it is not overwritten.
+ *
+ * Writes land at their content-addressed path via a temp file
+ * plus atomic rename, so a crash mid-write can never leave a
+ * torn blob at its final, hash-named path.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
-import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
+import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
 import type { StackBlobAdapter, BlobFileInfo, FileId } from '@haverstack/core';
 
@@ -28,8 +32,16 @@ export class DiskBlobAdapter implements StackBlobAdapter {
 
   async putAttachment(data: Uint8Array): Promise<FileId> {
     const fileId = createHash('sha256').update(data).digest('hex');
-    if (!existsSync(join(this.dir, fileId))) {
-      await writeFile(join(this.dir, fileId), data);
+    const finalPath = join(this.dir, fileId);
+    if (!existsSync(finalPath)) {
+      const tempPath = join(this.dir, `.tmp-${fileId}-${randomBytes(8).toString('hex')}`);
+      try {
+        await writeFile(tempPath, data);
+        await rename(tempPath, finalPath);
+      } catch (err) {
+        await unlink(tempPath).catch(() => {});
+        throw err;
+      }
     }
     return fileId;
   }
