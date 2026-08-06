@@ -744,12 +744,7 @@ export class Stack implements StackClient {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
     }
 
-    if (opts.id !== undefined) {
-      validateRecordId(opts.id);
-      if (await this.adapter.getRecord(opts.id)) {
-        throw new StackConflictError(`Record already exists: "${opts.id}"`);
-      }
-    }
+    if (opts.id !== undefined) validateRecordId(opts.id);
 
     const now = new Date();
     const record: StackRecord = {

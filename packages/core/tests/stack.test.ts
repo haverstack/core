@@ -371,6 +371,17 @@ describe('create — client-supplied id', () => {
     );
   });
 
+  test('MemoryAdapter.createRecord itself rejects a duplicate id — not just Stack’s callers (#120)', async () => {
+    const first = await stack.create(NOTE_V1, { text: 'first' });
+    await expect(adapter.createRecord({ ...first, content: { text: 'second' } })).rejects.toThrow(
+      StackConflictError,
+    );
+    // The rejected create must not have mutated storage: no overwrite, no
+    // dangling duplicate `order` entry (which would corrupt pagination).
+    expect((await adapter.getRecord(first.id))?.content).toEqual({ text: 'first' });
+    expect(adapter.order.filter((recordId) => recordId === first.id)).toHaveLength(1);
+  });
+
   test('unscoped Stack.create() does not apply a timestamp-skew check', async () => {
     const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
     const record = await stack.create(NOTE_V1, { text: 'hello' }, { id: ancientId });

@@ -417,6 +417,13 @@ export interface StackRecordAdapter {
   readonly timezone: string | undefined;
 
   // Records
+  /**
+   * Throws StackConflictError if `record.id` already exists — never a
+   * silent overwrite (#55, #120). The check must be atomic with the write
+   * (a PK/unique constraint, or an equivalent single-threaded check with no
+   * await between the existence check and the mutation) — Stack itself no
+   * longer pre-checks, so a raw adapter that skips this enforces nothing.
+   */
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**

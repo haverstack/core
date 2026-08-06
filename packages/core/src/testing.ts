@@ -48,6 +48,9 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async createRecord(record: StackRecord) {
+    if (this.records.has(record.id)) {
+      throw new StackConflictError(`Record already exists: "${record.id}"`);
+    }
     this.records.set(record.id, { ...record });
     this.order.push(record.id);
     return record;

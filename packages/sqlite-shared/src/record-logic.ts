@@ -130,26 +130,38 @@ export class SharedSqlRecordLogic {
   // Records
   // -------------------------------------------------------
 
+  /**
+   * A duplicate id hits the `records` PK — mapped to StackConflictError
+   * instead of surfacing the raw engine exception, mirroring saveVersion's
+   * collision mapping below (#120).
+   */
   async createRecord(record: StackRecord): Promise<StackRecord> {
-    this.exec.run(
-      `INSERT INTO records
-        (id, type_id, created_at, updated_at, content, version,
-         parent_id, entity_id, app_id, deleted_at, permissions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        record.id,
-        record.typeId,
-        toMs(record.createdAt),
-        toMs(record.updatedAt),
-        JSON.stringify(record.content),
-        record.version,
-        record.parentId ?? null,
-        record.entityId ?? null,
-        record.appId ?? null,
-        record.deletedAt ? toMs(record.deletedAt) : null,
-        record.permissions ? JSON.stringify(record.permissions) : null,
-      ],
-    );
+    try {
+      this.exec.run(
+        `INSERT INTO records
+          (id, type_id, created_at, updated_at, content, version,
+           parent_id, entity_id, app_id, deleted_at, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          record.id,
+          record.typeId,
+          toMs(record.createdAt),
+          toMs(record.updatedAt),
+          JSON.stringify(record.content),
+          record.version,
+          record.parentId ?? null,
+          record.entityId ?? null,
+          record.appId ?? null,
+          record.deletedAt ? toMs(record.deletedAt) : null,
+          record.permissions ? JSON.stringify(record.permissions) : null,
+        ],
+      );
+    } catch (err) {
+      if (isUniqueConstraintViolation(err)) {
+        throw new StackConflictError(`Record already exists: "${record.id}"`);
+      }
+      throw err;
+    }
 
     if (record.associations?.length) {
       this.insertAssociations(record.id, record.associations);
