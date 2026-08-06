@@ -67,6 +67,27 @@ describe('DiskBlobAdapter', () => {
     expect(files.filter((f) => f === id1).length).toBe(1);
   });
 
+  test('putAttachment leaves no temp file behind on success', async () => {
+    const fileId = await adapter.putAttachment(Buffer.from('clean write'));
+    const files = readdirSync(testDir);
+    expect(files).toEqual([fileId]);
+  });
+
+  test('concurrent putAttachment of identical content never produces a torn file', async () => {
+    const data = Buffer.from('concurrent payload');
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => adapter.putAttachment(data)),
+    );
+    expect(new Set(results).size).toBe(1);
+
+    const [fileId] = results;
+    const files = readdirSync(testDir);
+    expect(files).toEqual([fileId]);
+
+    const stored = await adapter.getAttachment(fileId);
+    expect((stored as Buffer).equals(data)).toBe(true);
+  });
+
   test('getAttachment throws after deleteAttachment', async () => {
     const fileId = await adapter.putAttachment(Buffer.from('bye'));
     await adapter.deleteAttachment(fileId);
