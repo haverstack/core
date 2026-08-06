@@ -7,7 +7,7 @@
  * their grammars differ (see fts.ts).
  */
 
-import type { StackQuery } from '@haverstack/core';
+import { StackQueryError, type StackQuery } from '@haverstack/core';
 import { decodeCursor, getSortColumn, getSortField, type SortField } from './cursor.js';
 
 export { getSortField, getSortColumn };
@@ -139,6 +139,12 @@ export const buildWhereClause = (
   // Cursor (sort-field value + id for stable pagination)
   if (query.cursor) {
     const { field: cursorField, value: numericValue, id: cursorId } = decodeCursor(query.cursor);
+    const sortField = getSortField(query);
+    if (cursorField !== sortField) {
+      throw new StackQueryError(
+        `Cursor sort field "${cursorField}" does not match query sort field "${sortField}"`,
+      );
+    }
     const col = getSortColumn(cursorField);
     const sortDir = query.sort?.direction ?? 'desc';
     const op = sortDir === 'asc' ? '>' : '<';

@@ -688,6 +688,26 @@ describe('records — queries', () => {
     );
   });
 
+  test('cursor minted under one sort field replayed with a different sort field throws StackQueryError', async () => {
+    const adapter = await initAdapter();
+    for (let i = 0; i < 5; i++) {
+      await adapter.createRecord(makeRecord({ id: `r${i}`, createdAt: new Date(i * 1000) }));
+    }
+    const page1 = await adapter.queryRecords({
+      sort: { field: 'createdAt', direction: 'asc' },
+      limit: 3,
+    });
+    expect(page1.cursor).not.toBeNull();
+
+    await expect(
+      adapter.queryRecords({
+        sort: { field: 'version', direction: 'asc' },
+        limit: 3,
+        cursor: page1.cursor!,
+      }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
   test('sort by createdAt descending (default)', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', createdAt: new Date(1000) }));
