@@ -1624,6 +1624,49 @@ describe('setPermissions', () => {
       StackNotFoundError,
     );
   });
+
+  test('adding role: "admin" to a group entry persists and bumps version (#107)', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', read: true, write: true },
+    ]); // v2
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+    ]); // v3
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(3);
+    expect(updated?.permissions).toEqual([
+      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+    ]);
+  });
+
+  test('removing role: "admin" from a group entry persists and bumps version (#107)', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+    ]); // v2
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', read: true, write: true },
+    ]); // v3
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(3);
+    expect(updated?.permissions).toEqual([
+      { access: 'group', groupId: 'group-1', read: true, write: true },
+    ]);
+  });
+
+  test('a genuinely-identical group entry (matching role) still no-ops (#107)', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+    ]); // v2
+    await stack.setPermissions(record.id, [
+      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+    ]);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(await stack.getVersions(record.id)).toHaveLength(1);
+  });
 });
 
 // -------------------------------------------------------
