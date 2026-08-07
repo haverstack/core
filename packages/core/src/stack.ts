@@ -15,12 +15,19 @@
  */
 
 import { generateId, isValidIdFormat, idTimestamp } from './id.js';
-import { hashSchema, isCompatible, parseTypeId, baseIdOf, diffSchemas } from './schema.js';
+import {
+  hashSchema,
+  isCompatible,
+  parseTypeId,
+  baseIdOf,
+  diffSchemas,
+  isWellFormedTypeId,
+} from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import { validateContent } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -52,16 +59,12 @@ import type {
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
-/** Valid GrantAction values, for runtime validation in Stack.grant() (#116). */
-const GRANT_ACTIONS: ReadonlySet<GrantAction> = new Set<GrantAction>([
-  'create',
-  'read-own',
-  'read-any',
-  'update-own',
-  'update-any',
-  'delete-own',
-  'delete-any',
-]);
+/**
+ * Valid GrantAction values, for runtime validation in Stack.grant() (#116).
+ * Built from GRANT_ACTIONS (types.ts), the source of truth GrantAction is
+ * itself derived from — so this can't drift from the type.
+ */
+const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
 /**
  * System type families that grant() refuses to target (#116/F5). A
@@ -1595,7 +1598,7 @@ export class Stack implements StackClient {
     const errors: ValidationError[] = [];
     grants.forEach((g, i) => {
       g.actions.forEach((action, j) => {
-        if (!GRANT_ACTIONS.has(action)) {
+        if (!GRANT_ACTION_SET.has(action)) {
           errors.push({
             path: `grants[${i}].actions[${j}]`,
             message: `Unknown grant action "${action}"`,
@@ -1603,19 +1606,12 @@ export class Stack implements StackClient {
         }
       });
 
-      if (typeof g.typeId !== 'string' || g.typeId.trim().length === 0) {
-        errors.push({ path: `grants[${i}].typeId`, message: 'typeId must be a non-empty string' });
+      if (!isWellFormedTypeId(g.typeId)) {
+        errors.push({
+          path: `grants[${i}].typeId`,
+          message: `"${g.typeId}" is not a well-formed baseId or versioned TypeId (expected "baseId" or "baseId@version")`,
+        });
         return;
-      }
-      if (g.typeId.includes('@')) {
-        const parsed = parseTypeId(g.typeId);
-        if (!parsed || parsed.baseId.trim().length === 0) {
-          errors.push({
-            path: `grants[${i}].typeId`,
-            message: `"${g.typeId}" is not a well-formed versioned TypeId (expected "baseId@version")`,
-          });
-          return;
-        }
       }
 
       if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(g.typeId))) {

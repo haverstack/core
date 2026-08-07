@@ -297,3 +297,15 @@ export const buildTypeId = (baseId: string, version: number): string => `${baseI
  * e.g. a grant on "comment@1" and a record at "comment@2" share a baseId.
  */
 export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;
+
+/**
+ * True if typeId is well-formed as either a bare baseId (no version
+ * suffix) or a versioned TypeId ("baseId@version") — the shape
+ * GrantContent.typeId accepts, the same tolerance baseIdOf() applies.
+ * Not used by defineType(), which requires a version and needs the parsed
+ * {baseId, version} itself — it calls parseTypeId() directly instead.
+ */
+export const isWellFormedTypeId = (typeId: string): boolean => {
+  if (typeof typeId !== 'string' || typeId.trim().length === 0) return false;
+  return !typeId.includes('@') || parseTypeId(typeId) !== null;
+};
