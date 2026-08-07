@@ -1049,6 +1049,19 @@ describe('ScopedStack — group role gating (#58)', () => {
     );
     expect(adminAssociations).toHaveLength(1);
   });
+
+  // #118: the owner writing through asEntity(OWNER) carries no entityId
+  // (#69 normalization) — confirms Stack.create()'s single stamping site
+  // keys off ownerEntityId in that case rather than stamping twice or not
+  // at all.
+  test('owner writing through ScopedStack stamps the owner as admin exactly once', async () => {
+    const group = await stack.asEntity(OWNER).create('_group@1', { name: 'New Group' });
+    expect(group.entityId).toBeUndefined();
+    const adminAssociations = (group.associations ?? []).filter(
+      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === OWNER,
+    );
+    expect(adminAssociations).toHaveLength(1);
+  });
 });
 
 // -------------------------------------------------------
