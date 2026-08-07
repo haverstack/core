@@ -33,13 +33,15 @@ export type ConformanceFixture<Req = unknown, Res = unknown> = {
   /** What this fixture pins down, and why. */
   description: string;
   method: WireMethod;
-  /** Request path, e.g. "/records/rec-1/restore/1". */
+  /** Request path, e.g. "/records/1hk153x00001/restore/1". */
   path: string;
+  /** Request headers this call must send, beyond Authorization (omitted throughout — every fixture assumes a valid bearer token unless its description says otherwise). Absent when the endpoint has none, e.g. If-Match for the ifVersion precondition. */
+  requestHeaders?: Record<string, string>;
   /** JSON request body. Absent for bodiless requests. */
   requestBody?: Req;
   /** Expected HTTP status code. */
   responseStatus: number;
-  /** Expected JSON response body. Absent for empty (e.g. 204) responses. */
+  /** Expected JSON response body. Absent for empty (e.g. 204, or a bodyless 401) responses. */
   responseBody?: Res;
 };
 
@@ -54,7 +56,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -63,7 +65,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -81,25 +83,35 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       'POST /records for _attachment@1 to owner-only — see ' +
       'error-permission-denied-attachment-non-owner-create and ' +
       'create-attachment-record-non-owner-carve-out-succeeds for the non-owner cases) and that ' +
-      'an _attachment@1 record already exists for "fileId": "abc123..." with ' +
+      'an _attachment@1 record already exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with ' +
       '"mimeType": "image/png".',
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-attachment-2',
+      id: '1hk153x03004',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'second.png' },
+      content: {
+        fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        mimeType: 'image/png',
+        size: 12345,
+        filename: 'second.png',
+      },
       version: 1,
     },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-attachment-2',
+      id: '1hk153x03004',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'second.png' },
+      content: {
+        fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        mimeType: 'image/png',
+        size: 12345,
+        filename: 'second.png',
+      },
       version: 1,
     },
   },
@@ -107,29 +119,39 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     name: 'create-attachment-record-non-owner-carve-out-succeeds',
     description:
       '(#106 residual decision 1) A non-owner who can already read some record referencing ' +
-      'fileId "abc123..." may create an additional _attachment@1 record for it — e.g. their own ' +
+      'fileId "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" may create an additional _attachment@1 record for it — e.g. their own ' +
       'filename — without re-uploading bytes, since this conveys no access they did not already ' +
       'have. Assumes a record readable by this requester already carries an attachment ' +
-      'association or file-ref field for "fileId": "abc123...". The carve-out is satisfied only ' +
+      'association or file-ref field for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d". The carve-out is satisfied only ' +
       "by that readable reference, never by the requester's own prior _attachment@1 record for " +
       'the same fileId — see create-attachment-record-non-owner-without-carve-out-refused.',
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-attachment-carveout',
+      id: '1hk153x05006',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'mine.png' },
+      content: {
+        fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        mimeType: 'image/png',
+        size: 12345,
+        filename: 'mine.png',
+      },
       version: 1,
     },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-attachment-carveout',
+      id: '1hk153x05006',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'abc123', mimeType: 'image/png', size: 12345, filename: 'mine.png' },
+      content: {
+        fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        mimeType: 'image/png',
+        size: 12345,
+        filename: 'mine.png',
+      },
       version: 1,
     },
   },
@@ -146,11 +168,11 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'The PATCH body carries only the content patch — never typeId, version, or updatedAt. ' +
       'The server merges it against current content and assigns the new version/updatedAt itself.',
     method: 'PATCH',
-    path: '/records/rec-1',
+    path: '/records/1hk153x00001',
     requestBody: { title: 'Updated title', pinned: true },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-02T00:00:00.000Z',
@@ -164,11 +186,11 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'A field set to null is removed from stored content (RFC 7396 merge-patch delete). ' +
       'Fields omitted from the patch are left untouched.',
     method: 'PATCH',
-    path: '/records/rec-2',
+    path: '/records/1hk153x01002',
     requestBody: { title: null },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-2',
+      id: '1hk153x01002',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-02T00:00:00.000Z',
@@ -187,14 +209,14 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, undefined>[] = 
     name: 'delete-record-soft',
     description: 'DELETE /records/:id soft-deletes — record and version history are retained.',
     method: 'DELETE',
-    path: '/records/rec-1',
+    path: '/records/1hk153x00001',
     responseStatus: 204,
   },
   {
     name: 'delete-record-hard',
     description: 'DELETE /records/:id?hard=true permanently removes the record and its history.',
     method: 'DELETE',
-    path: '/records/rec-1?hard=true',
+    path: '/records/1hk153x00001?hard=true',
     responseStatus: 204,
   },
 ];
@@ -206,10 +228,10 @@ export const undeleteRecordFixtures: ConformanceFixture<undefined, WireRecord>[]
       'POST /records/:id/undelete reverses a soft delete and returns the record as it now ' +
       'stands (deletedAt absent). Idempotent — a second call returns the same result.',
     method: 'POST',
-    path: '/records/rec-1/undelete',
+    path: '/records/1hk153x00001/undelete',
     responseStatus: 200,
     responseBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-03T00:00:00.000Z',
@@ -228,7 +250,7 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, unde
     name: 'associate-tag',
     description: 'POST /records/:id/associations adds an association and bumps version.',
     method: 'POST',
-    path: '/records/rec-1/associations',
+    path: '/records/1hk153x00001/associations',
     requestBody: { kind: 'tag', label: 'starred' },
     responseStatus: 204,
   },
@@ -242,7 +264,7 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, und
       'not DELETE — a DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a ' +
       'portability landmine for proxies/gateways that drop or reject it (#56).',
     method: 'POST',
-    path: '/records/rec-1/associations/delete',
+    path: '/records/1hk153x00001/associations/delete',
     requestBody: { kind: 'tag', label: 'starred' },
     responseStatus: 204,
   },
@@ -259,7 +281,7 @@ export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[]
       'PUT /records/:id/permissions replaces all permissions. Body and (if returned) response ' +
       'both use the { "permissions": [...] } envelope.',
     method: 'PUT',
-    path: '/records/rec-1/permissions',
+    path: '/records/1hk153x00001/permissions',
     requestBody: { permissions: [{ access: 'public' }] },
     responseStatus: 204,
   },
@@ -267,7 +289,7 @@ export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[]
     name: 'set-permissions-empty-is-private',
     description: 'An empty permissions array makes the record private (owner-only).',
     method: 'PUT',
-    path: '/records/rec-1/permissions',
+    path: '/records/1hk153x00001/permissions',
     requestBody: { permissions: [] },
     responseStatus: 204,
   },
@@ -285,10 +307,10 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
       'content (and associations, if present) — never permissions. No request body: the ' +
       'server holds the snapshot already.',
     method: 'POST',
-    path: '/records/rec-1/restore/1',
+    path: '/records/1hk153x00001/restore/1',
     responseStatus: 200,
     responseBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-04T00:00:00.000Z',
@@ -313,11 +335,11 @@ export const commitMigrationFixtures: ConformanceFixture<
       "the full post-migration content (computed client-side by the type's owning app); the " +
       "server validates it against toTypeId's schema before writing.",
     method: 'POST',
-    path: '/records/rec-1/migrate',
+    path: '/records/1hk153x00001/migrate',
     requestBody: { toTypeId: 'com.example/note@2', content: { title: 'Hello', pinned: false } },
     responseStatus: 200,
     responseBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@2',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-05T00:00:00.000Z',
@@ -338,6 +360,10 @@ export const commitMigrationFixtures: ConformanceFixture<
 // a requester without a grant, ...); these fixtures pin the error shape a
 // server must produce and APIAdapter must reconstruct, not how a server
 // gets into that state.
+//
+// One exception: 401 has no wire error body (see error-unauthorized-
+// anonymous) — it fires before any DID has verified, so there's no core
+// error to serialize yet. `responseBody` is absent for that fixture only.
 
 export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
@@ -346,7 +372,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'A write from a requester without the required grant on the record returns 403 with ' +
       'code "permission" — reconstructed client-side as StackPermissionError.',
     method: 'PATCH',
-    path: '/records/rec-1',
+    path: '/records/1hk153x00001',
     requestBody: { title: 'New title' },
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
@@ -366,11 +392,15 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-attachment-guessed',
+      id: '1hk153x06007',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'guessed-sha256-hash', mimeType: 'image/png', size: 12345 },
+      content: {
+        fileId: 'd4dc2868d42528f18d9907a239e378564e4106c796f252424a05c9c850089e41',
+        mimeType: 'image/png',
+        size: 12345,
+      },
       version: 1,
     },
     responseStatus: 403,
@@ -385,16 +415,21 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'for the same fileId (the "uploaded it themselves" clause of the getAttachment() access ' +
       'rule). Allowing that would let one successful guess bootstrap unlimited further metadata ' +
       'records for the same fileId, reintroducing the circularity #106 closes. Assumes the ' +
-      'requester already holds an _attachment@1 record for "fileId": "file-mine" (e.g. from a ' +
+      'requester already holds an _attachment@1 record for "fileId": "d56b0d4d2c35d9d856d06702a6cc4482d4fedbea54a083cfb56cf19bea35d94f" (e.g. from a ' +
       'prior putAttachment() upload) but no readable record references it.',
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-attachment-second-name',
+      id: '1hk153x07008',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'file-mine', mimeType: 'image/png', size: 1, filename: 'second-name.png' },
+      content: {
+        fileId: 'd56b0d4d2c35d9d856d06702a6cc4482d4fedbea54a083cfb56cf19bea35d94f',
+        mimeType: 'image/png',
+        size: 1,
+        filename: 'second-name.png',
+      },
       version: 1,
     },
     responseStatus: 403,
@@ -410,11 +445,11 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'indistinguishable from the "exists but forbidden" case only in error *shape*, never in ' +
       'status/code (see #51 anti-oracle rule).',
     method: 'PATCH',
-    path: '/records/rec-does-not-exist',
+    path: '/records/1hk153x0a00b',
     requestBody: { title: 'New title' },
     responseStatus: 404,
     responseBody: {
-      error: { code: 'not_found', message: 'Record "rec-does-not-exist" not found.' },
+      error: { code: 'not_found', message: 'Record "1hk153x0a00b" not found.' },
     },
   },
   {
@@ -425,7 +460,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-1',
+      id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -433,7 +468,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       version: 1,
     },
     responseStatus: 409,
-    responseBody: { error: { code: 'conflict', message: 'Record "rec-1" already exists.' } },
+    responseBody: { error: { code: 'conflict', message: 'Record "1hk153x00001" already exists.' } },
   },
   {
     name: 'error-validation-failed',
@@ -442,7 +477,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'field-level details — reconstructed as StackValidationError, with `details` populating ' +
       '`.errors`.',
     method: 'PATCH',
-    path: '/records/rec-1',
+    path: '/records/1hk153x00001',
     requestBody: { title: 42 },
     responseStatus: 422,
     responseBody: {
@@ -462,7 +497,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'around schema validation (#62): the snapshot is validated against its own stored ' +
       "typeId, not the record's current one.",
     method: 'POST',
-    path: '/records/rec-1/restore/1',
+    path: '/records/1hk153x00001/restore/1',
     responseStatus: 422,
     responseBody: {
       error: {
@@ -484,15 +519,19 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'content type to a caller who only guessed the fileId. Assumes the requester is the owner ' +
       '(non-owner POST /records for _attachment@1 is refused outright — see ' +
       'error-permission-denied-attachment-non-owner-create) and that an _attachment@1 record ' +
-      'already exists for "fileId": "abc123..." with "mimeType": "image/png".',
+      'already exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with "mimeType": "image/png".',
     method: 'POST',
     path: '/records',
     requestBody: {
-      id: 'rec-attachment-3',
+      id: '1hk153x04005',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { fileId: 'abc123', mimeType: 'text/html', size: 12345 },
+      content: {
+        fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        mimeType: 'text/html',
+        size: 12345,
+      },
       version: 1,
     },
     responseStatus: 422,
@@ -517,7 +556,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'filename is the only field an _attachment@1 update may change; fileId and size are ' +
       'rejected the same way if the patch would actually change their stored value.',
     method: 'PATCH',
-    path: '/records/rec-attachment-1',
+    path: '/records/1hk153x02003',
     requestBody: { mimeType: 'image/jpeg' },
     responseStatus: 422,
     responseBody: {
@@ -538,7 +577,10 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +
       'structurally malformed request, distinct from a 422 content-validation failure. ' +
-      'Reconstructed as StackQueryError (see the cursor codec fix in record-adapter-sqljs, #53).',
+      'Reconstructed as StackQueryError. (#115 D3) "not-a-valid-cursor" is not valid base64 ' +
+      "(the hyphens aren't in the alphabet), so decoding fails before the sort-field is ever " +
+      'inspected — the message names the malformed input itself, not a sort field. See ' +
+      'error-bad-request-unknown-sort-field-cursor for the distinct, decodable-but-invalid case.',
     method: 'POST',
     path: '/records/query',
     requestBody: { cursor: 'not-a-valid-cursor' },
@@ -546,9 +588,226 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'bad_request',
-        message: 'Invalid cursor: unknown sort field "not-a-valid-cursor"',
+        message: 'Invalid cursor: malformed "not-a-valid-cursor"',
       },
     },
+  },
+  {
+    name: 'error-bad-request-unknown-sort-field-cursor',
+    description:
+      '(#115 D3) A cursor that decodes cleanly as base64 but names a sort field the server ' +
+      "doesn't recognize is a second, distinct 400 bad_request branch from the malformed-" +
+      'base64 case above (see error-bad-request-malformed-cursor) — both map to the same code, ' +
+      'but a server that only implements one of the two decode failures is only half-conformant. ' +
+      'The cursor here is the base64 encoding of "badfield|123|1hk153x00001".',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { cursor: 'YmFkZmllbGR8MTIzfDFoazE1M3gwMDAwMQ==' },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid cursor: unknown sort field "badfield"',
+      },
+    },
+  },
+
+  // -- #115 D2: fixtures for contracts decided since #52/#53, previously unpinned --
+
+  {
+    name: 'error-version-conflict-if-match-mismatch',
+    description:
+      '(#48) PATCH /records/:id with an If-Match header whose value does not match the ' +
+      'record\'s current version returns 412 with code "version_conflict" — reconstructed as ' +
+      'StackVersionConflictError. The versionConflict payload (recordId/expectedVersion/' +
+      'actualVersion) is exactly what an ifVersion retry loop needs: which record, what it ' +
+      'expected, what actually won the race. Deliberately not 409 / "conflict": the two error ' +
+      'types have different recovery stories (fix your input vs. re-read and retry) and get ' +
+      'distinct statuses so status-only reconstruction (no parseable body) still recovers the ' +
+      'precise error. Assumes the record is currently at version 7.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestHeaders: { 'If-Match': '"5"' },
+    requestBody: { title: 'New title' },
+    responseStatus: 412,
+    responseBody: {
+      error: {
+        code: 'version_conflict',
+        message: 'Record "1hk153x00001" is at version 7, expected 5',
+        versionConflict: { recordId: '1hk153x00001', expectedVersion: 5, actualVersion: 7 },
+      },
+    },
+  },
+  {
+    name: 'error-schema-drift-non-additive-redefinition',
+    description:
+      '(#68) POST /types on an id that already has a stored Type runs the same drift check as ' +
+      'Stack.defineType(): a schema-hash mismatch is only legal if the change is purely ' +
+      'additive (new optional fields, recursively, nothing removed/retyped/newly-required). ' +
+      "Changing an existing field's kind is not additive, so this returns 409 with code " +
+      '"schema_drift" — reconstructed as StackSchemaDriftError — never a silent REPLACE of the ' +
+      'stored definition. The duplicate-id 409 (code "conflict") and this one deliberately share ' +
+      'a status but not a code (#115 D2) — status-only reconstruction of a bodyless 409 degrades ' +
+      'to the generic StackConflictError; only a parseable body recovers this specific class. ' +
+      'Assumes "com.example/note@1" is already stored with { title: { kind: "string", ' +
+      'required: true } }.',
+    method: 'POST',
+    path: '/types',
+    requestBody: {
+      id: 'com.example/note@1',
+      baseId: 'com.example/note',
+      version: 1,
+      name: 'Note',
+      schema: { title: { kind: 'number', required: true } },
+      schemaHash: 'b2c9f7a1e6d4805c3f19a8e2b7d6c4a1908f5e3d2c1b0a9f8e7d6c5b4a392817',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    },
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'schema_drift',
+        message:
+          'Schema drift detected for type "com.example/note@1": the stored schema and the new ' +
+          'definition differ beyond additive evolution (new optional fields only). Bump the ' +
+          'version instead of redefining "com.example/note@1" in place.',
+        schemaDrift: {
+          typeId: 'com.example/note@1',
+          violations: [{ path: 'title', message: 'field kind changed from "string" to "number"' }],
+        },
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-id-invalid-charset',
+    description:
+      '(#55, #115 D2) POST /records with a client-supplied id containing a character outside ' +
+      'lowercase Crockford base-32 (0-9, a-z excluding i/l/o/u) returns 400 with code ' +
+      '"bad_request" — structurally malformed input, not a 422 content-validation failure (the ' +
+      'id never reaches type-schema validation). Reconstructed as StackQueryError.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0000!',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello' },
+      version: 1,
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid ID "1hk153x0000!": expected 12 lowercase Crockford base-32 characters.',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-id-invalid-length',
+    description:
+      '(#55, #115 D2) POST /records with a client-supplied id that is not exactly 12 characters ' +
+      'returns 400 with code "bad_request", the same structural-malformed-input class as the ' +
+      'invalid-charset case above.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: 'short-id',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello' },
+      version: 1,
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid ID "short-id": expected 12 lowercase Crockford base-32 characters.',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-id-reserved-prefix',
+    description:
+      '(#55, #115 D2) POST /records with a client-supplied id beginning with "_" returns 400 ' +
+      'with code "bad_request" — that namespace is reserved for system records (_config, ' +
+      '_entity, ...). Checked before the charset/length check (the Crockford alphabet already ' +
+      'excludes "_", so a reserved-looking id would otherwise fail as a generic format error ' +
+      'instead of this specific, actionable one). The duplicate-id 409 case (error-conflict-' +
+      'duplicate-id) is unaffected — this is about ids that were never legal to submit at all.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '_hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello' },
+      version: 1,
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'ID "_hk153x00001" uses the reserved "_" prefix.',
+      },
+    },
+  },
+  {
+    name: 'error-conflict-delete-config',
+    description:
+      '(#67, #115 D2) DELETE /records/_config — soft or hard — is always refused with 409 / ' +
+      'code "conflict": _config holds the stack\'s identity (ownerEntityId, read at open and ' +
+      'consulted by every permission check) and deleting it either bricks the stack (hard) or ' +
+      'makes it unreadable through normal paths (soft). Reconstructed as StackConflictError.',
+    method: 'DELETE',
+    path: '/records/_config',
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message:
+          "Cannot delete the _config record: it holds the stack's identity and is required " +
+          'for every permission check.',
+      },
+    },
+  },
+  {
+    name: 'error-conflict-config-entityid-change',
+    description:
+      '(#67, #115 D2) PATCH /records/_config that would change entityId returns 409 / code ' +
+      '"conflict" — entityId defines stack ownership, read once at open and consulted by every ' +
+      'permission check thereafter; a write that silently re-anchored it would desync every ' +
+      'already-running owner check. Other _config fields (e.g. timezone) update normally through ' +
+      'the same endpoint — only an entityId change is refused.',
+    method: 'PATCH',
+    path: '/records/_config',
+    requestBody: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message:
+          'Cannot change _config.entityId: it defines stack ownership. Ownership transfer is ' +
+          'not a supported operation.',
+      },
+    },
+  },
+  {
+    name: 'error-unauthorized-anonymous',
+    description:
+      '(#49, #115 D2) A request with no bearer token, or an invalid/expired one, returns 401 ' +
+      'with no wire error body at all — there is no verified DID behind the request at all ' +
+      '("who are you?"). This is distinct from error-permission-denied\'s 403, which means the ' +
+      "requester's DID *did* verify but their permissions/grants don't cover the operation " +
+      '("your claim is genuine; no") — a server must keep the two statuses apart, never collapse ' +
+      'unverified and verified-but-ungranted into one. Unlike every other code in this file, 401 ' +
+      'carries no JSON body: APIAdapter checks response status before ever attempting to parse ' +
+      'one, and reconstructs APIAdapterAuthError from status alone.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { title: 'New title' },
+    responseStatus: 401,
   },
 ];
 
@@ -576,7 +835,7 @@ export type AttachmentDownloadFixture = {
   name: string;
   /** What this fixture pins down, and why. Also states any assumed prior state (e.g. an existing _attachment@1 record), since GET takes no body. */
   description: string;
-  /** Request path including query string, e.g. "/attachments/abc123?contentType=text/html". */
+  /** Request path including query string, e.g. "/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?contentType=text/html". */
   path: string;
   /** Response headers this GET must produce. Only the headers a fixture pins are listed here; anything else about the response is unconstrained by it. */
   responseHeaders: Record<string, string>;
@@ -588,7 +847,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
   {
     name: 'attachment-download-contenttype-param-safe-passes-through',
     description: 'A safe ?contentType is served as given.',
-    path: '/attachments/abc123?contentType=image/png',
+    path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?contentType=image/png',
     responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
   },
   {
@@ -596,7 +855,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
     description:
       'A dangerous ?contentType is forced to application/octet-stream — the one case the ' +
       'pre-#66 spec already covered, kept here so the full three-source matrix is in one place.',
-    path: '/attachments/abc123?contentType=text/html',
+    path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?contentType=text/html',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': 'attachment',
@@ -607,7 +866,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
     name: 'attachment-download-filename-extension-safe-passes-through',
     description:
       'With no ?contentType, a safe type inferred from the ?filename extension is served as given.',
-    path: '/attachments/abc123?filename=photo.png',
+    path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?filename=photo.png',
     responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
   },
   {
@@ -617,7 +876,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
       "still be forced — this was the spec's silent gap: extension inference had no forcing " +
       'language at all, so `?filename=payload.html` was the unhardened path into the same XSS ' +
       'this policy exists to prevent.',
-    path: '/attachments/abc123?filename=payload.html',
+    path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?filename=payload.html',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': 'attachment',
@@ -628,8 +887,8 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
     name: 'attachment-download-stored-mimetype-safe-passes-through',
     description:
       'With no query params, a safe stored _attachment@1 mimeType is served as given. Assumes ' +
-      'an _attachment@1 record exists for "fileId": "abc123" with "mimeType": "image/png".',
-    path: '/attachments/abc123',
+      'an _attachment@1 record exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with "mimeType": "image/png".',
+    path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
     responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
   },
   {
@@ -639,8 +898,8 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
       "the spec's other silent gap, and the one #65's escalation scenario depends on: a lying " +
       'or dishonest _attachment@1 record must not reach the response header unforced just ' +
       'because it came from storage rather than a query param. Assumes an _attachment@1 record ' +
-      'exists for "fileId": "def456" with "mimeType": "text/html".',
-    path: '/attachments/def456',
+      'exists for "fileId": "0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737" with "mimeType": "text/html".',
+    path: '/attachments/0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': 'attachment',
@@ -653,7 +912,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
       'With no query params and no _attachment@1 record for the fileId, the response falls ' +
       'back to application/octet-stream — already the safe default, so unforced in the sense ' +
       'that nothing needed overriding, but nosniff is still present.',
-    path: '/attachments/no-metadata-file',
+    path: '/attachments/55e6bec88d703985030c5822286b105ead73d7bb8ffa1927a28a69e3acd0ba2a',
     responseHeaders: { 'Content-Type': 'application/octet-stream', ...NOSNIFF },
   },
 ];
@@ -708,7 +967,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
     requestBodyBytes: HELLO_BYTES,
     responseStatus: 200,
     responseBody: {
-      id: 'rec-attachment-upload-1',
+      id: '1hk153x08009',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -732,7 +991,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
     requestBodyBytes: HELLO_BYTES,
     responseStatus: 200,
     responseBody: {
-      id: 'rec-attachment-upload-2',
+      id: '1hk153x0900a',
       typeId: '_attachment@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
