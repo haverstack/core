@@ -46,7 +46,6 @@ export type AttachmentAssociation = {
   kind: 'attachment';
   label: string;
   fileId: FileId;
-  mimeType: string;
 };
 
 export type RelationshipAssociation = {

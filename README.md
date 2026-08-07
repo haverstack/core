@@ -137,7 +137,7 @@ Tags, attachments, and relationships are unified under a single model:
 
 ```ts
 { kind: 'tag',          label: 'favourite' }
-{ kind: 'attachment',   label: 'avatar',   fileId: '...', mimeType: 'image/png' }
+{ kind: 'attachment',   label: 'avatar',   fileId: '...' }
 { kind: 'relationship', label: 'reply-to', recordId: '...' }
 ```
 

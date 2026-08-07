@@ -811,7 +811,6 @@ describe('ScopedStack.getAttachment', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'file-referenced',
-      mimeType: 'image/png',
     });
 
     const bytes = await stack.asEntity(MEMBER).getAttachment('file-referenced');
@@ -1135,9 +1134,7 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
         COMMENT,
         { text: 'hi' },
         {
-          associations: [
-            { kind: 'attachment', label: 'x', fileId: 'unknown-file', mimeType: 'image/png' },
-          ],
+          associations: [{ kind: 'attachment', label: 'x', fileId: 'unknown-file' }],
         },
       ),
     ).rejects.toThrow(StackPermissionError);
@@ -1150,14 +1147,13 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
       COMMENT,
       { text: 'hi' },
       {
-        associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }],
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
       },
     );
     expect(record.associations).toContainEqual({
       kind: 'attachment',
       label: 'x',
       fileId,
-      mimeType: 'image/png',
     });
   });
 
@@ -1168,7 +1164,6 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
     await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
 
@@ -1176,14 +1171,13 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
       COMMENT,
       { text: 'hi' },
       {
-        associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }],
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
       },
     );
     expect(record.associations).toContainEqual({
       kind: 'attachment',
       label: 'x',
       fileId,
-      mimeType: 'image/png',
     });
   });
 
@@ -1196,9 +1190,7 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
         COMMENT,
         { text: 'hi' },
         {
-          associations: [
-            { kind: 'attachment', label: 'x', fileId: 'truly-nonexistent', mimeType: 'image/png' },
-          ],
+          associations: [{ kind: 'attachment', label: 'x', fileId: 'truly-nonexistent' }],
         },
       );
     } catch (e) {
@@ -1209,9 +1201,7 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
         COMMENT,
         { text: 'hi' },
         {
-          associations: [
-            { kind: 'attachment', label: 'x', fileId: forbiddenFileId, mimeType: 'image/png' },
-          ],
+          associations: [{ kind: 'attachment', label: 'x', fileId: forbiddenFileId }],
         },
       );
     } catch (e) {
@@ -1238,9 +1228,7 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
       COMMENT,
       { text: 'hi' },
       {
-        associations: [
-          { kind: 'attachment', label: 'x', fileId: 'anything', mimeType: 'image/png' },
-        ],
+        associations: [{ kind: 'attachment', label: 'x', fileId: 'anything' }],
       },
     );
     expect(record.associations).toHaveLength(1);
@@ -1325,13 +1313,12 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal (#106)', () => 
       .create(
         COMMENT,
         { text: 'hi' },
-        { associations: [{ kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' }] },
+        { associations: [{ kind: 'attachment', label: 'x', fileId }] },
       );
     expect(record.associations).toContainEqual({
       kind: 'attachment',
       label: 'x',
       fileId,
-      mimeType: 'image/png',
     });
   });
 
@@ -1346,7 +1333,6 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal (#106)', () => 
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
     await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
 
@@ -1518,7 +1504,6 @@ describe('ScopedStack.associate — reference-creation gating (#51)', () => {
         kind: 'attachment',
         label: 'x',
         fileId: 'unknown',
-        mimeType: 'image/png',
       }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -1528,12 +1513,11 @@ describe('ScopedStack.associate — reference-creation gating (#51)', () => {
     const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
     await stack
       .asEntity(MEMBER)
-      .associate(ownedRecord.id, { kind: 'attachment', label: 'x', fileId, mimeType: 'image/png' });
+      .associate(ownedRecord.id, { kind: 'attachment', label: 'x', fileId });
     expect((await adapter.getRecord(ownedRecord.id))?.associations).toContainEqual({
       kind: 'attachment',
       label: 'x',
       fileId,
-      mimeType: 'image/png',
     });
   });
 

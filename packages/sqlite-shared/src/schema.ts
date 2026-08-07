@@ -26,7 +26,6 @@ export const RECORD_SCHEMA_SQL = `
     kind       TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
     label      TEXT NOT NULL,
     file_id    TEXT NOT NULL DEFAULT '',
-    mime_type  TEXT,
     related_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (record_id, kind, label, file_id, related_id)
   ) STRICT;

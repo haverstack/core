@@ -2030,7 +2030,6 @@ describe('deleteAttachment', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
@@ -2047,7 +2046,6 @@ describe('deleteAttachment', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
     await stack.delete(note.id);
 
@@ -2190,7 +2188,6 @@ describe('collectAttachmentGarbage', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
     await stack.delete(note.id, { hard: true });
 
@@ -2208,7 +2205,6 @@ describe('collectAttachmentGarbage', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
@@ -2225,7 +2221,6 @@ describe('collectAttachmentGarbage', () => {
       kind: 'attachment',
       label: 'cover',
       fileId,
-      mimeType: 'image/png',
     });
     await stack.delete(note.id);
 

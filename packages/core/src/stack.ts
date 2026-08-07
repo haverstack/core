@@ -1708,8 +1708,7 @@ export class Stack implements StackClient {
 
 /**
  * Matches the SQLite adapter's association primary key (kind, label,
- * file_id, related_id) — mimeType is not part of an attachment
- * association's identity.
+ * file_id, related_id).
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;
