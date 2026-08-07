@@ -1064,7 +1064,6 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'file-1',
-      mimeType: 'image/png',
     });
 
     await expect(
@@ -1119,7 +1118,6 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'file-1',
-      mimeType: 'image/png',
     });
 
     await expect(

@@ -508,7 +508,6 @@ describe('records — queries', () => {
       kind: 'attachment',
       label: 'diagram',
       fileId: 'file-1',
-      mimeType: 'image/png',
     });
     const result = await adapter.queryRecords({ filter: { hasAttachment: 'diagram' } });
     expect(result.records.length).toBe(1);
@@ -527,13 +526,11 @@ describe('records — queries', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'target-file-id',
-      mimeType: 'image/png',
     });
     await adapter.associate(otherFile.id, {
       kind: 'attachment',
       label: 'cover',
       fileId: 'different-file-id',
-      mimeType: 'image/png',
     });
     const result = await adapter.queryRecords({
       filter: { attachmentFileId: 'target-file-id' },
@@ -893,14 +890,12 @@ describe('associations', () => {
       kind: 'attachment',
       label: 'avatar',
       fileId: 'file-xyz',
-      mimeType: 'image/jpeg',
     });
     const retrieved = await adapter.getRecord(record.id);
     const assoc = retrieved?.associations?.find((a) => a.kind === 'attachment');
     expect(assoc).toBeDefined();
     if (assoc?.kind === 'attachment') {
       expect(assoc.fileId).toBe('file-xyz');
-      expect(assoc.mimeType).toBe('image/jpeg');
     }
   });
 
@@ -952,7 +947,6 @@ describe('associations', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'f1',
-      mimeType: 'image/png',
     });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.associations?.length).toBe(3);
@@ -1240,7 +1234,6 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'file-1',
-      mimeType: 'image/png',
     });
 
     await expect(
@@ -1295,7 +1288,6 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       kind: 'attachment',
       label: 'cover',
       fileId: 'file-1',
-      mimeType: 'image/png',
     });
 
     await expect(

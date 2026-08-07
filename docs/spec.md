@@ -440,7 +440,7 @@ Tags, attachments, and relationships are unified under a single **Association** 
 ```ts
 type Association =
   | { kind: 'tag'; label: string }
-  | { kind: 'attachment'; label: string; fileId: string; mimeType: string }
+  | { kind: 'attachment'; label: string; fileId: string }
   | { kind: 'relationship'; label: string; recordId: string };
 ```
 
@@ -1074,7 +1074,7 @@ Response shape is consistent regardless of kind:
 {
   "associations": [
     { "kind": "tag", "label": "starred" },
-    { "kind": "attachment", "label": "avatar", "fileId": "abc123", "mimeType": "image/png" },
+    { "kind": "attachment", "label": "avatar", "fileId": "abc123" },
     { "kind": "relationship", "label": "reply-to", "recordId": "xyz789" }
   ]
 }

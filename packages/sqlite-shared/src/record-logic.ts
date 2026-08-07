@@ -567,14 +567,13 @@ export class SharedSqlRecordLogic {
       try {
         this.exec.run(
           `INSERT OR IGNORE INTO associations
-            (record_id, kind, label, file_id, mime_type, related_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+            (record_id, kind, label, file_id, related_id)
+           VALUES (?, ?, ?, ?, ?)`,
           [
             recordId,
             assoc.kind,
             assoc.label,
             assoc.kind === 'attachment' ? assoc.fileId : '',
-            assoc.kind === 'attachment' ? assoc.mimeType : null,
             assoc.kind === 'relationship' ? assoc.recordId : '',
           ],
         );

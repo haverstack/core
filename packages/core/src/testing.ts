@@ -327,8 +327,7 @@ export class MemoryAdapter implements StackAdapter {
 
 /**
  * Mirrors Stack's private associationEqual(): identity is (kind, label) plus
- * fileId for attachments / recordId for relationships — mimeType is not
- * part of an attachment association's identity.
+ * fileId for attachments / recordId for relationships.
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;

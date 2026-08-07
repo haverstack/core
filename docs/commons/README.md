@@ -137,7 +137,7 @@ authority on **any** record, of any type:
   points at a [`place`](./place.md) record: the geotagged photo, the note written at a
   café, the check-in. Apps that understand places understand every located record for
   free, whatever its type.
-- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId, mimeType }` marks a file
+- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file
   referenced from a record's body text (`note`, `article`, `page`, `message`). How the
   body refers to the embed is app territory in v1; a commons syntax is an expected
   follow-up once `file-ref` fields (#63) land.

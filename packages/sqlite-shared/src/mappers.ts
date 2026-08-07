@@ -39,7 +39,6 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
       kind: 'attachment',
       label: row.label as string,
       fileId: row.file_id as string,
-      mimeType: row.mime_type as string,
     };
   }
   // relationship
