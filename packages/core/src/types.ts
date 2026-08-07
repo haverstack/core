@@ -211,15 +211,22 @@ export type GroupContent = {
   stackUrl?: string;
 };
 
-/** Actions that can be granted via a _grant record. */
-export type GrantAction =
-  | 'create'
-  | 'read-own'
-  | 'read-any'
-  | 'update-own'
-  | 'update-any'
-  | 'delete-own'
-  | 'delete-any';
+/**
+ * Actions that can be granted via a _grant record. The array is the source
+ * of truth — GrantAction is derived from it so runtime validation (see
+ * Stack.grant()) can't drift from the type (#116).
+ */
+export const GRANT_ACTIONS = [
+  'create',
+  'read-own',
+  'read-any',
+  'update-own',
+  'update-any',
+  'delete-own',
+  'delete-any',
+] as const;
+
+export type GrantAction = (typeof GRANT_ACTIONS)[number];
 
 /** Content for _grant records */
 export type GrantContent = {

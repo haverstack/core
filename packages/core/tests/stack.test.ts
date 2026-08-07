@@ -1477,6 +1477,72 @@ describe('grant', () => {
     const record = await stack.asEntity('entity-abc').create(NOTE_V1, { text: 'hi' });
     expect(record.content.text).toBe('hi');
   });
+
+  // #116/F4 — an unrecognized action string would otherwise be stored
+  // silently and simply never match at check time (hasGrant).
+  test('rejects an unknown grant action', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['read-all' as never], typeId: NOTE_V1 }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('does not create any records when one grant in a batch has an unknown action', async () => {
+    await expect(
+      stack.grant('entity-abc', [
+        { actions: ['create'], typeId: NOTE_V1 },
+        { actions: ['read-all' as never], typeId: NOTE_V1 },
+      ]),
+    ).rejects.toThrow(StackValidationError);
+    const grants = await stack.listGrants();
+    expect(grants).toHaveLength(0);
+  });
+
+  // #116/F4 — typeId must be a well-formed bare baseId or versioned TypeId.
+  test('rejects an empty typeId', async () => {
+    await expect(stack.grant('entity-abc', [{ actions: ['create'], typeId: '' }])).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects a malformed versioned typeId', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['create'], typeId: 'com.example.test/note@abc' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('accepts a bare baseId (no version suffix)', async () => {
+    const records = await stack.grant('entity-abc', [
+      { actions: ['create'], typeId: 'com.example.test/note' },
+    ]);
+    expect(records).toHaveLength(1);
+  });
+
+  // #116/F5 — grants on _grant/_config are refused outright; other reserved
+  // types (_attachment, _entity, _group) stay grantable.
+  test('rejects a grant targeting _grant@1', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['create'], typeId: '_grant@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a grant targeting _config@1', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['update-any'], typeId: '_config@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a default (any-authenticated) grant targeting _grant@1', async () => {
+    await expect(stack.grant(null, [{ actions: ['create'], typeId: '_grant@1' }])).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('still allows a grant targeting _attachment@1', async () => {
+    const records = await stack.grant('entity-abc', [
+      { actions: ['create'], typeId: '_attachment@1' },
+    ]);
+    expect(records).toHaveLength(1);
+  });
 });
 
 // -------------------------------------------------------
