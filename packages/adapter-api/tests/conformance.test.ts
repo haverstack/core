@@ -7,7 +7,7 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { APIAdapter } from '../src/index.js';
+import { APIAdapter, APIAdapterAuthError } from '../src/index.js';
 import {
   createRecordFixtures,
   patchContentFixtures,
@@ -21,13 +21,15 @@ import {
   errorResponseFixtures,
   attachmentUploadFixtures,
 } from '@haverstack/conformance-fixtures';
-import type { Association } from '@haverstack/core';
+import type { Association, StackType } from '@haverstack/core';
 import {
   StackPermissionError,
   StackNotFoundError,
   StackConflictError,
   StackValidationError,
   StackQueryError,
+  StackVersionConflictError,
+  StackSchemaDriftError,
 } from '@haverstack/core';
 
 const BASE_URL = 'https://stack.example.com';
@@ -239,6 +241,8 @@ const ERROR_CLASS_FOR_CODE = {
   conflict: StackConflictError,
   validation: StackValidationError,
   bad_request: StackQueryError,
+  version_conflict: StackVersionConflictError,
+  schema_drift: StackSchemaDriftError,
 } as const;
 
 describe('error response fixtures', () => {
@@ -262,26 +266,55 @@ describe('error response fixtures', () => {
         if (fixture.method === 'POST' && fixture.path === '/records/query') {
           return adapter.queryRecords(fixture.requestBody as never);
         }
+        if (fixture.method === 'POST' && fixture.path === '/types') {
+          const { createdAt, ...rest } = fixture.requestBody as Record<string, unknown>;
+          return adapter.saveType({
+            ...(rest as Omit<StackType, 'createdAt'>),
+            createdAt: new Date(createdAt as string),
+          });
+        }
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
           const version = Number(fixture.path.split('/').pop());
           return adapter.restoreVersion(idFromPath(fixture.path), version);
         }
+        if (fixture.method === 'DELETE') {
+          return adapter.deleteRecord(idFromPath(fixture.path));
+        }
         if (fixture.method === 'PATCH') {
+          // If-Match (see error-version-conflict-if-match-mismatch) travels as a quoted
+          // version number, matching the header APIAdapter itself sends for ifVersion.
+          const ifMatch = fixture.requestHeaders?.['If-Match'];
+          const expectedVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
           return adapter.patchContent(
             idFromPath(fixture.path),
             fixture.requestBody as Record<string, unknown>,
+            { expectedVersion },
           );
         }
         throw new Error(`no dispatch wired for error fixture "${fixture.name}"`);
       };
 
-      const code = (fixture.responseBody as { error: { code: keyof typeof ERROR_CLASS_FOR_CODE } })
-        .error.code;
-      await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
+      // 401 (error-unauthorized-anonymous) carries no wire error body, so it can't be
+      // routed through the code->class map below; APIAdapter reconstructs it from status
+      // alone as APIAdapterAuthError.
+      if (fixture.responseStatus === 401) {
+        await expect(dispatch()).rejects.toThrow(APIAdapterAuthError);
+      } else {
+        const code = (
+          fixture.responseBody as { error: { code: keyof typeof ERROR_CLASS_FOR_CODE } }
+        ).error.code;
+        await expect(dispatch()).rejects.toThrow(ERROR_CLASS_FOR_CODE[code]);
+      }
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
+      if (fixture.requestHeaders) {
+        const headers = init.headers as Record<string, string>;
+        for (const [key, value] of Object.entries(fixture.requestHeaders)) {
+          expect(headers[key]).toBe(value);
+        }
+      }
     });
   }
 });
