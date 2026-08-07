@@ -724,6 +724,12 @@ export class Stack implements StackClient {
 
   /**
    * Create a new record. Validates content against the type's schema.
+   *
+   * `_group` records get their author stamped as the first `admin` roster
+   * association (keyed on `opts.entityId ?? ownerEntityId`, i.e. whoever
+   * would be recorded as the record's author) — this is the single stamping
+   * site for both plain `Stack.create()` and `ScopedStack.create()`, which
+   * delegates here with `entityId` already normalized (#118).
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -746,6 +752,11 @@ export class Stack implements StackClient {
 
     if (opts.id !== undefined) validateRecordId(opts.id);
 
+    const associations =
+      baseIdOf(typeId) === SYSTEM_TYPES.GROUP
+        ? stampGroupAdmin(opts.associations, opts.entityId ?? this.ownerEntityId)
+        : opts.associations;
+
     const now = new Date();
     const record: StackRecord = {
       id: opts.id ?? generateId(),
@@ -758,7 +769,7 @@ export class Stack implements StackClient {
       ...(opts.entityId && { entityId: opts.entityId }),
       ...(opts.appId && { appId: opts.appId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
-      ...(opts.associations?.length && { associations: opts.associations }),
+      ...(associations?.length && { associations }),
     };
 
     return this.adapter.createRecord(record) as Promise<StackRecord & { content: T }>;
@@ -1942,9 +1953,10 @@ export class ScopedStack implements StackClient {
    * untrusted actor who could otherwise mint an ID that forges its sort
    * position. See StackOptions.idTimestampSkewMs.
    *
-   * `_group` records additionally get the creator stamped as their first
-   * `admin` roster association, so a group is never management-orphaned —
-   * without this, nobody could ever pass isGroupManager() to add themselves.
+   * `_group` records get the creator stamped as their first `admin` roster
+   * association — that stamping happens in `Stack.create()` (#118), keyed
+   * on the `entityId` set below, so a group is never management-orphaned
+   * regardless of which path created it.
    *
    * `parentId`, `associations`, and file-ref content fields are all
    * reference-creating options a caller could otherwise use to piggyback on
@@ -1999,12 +2011,8 @@ export class ScopedStack implements StackClient {
       await this.requireAssociationAccess(typeId, assoc);
     }
     await this.requireFileRefAccess(typeId, content);
-    const createOpts =
-      baseIdOf(typeId) === SYSTEM_TYPES.GROUP
-        ? { ...opts, associations: stampGroupAdmin(opts.associations, requester) }
-        : opts;
     return this.stack.create(typeId, content, {
-      ...createOpts,
+      ...opts,
       entityId: isOwner ? undefined : requester,
     });
   }

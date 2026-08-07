@@ -330,6 +330,43 @@ describe('create', () => {
 });
 
 // -------------------------------------------------------
+// create — _group admin bootstrap (#118)
+// -------------------------------------------------------
+
+describe('create — _group admin bootstrap', () => {
+  test('owner-created group via plain Stack.create stamps the owner as first admin', async () => {
+    const group = await stack.create('_group@1', { name: 'New Group' });
+    expect(group.associations).toEqual([
+      { kind: 'relationship', label: 'admin', recordId: 'owner-123' },
+    ]);
+  });
+
+  test('stamps the supplied entityId, not the owner, when one is provided', async () => {
+    const group = await stack.create('_group@1', { name: 'New Group' }, { entityId: 'other-456' });
+    expect(group.associations).toEqual([
+      { kind: 'relationship', label: 'admin', recordId: 'other-456' },
+    ]);
+  });
+
+  test('does not duplicate an explicitly supplied admin association', async () => {
+    const group = await stack.create(
+      '_group@1',
+      { name: 'New Group' },
+      { associations: [{ kind: 'relationship', label: 'admin', recordId: 'owner-123' }] },
+    );
+    const adminAssociations = (group.associations ?? []).filter(
+      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === 'owner-123',
+    );
+    expect(adminAssociations).toHaveLength(1);
+  });
+
+  test('does not stamp non-group records', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    expect(record.associations).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
 // create — client-supplied id (#55)
 // -------------------------------------------------------
 
