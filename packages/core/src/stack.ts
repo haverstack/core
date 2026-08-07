@@ -52,6 +52,29 @@ import type {
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
+/** Valid GrantAction values, for runtime validation in Stack.grant() (#116). */
+const GRANT_ACTIONS: ReadonlySet<GrantAction> = new Set<GrantAction>([
+  'create',
+  'read-own',
+  'read-any',
+  'update-own',
+  'update-any',
+  'delete-own',
+  'delete-any',
+]);
+
+/**
+ * System type families that grant() refuses to target (#116/F5). A
+ * create/update-any grant on either lets the grantee mint their own grants
+ * or touch stack config — privilege-bearing verbs stay owner-only (#67).
+ * Other reserved types (_attachment, _entity, _group) are deliberately not
+ * listed here — grants on those are plausibly legitimate.
+ */
+const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
+  SYSTEM_TYPES.GRANT,
+  SYSTEM_TYPES.CONFIG,
+]);
+
 export type CreateRecordOptions = {
   /**
    * Client-minted record ID. Must be 12 lowercase Crockford base-32
@@ -1482,6 +1505,7 @@ export class Stack implements StackClient {
     entityId: EntityId | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
+    this.checkGrantsValid(grants);
     const records: StackRecord[] = [];
     for (const g of grants) {
       records.push(
@@ -1548,6 +1572,63 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
+
+  /**
+   * grant() input hygiene (#116/F4, F5). Validates the whole batch before
+   * any record is created, so a bad entry in a multi-grant call fails
+   * clean rather than leaving a partial set of grants written.
+   *
+   * - actions must be known GrantAction values — an unrecognized string
+   *   (e.g. a typo like "read-all") would be stored silently and simply
+   *   never match at check time (hasGrant), a grant that looks live but
+   *   isn't.
+   * - typeId must be a well-formed bare baseId or versioned TypeId — the
+   *   same shape hasGrant() accepts (baseIdOf() tolerates either).
+   * - typeId may not target the _grant or _config families: a create /
+   *   update-any grant there lets the grantee mint their own grants or
+   *   touch stack config, and a default (any-authenticated) grant is
+   *   self-service escalation. Other reserved types (_attachment, _entity,
+   *   _group) are deliberately not restricted — grants on those are
+   *   plausibly legitimate.
+   */
+  private checkGrantsValid(grants: Array<{ actions: GrantAction[]; typeId: TypeId }>): void {
+    const errors: ValidationError[] = [];
+    grants.forEach((g, i) => {
+      g.actions.forEach((action, j) => {
+        if (!GRANT_ACTIONS.has(action)) {
+          errors.push({
+            path: `grants[${i}].actions[${j}]`,
+            message: `Unknown grant action "${action}"`,
+          });
+        }
+      });
+
+      if (typeof g.typeId !== 'string' || g.typeId.trim().length === 0) {
+        errors.push({ path: `grants[${i}].typeId`, message: 'typeId must be a non-empty string' });
+        return;
+      }
+      if (g.typeId.includes('@')) {
+        const parsed = parseTypeId(g.typeId);
+        if (!parsed || parsed.baseId.trim().length === 0) {
+          errors.push({
+            path: `grants[${i}].typeId`,
+            message: `"${g.typeId}" is not a well-formed versioned TypeId (expected "baseId@version")`,
+          });
+          return;
+        }
+      }
+
+      if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(g.typeId))) {
+        errors.push({
+          path: `grants[${i}].typeId`,
+          message: `Cannot grant on "${baseIdOf(g.typeId)}": grants on _grant and _config are refused to prevent privilege escalation`,
+        });
+      }
+    });
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
+    }
+  }
 
   private async seedSystemTypes(): Promise<void> {
     await this.defineType(`${SYSTEM_TYPES.CONFIG}@1`, 'Config', {
