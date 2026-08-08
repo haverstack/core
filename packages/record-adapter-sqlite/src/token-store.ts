@@ -30,7 +30,7 @@ export const defaultTokenStorePath = (dbPath: string): string => `${dbPath}.toke
 export type NativeTokenStoreOptions = {
   /** Absolute path to the token store file. Created if it doesn't exist. */
   path: string;
-  /** Bypass the storage-ownership lock check. See docs/spec.md § Concurrency & storage ownership. */
+  /** Bypass the storage-ownership lock check. See docs/spec/adapters.md § Concurrency & storage ownership. */
   force?: boolean;
 };
 

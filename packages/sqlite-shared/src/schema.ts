@@ -2,7 +2,7 @@
  * Schema DDL shared by SQLite-backed record adapters. TOKENS_SCHEMA_SQL
  * is split out from RECORD_SCHEMA_SQL because token storage lives in its
  * own file, never a browser adapter's, and never bundled with records —
- * see NativeTokenStore in record-adapter-sqlite, docs/spec.md § Adapters,
+ * see NativeTokenStore in record-adapter-sqlite, docs/spec/adapters.md,
  * and the StackTokenStore portability rationale in #46.
  */
 

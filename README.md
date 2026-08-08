@@ -21,7 +21,7 @@ The key idea: apps talk to the Haverstack library, not to a storage format direc
 - **One app, one stack:** the app embeds `adapter-local` and owns the file directly. This is the simple, common case.
 - **Multiple apps, one stack:** run a server (local or hosted) that owns the file, and have each app connect through `adapter-api` — the same client works against `localhost` or a remote provider.
 
-Don't point more than one app at the same stack file with `adapter-local`. Nothing enforces permissions at that layer — `appId` is self-reported and grants aren't checked — so direct file access is a full-trust, single-owner arrangement, not a way to share data between apps. See [Concurrency & storage ownership](./docs/spec.md#concurrency--storage-ownership) in the spec for the full rationale.
+Don't point more than one app at the same stack file with `adapter-local`. Nothing enforces permissions at that layer — `appId` is self-reported and grants aren't checked — so direct file access is a full-trust, single-owner arrangement, not a way to share data between apps. See [Concurrency & storage ownership](./docs/spec/adapters.md#concurrency--storage-ownership) in the spec for the full rationale.
 
 ---
 
@@ -119,7 +119,7 @@ The fundamental unit of data. Every record has:
 
 The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.create(adapter, { ownerProfile })` creates the owner's own card on first run.
 
-See [Identity](./docs/spec.md#identity) in the spec for the full model, including authentication (challenge–response, not a shared secret) and what's deliberately deferred (key rotation).
+See [Identity](./docs/spec/identity.md) in the spec for the full model, including authentication (challenge–response, not a shared secret) and what's deliberately deferred (key rotation).
 
 ### Types
 
@@ -208,7 +208,8 @@ pnpm build
 
 ```
 docs/
-  spec.md                 # Design spec — data model, wire format, adapter contract
+  spec.md                 # Design spec — overview and index
+  spec/                   # Spec sub-documents — data model, identity, access control, wire format, …
 packages/
   core/                   # @haverstack/core
     src/
@@ -249,7 +250,7 @@ packages/
 
 ## Spec
 
-The design spec lives in [`docs/spec.md`](./docs/spec.md). It covers the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
+The design spec lives in [`docs/spec.md`](./docs/spec.md), which indexes focused sub-documents under [`docs/spec/`](./docs/spec). Together they cover the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
 
 Shared, app-neutral record types (note, bookmark, task, contact) live in the [Schema Commons](./docs/commons/README.md) — start there if you want your app's data to interoperate with other Haverstack apps.
 

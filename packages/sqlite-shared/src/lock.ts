@@ -1,6 +1,6 @@
 /**
  * Storage-ownership lock file. A stack file is owned by exactly one
- * process at a time (see docs/spec.md § Concurrency & storage ownership).
+ * process at a time (see docs/spec/adapters.md § Concurrency & storage ownership).
  * The lock file sits beside the database and records the PID of its
  * opener — pure Node fs/process logic, no SQLite engine involved, so
  * every Node-backed record adapter shares one implementation and one

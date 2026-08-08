@@ -15,7 +15,7 @@
  * automatically.
  *
  * A stack file is owned by exactly one process at a time (see
- * docs/spec.md § Concurrency & storage ownership). open()/initialize()
+ * docs/spec/adapters.md § Concurrency & storage ownership). open()/initialize()
  * acquire a PID-stamped lock file beside the database and reject if
  * another live process already holds it; close() releases it.
  *
