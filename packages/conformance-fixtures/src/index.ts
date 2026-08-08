@@ -5,7 +5,7 @@
  * API wire format (docs/spec/wire-format.md). These pin down
  * the exact wire shape each endpoint accepts and returns — in particular,
  * that PATCH /records/:id carries a content-only merge patch, never
- * record fields like typeId/version/updatedAt (see #52).
+ * record fields like typeId/version/updatedAt.
  *
  * This package is pure data: no test framework, no adapter, no server.
  * Two independent consumers exercise the same fixtures against their own
@@ -76,11 +76,11 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
   {
     name: 'create-attachment-record-matching-mimetype-succeeds',
     description:
-      '(#65) mimeType is a property of the fileId, established by the first _attachment@1 ' +
+      'mimeType is a property of the fileId, established by the first _attachment@1 ' +
       'record ever created for it. A second upload of the same bytes that declares a matching ' +
       'mimeType succeeds and gets its own record — its own id, entityId, and filename — rather ' +
-      'than being deduplicated away. Assumes the requester is the owner (#106 restricts generic ' +
-      'POST /records for _attachment@1 to owner-only — see ' +
+      'than being deduplicated away. Assumes the requester is the owner (generic ' +
+      'POST /records for _attachment@1 is owner-only — see ' +
       'error-permission-denied-attachment-non-owner-create and ' +
       'create-attachment-record-non-owner-carve-out-succeeds for the non-owner cases) and that ' +
       'an _attachment@1 record already exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with ' +
@@ -118,7 +118,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
   {
     name: 'create-attachment-record-non-owner-carve-out-succeeds',
     description:
-      '(#106 residual decision 1) A non-owner who can already read some record referencing ' +
+      'A non-owner who can already read some record referencing ' +
       'fileId "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" may create an additional _attachment@1 record for it — e.g. their own ' +
       'filename — without re-uploading bytes, since this conveys no access they did not already ' +
       'have. Assumes a record readable by this requester already carries an attachment ' +
@@ -262,7 +262,7 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, und
     description:
       'POST /records/:id/associations/delete removes an association and bumps version. POST, ' +
       'not DELETE — a DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a ' +
-      'portability landmine for proxies/gateways that drop or reject it (#56).',
+      'portability landmine for proxies/gateways that drop or reject it.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: { kind: 'tag', label: 'starred' },
@@ -296,19 +296,13 @@ export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[]
 ];
 
 // -------------------------------------------------------
-// Versions: read (#109)
+// Versions: read
 // -------------------------------------------------------
 //
-// GET /records/:id/versions[/:version] require the same mutate-surface
-// authorization as a write to the record — not plain read access — because
-// history is the recovery surface, not a read surface: gating it on current
-// read access would make a record's entire past exactly as public as its
-// present. The 403-for-a-read-only-requester case lives in
-// errorResponseFixtures below (error-permission-denied-versions-read-only);
-// these pin the success shape for a requester who does hold write access.
-// Snapshot `permissions` — owner/creator-only audit data — are additionally
-// omitted from the response for any non-owner, including a write-holder who
-// passes the gate; `entityId` (change attribution) is not stripped.
+// GET /records/:id/versions[/:version] require mutate-surface
+// authorization, not plain read access, and strip snapshot `permissions`
+// for non-owners (docs/spec/versioning.md § History access). These pin the
+// success shape; the 403 case is error-permission-denied-versions-read-only.
 
 export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
   {
@@ -370,21 +364,14 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
 ];
 
 // -------------------------------------------------------
-// Versions: read after migrate/restore (#110)
+// Versions: read after migrate/restore
 // -------------------------------------------------------
 //
-// APIAdapter.saveVersion() is a deliberate no-op — the server is the only
-// snapshot writer, snapshotting prior state as a side effect of each
-// mutating endpoint. These pin that a version row appears after
-// POST /migrate and after POST /restore/:version specifically, not just the
-// five endpoints the spec's older enumeration listed (PATCH, associations,
-// permissions, delete, undelete) — the drift #110 closes. Paired with
-// commitMigrationFixtures' "commit-migration" and restoreVersionFixtures'
-// "restore-version": a server-side conformance run dispatches the mutating
-// fixture first, then this one, and asserts the version count actually grew
-// by one; a mocked-transport run (as in this package's own adapter-api
-// tests) can only assert the response shape parses, since there's no real
-// backing store behind the mock to observe state through.
+// The server is the only snapshot writer (docs/spec/wire-format.md
+// § Versions); these pin that a version row appears after POST /migrate
+// and POST /restore/:version specifically. A server-side conformance run
+// dispatches the mutating fixture first and asserts the version count
+// grew; a mocked-transport run can only assert the response shape parses.
 
 export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
   {
@@ -503,17 +490,11 @@ export const commitMigrationFixtures: ConformanceFixture<
 // Error responses
 // -------------------------------------------------------
 //
-// Pins the wire error body contract (#53): every failed request returns
-// { error: { code, message, details? } }, with `code` as the authoritative
-// discriminator — status is a transport hint. Each fixture assumes the
-// server is already in the state its description names (a missing record,
-// a requester without a grant, ...); these fixtures pin the error shape a
-// server must produce and APIAdapter must reconstruct, not how a server
-// gets into that state.
-//
-// One exception: 401 has no wire error body (see error-unauthorized-
-// anonymous) — it fires before any DID has verified, so there's no core
-// error to serialize yet. `responseBody` is absent for that fixture only.
+// Pins the wire error body contract (docs/spec/wire-format.md § Error
+// responses): { error: { code, message, details? } }, `code`
+// authoritative. Each fixture assumes the state its description names.
+// One exception: 401 has no wire error body — it fires before any DID has
+// verified, so there's no core error to serialize yet.
 
 export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
@@ -530,7 +511,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-permission-denied-versions-read-only',
     description:
-      '(#109) GET /records/:id/versions from a requester who can read the record but cannot ' +
+      'GET /records/:id/versions from a requester who can read the record but cannot ' +
       'write it returns 403 / code "permission" — history is the mutation/recovery surface, ' +
       'gated the same as a write, not exposed to plain readers. Same shape for ' +
       'GET /records/:id/versions/:version.',
@@ -542,7 +523,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-permission-denied-restore-reference-reconveyance',
     description:
-      '(#109 restoreVersion follow-up) POST /records/:id/restore/:version from a non-owner ' +
+      'POST /records/:id/restore/:version from a non-owner ' +
       'write-holder is refused with 403 / code "permission" when the target snapshot carries an ' +
       'attachment association (or file-ref content field) the requester cannot currently attach ' +
       'fresh — restoring must not re-convey access to a file or record the requester can no ' +
@@ -556,7 +537,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-permission-denied-attachment-non-owner-create',
     description:
-      '(#106) POST /records creating an _attachment@1 record is refused for any non-owner ' +
+      'POST /records creating an _attachment@1 record is refused for any non-owner ' +
       'requester with 403 / code "permission" — even one holding an otherwise-sufficient ' +
       '"create" grant on the type, and even for a fileId nobody has ever uploaded or referenced. ' +
       'This is not the ordinary missing-grant case (see error-permission-denied): _attachment@1 ' +
@@ -585,12 +566,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'create-attachment-record-non-owner-without-carve-out-refused',
     description:
-      '(#106 residual decision 1) The carve-out (see ' +
+      'The carve-out (see ' +
       'create-attachment-record-non-owner-carve-out-succeeds) is satisfied only by a readable ' +
       "record referencing the fileId — never by the requester's own prior _attachment@1 record " +
       'for the same fileId (the "uploaded it themselves" clause of the getAttachment() access ' +
       'rule). Allowing that would let one successful guess bootstrap unlimited further metadata ' +
-      'records for the same fileId, reintroducing the circularity #106 closes. Assumes the ' +
+      'records for the same fileId, reintroducing the circularity the refusal closes. Assumes the ' +
       'requester already holds an _attachment@1 record for "fileId": "d56b0d4d2c35d9d856d06702a6cc4482d4fedbea54a083cfb56cf19bea35d94f" (e.g. from a ' +
       'prior putAttachment() upload) but no readable record references it.',
     method: 'POST',
@@ -619,7 +600,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '(GET /records/:id is deliberately excluded here: APIAdapter treats a 404 there as ' +
       '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.) Must be ' +
       'indistinguishable from the "exists but forbidden" case only in error *shape*, never in ' +
-      'status/code (see #51 anti-oracle rule).',
+      'status/code (anti-oracle rule).',
     method: 'PATCH',
     path: '/records/1hk153x0a00b',
     requestBody: { title: 'New title' },
@@ -670,7 +651,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'POST /records/:id/restore/:version against a drifted or corrupted snapshot — content ' +
       'that no longer satisfies the schema of the type it claims — returns 422 with code ' +
       '"validation", identically to a PATCH validation failure. Restore is not a backdoor ' +
-      'around schema validation (#62): the snapshot is validated against its own stored ' +
+      'around schema validation: the snapshot is validated against its own stored ' +
       "typeId, not the record's current one.",
     method: 'POST',
     path: '/records/1hk153x00001/restore/1',
@@ -686,12 +667,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-attachment-mimetype-conflict-on-create',
     description:
-      '(#65, message genericized by #106) POST /records creating an _attachment@1 record whose ' +
+      'POST /records creating an _attachment@1 record whose ' +
       'mimeType conflicts with the mimeType already established (by the first-ever record) for ' +
       'the same fileId returns 422 with code "validation" — reconstructed as ' +
       'StackValidationError. A matching mimeType would instead succeed (see ' +
       'create-attachment-record-matching-mimetype-succeeds). The message never names the ' +
-      "established mimeType (anti-oracle, #106): stating it would confirm an existing fileId's " +
+      "established mimeType (anti-oracle): stating it would confirm an existing fileId's " +
       'content type to a caller who only guessed the fileId. Assumes the requester is the owner ' +
       '(non-owner POST /records for _attachment@1 is refused outright — see ' +
       'error-permission-denied-attachment-non-owner-create) and that an _attachment@1 record ' +
@@ -727,7 +708,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-attachment-mimetype-immutable-on-update',
     description:
-      '(#65) PATCH /records/:id against an _attachment@1 record is rejected with 422 / code ' +
+      'PATCH /records/:id against an _attachment@1 record is rejected with 422 / code ' +
       '"validation" if the patch touches mimeType at all — even restating the current value. ' +
       'filename is the only field an _attachment@1 update may change; fileId and size are ' +
       'rejected the same way if the patch would actually change their stored value.',
@@ -753,7 +734,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +
       'structurally malformed request, distinct from a 422 content-validation failure. ' +
-      'Reconstructed as StackQueryError. (#115 D3) "not-a-valid-cursor" is not valid base64 ' +
+      'Reconstructed as StackQueryError. "not-a-valid-cursor" is not valid base64 ' +
       "(the hyphens aren't in the alphabet), so decoding fails before the sort-field is ever " +
       'inspected — the message names the malformed input itself, not a sort field. See ' +
       'error-bad-request-unknown-sort-field-cursor for the distinct, decodable-but-invalid case.',
@@ -771,7 +752,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-bad-request-unknown-sort-field-cursor',
     description:
-      '(#115 D3) A cursor that decodes cleanly as base64 but names a sort field the server ' +
+      'A cursor that decodes cleanly as base64 but names a sort field the server ' +
       "doesn't recognize is a second, distinct 400 bad_request branch from the malformed-" +
       'base64 case above (see error-bad-request-malformed-cursor) — both map to the same code, ' +
       'but a server that only implements one of the two decode failures is only half-conformant. ' +
@@ -788,12 +769,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
 
-  // -- #115 D2: fixtures for contracts decided since #52/#53, previously unpinned --
+  // -- Fixtures for later-decided contracts, previously unpinned --
 
   {
     name: 'error-version-conflict-if-match-mismatch',
     description:
-      '(#48) PATCH /records/:id with an If-Match header whose value does not match the ' +
+      'PATCH /records/:id with an If-Match header whose value does not match the ' +
       'record\'s current version returns 412 with code "version_conflict" — reconstructed as ' +
       'StackVersionConflictError. The versionConflict payload (recordId/expectedVersion/' +
       'actualVersion) is exactly what an ifVersion retry loop needs: which record, what it ' +
@@ -817,13 +798,13 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-schema-drift-non-additive-redefinition',
     description:
-      '(#68) POST /types on an id that already has a stored Type runs the same drift check as ' +
+      'POST /types on an id that already has a stored Type runs the same drift check as ' +
       'Stack.defineType(): a schema-hash mismatch is only legal if the change is purely ' +
       'additive (new optional fields, recursively, nothing removed/retyped/newly-required). ' +
       "Changing an existing field's kind is not additive, so this returns 409 with code " +
       '"schema_drift" — reconstructed as StackSchemaDriftError — never a silent REPLACE of the ' +
       'stored definition. The duplicate-id 409 (code "conflict") and this one deliberately share ' +
-      'a status but not a code (#115 D2) — status-only reconstruction of a bodyless 409 degrades ' +
+      'a status but not a code — status-only reconstruction of a bodyless 409 degrades ' +
       'to the generic StackConflictError; only a parseable body recovers this specific class. ' +
       'Assumes "com.example/note@1" is already stored with { title: { kind: "string", ' +
       'required: true } }.',
@@ -856,7 +837,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-bad-request-id-invalid-charset',
     description:
-      '(#55, #115 D2) POST /records with a client-supplied id containing a character outside ' +
+      'POST /records with a client-supplied id containing a character outside ' +
       'lowercase Crockford base-32 (0-9, a-z excluding i/l/o/u) returns 400 with code ' +
       '"bad_request" — structurally malformed input, not a 422 content-validation failure (the ' +
       'id never reaches type-schema validation). Reconstructed as StackQueryError.',
@@ -881,7 +862,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-bad-request-id-invalid-length',
     description:
-      '(#55, #115 D2) POST /records with a client-supplied id that is not exactly 12 characters ' +
+      'POST /records with a client-supplied id that is not exactly 12 characters ' +
       'returns 400 with code "bad_request", the same structural-malformed-input class as the ' +
       'invalid-charset case above.',
     method: 'POST',
@@ -905,7 +886,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-bad-request-id-reserved-prefix',
     description:
-      '(#55, #115 D2) POST /records with a client-supplied id beginning with "_" returns 400 ' +
+      'POST /records with a client-supplied id beginning with "_" returns 400 ' +
       'with code "bad_request" — that namespace is reserved for system records (_config, ' +
       '_entity, ...). Checked before the charset/length check (the Crockford alphabet already ' +
       'excludes "_", so a reserved-looking id would otherwise fail as a generic format error ' +
@@ -932,7 +913,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-delete-config',
     description:
-      '(#67, #115 D2) DELETE /records/_config — soft or hard — is always refused with 409 / ' +
+      'DELETE /records/_config — soft or hard — is always refused with 409 / ' +
       'code "conflict": _config holds the stack\'s identity (ownerEntityId, read at open and ' +
       'consulted by every permission check) and deleting it either bricks the stack (hard) or ' +
       'makes it unreadable through normal paths (soft). Reconstructed as StackConflictError.',
@@ -951,7 +932,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-config-entityid-change',
     description:
-      '(#67, #115 D2) PATCH /records/_config that would change entityId returns 409 / code ' +
+      'PATCH /records/_config that would change entityId returns 409 / code ' +
       '"conflict" — entityId defines stack ownership, read once at open and consulted by every ' +
       'permission check thereafter; a write that silently re-anchored it would desync every ' +
       'already-running owner check. Other _config fields (e.g. timezone) update normally through ' +
@@ -972,7 +953,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-unauthorized-anonymous',
     description:
-      '(#49, #115 D2) A request with no bearer token, or an invalid/expired one, returns 401 ' +
+      'A request with no bearer token, or an invalid/expired one, returns 401 ' +
       'with no wire error body at all — there is no verified DID behind the request at all ' +
       '("who are you?"). This is distinct from error-permission-denied\'s 403, which means the ' +
       "requester's DID *did* verify but their permissions/grants don't cover the operation " +
@@ -988,23 +969,14 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
 ];
 
 // -------------------------------------------------------
-// Attachment download: dangerous-type forcing (#66)
+// Attachment download: dangerous-type forcing
 // -------------------------------------------------------
 //
-// GET /attachments/:fileId doesn't fit ConformanceFixture: there's no JSON
-// request or response body (it's a binary download), and what's actually
-// being pinned here is response *headers* — Content-Type, Content-
-// Disposition, and X-Content-Type-Options — not a body shape. Hence a
-// separate, narrower fixture type.
-//
-// The candidate Content-Type is computed source-by-source (?contentType,
-// then extension inference from ?filename, then the stored _attachment@1
-// mimeType, then application/octet-stream) and the safe-list is applied to
-// *that result*, never to the source — so each fixture below pins one
-// (source, type) pair, and forcing must catch the dangerous ones
-// regardless of which source produced them. See
-// resolveAttachmentDownloadContentType() in @haverstack/core, which is the
-// canonical implementation of this same table.
+// GET /attachments/:fileId pins response *headers*, not a JSON body —
+// hence a separate, narrower fixture type. Forcing applies to the
+// resolved candidate, never the source, so each fixture pins one
+// (source, type) pair (docs/spec/wire-format.md § Download;
+// resolveAttachmentDownloadContentType() is the canonical implementation).
 
 export type AttachmentDownloadFixture = {
   /** Unique, stable name — usable as a test-case id. */
@@ -1029,8 +1001,8 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
   {
     name: 'attachment-download-contenttype-param-dangerous-forced',
     description:
-      'A dangerous ?contentType is forced to application/octet-stream — the one case the ' +
-      'pre-#66 spec already covered, kept here so the full three-source matrix is in one place.',
+      'A dangerous ?contentType is forced to application/octet-stream — the long-covered case, ' +
+      'kept here so the full three-source matrix is in one place.',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?contentType=text/html',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
@@ -1048,10 +1020,9 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
   {
     name: 'attachment-download-filename-extension-dangerous-forced',
     description:
-      '(#66) With no ?contentType, a dangerous type inferred from the ?filename extension must ' +
-      "still be forced — this was the spec's silent gap: extension inference had no forcing " +
-      'language at all, so `?filename=payload.html` was the unhardened path into the same XSS ' +
-      'this policy exists to prevent.',
+      'With no ?contentType, a dangerous type inferred from the ?filename extension must ' +
+      'still be forced — otherwise `?filename=payload.html` is an unhardened path into the ' +
+      'same XSS this policy exists to prevent.',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?filename=payload.html',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
@@ -1070,8 +1041,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
   {
     name: 'attachment-download-stored-mimetype-dangerous-forced',
     description:
-      '(#66) With no query params, a dangerous stored mimeType must still be forced — this was ' +
-      "the spec's other silent gap, and the one #65's escalation scenario depends on: a lying " +
+      'With no query params, a dangerous stored mimeType must still be forced: a lying ' +
       'or dishonest _attachment@1 record must not reach the response header unforced just ' +
       'because it came from storage rather than a query param. Assumes an _attachment@1 record ' +
       'exists for "fileId": "0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737" with "mimeType": "text/html".',
@@ -1094,19 +1064,14 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
 ];
 
 // -------------------------------------------------------
-// Attachment upload: POST /attachments creates the record (#106)
+// Attachment upload: POST /attachments creates the record
 // -------------------------------------------------------
 //
-// Like attachmentDownloadFixtures, POST /attachments doesn't fit
-// ConformanceFixture: the request body is raw bytes, not JSON. What's
-// pinned here is the request Content-Type/Content-Disposition headers going
-// in and the created _attachment@1 record coming out — the wire shape of
-// the combined, non-owner-safe upload primitive described in the spec's
-// Attachments section. This is not an efficiency shortcut: fileId must be
-// established from bytes the server actually received in this request, so
-// there is no seam where a caller-supplied string could substitute for
-// them (see error-permission-denied-attachment-non-owner-create, which
-// pins the generic-create path this closes).
+// The request body is raw bytes, so these pin the upload headers going in
+// and the created _attachment@1 record coming out — the combined,
+// non-owner-safe upload primitive (docs/spec/wire-format.md § Upload).
+// See error-permission-denied-attachment-non-owner-create for the
+// generic-create path this closes.
 
 export type AttachmentUploadFixture = {
   /** Unique, stable name — usable as a test-case id. */
@@ -1131,7 +1096,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
   {
     name: 'attachment-upload-creates-metadata-record',
     description:
-      '(#106) POST /attachments carries Content-Type and Content-Disposition (filename) and ' +
+      'POST /attachments carries Content-Type and Content-Disposition (filename) and ' +
       'stores the bytes and creates the _attachment@1 record in the same request — the wire ' +
       'counterpart of ScopedStack.putAttachment()/Stack.putAttachment(). The response is the ' +
       'created record (same shape as POST /records), not just { fileId }. fileId is the SHA-256 ' +
@@ -1159,7 +1124,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
   {
     name: 'attachment-upload-no-content-type-defaults-to-octet-stream',
     description:
-      '(#106) Content-Type is optional on upload — when omitted, the server defaults the ' +
+      'Content-Type is optional on upload — when omitted, the server defaults the ' +
       "created record's mimeType to application/octet-stream rather than rejecting the request, " +
       'matching the download-side default (see attachment-download-no-metadata-defaults-to-' +
       'octet-stream).',
@@ -1195,7 +1160,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
   {
     name: 'attachment-upload-payload-too-large',
     description:
-      "(#114 C4) A body exceeding the server's configured MAX_ATTACHMENT_BYTES ceiling " +
+      "A body exceeding the server's configured MAX_ATTACHMENT_BYTES ceiling " +
       '(exposed ahead of time as maxAttachmentBytes in discovery — see docs/spec/wire-format.md § Discovery) ' +
       'returns 413 with code "payload_too_large" — reconstructed client-side as ' +
       'StackPayloadTooLargeError. 413 is unambiguous (no other wire code shares it), so this is ' +

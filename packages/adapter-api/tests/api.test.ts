@@ -133,7 +133,7 @@ describe('open', () => {
     expect(adapter.timezone).toBe('America/New_York');
   });
 
-  // #69: timezone is passthrough metadata only — no 'UTC' default, which
+  // timezone is passthrough metadata only — no 'UTC' default, which
   // would claim knowledge the discovery response didn't actually provide.
   test('timezone is undefined when not in discovery response — no default', async () => {
     const adapter = await openAdapter({ ...DISCOVERY, timezone: undefined });
@@ -495,7 +495,7 @@ describe('queryRecords', () => {
     expect(url).toContain('parentId=null');
   });
 
-  test('GET params include relatedToLabel alongside relatedTo (#56)', async () => {
+  test('GET params include relatedToLabel alongside relatedTo', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
       capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
@@ -521,7 +521,7 @@ describe('queryRecords', () => {
     expect(url).not.toContain('relatedToLabel');
   });
 
-  test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery (#56)', async () => {
+  test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
       capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
@@ -533,7 +533,7 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('throws APIAdapterCapabilityError for filter.search without fullTextSearch (#56)', async () => {
+  test('throws APIAdapterCapabilityError for filter.search without fullTextSearch', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
       capabilities: { ...DISCOVERY.capabilities, fullTextSearch: false },
@@ -581,7 +581,7 @@ describe('associate', () => {
 });
 
 describe('dissociate', () => {
-  // POST, not DELETE — a DELETE body has no defined wire semantics (#56).
+  // POST, not DELETE — a DELETE body has no defined wire semantics.
   test('sends POST /records/:id/associations/delete', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
@@ -777,7 +777,7 @@ describe('listTypes', () => {
 // Attachments
 // -------------------------------------------------------
 
-// POST /attachments always creates the _attachment@1 record now (#106) —
+// POST /attachments always creates the _attachment@1 record now —
 // the response is a full WireRecord, not { fileId }.
 const attachmentRecordResponse = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: 'rec-attachment-1',
@@ -791,7 +791,7 @@ const attachmentRecordResponse = (overrides: Partial<Record<string, unknown>> = 
 
 describe('putAttachment', () => {
   // Bytes-only upload has no wire mode: POST /attachments always creates
-  // the _attachment@1 record (#106), so implementing this method would
+  // the _attachment@1 record, so implementing this method would
   // silently mint a default-mimeType record while claiming "no record
   // created". It must throw — without ever reaching the network — rather
   // than approximately honor the contract.
@@ -920,7 +920,7 @@ describe('error propagation on subsequent requests', () => {
 });
 
 // -------------------------------------------------------
-// Error taxonomy reconstruction (#53)
+// Error taxonomy reconstruction
 // -------------------------------------------------------
 
 describe('error taxonomy reconstruction', () => {
@@ -996,7 +996,7 @@ describe('error taxonomy reconstruction', () => {
     ).rejects.toThrow(StackVersionConflictError);
   });
 
-  test('reconstructs StackPayloadTooLargeError from a 413 payload_too_large wire error body (#114)', async () => {
+  test('reconstructs StackPayloadTooLargeError from a 413 payload_too_large wire error body', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
@@ -1011,7 +1011,7 @@ describe('error taxonomy reconstruction', () => {
     ).rejects.toThrow(StackPayloadTooLargeError);
   });
 
-  test('reconstructs StackPayloadTooLargeError from a bare 413 status with no parseable body (#114)', async () => {
+  test('reconstructs StackPayloadTooLargeError from a bare 413 status with no parseable body', async () => {
     // 413 is unambiguous — no other wire code shares it — so status-only
     // reconstruction recovers the precise type even without a body, e.g. a
     // reverse proxy's own request-entity-too-large page in front of the

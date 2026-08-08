@@ -120,7 +120,7 @@ describe('resolveAttachmentDownloadContentType — source precedence', () => {
 });
 
 // -------------------------------------------------------
-// resolveAttachmentDownloadContentType — dangerous-type forcing (#66)
+// resolveAttachmentDownloadContentType — dangerous-type forcing
 // -------------------------------------------------------
 
 describe('resolveAttachmentDownloadContentType — forcing applies to the result, not the source', () => {
@@ -134,7 +134,7 @@ describe('resolveAttachmentDownloadContentType — forcing applies to the result
     expect(result).toEqual({ contentType: FORCED_CONTENT_TYPE, forced: true });
   });
 
-  test('forces a dangerous stored mimeType (e.g. a lying _attachment@1 record, #65)', () => {
+  test('forces a dangerous stored mimeType (e.g. a lying _attachment@1 record)', () => {
     const result = resolveAttachmentDownloadContentType({ storedMimeType: 'text/html' });
     expect(result).toEqual({ contentType: FORCED_CONTENT_TYPE, forced: true });
   });

@@ -74,11 +74,8 @@ export const hashSchema = async (schema: TypeSchema): Promise<string> => {
 
 /**
  * Kinds acceptable in a candidate field, per required kind. `string` and
- * `text` share an identical value set (the distinction is presentation/
- * indexing intent, not data shape), so they're mutually acceptable for
- * reading. Everything else requires an exact kind match — notably `date`
- * is NOT compatible with `string`: it carries a parse/validity guarantee
- * a plain string doesn't.
+ * `text` are mutually acceptable for reading; everything else requires an
+ * exact match. See docs/spec/data-model.md § Type compatibility.
  */
 const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   string: ['string', 'text'],
@@ -132,20 +129,11 @@ const isCompatibleAtDepth = (
 };
 
 /**
- * Check whether a candidate schema is read-compatible with a required schema:
- * whether records of the candidate Type carry every field an app needs to
- * *read*, at a kind the app can safely consume. This licenses consuming
- * records, not writing them — a consumer writing through a "compatible" view
- * still has to validate against the candidate's full schema.
- *
- * A candidate is compatible if, for every *required* field in the required
- * schema, the candidate declares that field as required with a read-compatible
- * kind (see READ_COMPATIBLE). Optional fields in the required schema are
- * ignored. Array and object fields recurse into their items/properties, up
- * to MAX_COMPATIBILITY_DEPTH.
- *
- * Apps that need precise type matching should compare typeIds directly.
- * isCompatible() is for duck-typed consumption across types.
+ * Check whether a candidate schema is read-compatible with a required
+ * schema — licensing duck-typed *consumption* of records, not writing
+ * them. Every required field must be declared required at a
+ * read-compatible kind; array/object fields recurse. See
+ * docs/spec/data-model.md § Type compatibility.
  */
 export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSchema): boolean =>
   isCompatibleAtDepth(candidateSchema, requiredSchema, 0);
@@ -154,24 +142,9 @@ export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSc
 // Schema evolution legality (drift detection)
 // -------------------------------------------------------
 //
-// Deliberately distinct from isCompatible() above, despite both walking a
-// TypeSchema pair recursively:
-//
-//   - isCompatible()  — read compatibility: may a consumer of this shape
-//                        read records of that type? (`text` and `string`
-//                        interchange; a candidate may have *extra* required
-//                        fields the consumer doesn't ask about.)
-//   - diffSchemas()   — evolution legality: may this schema replace that one
-//                        in place, under the same typeId? (`text` and
-//                        `string` are NOT interchangeable — changing a
-//                        field's declared kind is drift regardless of value-
-//                        level overlap; nothing about the *other* schema's
-//                        extra fields is relevant, every field on both sides
-//                        matters.)
-//
-// Conflating them is the obvious future bug: a read-compatible schema
-// (e.g. one that merely has extra optional fields) is not necessarily a
-// legal in-place evolution, and vice versa.
+// Deliberately distinct from isCompatible() above: read compatibility and
+// evolution legality are different relations that disagree on text/string.
+// See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {
   /** Field path where the drift was detected, e.g. "title" or "author.name". Empty string means array-item context. */
@@ -251,18 +224,10 @@ const diffFields = (
 };
 
 /**
- * Check whether `candidate` is a legal in-place evolution of `stored` — the
- * same typeId, a new schemaHash. Legal iff every existing field is
- * unchanged (same kind, same required-ness, recursively into object
- * properties and array items) and every field `candidate` adds beyond
- * `stored` is optional. Returns the list of violations; empty means legal.
- *
- * This is the callable-facing sibling of isCompatible() but answers a
- * different question — see the note above. Removing a field, changing a
- * field's kind, or flipping required either direction (optional→required or
- * required→optional) is drift: a version bump communicates that a consumer
- * pinned to the old shape needs to notice, in a way an in-place change
- * cannot.
+ * Check whether `candidate` is a legal in-place evolution of `stored`:
+ * every existing field unchanged (recursively) and every added field
+ * optional. Returns the list of violations; empty means legal. See
+ * docs/spec/data-model.md § Schema drift detection.
  */
 export const diffSchemas = (stored: TypeSchema, candidate: TypeSchema): SchemaDriftViolation[] => {
   const violations: SchemaDriftViolation[] = [];

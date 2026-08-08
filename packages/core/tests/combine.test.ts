@@ -112,7 +112,7 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
-  // putAttachmentWithMetadata (#106) promises bytes + record as one atomic
+  // putAttachmentWithMetadata promises bytes + record as one atomic
   // operation — something a record backend glued to a blob backend can
   // never honor, so combineAdapters() must not synthesize it. Its absence
   // is what routes Stack.putAttachment() to the bytes-then-create()

@@ -295,7 +295,7 @@ describe('ScopedStack — versions', () => {
     expect(restored.content.text).toBe('old');
   });
 
-  // #109: history is the mutate/recovery surface, not a read surface — a
+  // history is the mutate/recovery surface, not a read surface — a
   // plain reader (read access but no write) must be denied, matching
   // update()/associate()'s gate exactly.
   test('getVersions/getVersion deny a read-only requester', async () => {
@@ -367,7 +367,7 @@ describe('ScopedStack — versions', () => {
     ]);
   });
 
-  test('getVersions/getVersion on a group require admin, not just membership (#58)', async () => {
+  test('getVersions/getVersion on a group require admin, not just membership', async () => {
     const ADMIN = 'group-version-admin';
     const group = await adapter.createRecord(
       makeRecord({
@@ -390,11 +390,11 @@ describe('ScopedStack — versions', () => {
     await expect(stack.asEntity(ADMIN).getVersions(group.id)).resolves.toHaveLength(1);
   });
 
-  // #109's related follow-up: restoreVersion() restores associations/file-ref
+  // Related follow-up: restoreVersion() restores associations/file-ref
   // fields straight from the snapshot, which for a non-owner write-holder
   // could re-convey access to a file or record they can no longer reach —
   // the reference was legitimate when created, but access moved on since.
-  // Re-running #51's reference-creation checks against the snapshot closes
+  // Re-running the reference-creation checks against the snapshot closes
   // that: a write-holder may only restore references they could create fresh.
   describe('restoreVersion — reference-reconveyance gating', () => {
     test('rejects restoring an attachment association to a file the requester can no longer access', async () => {
@@ -555,7 +555,7 @@ describe('ScopedStack.create', () => {
     expect(record.typeId).toBe(COMMENT);
   });
 
-  // #69: the spec says owner-created records carry no entityId — that must
+  // the spec says owner-created records carry no entityId — that must
   // hold whether the owner writes through Stack.create() directly or
   // through ScopedStack.asEntity(ownerEntityId). Before this fix, only the
   // former was true.
@@ -573,7 +573,7 @@ describe('ScopedStack.create', () => {
   // Owner bypasses grants entirely (checkAccess's owner shortcut), so an
   // owner-authored record carrying no entityId can never accidentally
   // satisfy a *different* requester's -own grant check — pinning the claim
-  // from #69 that this normalization doesn't regress -own semantics.
+  // that this normalization doesn't regress -own semantics.
   test('a stranger with a -own grant cannot use it against an owner-authored record', async () => {
     const ownerRecord = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
     await stack.grant(STRANGER, [{ actions: ['read-own', 'update-own'], typeId: COMMENT }]);
@@ -645,7 +645,7 @@ describe('ScopedStack.create', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack.create — client-supplied id (#55)
+// ScopedStack.create — client-supplied id
 // -------------------------------------------------------
 
 describe('ScopedStack.create — client-supplied id', () => {
@@ -781,7 +781,7 @@ describe('ScopedStack — grant-based read', () => {
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
 
-  // #50: the grant prefetch used to take a single unbounded query() page,
+  // the grant prefetch used to take a single unbounded query() page,
   // so a grant past MemoryAdapter's 50-record default page went unseen —
   // a legitimate grant silently stopped working with no error.
   test('a grant beyond the first page (>50 _grant records) is still honored', async () => {
@@ -951,7 +951,7 @@ describe('ScopedStack.putAttachment', () => {
     expect(typeof fileId).toBe('string');
   });
 
-  // #106 E1: owner uploads carry no entityId, matching create()'s existing
+  // owner uploads carry no entityId, matching create()'s existing
   // normalization — same author, same shape, whether writing directly or
   // through asEntity(ownerEntityId).
   test('owner upload via asEntity(ownerEntityId) produces a record with no entityId', async () => {
@@ -961,7 +961,7 @@ describe('ScopedStack.putAttachment', () => {
     expect(result.records[0].entityId).toBeUndefined();
   });
 
-  // #114 C4: the maxAttachmentBytes pre-check applies to ScopedStack's own
+  // the maxAttachmentBytes pre-check applies to ScopedStack's own
   // upload path too, after the permission checks (grant checks run against
   // adapter.query(), which is unaffected by upload size).
   test('over-ceiling upload throws StackPayloadTooLargeError without touching the adapter', async () => {
@@ -1021,16 +1021,11 @@ describe('ScopedStack.getAttachment', () => {
     );
   });
 
-  // #50: on adapters without contentFieldQuery, the uploader check used
-  // limit: 1 even though matching happens in memory — it could only ever
-  // see one of the requester's uploads, false-denying every other one.
-  // Uses IncapableMemoryAdapter (#90/#113) to force that code path — a
-  // compliant local adapter (MemoryAdapter's real-world default) would
-  // take the fast content-filtered query instead, which this regression
-  // isn't about. IncapableMemoryAdapter returns records in insertion order
-  // with no sort applied, so under the old code this second upload was
-  // never even considered.
-  test('uploader can access an upload that is not their first (#50 regression)', async () => {
+  // Regression: on adapters without contentFieldQuery, the uploader check
+  // used limit: 1 even though matching happens in memory — false-denying
+  // every upload but one. IncapableMemoryAdapter forces that fallback path
+  // (a compliant local adapter would take the content-filtered query).
+  test('uploader can access an upload that is not their first (regression)', async () => {
     const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const incapableStack = await Stack.create(incapableAdapter);
     incapableAdapter.blobs.set('file-first', { data: new Uint8Array([1]), modifiedAt: new Date() });
@@ -1053,13 +1048,13 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
-  // #108: hasReadableReference() used to check readability via
+  // hasReadableReference() used to check readability via
   // ScopedStack.query({ limit: 1 }), which stops after limit * 10 = 10
   // underlying records. A file referenced by more than 10 records the
   // requester can't read, plus one further down that they can, was
   // false-denied. MemoryAdapter returns records in insertion order with no
   // sort applied, so the 11th-created record lands past that old cutoff.
-  test('requester can download when the only readable referencing record is past the first 10 (#108 regression)', async () => {
+  test('requester can download when the only readable referencing record is past the first 10 (regression)', async () => {
     const fileId = 'file-widely-referenced';
     adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     for (let i = 0; i < 10; i++) {
@@ -1084,7 +1079,7 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
-  test('reference creation (#51 gate) succeeds when the only readable referencing record is past the first 10 (#108)', async () => {
+  test('reference creation (gating check) succeeds when the only readable referencing record is past the first 10', async () => {
     const fileId = 'file-widely-referenced-2';
     for (let i = 0; i < 10; i++) {
       await stack.create(
@@ -1114,7 +1109,7 @@ describe('ScopedStack.getAttachment', () => {
     expect(updated?.associations).toContainEqual({ kind: 'attachment', label: 'y', fileId });
   });
 
-  test('requester who can read none of >10 referencing records is still denied (no false positive, #108)', async () => {
+  test('requester who can read none of >10 referencing records is still denied (no false positive)', async () => {
     const fileId = 'file-widely-referenced-3';
     for (let i = 0; i < 12; i++) {
       await stack.create(
@@ -1133,7 +1128,7 @@ describe('ScopedStack.getAttachment', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack.getAttachment — file-ref content fields convey access (#63)
+// ScopedStack.getAttachment — file-ref content fields convey access
 // -------------------------------------------------------
 
 describe('ScopedStack.getAttachment — file-ref content fields', () => {
@@ -1167,7 +1162,7 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack.collectAttachmentGarbage — owner only (#64)
+// ScopedStack.collectAttachmentGarbage — owner only
 // -------------------------------------------------------
 
 describe('ScopedStack.collectAttachmentGarbage', () => {
@@ -1193,10 +1188,10 @@ describe('ScopedStack.collectAttachmentGarbage', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack — group role gating (#58)
+// ScopedStack — group role gating
 // -------------------------------------------------------
 
-describe('ScopedStack — group role gating (#58)', () => {
+describe('ScopedStack — group role gating', () => {
   const ADMIN = 'group-admin-1';
 
   function makeGroup(overrides: Partial<StackRecord> = {}): Promise<StackRecord> {
@@ -1326,8 +1321,8 @@ describe('ScopedStack — group role gating (#58)', () => {
     expect(adminAssociations).toHaveLength(1);
   });
 
-  // #118: the owner writing through asEntity(OWNER) carries no entityId
-  // (#69 normalization) — confirms Stack.create()'s single stamping site
+  // the owner writing through asEntity(OWNER) carries no entityId
+  // (owner normalization) — confirms Stack.create()'s single stamping site
   // keys off ownerEntityId in that case rather than stamping twice or not
   // at all.
   test('owner writing through ScopedStack stamps the owner as admin exactly once', async () => {
@@ -1341,10 +1336,10 @@ describe('ScopedStack — group role gating (#58)', () => {
 });
 
 // -------------------------------------------------------
-// Permission — group `role` (#58)
+// Permission — group `role`
 // -------------------------------------------------------
 
-describe('Permission — group role restriction (#58)', () => {
+describe('Permission — group role restriction', () => {
   test('role: "admin" ACL entry excludes a plain member', async () => {
     const group = await adapter.createRecord(
       makeRecord({
@@ -1388,18 +1383,15 @@ describe('Permission — group role restriction (#58)', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack.create()/associate() — reference-creation gating (#51)
+// ScopedStack.create()/associate() — reference-creation gating
 // -------------------------------------------------------
 //
 // ScopedStack.create() forwards parentId/associations from an untrusted
-// caller. Creating a reference should require exactly what possessing that
-// reference would grant: an attachment association or file-ref field
-// requires file access, a relationship association or parentId requires
-// read access to the target. Both gates must produce the same error for a
-// nonexistent target as for an existing-but-forbidden one, so the check
-// itself can't be used to probe for a record or file's existence.
+// caller; creating a reference requires exactly what possessing it would
+// grant, and missing vs. forbidden targets are indistinguishable. See
+// docs/spec/access-control.md § Reference-creation gating.
 
-describe('ScopedStack.create — attachment association gating (#51)', () => {
+describe('ScopedStack.create — attachment association gating', () => {
   beforeEach(async () => {
     await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
@@ -1513,17 +1505,15 @@ describe('ScopedStack.create — attachment association gating (#51)', () => {
 });
 
 // -------------------------------------------------------
-// ScopedStack.create — non-owner _attachment@1 refusal (#106)
+// ScopedStack.create — non-owner _attachment@1 refusal
 // -------------------------------------------------------
 //
-// putAttachment() derives fileId from bytes it just hashed — possession is
-// proven by construction. Generic create() accepts a caller-supplied
-// fileId string with no such proof, so a non-owner holding nothing but a
-// bare `create` grant on _attachment@1 could otherwise name an arbitrary
-// guessed fileId and, via canAccessFile()'s uploader clause, turn a correct
-// guess into a read. These tests pin the guard that closes this path.
+// putAttachment() proves possession by hashing bytes; generic create()
+// accepts a caller-supplied fileId with no such proof. These pin the
+// non-owner refusal and its carve-out. See docs/spec/attachments.md
+// § Creating `_attachment@1` records directly.
 
-describe('ScopedStack.create — non-owner _attachment@1 refusal (#106)', () => {
+describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
   beforeEach(async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
   });
@@ -1658,7 +1648,7 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal (#106)', () => 
   });
 });
 
-describe('ScopedStack.create — relationship association and parentId gating (#51)', () => {
+describe('ScopedStack.create — relationship association and parentId gating', () => {
   let readableNote: StackRecord;
   let unreadableNote: StackRecord;
 
@@ -1767,7 +1757,7 @@ describe('ScopedStack.create — relationship association and parentId gating (#
   });
 });
 
-describe('ScopedStack.associate — reference-creation gating (#51)', () => {
+describe('ScopedStack.associate — reference-creation gating', () => {
   let ownedRecord: StackRecord;
 
   beforeEach(async () => {
@@ -1818,7 +1808,7 @@ describe('ScopedStack.associate — reference-creation gating (#51)', () => {
   });
 });
 
-describe('ScopedStack — file-ref content field gating (#51, extends #63)', () => {
+describe('ScopedStack — file-ref content field gating', () => {
   const PHOTO_NOTE = 'com.example.test/photo-note-gating@1';
   const FILE_ID = 'c'.repeat(64);
 

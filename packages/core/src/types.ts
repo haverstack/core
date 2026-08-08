@@ -24,12 +24,10 @@ export type TypeId = string;
 export type FileId = string;
 
 /**
- * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". Distinct from
- * RecordId: an entity is never a record within *this* stack the way a
- * RecordId's uniqueness scope implies — it's a self-certifying identifier
- * that means the same thing in every stack. did:key is the mandatory
- * floor method (see did.ts); did:web, did:plc, etc. are also valid values
- * here. See docs/spec/identity.md.
+ * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". A
+ * self-certifying identifier that means the same thing in every stack,
+ * unlike a RecordId. did:key is the mandatory floor method (see did.ts).
+ * See docs/spec/identity.md.
  */
 export type EntityId = string;
 
@@ -172,12 +170,10 @@ export type StackType = {
 // -------------------------------------------------------
 
 /**
- * Content for _entity records. An _entity record is a stack-local profile
- * card *about* a DID — not the identity itself, the identity is the `did`
- * value. `name`/`handle` are this stack owner's local labels for that DID
- * (the petname pattern) — two stacks may hold different `_entity` cards
- * with different display names for the same DID, and that's correct: it's
- * each owner's own contact card for that identity.
+ * Content for _entity records: a stack-local profile card *about* a DID,
+ * not the identity itself. `name`/`handle` are this owner's local labels
+ * for that DID (the petname pattern), so two stacks holding different
+ * names for the same DID is correct. See docs/spec/identity.md § Entity.
  */
 export type EntityContent = {
   /** The identity this profile is about. e.g. "did:key:z6Mk..." */
@@ -213,7 +209,7 @@ export type GroupContent = {
 /**
  * Actions that can be granted via a _grant record. The array is the source
  * of truth — GrantAction is derived from it so runtime validation (see
- * Stack.grant()) can't drift from the type (#116).
+ * Stack.grant()) can't drift from the type.
  */
 export const GRANT_ACTIONS = [
   'create',
@@ -252,15 +248,14 @@ export type AttachmentContent = {
 /** Content for _config records — one singleton per stack, created on initialization. */
 export type ConfigContent = {
   /**
-   * DID of the stack owner. Immutable — see docs/spec.md § Stack
-   * initialization for why ownership transfer isn't a field write.
+   * DID of the stack owner. Immutable — see docs/spec.md § The `_config`
+   * record for why ownership transfer isn't a field write.
    */
   entityId: EntityId;
   /**
    * IANA timezone string e.g. "America/New_York". Optional passthrough app
-   * metadata — nothing in core reads it for behavior. Absent means unset;
-   * there is no default, since defaulting to a real timezone would claim
-   * knowledge the stack doesn't have (#69).
+   * metadata — nothing in core reads it for behavior, and there is no
+   * default. See docs/spec.md § The `_config` record.
    */
   timezone?: string;
 };
@@ -374,28 +369,16 @@ export type Migration = {
 export type AdapterCapabilities = {
   fullTextSearch: boolean;
   /**
-   * Required `true` for local/in-process adapters — reads/writes storage
-   * directly, with no network hop to a server that could have its own
-   * opinion (`record-adapter-sqlite`, `record-adapter-sqljs`, any future
-   * JSON-file adapter, and first-party test doubles standing in for one).
-   * Filtering by `content` is just a linear scan over data the adapter
-   * already holds resident, so there's no legitimate reason for a local
-   * adapter to decline it (#90). Wire adapters (`adapter-api`) remain free
-   * to report `false`, driven by the connected server's own discovery
-   * response — `content` is an arbitrary, app-defined JSON blob rather than
-   * the server's fixed, indexable native schema, and a server may
-   * reasonably decline to index or full-scan it. `Stack.query()` enforces
-   * this at the invariant layer regardless: a query using `content` against
-   * an adapter that declares `false` throws `StackQueryError` rather than
-   * silently returning the unfiltered superset (#113).
+   * Required `true` for local/in-process adapters; wire adapters may
+   * report `false`, driven by the server's discovery response.
+   * Stack.query() throws StackQueryError rather than silently widening.
+   * See docs/spec/adapters.md § Adapter capabilities.
    */
   contentFieldQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
   /**
-   * Maximum attachment upload size in bytes this adapter/server will
-   * accept, or `null` if unbounded. Lets apps pre-check and surface limits
-   * in UI before burning the upload, rather than learning the ceiling only
-   * from a 413 after sending the whole payload.
+   * Maximum attachment upload size in bytes, or `null` if unbounded. Lets
+   * apps pre-check and surface limits before burning an upload on a 413.
    */
   maxAttachmentBytes: number | null;
 };
@@ -408,69 +391,56 @@ export type StackFeatures = AdapterCapabilities;
 // -------------------------------------------------------
 
 /**
- * The record-storage half of an adapter. Handles structured data, queries,
- * associations, versioning, type definitions, and stack identity.
- */
-/**
  * Opt-in optimistic-concurrency precondition, accepted by every mutation
- * that bumps a record's version. When set, the mutation only applies if
- * the record's current version equals `expectedVersion`; otherwise the
- * adapter throws StackVersionConflictError without applying any part of
- * the mutation. The check happens atomically inside the adapter's write
- * (e.g. `UPDATE ... WHERE id = ? AND version = ?`, checking the affected
- * row count) — never as a read-then-write, which would just move the race
- * down a layer. Omit to keep today's last-writer-wins behavior.
+ * that bumps a record's version. On mismatch the adapter throws
+ * StackVersionConflictError without applying anything. The check is atomic
+ * inside the adapter's write, never a read-then-write. See
+ * docs/spec/versioning.md § Optimistic concurrency.
  */
 export type ExpectedVersionOptions = {
   expectedVersion?: number;
 };
 
 /**
- * Accepted by every mutating StackRecordAdapter method alongside
- * ExpectedVersionOptions. When present, the adapter persists this prior
- * full-state snapshot as part of the SAME atomic write as the mutation —
- * never as a separate call — so a crash between "snapshot" and "mutate"
- * can't leave an orphan `versions` row that permanently blocks future
- * mutations (#112). Stack builds the snapshot from the record it already
- * read and passes it through; local adapters fold the insert into their
- * own transaction. Server-backed adapters (already atomic per-request,
- * e.g. the API adapter) can ignore it — saveVersion() there is a no-op
- * for the same reason.
+ * Accepted by every mutating StackRecordAdapter method. The adapter
+ * persists this prior-state snapshot as part of the SAME atomic write as
+ * the mutation, so a crash between the two can't leave an orphan versions
+ * row. Server-backed adapters (already atomic per-request) can ignore it.
  */
 export type SnapshotOptions = {
   snapshot?: RecordVersion;
 };
 
+/**
+ * The record-storage half of an adapter: structured data, queries,
+ * associations, versioning, type definitions, and stack identity.
+ */
 export interface StackRecordAdapter {
   readonly capabilities: AdapterCapabilities;
 
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
   /**
-   * IANA timezone string for this stack e.g. "America/New_York", or
-   * undefined if never set. Passthrough app metadata — no core behavior
-   * reads it, and there is no 'UTC' default, since defaulting would claim
-   * knowledge the stack doesn't have (#69).
+   * IANA timezone string for this stack, or undefined if never set.
+   * Passthrough app metadata with no default — see docs/spec.md § The
+   * `_config` record.
    */
   readonly timezone: string | undefined;
 
   // Records
   /**
    * Throws StackConflictError if `record.id` already exists — never a
-   * silent overwrite (#55, #120). The check must be atomic with the write
-   * (a PK/unique constraint, or an equivalent single-threaded check with no
-   * await between the existence check and the mutation) — Stack itself no
-   * longer pre-checks, so a raw adapter that skips this enforces nothing.
+   * silent overwrite. The check must be atomic with the write (a PK/unique
+   * constraint or equivalent); Stack itself doesn't pre-check, so a raw
+   * adapter that skips this enforces nothing.
    */
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
-   * Apply a content-only RFC 7396 merge patch. `null` removes a field;
-   * other values replace it; omitted fields are retained. Bumps `version`
-   * and `updatedAt` as part of the same write. Does not touch `typeId` —
-   * a patch that also commits a pending migration goes through
-   * commitMigration() instead, since a content-only patch has no way to
-   * carry a type change.
+   * Apply a content-only RFC 7396 merge patch: `null` removes a field,
+   * omitted fields are retained. Bumps `version`/`updatedAt` in the same
+   * write. Never touches `typeId` — a type change goes through
+   * commitMigration() instead.
    */
   patchContent(
     id: RecordId,
@@ -546,16 +516,11 @@ export interface StackRecordAdapter {
   listTypes(): Promise<StackType[]>;
 
   /**
-   * Atomically verify fileId is unreferenced by any record's attachment
-   * association, then hard-delete every record of `metadataTypeId` whose
-   * content.fileId matches it — all within a single adapter call, so
-   * nothing can add a new reference between the check and the delete.
-   * Returns the ids of the deleted metadata records (empty if none exist,
-   * e.g. bare bytes left by an interrupted upload). Throws
-   * StackConflictError if fileId is still referenced.
-   *
-   * Optional: Stack.deleteAttachment() falls back to a non-atomic
-   * check-then-act sequence for adapters that don't implement this.
+   * Atomically verify fileId is unreferenced, then hard-delete its
+   * metadata records in the same adapter call, returning their ids.
+   * Throws StackConflictError if still referenced. Optional —
+   * Stack.deleteAttachment() has a non-atomic fallback. See
+   * docs/spec/attachments.md § Deleting attachments.
    */
   deleteUnreferencedAttachmentRecords?(fileId: FileId, metadataTypeId: TypeId): Promise<RecordId[]>;
 
@@ -583,14 +548,10 @@ export interface StackBlobAdapter {
   deleteAttachment(fileId: FileId): Promise<void>;
 
   /**
-   * Enumerate every blob currently in storage. Optional — capability-flagged,
-   * like StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Without it,
-   * Stack.collectAttachmentGarbage() can still collect files that have
-   * _attachment@1 metadata but no live/soft-deleted referencing record; it
-   * just can't find bare-bytes orphans (bytes with zero metadata records at
-   * all, left by a putAttachment() that stored bytes but crashed before
-   * creating the metadata record) — enumerating the store directly is the
-   * only way to find those.
+   * Enumerate every blob currently in storage. Optional — without it,
+   * garbage collection can't find bare-bytes orphans (bytes with no
+   * metadata record at all). See docs/spec/attachments.md § Garbage
+   * collection.
    */
   listFiles?(): Promise<BlobFileInfo[]>;
 
@@ -608,26 +569,10 @@ export type StackAdapter = StackRecordAdapter &
   StackBlobAdapter & {
     /**
      * Store bytes and create the accompanying _attachment@1 record as one
-     * atomic operation. Optional — capability-flagged, like
-     * StackRecordAdapter.deleteUnreferencedAttachmentRecords(): implement it
-     * only when bytes and records genuinely live behind a single boundary
-     * that can do both in one operation. Today that is APIAdapter alone, via
-     * one POST /attachments request the server fulfills atomically (#106).
-     * It lives here on the composed type, not on either half, because
-     * neither half can ever have it: a blob adapter has no record store and
-     * a record adapter has no byte store. Accordingly, combineAdapters()
-     * never synthesizes it from parts — a record backend and a blob backend
-     * glued together have no shared transaction.
-     *
-     * This is not an efficiency shortcut: the record's fileId must be
-     * established from bytes the backend actually received in *this*
-     * operation, or a separate record-creation call is indistinguishable,
-     * server-side, from a caller who never uploaded anything and only
-     * guessed the fileId (#106). Stack.putAttachment() uses this when
-     * present — trusting the returned record as backend-authoritative,
-     * without re-running client-side validation — and otherwise falls back
-     * to its own bytes-then-create() sequence, unchanged from before this
-     * method existed.
+     * atomic operation. Optional; implement only when bytes and records
+     * live behind a single boundary (today: APIAdapter alone), and never
+     * synthesized by combineAdapters(). A security boundary, not an
+     * efficiency shortcut — see docs/spec/adapters.md § Interface split.
      */
     putAttachmentWithMetadata?(
       data: Uint8Array,
@@ -645,27 +590,11 @@ export type TokenInfo = {
 };
 
 /**
- * Bearer-token issuance and lookup for server implementations. Neither
- * `Stack` nor `StackClient` touches this — it's server-side tooling, not
- * part of the record/blob adapter contract, so it's a standalone
- * interface rather than a slot on `StackAdapter`. Server implementations
- * accept storage and tokens as separate parts (`{ adapter, tokens }`)
- * rather than sniffing an adapter for token methods.
- *
- * `createToken(entityId)` trusts its caller about who that DID is —
- * verifying that the caller actually controls the private key behind it
- * is the server's job, done once, before calling createToken(), via a
- * challenge-response handshake (server nonce, signed by the requester's
- * key, verified with verifyDidSignature() — see docs/spec/identity.md §
- * Authentication). This interface doesn't change shape for that; it's
- * where issuance lands once verification has already happened.
- *
- * Token storage is deliberately decoupled from record storage: the
- * portable stack file is "your data, take it with you," and auth
- * material shouldn't travel with it (an export/backup shouldn't also
- * hand over — or resurrect — bearer tokens). Implementations SHOULD
- * default to storing tokens outside the stack's own file, treating
- * in-file storage as an explicit opt-in at most.
+ * Bearer-token issuance and lookup for server implementations — a
+ * standalone interface, not a slot on StackAdapter. createToken() trusts
+ * its caller: DID verification happens first, via the challenge-response
+ * handshake. Tokens SHOULD be stored outside the portable stack file.
+ * See docs/spec/wire-format.md § Authentication.
  */
 export interface StackTokenStore {
   createToken(

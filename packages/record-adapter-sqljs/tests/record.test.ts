@@ -133,7 +133,7 @@ describe('open', () => {
 // -------------------------------------------------------
 
 describe('capabilities', () => {
-  // #90 regression guard: this is a local, in-process adapter, so it has no
+  // Regression guard: this is a local, in-process adapter, so it has no
   // legitimate reason to decline content-field filtering — a future
   // refactor that regressed this to `false` would silently widen every
   // caller's query() results instead of erroring (see assertQueryCapabilities
@@ -582,7 +582,7 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
-  // #69: a null content filter means "field absent or null," never "match
+  // a null content filter means "field absent or null," never "match
   // nothing" — plain SQL `= NULL` is always false, which used to make this
   // silently return zero records with no signal.
   test('content filter with a null value matches records where the field is absent', async () => {
@@ -616,7 +616,7 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
-  // #113 C1: a search term that sanitizes to nothing (here, a bare wildcard
+  // a search term that sanitizes to nothing (here, a bare wildcard
   // FTS4 strips outright) must match nothing, not silently drop the search
   // clause and return the whole table as the "search result".
   test('a search term that sanitizes to empty matches nothing, not everything', async () => {
@@ -765,7 +765,7 @@ describe('records — queries', () => {
 });
 
 // -------------------------------------------------------
-// file-ref indexing (#63)
+// file-ref indexing
 // -------------------------------------------------------
 
 describe('file-ref indexing', () => {
@@ -953,7 +953,7 @@ describe('associations', () => {
     const retrieved = await adapter.getRecord(record.id);
     const hasStarred = (retrieved?.associations ?? []).some((a) => a.label === 'starred');
     expect(hasStarred).toBe(false);
-    // #111: dissociating the only association omits the key entirely
+    // dissociating the only association omits the key entirely
     // (undefined), never a bare `[]` — this is the shape MemoryAdapter must
     // match too, since it's what a fresh record's snapshot also uses.
     expect(retrieved?.associations).toBeUndefined();
@@ -1120,15 +1120,12 @@ describe('versions', () => {
     expect(versions.length).toBe(1);
   });
 
-  // #112: the old Stack design called saveVersion() and the mutation as two
-  // separate adapter calls; a crash between them left an orphan versions
-  // row at the record's own current version, permanently colliding with
-  // every future mutation's snapshot attempt. Mutating methods now take
-  // the snapshot as part of their own call (opts.snapshot), so it commits
-  // atomically with the mutation — but a stack that already carries an
-  // orphan from before this fix (or one manufactured directly here, same
-  // shape) must still be able to heal.
-  describe('orphan version row recovery (#112)', () => {
+  // The old two-call design could crash between saveVersion() and the
+  // mutation, leaving an orphan versions row at the record's current
+  // version that collided with every future snapshot. Snapshots now commit
+  // atomically with the mutation, but a stack already carrying an orphan
+  // must still heal. See docs/spec/versioning.md § Snapshot atomicity.
+  describe('orphan version row recovery', () => {
     test("a mutating call's snapshot heals a pre-existing orphan at the record's current version instead of colliding with it forever", async () => {
       const adapter = await initAdapter();
       const record = makeRecord({ version: 1, content: { text: 'original' } });

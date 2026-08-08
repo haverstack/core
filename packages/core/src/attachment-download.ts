@@ -2,7 +2,7 @@
  * Stack — Attachment Download Content-Type Resolution
  * -------------------------------------------------------
  * Shared, pure implementation of the `GET /attachments/:fileId` dangerous-
- * type policy (spec §Attachments, "Download"; see #66). Core has no HTTP
+ * type policy (docs/spec/wire-format.md § Download). Core has no HTTP
  * server of its own — this module exists so `haverstack/server` and any
  * other server implementation share one safe-list and one forcing
  * computation, rather than each re-deriving it and risking drift on a
@@ -105,11 +105,11 @@ export type AttachmentDownloadContentType = {
 };
 
 /**
- * Resolve the Content-Type served for `GET /attachments/:fileId`, per spec
- * §Attachments "Download": `?contentType` wins if present, else extension
- * inference from `?filename`, else the stored `_attachment@1` mimeType,
- * else `application/octet-stream` — then the safe-list is applied to
- * whichever candidate that produced.
+ * Resolve the Content-Type served for `GET /attachments/:fileId`
+ * (docs/spec/wire-format.md § Download): `?contentType` wins, else
+ * extension inference from `?filename`, else the stored mimeType, else
+ * `application/octet-stream` — then the safe-list is applied to whichever
+ * candidate that produced.
  */
 export function resolveAttachmentDownloadContentType(input: {
   contentTypeParam?: string;

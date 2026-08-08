@@ -2,8 +2,8 @@
  * Schema DDL shared by SQLite-backed record adapters. TOKENS_SCHEMA_SQL
  * is split out from RECORD_SCHEMA_SQL because token storage lives in its
  * own file, never a browser adapter's, and never bundled with records —
- * see NativeTokenStore in record-adapter-sqlite, docs/spec/adapters.md,
- * and the StackTokenStore portability rationale in #46.
+ * see NativeTokenStore in record-adapter-sqlite and the StackTokenStore
+ * portability rationale (docs/spec/wire-format.md § Authentication).
  */
 
 export const RECORD_SCHEMA_SQL = `
@@ -56,7 +56,7 @@ export const RECORD_SCHEMA_SQL = `
   -- One row per top-level file-ref content field on a record, kept in sync
   -- on every content/typeId write. Lets the attachmentFileId query filter
   -- and deleteAttachment()'s reference check see content-held file
-  -- references, not just attachment associations (see #63).
+  -- references, not just attachment associations.
   CREATE TABLE IF NOT EXISTS file_refs (
     record_id TEXT NOT NULL REFERENCES records(id),
     field     TEXT NOT NULL,
@@ -116,11 +116,9 @@ export const FTS5_SCHEMA_SQL = `
 
 /**
  * Enforces the REFERENCES constraints declared above (off by default per
- * SQLite connection). Without it, associating/versioning a nonexistent
- * record silently creates an orphan row instead of failing loudly.
- * Adapters that enable this must map the resulting constraint-violation
- * error to StackNotFoundError at the call sites that can trigger it
- * (chiefly `associate()` on a record that doesn't exist).
+ * SQLite connection), so touching a nonexistent record fails loudly
+ * instead of creating an orphan row. Adapters map the constraint
+ * violation to StackNotFoundError at the call sites that can trigger it.
  */
 export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
 

@@ -180,7 +180,7 @@ describe('generateId', () => {
     expect(generateAllSuffixes).toThrow(IdGenerationOverflowError);
   });
 
-  test('incremented suffix with leading zero is padded correctly (regression #90)', () => {
+  test('incremented suffix with leading zero is padded correctly (regression)', () => {
     // Timestamp prefix '1hk1p9749' corresponds to ms timestamp 1704085200009
     const now = 1704085200009;
     _setLastNowId('1hk1p9749');
@@ -190,7 +190,7 @@ describe('generateId', () => {
     expect(id).toBe('1hk1p97490as');
   });
 
-  test('a fresh random draw can produce the maximum suffix "zzz" (regression #55: modulus off-by-one)', () => {
+  test('a fresh random draw can produce the maximum suffix "zzz" (regression: modulus off-by-one)', () => {
     const spy = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((arr) => {
       (arr as Uint32Array)[0] = Math.pow(BASE, RAND_SUFFIX_LENGTH) - 1; // 32767
       return arr;
@@ -200,7 +200,7 @@ describe('generateId', () => {
     spy.mockRestore();
   });
 
-  test('clamps to the last timestamp when the clock regresses (regression #55)', () => {
+  test('clamps to the last timestamp when the clock regresses (regression)', () => {
     const t2 = new Date('2024-06-01T00:00:05.000Z').valueOf();
     const t1 = t2 - 5000; // clock steps backward after t2
 

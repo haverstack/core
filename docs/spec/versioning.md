@@ -25,6 +25,19 @@ type RecordVersion = {
 - `stack.getVersions(recordId)` — retrieve version history
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Access control](./access-control.md#the-write-bit-a-recoverability-trust-model)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore. The snapshot also deliberately does not capture `parentId` or `appId`, so restore never reverts a re-parent or an app reattribution — those fields keep their current values.
 
+## Snapshot atomicity
+
+**A snapshot is written as part of the same atomic write as the mutation it precedes**, never as a separate call before it. Adapters accept the snapshot as an option on every mutating method and fold the insert into their own transaction; `Stack` builds it from the record it has already read and passes it through. A standalone `saveVersion()` exists for tooling, but no mutation path uses it — and it is a deliberate no-op over `APIAdapter`, where the server is the only snapshot writer.
+
+The reason is recoverability of the history mechanism itself. Under a two-call design (snapshot, then mutate), a crash in between leaves a `versions` row at the record's own current version — a version number that no legitimate snapshot can ever carry, since a snapshot is written in the same breath as the bump past it. That orphan then collides with every future mutation's snapshot attempt, permanently blocking writes to the record.
+
+Adapters therefore treat a `(recordId, version)` collision two ways:
+
+- **Colliding row below the record's current version** — a genuine conflict: two writers read the same stale version and raced to snapshot it. The loser is rejected with `StackConflictError` before its mutation applies. Never silently discarded, which would leave a hole in rollback history exactly where a conflict happened.
+- **Colliding row _at_ the record's current version** — an orphan from an interrupted write, impossible to produce under atomic snapshotting. The row is overwritten and the mutation proceeds, healing the record.
+
+The distinction is a pure version-number comparison against the live record, never a comparison of snapshot content. The tempting "same payload ⇒ treat as success" shortcut is unsound: it would let two genuinely concurrent writers both proceed and corrupt history.
+
 ## History access
 
 **History is the mutation/recovery surface, not a read surface.** Under `ScopedStack`, `getVersions()`/`getVersion()` require the same access `update()`/`associate()` require — a write-holder, or the owner/creator (or a Group's admin, for a `_group`'s own history) — not plain read access. Gating history on current read access would make a Record's entire past exactly as public as its present: share a Record after editing out something sensitive, and every current reader would see the pre-edit revisions too, as an automatic side effect of an ACL that only describes _now_. Requiring the mutate surface instead ties history access to "can undo," the same justification the `write` bit rests on. History is deliberately **not** time-sliced per reader (a contributor added today sees the same history a contributor added last year would, including pre-their-involvement content); ACLs aren't per-version timestamped, and building that slicing is out of scope. A denied requester gets `StackPermissionError`, matching every other write-gated verb.

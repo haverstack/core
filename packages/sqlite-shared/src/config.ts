@@ -1,6 +1,6 @@
 import type { SqlExecutor } from './executor.js';
 
-/** timezone is optional passthrough app metadata — no default (#69). */
+/** timezone is optional passthrough app metadata — no default. */
 export type StackConfig = { entityId: string; timezone: string | undefined };
 
 /** Inserts the singleton _config@1 record. Only valid on a freshly-created database. */

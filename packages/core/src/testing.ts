@@ -16,21 +16,11 @@ import { applyMergePatch } from './merge.js';
 import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './stack.js';
 
 /**
- * In-memory StackAdapter with offset-based cursor pagination. Implements the
- * full RecordFilter shape (mirroring sqlite-shared's buildWhereClause) so
- * permission logic under test exercises real predicates rather than an
- * adapter that quietly ignores most filters. Intended for use in tests —
- * import from `@haverstack/core/testing`.
- *
- * Declares `contentFieldQuery: true` — a local, in-process adapter like this
- * one has no legitimate reason to decline content-field filtering (#90), so
- * this is the shape a real local adapter should have. `fullTextSearch`
- * stays `false`: no such requirement applies there, and this adapter never
- * implements `filter.search`. Tests that specifically need to exercise
- * Stack's capability-gated fallback/cursor-walk paths (or the fail-loud
- * check in `assertQueryCapabilities`, #113) should use
- * `IncapableMemoryAdapter` below instead of reaching for a `false` override
- * here.
+ * In-memory StackAdapter with offset-based cursor pagination. Implements
+ * the full RecordFilter shape (mirroring sqlite-shared's buildWhereClause)
+ * so permission logic under test exercises real predicates. Declares
+ * `contentFieldQuery: true`, as every local adapter must; tests needing
+ * the capability-gated paths use IncapableMemoryAdapter below.
  */
 export class MemoryAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities = {
@@ -88,8 +78,8 @@ export class MemoryAdapter implements StackAdapter {
   /**
    * True if any top-level file-ref field in the record's registered type
    * schema currently holds this fileId — the content-reference half of
-   * attachmentFileId matching (see #63). Mirrors sqlite-shared's file_refs
-   * index, computed on the fly since MemoryAdapter has no persisted index.
+   * attachmentFileId matching. Mirrors sqlite-shared's file_refs index,
+   * computed on the fly since MemoryAdapter has no persisted index.
    */
   private hasFileRefTo(record: StackRecord, fileId: string): boolean {
     const schema = this.types.get(record.typeId)?.schema;
@@ -152,7 +142,7 @@ export class MemoryAdapter implements StackAdapter {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
     // _config is addressable only by ID (getRecord), never returned by a
-    // generic query — mirroring the real SQL adapters' WHERE exclusion (#67).
+    // generic query — mirroring the real SQL adapters' WHERE exclusion.
     results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);
     if (!f.includeDeleted) results = results.filter((r) => !r.deletedAt);
     if (f.typeId) {
@@ -208,8 +198,8 @@ export class MemoryAdapter implements StackAdapter {
       );
     }
     // A `null` filter value means "field absent or null" — not "match
-    // nothing" (#69). Plain `===` would miss an absent field, since
-    // `undefined === null` is false; treat both as satisfying a null filter.
+    // nothing". Plain `===` would miss an absent field; treat both as
+    // satisfying a null filter (docs/spec/data-model.md § Filter).
     if (f.content) {
       const entries = Object.entries(f.content);
       results = results.filter((r) =>
@@ -290,12 +280,10 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /**
-   * Standalone snapshot write, outside of a mutation's own atomic path —
-   * for tooling and tests. Loud on a collision, unconditionally: nothing
-   * here is about to bump the record's version, so a colliding row can
-   * only mean a genuine double-write. Mutating methods take a `snapshot`
-   * option instead — see snapshotBeforeMutation, which is more forgiving
-   * because it always bumps the version right after.
+   * Standalone snapshot write for tooling and tests — loud on any
+   * collision, since nothing here is about to bump the record's version.
+   * Mutating methods take a `snapshot` option instead; see
+   * snapshotBeforeMutation.
    */
   async saveVersion(id: string, version: RecordVersion) {
     this.insertVersionRow(id, version);
@@ -303,20 +291,10 @@ export class MemoryAdapter implements StackAdapter {
 
   /**
    * The snapshot half of a mutating method's atomic snapshot-then-mutate
-   * step, called immediately before the method applies its version bump.
-   * Mirrors the real adapters' snapshotBeforeMutation (see
+   * step. Mirrors the real adapters' snapshotBeforeMutation (see
    * sqlite-shared/record-logic.ts for the full rationale): a collision is
-   * usually a genuine conflict between two writers racing to snapshot the
-   * same stale version, and the loser must be rejected here before its
-   * mutation ever applies. But a versions row can only ever legitimately
-   * describe a version strictly less than the record's current version —
-   * one that equals it can only be an orphan left by an interrupted write
-   * under the old two-call design (#112), since the bump that should have
-   * accompanied it never landed. That's a pure version-number check
-   * against the live record, never a content comparison (the "same
-   * payload ⇒ success" shortcut is unsound and deliberately not used
-   * here) — recoverable: overwrite the stale row and let this call's own
-   * mutation, right after, finally complete the bump.
+   * rejected loudly, except an orphan row at the record's current version,
+   * which is overwritten so the interrupted write can finally complete.
    */
   private snapshotBeforeMutation(id: string, version: RecordVersion): void {
     const existing = this.versions.get(id) ?? [];
@@ -418,15 +396,11 @@ export class MemoryAdapter implements StackAdapter {
 }
 
 /**
- * A `MemoryAdapter` that declares `contentFieldQuery: false` — deliberately
- * simulating the one case where that declaration is still legitimate: a
- * wire adapter whose server has declined the capability (#90). Not a stand-
- * in for a real local adapter; every actual local adapter must declare
- * `true`. Its query() still filters `content` correctly under the hood (it
- * shares MemoryAdapter's implementation), so it's precise for what it's
- * for: exercising Stack's capability-gated fallback/cursor-walk code paths
- * and the fail-loud `assertQueryCapabilities` check (#113) in tests,
- * without also losing correctness on the fallback's own filtering logic.
+ * A MemoryAdapter that declares `contentFieldQuery: false`, simulating the
+ * one legitimate case: a wire adapter whose server declined the capability
+ * (docs/spec/adapters.md § Adapter capabilities). For exercising Stack's
+ * capability-gated fallbacks and the fail-loud assertQueryCapabilities
+ * check in tests; not a stand-in for a real local adapter.
  */
 export class IncapableMemoryAdapter extends MemoryAdapter {
   override readonly capabilities: AdapterCapabilities = {
@@ -439,12 +413,8 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
 
 /**
  * Sets a record's associations, omitting the key entirely when empty —
- * mirroring the SQL adapters' rowToRecord, which only sets `associations`
- * `if (associations.length)`. Without this, MemoryAdapter's dissociate()
- * left a bare `associations: []` while the SQL adapters produced
- * `associations: undefined` for the identical post-state, so the same
- * create/associate/dissociate/restore sequence behaved differently on the
- * test double than on real storage (#111).
+ * mirroring the SQL adapters' rowToRecord, so the same mutation sequence
+ * produces identically-shaped records on the test double and real storage.
  */
 function withAssociations(record: StackRecord, associations: Association[]): StackRecord {
   const { associations: _drop, ...rest } = record;
