@@ -519,6 +519,9 @@ export class Stack implements StackClient {
    */
   private readonly typeCache = new Map<TypeId, StackType>();
 
+  /** Set by close(). See docs/spec/adapters.md § Lifecycle. */
+  private closed = false;
+
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
@@ -1442,23 +1445,29 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Flush any pending writes to the underlying storage.
-   * For adapters that write immediately (SQLite, JSON), this is a no-op.
-   * For the API adapter, this commits the offline write queue to the server.
-   * Safe to call at any time — always resolves, never rejects on its own.
+   * Flush pending writes to the underlying storage. A no-op for adapters
+   * that commit on every call (SQLite, the API adapter); meaningful for
+   * ones that buffer, and for checkpointing a stack that stays open —
+   * close() covers the teardown case on its own.
    */
   async flush(): Promise<void> {
     await this.adapter.flush?.();
   }
 
   /**
-   * Release any resources held by the adapter (connections, file handles, timers).
-   * Call this when the stack is no longer needed — especially important for the
-   * API adapter, which holds an open connection and retry timers.
-   * Safe to call even if the adapter has no resources to release.
+   * Flush, then release any resources the adapter holds (connections, file
+   * handles, lock files). A failed flush still releases them before it
+   * propagates: an unwritable stack must not also leak a lock file.
+   * See docs/spec/adapters.md § Lifecycle.
    */
   async close(): Promise<void> {
-    await this.adapter.close?.();
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      await this.flush();
+    } finally {
+      await this.adapter.close?.();
+    }
   }
 
   // -------------------------------------------------------

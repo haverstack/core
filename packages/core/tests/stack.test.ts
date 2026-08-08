@@ -1586,6 +1586,40 @@ describe('flush / close', () => {
   test('close() is a no-op when adapter does not implement close', async () => {
     await expect(stack.close()).resolves.toBeUndefined();
   });
+
+  test('close() flushes before releasing resources', async () => {
+    const calls: string[] = [];
+    adapter.flush = async () => {
+      calls.push('flush');
+    };
+    adapter.close = async () => {
+      calls.push('close');
+    };
+    await stack.close();
+    expect(calls).toEqual(['flush', 'close']);
+  });
+
+  test('close() releases resources even when the flush fails, then propagates', async () => {
+    let closed = false;
+    adapter.flush = async () => {
+      throw new Error('disk full');
+    };
+    adapter.close = async () => {
+      closed = true;
+    };
+    await expect(stack.close()).rejects.toThrow('disk full');
+    expect(closed).toBe(true);
+  });
+
+  test('close() is idempotent — the adapter is never closed twice', async () => {
+    let closes = 0;
+    adapter.close = async () => {
+      closes += 1;
+    };
+    await stack.close();
+    await stack.close();
+    expect(closes).toBe(1);
+  });
 });
 
 // -------------------------------------------------------

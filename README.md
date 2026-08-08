@@ -96,7 +96,6 @@ const notes = await stack.query({
 });
 
 // Tear down when done (flushes pending writes and releases resources)
-await stack.flush();
 await stack.close();
 ```
 

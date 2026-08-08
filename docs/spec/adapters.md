@@ -105,3 +105,13 @@ How each adapter honors the single-writer rule differs by what it actually is:
 - **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`/`initialize()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
 - **`record-adapter-sqljs`** (browser, no filesystem of its own) is a purely in-memory engine — no file, no PID, no lock to speak of. Durability and multi-tab/multi-process coordination are the embedding host's concern entirely: the adapter calls an optional `persist(bytes) => Promise<void>` callback after every write, and the host wires that to OPFS, IndexedDB, or a download, with whatever locking that storage layer provides.
 - **The planned whole-file `adapter-json`** reads its entire store into memory on open and rewrites it whole on every persist, so it must supply both guarantees itself: a PID lock file (to fail loudly on double-open) and an atomic temp-file-and-`rename()` persist (so a crash mid-write can't leave a torn, unreadable file). `record-adapter-sqlite` gets both from WAL and real file locking instead.
+
+## Lifecycle
+
+**`Stack.close()` flushes, then releases.** Teardown is one call: `close()` invokes `flush()` before `adapter.close?.()`, so no app has to know whether its adapter buffers writes. An adapter's own `close()` is therefore not required to be flush-inclusive — the ordering is an invariant of the `Stack` layer, guaranteed once for every backend rather than reimplemented per adapter.
+
+A failed flush still releases resources before the error propagates. The alternative — abandoning `close()` on a flush error — leaves a lock file or a connection behind precisely when the stack is in trouble, turning one failure into two.
+
+**`close()` is idempotent; calling it twice is a no-op and never reaches the adapter twice.** Adapters are not independently required to tolerate a double close (`node:sqlite` throws on an already-closed handle, and lock release is not re-entrant), so `Stack` absorbs it.
+
+**`flush()` alone is for a stack that stays open** — checkpointing before a backup, or forcing a buffered adapter to persist at a known point. It is not part of teardown.
