@@ -16,14 +16,10 @@ const MAX_VALIDATION_DEPTH = 32;
 const FILE_ID_RE = /^[0-9a-f]{64}$/;
 
 /**
- * ISO 8601 date or date-time shape — date-only ("2024-01-15") or full
- * date-time with optional fractional seconds and an optional "Z"/offset
- * suffix ("2024-01-15T14:30:00.123+05:00"). Bare `Date.parse` accepts far
- * more than this (engine-dependent formats like "March 1 2020" or
- * "3/1/2020"), which contradicts the "Expected ISO 8601 date string" error
- * message and lets cross-runtime stacks disagree about what's valid (#69).
- * `Date.parse` still runs afterward as a calendar sanity check (e.g.
- * rejects month 13) — the regex only pins the shape.
+ * ISO 8601 date or date-time shape. The regex pins the shape (bare
+ * `Date.parse` accepts engine-dependent non-ISO formats); `Date.parse`
+ * still runs afterward as a calendar sanity check. See
+ * docs/spec/data-model.md § Types.
  */
 const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
 

@@ -60,18 +60,16 @@ import type {
 const EMPTY_FAMILY = Symbol('empty-family');
 
 /**
- * Valid GrantAction values, for runtime validation in Stack.grant() (#116).
+ * Valid GrantAction values, for runtime validation in Stack.grant().
  * Built from GRANT_ACTIONS (types.ts), the source of truth GrantAction is
  * itself derived from — so this can't drift from the type.
  */
 const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
 /**
- * System type families that grant() refuses to target (#116/F5). A
- * create/update-any grant on either lets the grantee mint their own grants
- * or touch stack config — privilege-bearing verbs stay owner-only (#67).
- * Other reserved types (_attachment, _entity, _group) are deliberately not
- * listed here — grants on those are plausibly legitimate.
+ * System type families grant() refuses to target: a grant on either would
+ * let the grantee mint their own grants or touch stack config. See
+ * docs/spec/access-control.md § Type-level grants.
  */
 const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.GRANT,
@@ -95,21 +93,16 @@ export type CreateRecordOptions = {
 
 export type StackOptions = {
   /**
-   * Ensures the owner's own `_entity` profile record exists, creating it
-   * (`did: ownerEntityId`, plus `name`/`handle`) if this is the first
-   * Stack.create() call against a freshly initialized adapter. No-ops if a
-   * record with this DID already exists, so it's safe to pass on every
-   * open, not just the first one — this is what closes the gap where
-   * nothing used to create the owner's `_entity` record at all. See
-   * docs/spec/identity.md.
+   * Ensures the owner's own `_entity` profile record exists, creating it on
+   * first run. Idempotent — safe to pass on every open. See
+   * docs/spec/identity.md § Entity.
    */
   ownerProfile?: { name: string; handle?: string };
   /**
-   * Clock-skew tolerance (ms) for the timestamp-prefix plausibility check
-   * ScopedStack.create() runs on a grantee-supplied `id` — a grantee is an
-   * untrusted actor who could otherwise mint an ID that forges its sort
-   * position. Default: 24 hours. Pass null to disable the check entirely.
-   * Unscoped Stack.create() never runs this check (full-trust context).
+   * Clock-skew tolerance (ms) for the timestamp-prefix check
+   * ScopedStack.create() runs on grantee-supplied IDs; unscoped
+   * Stack.create() never runs it. Default: 24 hours; null disables.
+   * See docs/spec/data-model.md § Record IDs.
    */
   idTimestampSkewMs?: number | null;
 };
@@ -117,8 +110,8 @@ export type StackOptions = {
 export type CollectAttachmentGarbageOptions = {
   /**
    * How recent an unreferenced file must be to survive collection, covering
-   * the legitimate upload-then-associate window. Default: 24 hours (see
-   * DEFAULT_GC_GRACE_MS). Pass 0 to collect anything unreferenced right now.
+   * the upload-then-associate window. Default: 24 hours. Pass 0 to collect
+   * anything unreferenced right now.
    */
   graceMs?: number;
   /** Compute what would be deleted without deleting anything. Default: false. */
@@ -132,22 +125,18 @@ export type CollectAttachmentGarbageResult = {
 
 export type GetRecordOptions = {
   /**
-   * Records are returned exactly as stored by default ("stored"). Pass
-   * "latest" to apply the registered migration chain in memory before
-   * returning — never written back. Throws StackMigrationError if the
-   * record has no registered path to the latest version.
+   * Records are returned exactly as stored by default. Pass "latest" to
+   * apply the registered migration chain in memory — never written back.
+   * See docs/spec/data-model.md § Type migrations.
    */
   presentAt?: 'stored' | 'latest';
 };
 
 /**
  * Opt-in optimistic-concurrency precondition, accepted by every mutation
- * that bumps a record's version (update, delete, undelete, associate,
- * dissociate, setPermissions, restoreVersion). When set, the mutation
- * only applies if the record's current version equals `ifVersion`;
- * otherwise it throws StackVersionConflictError, with the record's actual
- * current version, and nothing is changed. Omit to keep today's
- * last-writer-wins behavior — apps that don't care don't pay.
+ * that bumps a record's version. On mismatch the mutation throws
+ * StackVersionConflictError and changes nothing; omit to keep
+ * last-writer-wins. See docs/spec/versioning.md § Optimistic concurrency.
  */
 export type IfVersionOptions = {
   ifVersion?: number;
@@ -208,14 +197,10 @@ export class StackConflictError extends Error {
 }
 
 /**
- * Thrown when an opt-in `ifVersion` precondition doesn't match a record's
- * current version — the one conflict type a caller can mechanically
- * recover from: re-fetch, look at `actualVersion`, decide whether to
- * retry. Deliberately not a StackConflictError subtype: the two have
- * different recovery stories (fix your input vs. retry after re-reading)
- * and, on the wire, different HTTP statuses (409 vs. 412) — sharing a
- * base class would either force one status per subtype or blur the
- * status↔code mapping for status-only error reconstruction.
+ * Thrown when an `ifVersion` precondition doesn't match a record's current
+ * version. Deliberately not a StackConflictError subtype — the two have
+ * different recovery stories and HTTP statuses (409 vs. 412). See
+ * docs/spec/versioning.md § Optimistic concurrency.
  */
 export class StackVersionConflictError extends Error {
   static readonly code = 'version_conflict' as const;
@@ -245,14 +230,11 @@ export class StackQueryError extends Error {
 }
 
 /**
- * Fail loud rather than silently widen: a `filter.search`/`filter.content`
- * against an adapter that hasn't declared the matching capability has no
- * code path that would honor it, so dispatching anyway would silently drop
- * the filter and return an unfiltered superset presented as the filtered
- * result (#56). Shared by `Stack.query()` (the local/in-process path) and
- * `APIAdapter.queryRecords()` (the wire path, which additionally has no
- * server endpoint that would even accept the filter) — one rule, checked
- * before either ever dispatches to storage.
+ * Fail loud rather than silently widen: a filter the adapter can't honor
+ * would otherwise be dropped, returning an unfiltered superset presented
+ * as the filtered result. Shared by Stack.query() and
+ * APIAdapter.queryRecords(). See docs/spec/data-model.md
+ * § Capability-gated filters.
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
@@ -272,12 +254,9 @@ export function assertQueryCapabilities(
 
 /**
  * Thrown when an attachment upload exceeds the adapter's declared
- * `maxAttachmentBytes` ceiling. Checked client-side in Stack.putAttachment()/
- * ScopedStack.putAttachment() before any bytes are sent — local adapters
- * declare `maxAttachmentBytes: null` (unbounded), so the check is a no-op
- * for them; only a server behind the API adapter enforces a real ceiling,
- * and it still enforces 413 authoritatively over the wire regardless of
- * this pre-check.
+ * `maxAttachmentBytes` ceiling — checked client-side before any bytes are
+ * sent; a server still enforces 413 authoritatively regardless. See
+ * docs/spec/wire-format.md § Attachments.
  */
 export class StackPayloadTooLargeError extends Error {
   static readonly code = 'payload_too_large' as const;
@@ -298,10 +277,9 @@ function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | n
 
 /**
  * Thrown by defineType() when redefining an existing typeId with a schema
- * change that isn't a legal in-place evolution (see diffSchemas() in
- * schema.ts) — same typeId, a shape change beyond "new optional fields
- * added." The remedy is always the same: register a new version instead of
- * redefining this one in place.
+ * change beyond additive evolution. The remedy is a new version, never an
+ * in-place redefinition. See docs/spec/data-model.md § Schema drift
+ * detection.
  */
 export class StackSchemaDriftError extends Error {
   static readonly code = 'schema_drift' as const;
@@ -327,12 +305,9 @@ const RESERVED_ID_PREFIX = '_';
 const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Default grace period for Stack.collectAttachmentGarbage(): how recent an
- * unreferenced file's newest _attachment@1 metadata record (or, for bare
- * bytes with none, the blob's own modifiedAt) must be to still protect it
- * from collection — covering the legitimate upload-then-associate window.
- * Same value and rationale as DEFAULT_ID_TIMESTAMP_SKEW_MS: a generous
- * tolerance at personal-stack scale.
+ * Default grace period for Stack.collectAttachmentGarbage(), covering the
+ * upload-then-associate window. See docs/spec/attachments.md § Garbage
+ * collection.
  */
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 
@@ -420,18 +395,10 @@ export interface StackClient {
 // -------------------------------------------------------
 
 /**
- * query() always paginates: an absent `limit` returns one adapter-default
- * page, never the complete result set. This walks `cursor` to exhaustion
- * for the handful of internal call sites that need every match — grant
- * checks, attachment-metadata cleanup, uploader-access checks — where
- * silently stopping at page one would misfire past the page boundary
- * (deny an existing grant, leave orphaned metadata, false-deny an
- * uploader). Not a public API: callers that can tolerate normal paging
- * should call query() directly.
- *
- * Throws StackQueryError rather than silently truncating if more than
- * `max` records are found without the cursor terminating — a runaway
- * scan is a bug to surface, not paper over.
+ * Walks `cursor` to exhaustion for the internal call sites that need every
+ * match (grant checks, attachment cleanup) — query() itself always
+ * paginates. Throws StackQueryError past `max` rather than silently
+ * truncating a runaway scan. Not a public API.
  */
 async function queryAllPages(
   run: (query: StackQuery) => Promise<QueryResult>,
@@ -457,15 +424,10 @@ async function queryAllPages(
 const QUERY_ALL_MAX = 10_000;
 
 /**
- * Cursor-walks `run(query)` to exhaustion looking for the first record
- * matching `predicate`, short-circuiting as soon as one is found rather than
- * draining every page first (the way queryAllPages() must, since it has no
- * predicate to stop early on). Shares queryAllPages()'s bounded-scan
- * discipline: a match past page one is still found (#108's canAccessFile()
- * false-denial and #(E2)'s ensureOwnerEntity() duplicate-owner-card bug were
- * both instances of a single bounded query standing in for "does any
- * matching record exist"), and a pathological non-terminating scan throws
- * StackQueryError instead of silently giving up.
+ * Cursor-walks `run(query)` looking for the first record matching
+ * `predicate`, short-circuiting on a match. Same bounded-scan discipline
+ * as queryAllPages(): a match past page one is still found, and a
+ * non-terminating scan throws StackQueryError.
  */
 async function findFirstMatch(
   run: (query: StackQuery) => Promise<QueryResult>,
@@ -498,21 +460,16 @@ async function findFirstMatch(
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
   /**
-   * Highest version this Stack instance has itself defineType()'d, per
-   * baseId — i.e. what *this app process* currently understands, as
-   * distinct from whatever versions happen to exist in shared storage.
-   * Used to detect the stale-writer case in presentAtLatest().
+   * Highest version this instance has defineType()'d, per baseId — what
+   * this app process understands, as distinct from what exists in shared
+   * storage. Used to detect the stale-writer case in presentAtLatest().
    */
   private readonly maxDefinedVersion = new Map<string, number>();
   /**
-   * In-memory cache of Types this instance has fetched or defined, keyed by
-   * versioned id. A Type's schema is immutable once defined — schemaHash
-   * only changes via a version bump, which is a different id and thus a
-   * different cache entry — so entries are never invalidated, only added
-   * (by getTypeCached() on first fetch, and by defineType() on write).
-   * listTypes() also refreshes it wholesale. This is what removes the
-   * GET /types/:id round trip that create()/update()/restoreVersion() would
-   * otherwise pay on every write for a value that cannot change.
+   * Types this instance has fetched or defined, keyed by versioned id. A
+   * Type's schema is immutable once defined, so entries are never
+   * invalidated, only added; listTypes() refreshes wholesale. See
+   * docs/spec/data-model.md § Type cache.
    */
   private readonly typeCache = new Map<TypeId, StackType>();
 
@@ -551,15 +508,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Idempotent bootstrap for StackOptions.ownerProfile: creates the owner's
-   * `_entity` record if none exists yet for their DID. Queries by typeId
-   * only (a universally-supported native filter) and matches `content.did`
-   * in memory, rather than relying on RecordFilter.content — which is
-   * capability-gated and not every adapter implements. Walks the cursor to
-   * exhaustion via findFirstMatch() rather than reading a single page: a
-   * stack with more than one page of `_entity` petname cards would
-   * otherwise page the owner's card out of page one, and every subsequent
-   * bootstrap would mint a duplicate owner card (design-assessment §E2).
+   * Idempotent bootstrap for StackOptions.ownerProfile. Filters by typeId
+   * only (contentFieldQuery is capability-gated) and matches `content.did`
+   * in memory, cursor-walking so an owner card past page one isn't missed
+   * and duplicated.
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
@@ -590,16 +542,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Get a permission-scoped view of this Stack, as if the request came from
-   * the given entity. Pass null for an anonymous/unauthenticated requester.
-   * Reads and writes are checked against each Record's `permissions`; the
-   * owner always has full access.
-   *
-   * Plain Stack methods are unscoped and skip permission checks entirely —
-   * correct for single-entity embedded use, where there's no requester
-   * distinct from the app itself. Use asEntity() when one Stack instance
-   * serves requests from multiple, possibly untrusted, entities (e.g. a
-   * multi-tenant API server).
+   * Get a permission-scoped view of this Stack, as if requests came from
+   * the given entity (null = anonymous). Plain Stack methods are unscoped;
+   * use asEntity() when one Stack serves multiple, possibly untrusted,
+   * entities. See docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
   asEntity(entityId: EntityId | null): ScopedStack {
     return new ScopedStack(this, entityId, this.idTimestampSkewMsValue, this.adapter);
@@ -610,27 +556,11 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Define and persist a Type. Computes the schemaHash automatically.
-   * Should be called at app startup before creating any records of this type.
-   *
-   * Redefining an existing typeId is checked against the stored schema
-   * (#68), instead of silently replacing it (the exact corruption
-   * schemaHash exists to catch, previously undetected since nothing ever
-   * compared it):
-   *
-   * - Identical schema and name — fully idempotent no-op, `createdAt`
-   *   untouched. This is what makes calling defineType() for every system
-   *   type on every `Stack.create()` (seedSystemTypes()) cheap instead of
-   *   six unconditional rewrites per open.
-   * - Identical schema, different name — name is display metadata, not
-   *   schema, so this always persists; `createdAt` is preserved from the
-   *   stored type either way.
-   * - Different schema — legal only if the change is a pure additive
-   *   evolution (diffSchemas(): new *optional* fields only, nothing
-   *   removed/retyped/re-required). Otherwise throws StackSchemaDriftError
-   *   naming each violation; the remedy is a new version
-   *   (`defineType('...@n+1', ...)` + `registerMigration()`), never an
-   *   in-place rewrite.
+   * Define and persist a Type; call at app startup before creating records
+   * of the type. Redefining an existing typeId is checked against the
+   * stored schema: identical is a no-op, a name-only change persists, and
+   * anything beyond additive evolution throws StackSchemaDriftError. See
+   * docs/spec/data-model.md § Schema drift detection.
    */
   async defineType(
     id: TypeId,
@@ -645,10 +575,8 @@ export class Stack implements StackClient {
       );
     }
 
-    // This instance now knows this version exists, independent of whether
-    // the adapter write below turns out to be a no-op — presentAtLatest()'s
-    // stale-writer detection depends on every defineType() call registering
-    // here, including the idempotent-no-op path.
+    // Register this version even on the idempotent-no-op path —
+    // presentAtLatest()'s stale-writer detection depends on it.
     const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
     if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
@@ -710,12 +638,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Register a migration function between two adjacent Type versions.
-   * Call at app startup after defineType(). The library composes
-   * adjacent migrations into chains automatically.
-   *
-   * Migrations run in-memory — they do not write to the adapter unless
-   * you call migrateAll() explicitly.
+   * Register a migration function between two adjacent Type versions; call
+   * at app startup after defineType(). Runs in-memory — nothing is written
+   * until migrateAll(). Adjacent migrations are composed into chains
+   * automatically.
    */
   registerMigration(migration: Migration): void {
     if (this.migrations.has(migration.from)) {
@@ -767,23 +693,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Eagerly migrate all records of a type family to the latest version,
-   * committing the results to disk immediately. This is the *only* way a
-   * record's disk state changes version — the library never migrates as a
-   * side effect of a read or an unrelated content edit. Call it at app
-   * startup after registerMigration(), or after a schema change.
-   *
-   * Sweeps soft-deleted records unconditionally (includeDeleted: true is
-   * not a caller option in either direction) so a record can't come back
-   * from undelete() stale merely because it was deleted during a migration
-   * window.
-   *
-   * Each record's migrated content is validated against the target type's
-   * schema before it's written; a validation failure aborts the batch
-   * immediately (a buggy migration function is a bug, not something to
-   * paper over by skipping the offending records) — anything already
-   * committed earlier in the pass stays committed. Previous content is
-   * preserved in version history before each write.
+   * Eagerly migrate all records of a type family to the latest version —
+   * the only way disk state changes version. Sweeps soft-deleted records
+   * too, validates each result before writing, and aborts on the first
+   * validation failure. See docs/spec/data-model.md § Type migrations.
    */
   async migrateAll(baseTypeId: string): Promise<{ migrated: number }> {
     const types = await this.adapter.listTypes();
@@ -843,12 +756,9 @@ export class Stack implements StackClient {
 
   /**
    * Create a new record. Validates content against the type's schema.
-   *
    * `_group` records get their author stamped as the first `admin` roster
-   * association (keyed on `opts.entityId ?? ownerEntityId`, i.e. whoever
-   * would be recorded as the record's author) — this is the single stamping
-   * site for both plain `Stack.create()` and `ScopedStack.create()`, which
-   * delegates here with `entityId` already normalized (#118).
+   * association here — the single stamping site for both Stack.create()
+   * and ScopedStack.create(). See docs/spec/identity.md § Group.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -895,18 +805,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply the registered migration chain to a record in memory, for the
-   * presentAt: 'latest' opt-in on get() and query(). Never writes back —
-   * only migrateAll() commits a migration to disk.
-   *
-   * If there's no forward migration path from the record's stored version,
-   * that's only unambiguous when this app instance has never defineType()'d
-   * a different version of the family — otherwise the record's version
-   * disagrees with what this app understands (older with a registration
-   * gap, or newer than anything this app has ever defined — the
-   * stale-writer case) and presentAt: 'latest' can't honor the request.
-   * Throws StackMigrationError rather than silently returning the raw
-   * record with a console.warn.
+   * Apply the registered migration chain in memory, for presentAt:
+   * 'latest'. Never writes back. Throws StackMigrationError when the
+   * record's version can't be reconciled with what this instance has
+   * registered — the stale-writer case. See docs/spec/data-model.md
+   * § Type migrations.
    */
   private presentAtLatest(record: StackRecord): StackRecord {
     const latestId = this.latestTypeId(record.typeId);
@@ -937,12 +840,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Get a record by ID, exactly as stored (its own typeId and content —
-   * no implicit migration).
-   *
-   * Pass { presentAt: 'latest' } to apply the registered migration chain
-   * in memory instead; nothing is written to disk. Committing a migration
-   * to disk is exclusively migrateAll()'s job.
+   * Get a record by ID, exactly as stored — no implicit migration. Pass
+   * { presentAt: 'latest' } to migrate in memory; only migrateAll()
+   * commits migrations to disk.
    */
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.adapter.getRecord(id);
@@ -951,22 +851,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Update a record's content. Accepts a partial content object — only the
-   * fields provided are changed. Omitted fields retain their current values.
-   *
-   * To remove an optional field, set it explicitly to null:
-   *   stack.update(id, { title: null })  // removes 'title' from content
-   *
-   * Validates the merged result against the record's *current* stored
-   * type's schema — update() never changes a record's typeId as a side
-   * effect. Migrating disk state is migrateAll()'s job exclusively, so an
-   * unrelated content edit never folds an invisible schema rewrite into
-   * the same version-history entry.
-   *
-   * Saves the previous state to version history before updating.
-   *
-   * For association or permission changes, use associate(), dissociate(),
-   * and setPermissions() instead.
+   * Update a record's content via JSON Merge Patch: omitted fields are
+   * kept, null removes a field. Validates the merged result against the
+   * record's *current* stored type and never changes typeId (see
+   * docs/spec/data-model.md § Type migrations); snapshots the prior state
+   * to version history. Associations and permissions have their own methods.
    */
   async update(
     id: string,
@@ -1083,19 +972,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Soft-delete a record (default) or hard-delete it permanently.
-   * Soft-deleted records are excluded from queries unless includeDeleted is set.
-   * Hard-deleted records and all their version history are permanently removed.
-   *
-   * Soft delete snapshots the record's prior state and bumps version, same
-   * as update(); it's a no-op if the record is already deleted. Hard delete
-   * destroys the record (and its version history) outright — there's
-   * nothing to snapshot.
-   *
-   * `_config` can never be deleted, soft or hard (#67): it's the stack's
-   * identity record, read at open and consulted by every permission check.
-   * A soft-deleted `_config` is unreadable through normal paths; a
-   * hard-deleted one bricks the stack outright (nothing to reopen against).
+   * Soft-delete a record (default) or hard-delete it permanently, removing
+   * the record and its version history. Soft delete snapshots and bumps
+   * version; a no-op if already deleted. `_config` is never deletable
+   * (docs/spec.md § The `_config` record). See docs/spec/versioning.md
+   * § Deletion.
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     if (id === SYSTEM_TYPES.CONFIG) {
@@ -1141,13 +1022,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Query records. See StackQuery for filter, sort, and pagination options.
-   *
-   * filter.baseId matches every version of a type family, resolved against
-   * registered Types (not string-parsed from typeId) — this is what fixes
-   * `query({ filter: { baseId } })` missing not-yet-migrated older-version
-   * records. Records are returned exactly as stored by default; pass
-   * presentAt: 'latest' to migrate each result in memory (see get()).
+   * Query records. filter.baseId matches every version of a type family,
+   * resolved against registered Types. Results come back exactly as
+   * stored; pass presentAt: 'latest' to migrate in memory. See
+   * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
@@ -1170,12 +1048,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Resolve filter.baseId into a concrete typeId set via listTypes(), so
-   * adapters — which only know about typeId — never need their own baseId
-   * concept. Intersects with filter.typeId when both are given. Returns
-   * EMPTY_FAMILY as a sentinel when the resolved set is empty (unknown
-   * baseId, or a typeId/baseId combination with no overlap), so the caller
-   * can short-circuit without a wasted adapter round trip.
+   * Resolve filter.baseId into a concrete typeId set (intersected with
+   * filter.typeId when both are given), so adapters never need their own
+   * baseId concept. Returns EMPTY_FAMILY when the resolved set is empty so
+   * the caller can short-circuit without an adapter round trip.
    */
   private async resolveBaseIdFilter(
     filter: RecordFilter | undefined,
@@ -1211,24 +1087,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Restore a record to a previous version by creating a new version
-   * with the old content and typeId. Never rewrites history.
-   *
-   * Validates the snapshot's content against the *snapshot's own* stored
-   * type — not the record's current type, which may have since migrated.
-   * A snapshot taken before a migration is `@1`-shaped; validating it
-   * against a current `@2` schema would wrongly reject a perfectly valid
-   * restore. Restoring an old-version snapshot therefore leaves the record
-   * stale at that old typeId, same as undelete() — legal, and healed by
-   * the owning app's next migrateAll() sweep. This never forward-migrates:
-   * migration functions are app code, and restore shouldn't behave
-   * differently locally than a server-side restore endpoint could.
-   *
-   * Restores associations too, when the target snapshot has them. Never
-   * restores permissions — those are owner/creator territory (see
-   * setPermissions()), and silently reverting an ACL as a side effect of a
-   * content rollback would be a surprise nobody wants. Permissions in a
-   * snapshot are for audit and deliberate owner action, not automatic restore.
+   * Restore a record to a previous version by creating a new version —
+   * never rewrites history. The snapshot is validated against its own
+   * stored typeId (not the record's current type), restores associations,
+   * and never restores permissions. See docs/spec/versioning.md § Restore
+   * semantics.
    */
   async restoreVersion(
     id: string,
@@ -1274,16 +1137,11 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * `_attachment@1` invariant (#65): mimeType is a property of the fileId,
-   * not the uploader's perspective — unlike filename, which is. Dedup means
-   * a second upload of identical bytes doesn't create a second file, it
-   * attaches a second execution claim to the first uploader's bytes; the
-   * first metadata record created for a given fileId fixes the type that
-   * gets served, so a later upload declaring a different mimeType is
-   * rejected rather than silently coexisting for the server to arbitrarily
-   * pick between. Cursor-walked (#50): a single unpaginated page could miss
-   * the fileId's earlier records and wrongly treat a conflicting upload as
-   * the first.
+   * mimeType is a property of the fileId, not the uploader's perspective:
+   * the first metadata record for a fileId fixes it, and a conflicting
+   * later upload is rejected. Cursor-walked so earlier records past page
+   * one are seen. See docs/spec/attachments.md § The `_attachment` record
+   * type.
    */
   private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
     const { fileId, mimeType } = content;
@@ -1305,11 +1163,9 @@ export class Stack implements StackClient {
     const first = existing.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
     const establishedMimeType = (first.content as AttachmentContent).mimeType;
     if (mimeType !== establishedMimeType) {
-      // Anti-oracle (#106): the established mimeType is deliberately not
-      // interpolated into the message. Naming it would confirm the fileId's
-      // existing content type to a caller who only guessed the fileId,
-      // reintroducing the exact confirmation-oracle #51's anti-oracle rule
-      // exists to prevent.
+      // Deliberately does not name the established mimeType — that would
+      // confirm a guessed fileId's content type. See the anti-oracle rule
+      // in docs/spec/attachments.md.
       throw new StackValidationError([
         {
           path: 'mimeType',
@@ -1320,14 +1176,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * `_attachment@1` invariant (#65): filename is the only mutable field
-   * once a metadata record exists. fileId and size describe the bytes
-   * themselves, so any change is rejected. mimeType's value was already
-   * pinned to the fileId's established type at create time (above) — even a
-   * same-value rewrite is refused, since first-recorded-wins leaves nothing
-   * legitimate for a later mimeType edit to do. The correction flow for a
-   * wrongly-declared type is delete + re-upload: identical bytes hash to
-   * the same fileId, and the fresh first record establishes the fix.
+   * filename is the only mutable field on an _attachment@1 record; fileId,
+   * size, and mimeType are immutable (even a same-value mimeType rewrite
+   * is refused). The correction flow is delete + re-upload. See
+   * docs/spec/attachments.md § The `_attachment` record type.
    */
   private checkAttachmentImmutableFields(
     patch: Record<string, unknown | null>,
@@ -1356,15 +1208,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * `_config.entityId` defines stack ownership — read once at open and
-   * consulted by every permission check thereafter (#67). Neither update()
-   * nor restoreVersion() may change it: a write that silently re-anchors
-   * ownership would desync every already-running owner check from the next
-   * reopen onward. This is a conflict with stack integrity, not a schema
-   * violation (the new value is a perfectly valid string) — hence
-   * StackConflictError, matching delete()'s guard on the same record.
-   * Ownership transfer, if it ever exists, is a deliberate future API with
-   * key-custody semantics (#49), not a field write.
+   * `_config.entityId` defines stack ownership; neither update() nor
+   * restoreVersion() may change it. A conflict with stack integrity, not a
+   * schema violation — hence StackConflictError. See docs/spec.md § The
+   * `_config` record.
    */
   private checkConfigEntityIdUnchanged(existingEntityId: EntityId, newEntityId: EntityId): void {
     if (newEntityId !== existingEntityId) {
@@ -1376,23 +1223,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Store bytes and create an _attachment@1 metadata record (owner-attributed,
-   * no entityId). Use ScopedStack.putAttachment() when the uploader is a
-   * specific entity rather than the stack owner.
-   *
-   * When the adapter implements the optional putAttachmentWithMetadata()
-   * capability (the API adapter, via one POST /attachments request the
-   * server fulfills atomically — #106), the whole operation is delegated to
-   * it and the separate create() call below is skipped — not for
-   * efficiency, but because a second, independent record-creation call
-   * would be indistinguishable, server-side, from a non-owner who never
-   * uploaded anything and only guessed the fileId. On that path the
-   * returned record is trusted as backend-authoritative: client-side schema
-   * validation and the mimeType-conflict check don't run here — the server
-   * runs both (a client-side conflict check against remote state would be
-   * both racy and itself a mini-oracle). Adapters without the capability
-   * (all local storage) fall back to the create() call that was always
-   * here.
+   * Store bytes and create an _attachment@1 metadata record (owner-
+   * attributed, no entityId). Delegates to the adapter's atomic
+   * putAttachmentWithMetadata() when implemented, trusting the returned
+   * record as backend-authoritative; otherwise falls back to
+   * bytes-then-create(). See docs/spec/wire-format.md § Attachments.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
@@ -1445,11 +1280,9 @@ export class Stack implements StackClient {
     fileId: string,
     metadataTypeId: string,
   ): Promise<string[]> {
-    // includeDeleted: a soft-deleted record is recoverable via undelete()
-    // (#59/#60), so it still counts as a reference — otherwise deleting the
-    // file now leaves that record's reference dangling the moment it's
-    // undeleted. Matches the atomic adapter path (record-logic.ts), which
-    // never filters on deleted_at at all.
+    // A soft-deleted record still counts as a reference — it must find its
+    // attachments intact on undelete. See docs/spec/attachments.md
+    // § Deleting attachments.
     const refResult = await this.query({
       filter: { attachmentFileId: fileId, includeDeleted: true },
       limit: 1,
@@ -1458,12 +1291,8 @@ export class Stack implements StackClient {
       throw new StackConflictError('Attachment is still referenced by one or more records');
     }
 
-    // Cursor-walked: on adapters without contentFieldQuery, every
-    // _attachment@1 record must be scanned in memory below, and a single
-    // default page would leave metadata beyond page one un-deleted —
-    // exactly the orphan this method exists to prevent. includeDeleted here
-    // too, so a soft-deleted metadata record for this fileId is cleaned up
-    // rather than left behind pointing at bytes that no longer exist.
+    // Cursor-walk with includeDeleted: metadata past page one, or soft-
+    // deleted, must be cleaned up too — not left pointing at deleted bytes.
     const metaResults = await queryAllPages((q) => this.query(q), {
       filter: {
         typeId: metadataTypeId,
@@ -1483,29 +1312,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Sweep for attachment bytes no longer reachable from any record — live
-   * or soft-deleted — and delete them (bytes + _attachment@1 metadata).
-   * "Reachable" is exactly what deleteAttachment()'s own reference check
-   * means: an `attachment` Association or a `file-ref` content field (#63)
-   * on a record in any state, since a soft-deleted record is recoverable
-   * via undelete() and must find its attachments intact (#59/#60).
-   *
-   * _attachment@1 metadata records never themselves count as references
-   * (else nothing would ever be garbage), but a file's newest metadata
-   * record — or, for bare bytes with no metadata at all, the blob's own
-   * modifiedAt — must be older than `graceMs` to be collected. This covers
-   * the legitimate upload-then-associate window.
-   *
-   * Bare-bytes orphans (bytes with zero metadata records, left by a
-   * putAttachment() that stored bytes but crashed before creating the
-   * metadata record) are only discoverable via StackBlobAdapter.listFiles()
-   * — optional, so this sweep simply can't find that orphan class on an
-   * adapter that doesn't implement it.
-   *
-   * Deletion goes through deleteAttachment() itself, so its usual conflict
-   * check runs once more per file at delete time; a file that turns out to
-   * be referenced or already gone by then is skipped, not treated as a
-   * sweep failure.
+   * Sweep for attachment bytes unreachable from any record — live or
+   * soft-deleted — and delete bytes + metadata. Deletion goes through
+   * deleteAttachment(), so a file re-referenced by sweep time is skipped,
+   * not a failure. See docs/spec/attachments.md § Garbage collection.
    */
   async collectAttachmentGarbage(
     opts: CollectAttachmentGarbageOptions = {},
@@ -1610,15 +1420,11 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Create _grant records that allow entities to call ScopedStack.create()
-   * for specific record types. Pass null as entityId for a default grant
-   * that applies to any authenticated entity.
-   *
-   * The grantee lives in `GrantContent.granteeEntityId`, not `record.entityId`
-   * — `entityId` means "author" everywhere else, and the owner (who calls
-   * grant()) authored this record, never the entity it names (#57).
-   *
-   * The _grant@1 type is defined automatically on first use.
+   * Create _grant records authorizing entities to act on records of
+   * specific types; null entityId writes a default grant (any
+   * authenticated entity). The grantee lives in content.granteeEntityId,
+   * not record.entityId. See docs/spec/access-control.md § Type-level
+   * grants.
    */
   async grant(
     entityId: EntityId | null,
@@ -1639,12 +1445,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * List _grant records. Omit `entityId` for every grant regardless of
-   * grantee. Pass `null` for only default grants (no `granteeEntityId` —
-   * apply to any authenticated entity). Pass a specific entityId for the
-   * grants that currently apply to that entity: ones naming them, plus
-   * every default grant — the same resolution ScopedStack's hasGrant()
-   * uses internally.
+   * List _grant records. Omit `entityId` for all grants; pass null for
+   * only default grants; pass a specific entityId for the grants that
+   * currently apply to that entity (ones naming them, plus every default
+   * grant) — the same resolution hasGrant() uses.
    */
   async listGrants(entityId?: EntityId | null): Promise<StackRecord[]> {
     const all = await queryAllPages((q) => this.query(q), {
@@ -1660,11 +1464,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The inverse of grant(): soft-deletes _grant records exactly matching
-   * `entityId` (null for default grants) and each `{ typeId, actions }`
-   * pair — matched by typeId baseId and action set, the same granularity
-   * grant() writes at. A soft delete like any other mutation: the owner can
-   * undelete a revocation the same as any other write (#59/#61).
+   * The inverse of grant(): soft-deletes _grant records matching `entityId`
+   * (null for default grants) and each `{ typeId, actions }` pair, at the
+   * same granularity grant() writes. A soft delete like any other — the
+   * owner can undelete a revocation.
    */
   async revoke(
     entityId: EntityId | null,
@@ -1693,22 +1496,11 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * grant() input hygiene (#116/F4, F5). Validates the whole batch before
-   * any record is created, so a bad entry in a multi-grant call fails
-   * clean rather than leaving a partial set of grants written.
-   *
-   * - actions must be known GrantAction values — an unrecognized string
-   *   (e.g. a typo like "read-all") would be stored silently and simply
-   *   never match at check time (hasGrant), a grant that looks live but
-   *   isn't.
-   * - typeId must be a well-formed bare baseId or versioned TypeId — the
-   *   same shape hasGrant() accepts (baseIdOf() tolerates either).
-   * - typeId may not target the _grant or _config families: a create /
-   *   update-any grant there lets the grantee mint their own grants or
-   *   touch stack config, and a default (any-authenticated) grant is
-   *   self-service escalation. Other reserved types (_attachment, _entity,
-   *   _group) are deliberately not restricted — grants on those are
-   *   plausibly legitimate.
+   * Validates the whole grant batch before any record is created, so a bad
+   * entry fails clean rather than leaving a partial set written. Actions
+   * must be known GrantAction values, typeIds must be well-formed, and the
+   * _grant/_config families are refused — see docs/spec/access-control.md
+   * § Type-level grants.
    */
   private checkGrantsValid(grants: Array<{ actions: GrantAction[]; typeId: TypeId }>): void {
     const errors: ValidationError[] = [];
@@ -1745,7 +1537,7 @@ export class Stack implements StackClient {
   private async seedSystemTypes(): Promise<void> {
     await this.defineType(`${SYSTEM_TYPES.CONFIG}@1`, 'Config', {
       entityId: { kind: 'string', required: true },
-      // Optional passthrough app metadata — see ConfigContent.timezone (#69).
+      // Optional passthrough app metadata — see ConfigContent.timezone.
       timezone: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
@@ -1776,12 +1568,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Fast-fail check for the opt-in ifVersion precondition, using the
-   * record already fetched for this operation. The adapter re-checks
-   * atomically at write time (the actual source of truth for concurrent
-   * writers — see StackRecordAdapter's ExpectedVersionOptions); this is
-   * just an early exit that skips validation/snapshotting work when the
-   * mismatch is already visible.
+   * Fast-fail for the ifVersion precondition using the already-fetched
+   * record. The adapter re-checks atomically at write time (the source of
+   * truth for concurrent writers) — this just skips validation and
+   * snapshotting work when the mismatch is already visible.
    */
   private checkIfVersion(existing: StackRecord, ifVersion: number | undefined): void {
     if (ifVersion === undefined || existing.version === ifVersion) return;
@@ -1794,17 +1584,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Build the RecordVersion snapshot of a record's prior full state, for
-   * the caller to pass as the mutating adapter call's `snapshot` option
-   * (see SnapshotOptions) — never written via a separate adapter.saveVersion()
-   * call, so snapshot and mutation land in one atomic adapter write (#112).
-   *
-   * `associations` is always present, even when empty — "no associations"
-   * snapshots as `[]`, not an omitted key, so restoreVersion() can tell
-   * "never had any" from "had some, now cleared" and can clear an emptied
-   * association set on restore (#111). Legacy snapshots taken before this
-   * fix still omit the key, which restoreVersion() correctly treats as
-   * "leave associations as-is."
+   * Snapshot of a record's prior state, passed with the mutating adapter
+   * call so snapshot and mutation land in one atomic write. `associations`
+   * is always present ([] when empty) so restore can distinguish "cleared"
+   * from a snapshot that omits the key entirely ("leave as-is"). See
+   * docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
     return {
@@ -1873,11 +1657,9 @@ function stampGroupAdmin(associations: Association[] | undefined, creator: strin
 }
 
 /**
- * Drops a snapshot's `permissions` field (#109) — owner/creator-only audit
- * data per setPermissions(), never served to a non-owner history reader
- * regardless of whether they reached history via read or write access.
- * `entityId` (change attribution) stays: useful for group attribution and
- * far less sensitive than the ACL trail.
+ * Drops a snapshot's `permissions` — owner-only audit data, never served
+ * to a non-owner history reader. `entityId` (change attribution) stays.
+ * See docs/spec/versioning.md § History access.
  */
 function stripVersionPermissions(version: RecordVersion): RecordVersion {
   if (version.permissions === undefined) return version;
@@ -1886,27 +1668,20 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 }
 
 /**
- * A permission-enforcing view of a Stack for a single requester. Obtained
- * via `stack.asEntity(entityId)` — see there for when to use it.
- *
- * Read methods return null for a Record that doesn't exist, and throw
- * StackPermissionError for one that exists but isn't readable by the requester.
- * Write methods throw StackNotFoundError for a missing Record and
- * StackPermissionError for one that exists but isn't writable. This lets
- * callers distinguish "not found" from "forbidden".
+ * A permission-enforcing view of a Stack for a single requester, obtained
+ * via `stack.asEntity(entityId)`. Missing records throw StackNotFoundError
+ * (or return null on reads); existing-but-inaccessible ones throw
+ * StackPermissionError. See docs/spec/access-control.md.
  */
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: EntityId | null,
     private readonly idTimestampSkewMs: number | null,
-    // The bytes-storage primitive for putAttachment()'s upload step. Held
-    // directly (passed by Stack.asEntity()) because Stack's adapter is
-    // private and the bytes-only upload is no longer part of Stack's
-    // public API (#106 follow-up): the record ScopedStack creates carries
-    // the requester's entityId, which the adapter-level atomic capability
-    // has no parameter for, so this class always composes bytes + its own
-    // create() rather than delegating to putAttachmentWithMetadata().
+    // Bytes-storage primitive for putAttachment(). Held directly because
+    // ScopedStack always composes bytes + its own create() — the record
+    // must carry the requester's entityId, which the adapter-level atomic
+    // capability has no parameter for.
     private readonly adapter: StackAdapter,
   ) {}
 
@@ -1937,13 +1712,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Check whether the requester holds a _grant record covering at least one
-   * of the given actions for the given type's family. Grants target
-   * baseId, not the exact versioned typeId — a grant on "comment@1" covers
-   * "comment@2" too, so a version bump never silently orphans an existing
-   * grant. For -own actions, additionally requires that `record.entityId`
-   * matches the requester (authorship check). Anonymous requesters always
-   * return false.
+   * Whether the requester holds a _grant covering one of `actions` for the
+   * type's family (grants match by baseId, so a version bump never orphans
+   * one). -own actions additionally require record.entityId === requester.
+   * Anonymous requesters always return false.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -1959,11 +1731,9 @@ export class ScopedStack implements StackClient {
     if (prefetchedGrants !== undefined) {
       grantRecords = prefetchedGrants;
     } else {
-      // No content-field prefilter here: matching is by baseId, which a
-      // stored grant may express as either a bare baseId or a versioned
-      // typeId, so an exact-match content filter would wrongly exclude
-      // grants for other versions of the family. Cursor-walked: a single
-      // default page would silently miss grants past page one.
+      // No content-field prefilter: a stored grant's typeId may be a bare
+      // baseId or versioned, so exact matching would wrongly exclude family
+      // versions. Cursor-walked to see grants past page one.
       grantRecords = await queryAllPages((q) => this.stack.query(q), {
         filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
       });
@@ -1994,12 +1764,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * `_group` records are managed, not merely written: the owner or a
-   * requester holding an `admin` roster association may mutate them.
-   * Ordinary write permissions/grants don't apply — membership rosters live
-   * on the very record they'd otherwise let a write-holder rewrite, so the
-   * generic write bit would let anyone who can write the record add or
-   * remove members (see #58).
+   * `_group` records are managed, not merely written: only the owner or an
+   * `admin` roster holder may mutate them — ordinary write permissions and
+   * grants don't apply. See docs/spec/identity.md § Group.
    */
   private isGroupManager(record: StackRecord): boolean {
     if (this.requesterEntityId === this.stack.ownerEntityId) return true;
@@ -2038,10 +1805,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester may create a reference to `recordId` (as a
-   * `parentId` or a `relationship` association target). Missing and
-   * unreadable both return false — indistinguishable, so this can't be used
-   * to probe for a record's existence (#51).
+   * Whether the requester may reference `recordId` (as a parentId or
+   * relationship target). Missing and unreadable both return false —
+   * indistinguishable, so this can't probe for a record's existence.
    */
   private async canReadReferent(recordId: string): Promise<boolean> {
     const record = await this.stack.get(recordId);
@@ -2050,22 +1816,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester can already read some record referencing `fileId`
-   * — the "possession via a readable referencing record" clause shared by
-   * canAccessFile() and the non-owner _attachment@1 create() carve-out
-   * (#106, residual decision 1). Deliberately excludes the uploader clause:
-   * using "I hold a metadata record for F" to justify creating *another*
-   * metadata record for F would let one successful guess bootstrap
-   * unlimited further ones — the exact circularity #106 closes.
-   *
-   * Walks every referencing record via findFirstMatch() over the unscoped
-   * stack.query(), short-circuiting on the first one this requester can
-   * read — not ScopedStack.query()'s bounded refill (capped at
-   * limit * 10 = 10 underlying records for limit: 1), which only ever
-   * checked the first ~10 referencing records and false-denied access when
-   * a readable one existed past that point (#108). The grant prefetch is
-   * still done once up front so the per-record canRead() checks stay cheap
-   * across a large scan.
+   * Whether the requester can read some record referencing `fileId` —
+   * shared by canAccessFile() and the non-owner _attachment@1 create()
+   * carve-out, which deliberately excludes the uploader clause. Walks
+   * every referencing record, short-circuiting on the first readable one.
+   * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
     const prefetchedGrants = this.requesterEntityId
@@ -2083,12 +1838,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester may create a reference (`attachment` association
-   * or file-ref content field) to `fileId` — the dual of getAttachment()'s
-   * access rule: reference creation requires exactly what reference
-   * possession would grant. A nonexistent fileId and an existing-but-
-   * inaccessible one are indistinguishable here (both false), so this can't
-   * become a confirmation oracle for guessed content hashes (#51).
+   * Whether the requester may reference or download `fileId` — the dual of
+   * getAttachment()'s access rule. Nonexistent and inaccessible are
+   * indistinguishable (both false), so no confirmation oracle for guessed
+   * hashes. See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canAccessFile(fileId: string): Promise<boolean> {
     if (this.requesterEntityId === this.stack.ownerEntityId) return true;
@@ -2115,7 +1868,7 @@ export class ScopedStack implements StackClient {
         ).some((r) => (r.content as AttachmentContent).fileId === fileId);
   }
 
-  /** Names of the type's top-level file-ref fields — the content-reference half of attachmentFileId matching (#63). */
+  /** Names of the type's top-level file-ref fields — the content-reference half of attachmentFileId matching. */
   private async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
     const type = await this.stack.getType(typeId);
     if (!type) return [];
@@ -2125,12 +1878,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Gates file-ref content fields on file access, mirroring the attachment-
-   * association gate below — #63 made a file-ref field convey attachment
-   * access exactly like an `attachment` association does, so it needs the
-   * same reference-creation check (#51). Only fields actually present in
-   * `content` are checked: on update() that's a merge patch, so untouched
-   * fields carry no new reference.
+   * Gates file-ref content fields on file access, mirroring the
+   * attachment-association gate — a file-ref field conveys attachment
+   * access exactly like an `attachment` association. Only fields present
+   * in `content` are checked (update() is a merge patch; untouched fields
+   * carry no new reference).
    */
   private async requireFileRefAccess(
     typeId: TypeId,
@@ -2144,15 +1896,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Gates a single association's reference-creation check per #51: an
-   * `attachment` association requires file access, a `relationship`
-   * association requires read access to its target, a `tag` carries no
-   * reference and is unchecked.
-   *
-   * `_group` roster associations are exempt from the relationship check —
-   * their `recordId` is an entity ID, not a readable record, and roster
-   * mutation is already gated by isGroupManager() (#58), which is strictly
-   * tighter than "can read the target".
+   * Reference-creation gate for one association: `attachment` requires
+   * file access, `relationship` read access to its target; `tag` is
+   * unchecked, and `_group` roster associations are gated by the stricter
+   * isGroupManager() instead. See docs/spec/access-control.md
+   * § Reference-creation gating.
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
@@ -2163,50 +1911,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Create a new record on behalf of the authenticated requester.
-   * Requires either an entity-specific _grant or a default _grant for
-   * the target type. Anonymous requesters (null entityId) are always denied.
-   * The created record's entityId is set to the requester — unless the
-   * requester *is* the owner, in which case entityId is omitted, matching
-   * the spec's "owner-created records carry no entityId" invariant (#69).
-   * Without this, the owner writing through asEntity(ownerEntityId) would
-   * produce a differently-shaped record than Stack.create() for the exact
-   * same author.
-   *
-   * A client-supplied `opts.id` gets the same format validation as
-   * Stack.create() plus a timestamp-skew check — the requester here is an
-   * untrusted actor who could otherwise mint an ID that forges its sort
-   * position. See StackOptions.idTimestampSkewMs.
-   *
-   * `_group` records get the creator stamped as their first `admin` roster
-   * association — that stamping happens in `Stack.create()` (#118), keyed
-   * on the `entityId` set below, so a group is never management-orphaned
-   * regardless of which path created it.
-   *
-   * `parentId`, `associations`, and file-ref content fields are all
-   * reference-creating options a caller could otherwise use to piggyback on
-   * a bare `create` grant: a `parentId` or `relationship` association
-   * requires read access to the target, and an `attachment` association or
-   * file-ref field requires file access — the same checks associate()
-   * applies post-create (#51). `permissions` and `appId` are deliberately
-   * left unchecked here: `permissions` is create-time-consistent with
-   * setPermissions() (owner/creator territory already), and `appId` is
-   * self-reported, untrusted metadata everywhere, not a permission input.
-   *
-   * `_attachment@1` (matched by baseId, like `_group`) is refused outright
-   * for non-owners, with one carve-out (#106): a readable record already
-   * referencing `content.fileId` may get a second metadata record (e.g. a
-   * second filename) without re-uploading. Otherwise, a bare `create` grant
-   * — held by every uploader — would let a requester name an arbitrary
-   * guessed fileId and, via canAccessFile()'s uploader clause, turn that
-   * guess into a read: creating an access-conveying record without ever
-   * proving possession of the bytes. `putAttachment()` is the only
-   * non-owner path left: it derives fileId from bytes it just hashed, so
-   * possession is proven by construction rather than asserted by the
-   * caller. The carve-out deliberately excludes the uploader clause of
-   * canAccessFile() — using an existing metadata record to justify creating
-   * another would let one successful guess bootstrap unlimited further
-   * ones, the same circularity this guard exists to close.
+   * Create a record on behalf of the requester: create grant required,
+   * anonymous denied, entityId set to the requester (omitted when that's
+   * the owner), client IDs skew-checked, reference-creating options gated,
+   * and non-owner `_attachment@1` creation refused save one carve-out.
+   * See docs/spec/access-control.md and docs/spec/attachments.md.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -2250,21 +1959,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Query records, filtered to only those the requester can read.
-   *
-   * Pagination is filtered-then-refilled: each adapter page is fetched in
-   * full and entirely evaluated before deciding whether to fetch another,
-   * so the returned page may overshoot `limit` slightly, but never skips a
-   * record that shared a page with the one that crossed the threshold (the
-   * adapter's cursor can't address a position mid-page).
-   *
-   * `total` is always null — see the QueryResult.total doc comment.
-   *
-   * Grant records are pre-fetched once before the pagination loop so read
-   * grants don't trigger a separate _grant@1 query per record. The
-   * prefetch itself cursor-walks every _grant@1 record — a single default
-   * page would silently miss grants past page one, denying access that
-   * should exist with no error (see queryAllPages()).
+   * Query records, filtered to those the requester can read. Pages are
+   * filtered then refilled, so a page may slightly overshoot `limit` but
+   * never skips a record. `total` is always null (see QueryResult.total).
+   * Grants are prefetched once, cursor-walked to exhaustion.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
@@ -2365,15 +2063,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * History is the mutation/recovery surface, not a read surface (#109): a
-   * record that is public *now* would otherwise have a transitively public
-   * *past* just because history reads gated on current read access. Gated
-   * the same as update/associate/restoreVersion — the write bit's own
-   * justification ("anything a write-holder does, the owner can undo") is
-   * exactly why the undo surface belongs to whoever can mutate the record,
-   * not to plain readers. Snapshot `permissions` are additionally stripped
-   * for everyone but the owner — owner/creator-only audit data per
-   * setPermissions(), never a reader's or write-holder's business.
+   * History is the mutation/recovery surface, not a read surface — gated
+   * like update(), with snapshot `permissions` stripped for everyone but
+   * the owner. See docs/spec/versioning.md § History access.
    */
   async getVersions(id: string): Promise<RecordVersion[]> {
     await this.requireUpdatable(id);
@@ -2394,15 +2086,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Restoring re-attaches whatever associations and file-ref fields the
-   * snapshot carried — for a non-owner write-holder, that can re-convey
-   * access to a file or record the requester can no longer reach today
-   * (the reference was legitimate when created, but access since moved on).
-   * Re-running #51's reference-creation checks against the *snapshot's*
-   * associations/content closes that: a write-holder can only restore
-   * references they could create fresh right now. The owner is exempt, per
-   * the same recoverability principle that exempts them from every other
-   * write-path gate — restoreVersion is how the owner undoes anything.
+   * Re-runs the reference-creation checks against the snapshot for
+   * non-owner requesters, so a restore can't re-convey access to a file or
+   * record the requester can no longer reach today. The owner is exempt.
+   * See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -2423,13 +2110,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Store bytes and create an _attachment@1 metadata record. Requires a
-   * `create` grant on `_attachment@1`. Anonymous requesters are always
-   * denied. The record's entityId is set to the requester — unless the
-   * requester is the owner, in which case entityId is omitted, matching the
-   * normalization create() applies (#69, #106 E1): without it, the owner
-   * uploading through asEntity(ownerEntityId) would produce a differently-
-   * shaped record than Stack.putAttachment() for the exact same author.
+   * Store bytes and create an _attachment@1 metadata record (create grant
+   * on `_attachment@1` required; anonymous denied). entityId is the
+   * requester, omitted when that's the owner — the same normalization
+   * create() applies.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
     const requester = this.requesterEntityId;
@@ -2456,11 +2140,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Download attachment bytes. Accessible if the requester is the owner,
-   * can read any record referencing the file, or uploaded the file themselves
-   * and it hasn't been associated with a record yet. Shares its predicate
-   * with the reference-creation gate (canAccessFile, #51) — reference
-   * creation requires exactly what reference possession grants.
+   * Download attachment bytes. Accessible to the owner, a reader of any
+   * referencing record, or the uploader pre-association — the same
+   * predicate as the reference-creation gate (canAccessFile).
    */
   async getAttachment(fileId: string): Promise<Uint8Array> {
     if (!(await this.canAccessFile(fileId))) throw new StackPermissionError();

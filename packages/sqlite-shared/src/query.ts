@@ -111,11 +111,9 @@ export const buildWhereClause = (
   }
 
   // Content field filters (top-level scalar exact match). A `null` value
-  // means "field absent or null" (IS NULL / missing-path semantics), not
-  // "match nothing" — plain SQL `= NULL` is never true, which would make
-  // `{ content: { x: null } }` silently return an empty result with no
-  // signal (#69). json_extract() already returns SQL NULL for both a
-  // missing path and a stored JSON null, so IS NULL captures both.
+  // means "field absent or null", not "match nothing"
+  // (docs/spec/data-model.md § Filter) — json_extract() returns SQL NULL
+  // for both a missing path and a stored JSON null, so IS NULL captures both.
   if (f.content) {
     for (const [key, value] of Object.entries(f.content)) {
       if (value === null) {
@@ -136,8 +134,7 @@ export const buildWhereClause = (
     } else {
       // A search that sanitizes to nothing (e.g. "*", punctuation-only) is
       // an honest zero-match result, not "no filter" — omitting the clause
-      // here would silently return the full table as the "search result"
-      // (#113 C1, #56's never-present-a-superset rule).
+      // would silently return the full table as the "search result".
       conditions.push('0');
     }
   }

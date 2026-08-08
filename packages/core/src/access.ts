@@ -21,12 +21,10 @@ export type GroupRole = 'member' | 'admin';
 export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 
 /**
- * Check whether an entity has read or write access to a Record.
- *
- * - No permissions (absent/empty): owner only.
- * - public: anyone can read; write still requires an explicit grant.
- * - entity: direct entityId match.
- * - group: walk the _group Record's relationship associations for membership.
+ * Check whether an entity has read or write access to a Record: absent
+ * permissions = owner only; public = anyone reads; entity = direct match;
+ * group = walk the _group Record's roster associations. See
+ * docs/spec/access-control.md § Record-level permissions.
  */
 export async function checkAccess(
   record: StackRecord,

@@ -78,12 +78,9 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
 
 /**
  * FTS5's external-content table needs its special `('delete', rowid,
- * content)` command — with the *old* content — to correctly unindex a
- * row; a plain DELETE leaves stale, still-searchable entries behind
- * (discovered and regression-tested while building the native adapter).
- * `remove()` therefore reads the current rowid/content before whatever
- * caller-side change is about to happen, which is why it must run
- * before that change, not after.
+ * content)` command — with the *old* content — to unindex a row; a plain
+ * DELETE leaves stale, still-searchable entries. remove() therefore reads
+ * the current rowid/content and must run before the caller's change.
  */
 export const fts5Strategy: FtsStrategy = {
   insert(exec, recordId, content) {

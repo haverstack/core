@@ -55,12 +55,9 @@ const fileRefFieldNames = (schema: Record<string, { kind?: string }>): string[] 
 
 export class SharedSqlRecordLogic {
   /**
-   * Per-typeId cache of file-ref field names, so syncFileRefs() doesn't hit
-   * the `types` table and re-parse its schema JSON on every single write —
-   * most types have no file-ref fields, and this makes that the common case
-   * cost one lookup ever, not one per write. Populated eagerly in saveType()
-   * and lazily (via getFileRefFields) for types saved before this cache
-   * existed in the process, e.g. right after open().
+   * Per-typeId cache of file-ref field names, so syncFileRefs() doesn't
+   * hit the `types` table and re-parse schema JSON on every write.
+   * Populated eagerly in saveType() and lazily via getFileRefFields().
    */
   private readonly fileRefFieldsByType = new Map<string, string[]>();
 
@@ -90,12 +87,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Precondition check against an already-fetched record, for mutations
-   * that can't fold expectedVersion into their primary UPDATE's WHERE
-   * clause — specifically patchContent/restoreVersion, whose FTS4/FTS5
-   * external-content tables (content='records') require fts.remove() to
-   * run *before* the records-table content changes, so the check has to
-   * happen first, standalone, rather than as part of that UPDATE.
+   * Precondition check for mutations that can't fold expectedVersion into
+   * their primary UPDATE's WHERE clause: patchContent/restoreVersion need
+   * fts.remove() to run *before* the records-table content changes, so
+   * the check happens first, standalone.
    */
   private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
     if (expectedVersion === undefined || record.version === expectedVersion) return;
@@ -133,7 +128,7 @@ export class SharedSqlRecordLogic {
   /**
    * A duplicate id hits the `records` PK — mapped to StackConflictError
    * instead of surfacing the raw engine exception, mirroring saveVersion's
-   * collision mapping below (#120).
+   * collision mapping below.
    */
   async createRecord(record: StackRecord): Promise<StackRecord> {
     try {
@@ -239,14 +234,9 @@ export class SharedSqlRecordLogic {
 
   /**
    * Deletes a record's FTS entry, associations, versions, file-refs, and
-   * row. No write() call — callers batch it.
-   *
-   * expectedVersion is checked first, before any of the cascading deletes,
-   * so a lost CAS race leaves nothing touched — the records table has no
-   * ON DELETE CASCADE, so the row itself can't be the first thing deleted
-   * (children still reference it), which rules out folding the check into
-   * the final `DELETE FROM records` the way the other mutations fold it
-   * into their WHERE clause.
+   * row. No write() call — callers batch it. expectedVersion is checked
+   * first so a lost CAS race leaves nothing touched (children reference
+   * the row, so the check can't fold into the final DELETE).
    */
   private hardDeleteRecord(id: string, expectedVersion?: number): void {
     if (expectedVersion !== undefined) {
@@ -420,12 +410,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Atomically verify fileId is unreferenced, then hard-delete every
-   * metadataTypeId record whose content.fileId matches it. See
-   * StackRecordAdapter.deleteUnreferencedAttachmentRecords(). Runs as a
-   * real SQL transaction and, being entirely synchronous SQL calls with
-   * no `await` in between, nothing else can interleave between the
-   * reference check and the deletes.
+   * Atomically verify fileId is unreferenced, then hard-delete its
+   * metadata records (see deleteUnreferencedAttachmentRecords on the
+   * adapter contract). A real SQL transaction of synchronous calls — no
+   * `await` between the check and the deletes, so nothing interleaves.
    */
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
@@ -483,13 +471,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * A version-number collision on (record_id, version) is a serious
-   * invariant violation — with expectedVersion/ifVersion in place it
-   * should be impossible, and if it happens anyway it must be loud, not a
-   * silently discarded snapshot leaving a hole in the rollback history.
-   * A plain INSERT throws on the UNIQUE constraint instead of swallowing
-   * it; mapped to StackConflictError so callers get a typed error instead
-   * of a raw SQLite exception.
+   * A (record_id, version) collision is rejected loudly via the UNIQUE
+   * constraint, mapped to StackConflictError — never a silently discarded
+   * snapshot leaving a hole in rollback history. See
+   * docs/spec/versioning.md § Optimistic concurrency.
    */
   private insertVersionRow(id: string, version: RecordVersion): void {
     try {
@@ -538,13 +523,9 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Standalone snapshot write, outside of a mutation's own atomic path —
-   * for tooling and tests. Loud on a collision, unconditionally: nothing
-   * here is about to bump the record's version, so a colliding row can
-   * only mean a genuine double-write, never something to paper over.
-   * Mutating methods take a `snapshot` option instead — see
-   * snapshotBeforeMutation, which is more forgiving because it always
-   * bumps the version right after.
+   * Standalone snapshot write for tooling and tests — loud on any
+   * collision, since nothing here is about to bump the version. Mutating
+   * methods take a `snapshot` option instead; see snapshotBeforeMutation.
    */
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
     this.insertVersionRow(id, version);
@@ -553,29 +534,10 @@ export class SharedSqlRecordLogic {
 
   /**
    * The snapshot half of a mutating method's atomic snapshot-then-mutate
-   * transaction, called immediately before the method applies its version
-   * bump. A (record_id, version) collision is usually a genuine conflict —
-   * two writers who both read the same stale version race to snapshot it,
-   * and the loser must be rejected here, before its mutation ever applies
-   * (regression coverage: two racers snapshotting the same version, the
-   * loser gets StackConflictError with no partial apply).
-   *
-   * But a versions row can only ever legitimately describe a version
-   * strictly *less than* the record's current version — it's written in
-   * the same breath as the bump past it. A colliding row whose version
-   * equals the record's CURRENT version therefore cannot be a legitimate
-   * snapshot: the bump that should have accompanied it never landed. That
-   * combination is impossible to produce going forward (this transaction
-   * commits the snapshot and the bump together), but it's exactly the
-   * state an already-bricked stack — one carrying an orphan row left by
-   * the old two-call, non-atomic design — is stuck in (#112). Recognizing
-   * it is a pure *version-number* comparison against the live record,
-   * never a comparison of the snapshot's content: the forbidden "same
-   * payload ⇒ treat as success" shortcut would let two genuinely
-   * concurrent writers both proceed, corrupting history. This can't,
-   * because it only ever fires when the record hasn't moved at all —
-   * overwrite the stale row and let this call's own mutation, right
-   * below, finally complete the bump it never got.
+   * transaction. A collision is a racing-writer conflict, except an orphan
+   * row at the record's *current* version — recognized by version number
+   * alone, never content — which is overwritten so the interrupted write
+   * can complete. See docs/spec/versioning.md § Snapshot atomicity.
    */
   private snapshotBeforeMutation(id: string, version: RecordVersion): void {
     try {
@@ -755,13 +717,9 @@ export class SharedSqlRecordLogic {
 
   /**
    * Replace a record's file_refs rows with whatever its content currently
-   * holds in top-level file-ref fields, per its type's schema. Called on
-   * every write that can change content or typeId, so the index never
-   * drifts from what's actually stored. Only top-level scalars are
-   * indexed — same limit as content-field query filtering generally.
-   * The vast majority of types have no file-ref fields at all, so the
-   * schema lookup is cached (see fileRefFieldsByType) — only the cheap,
-   * indexed delete runs unconditionally on every write.
+   * holds in top-level file-ref fields, on every write that can change
+   * content or typeId, so the index never drifts. Only top-level scalars
+   * are indexed; the schema lookup is cached (fileRefFieldsByType).
    */
   private syncFileRefs(recordId: string, typeId: string, content: Record<string, unknown>): void {
     this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [recordId]);

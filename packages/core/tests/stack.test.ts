@@ -59,7 +59,7 @@ describe('Stack.create', () => {
     );
   });
 
-  // #69: timezone is optional passthrough metadata, nothing more — no
+  // timezone is optional passthrough metadata, nothing more — no
   // default, since defaulting to a real timezone would claim knowledge the
   // stack doesn't have.
   test('timezone is undefined when not specified — no default', async () => {
@@ -125,12 +125,11 @@ describe('Stack.create', () => {
       expect(records[0].entityId).toBeUndefined();
     });
 
-    // design-assessment §E2: the idempotency check used to read a single,
-    // unpaginated page of `_entity@1` records. An owner card that already
-    // exists but lands past page one (>50 `_entity` records, e.g. an
-    // address book) was invisible to that check, so every subsequent
-    // Stack.create({ ownerProfile }) minted a duplicate owner card.
-    test('does not duplicate the owner record when it exists past the first query page (#108/§E2 regression)', async () => {
+    // The idempotency check cursor-walks every `_entity@1` record, so an
+    // owner card past page one (>50 `_entity` records, e.g. an address
+    // book) is still found and Stack.create({ ownerProfile }) stays a
+    // no-op rather than minting a duplicate.
+    test('does not duplicate the owner record when it exists past the first query page (regression)', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s0 = await Stack.create(emptyAdapter);
       for (let i = 0; i < 55; i++) {
@@ -190,7 +189,7 @@ describe('defineType', () => {
   });
 
   // -------------------------------------------------------
-  // Schema drift detection (#68)
+  // Schema drift detection
   // -------------------------------------------------------
 
   test('redefining with an identical schema is a no-op — createdAt does not churn', async () => {
@@ -360,7 +359,7 @@ describe('create', () => {
 });
 
 // -------------------------------------------------------
-// create — _group admin bootstrap (#118)
+// create — _group admin bootstrap
 // -------------------------------------------------------
 
 describe('create — _group admin bootstrap', () => {
@@ -397,7 +396,7 @@ describe('create — _group admin bootstrap', () => {
 });
 
 // -------------------------------------------------------
-// create — client-supplied id (#55)
+// create — client-supplied id
 // -------------------------------------------------------
 
 describe('create — client-supplied id', () => {
@@ -438,7 +437,7 @@ describe('create — client-supplied id', () => {
     );
   });
 
-  test('MemoryAdapter.createRecord itself rejects a duplicate id — not just Stack’s callers (#120)', async () => {
+  test('MemoryAdapter.createRecord itself rejects a duplicate id — not just Stack’s callers', async () => {
     const first = await stack.create(NOTE_V1, { text: 'first' });
     await expect(adapter.createRecord({ ...first, content: { text: 'second' } })).rejects.toThrow(
       StackConflictError,
@@ -457,7 +456,7 @@ describe('create — client-supplied id', () => {
 });
 
 // -------------------------------------------------------
-// Type cache (#56) — create()/update()/etc. shouldn't pay a getType()
+// Type cache — create()/update()/etc. shouldn't pay a getType()
 // round trip on every write for a value that can't change.
 // -------------------------------------------------------
 
@@ -510,7 +509,7 @@ describe('type cache', () => {
 });
 
 // -------------------------------------------------------
-// content filter null semantics (#69) — MemoryAdapter's own
+// content filter null semantics — MemoryAdapter's own
 // implementation, mirroring the SQL adapters' shared buildWhereClause fix.
 // -------------------------------------------------------
 
@@ -533,12 +532,12 @@ describe('query — content filter null semantics', () => {
 });
 
 // -------------------------------------------------------
-// query() fails loud rather than silently widening (#113 C2): a filter
+// query() fails loud rather than silently widening: a filter
 // Stack can't honor against this adapter's declared capabilities must
 // throw before dispatching, not quietly return the unfiltered superset.
 // -------------------------------------------------------
 
-describe('query — capability fail-loud (#113)', () => {
+describe('query — capability fail-loud', () => {
   test('filter.search against an adapter without fullTextSearch throws, not returns everything', async () => {
     await stack.create(NOTE_V1, { text: 'findable' });
     await expect(stack.query({ filter: { search: 'findable' } })).rejects.toThrow(StackQueryError);
@@ -969,10 +968,10 @@ describe('migrateAll', () => {
     expect(await buggyStack.getVersions(record.id)).toEqual([]); // no snapshot either
   });
 
-  test("an orphan snapshot at a record's current version does not block migrateAll from healing it (#112)", async () => {
+  test("an orphan snapshot at a record's current version does not block migrateAll from healing it", async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     // Simulate a migrateAll() interrupted between its snapshot and its
-    // commitMigration() call under the old two-call design.
+    // commitMigration() call, leaving an orphan row at v1.
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
@@ -987,7 +986,7 @@ describe('migrateAll', () => {
 });
 
 // -------------------------------------------------------
-// restoreVersion — typeId and validation (#62)
+// restoreVersion — typeId and validation
 // -------------------------------------------------------
 
 describe('restoreVersion — typeId and validation', () => {
@@ -1091,7 +1090,7 @@ describe('versions', () => {
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
   });
 
-  test('restoreVersion removes an association that did not exist at the target version, even though the target had none at all (#111)', async () => {
+  test('restoreVersion removes an association that did not exist at the target version, even though the target had none at all', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1, no associations
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2, snapshots v1
     const restored = await stack.restoreVersion(record.id, 1); // v3
@@ -1266,15 +1265,15 @@ describe('ifVersion', () => {
 });
 
 // -------------------------------------------------------
-// Orphan version row recovery (#112)
+// Orphan version row recovery
 // -------------------------------------------------------
 
-describe('orphan version row recovery (#112)', () => {
+describe('orphan version row recovery', () => {
   test("a pre-existing orphan snapshot at the record's current version does not permanently block update()", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    // Simulate the old two-call design being interrupted: the snapshot for
-    // v1 committed, but the mutation that should have bumped past it never
-    // did — an orphan row sitting at the record's own current version.
+    // Simulate an interrupted write: the v1 snapshot committed, but the
+    // mutation that should have bumped past it never did — an orphan row
+    // sitting at the record's own current version.
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
@@ -1395,10 +1394,10 @@ describe('delete', () => {
 });
 
 // -------------------------------------------------------
-// _config protections (#67)
+// _config protections
 // -------------------------------------------------------
 
-describe('_config protections (#67)', () => {
+describe('_config protections', () => {
   const CONFIG_ID = '_config';
   const CONFIG_TYPE = '_config@1';
 
@@ -1595,7 +1594,7 @@ describe('grant', () => {
     const records = await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
     expect(records).toHaveLength(1);
     // The grantee lives in content, not record.entityId — entityId means
-    // "author", and the owner (who called grant()) authored this record (#57).
+    // "author", and the owner (who called grant()) authored this record.
     expect(records[0].entityId).toBeUndefined();
     expect(records[0].content).toEqual({
       typeId: NOTE_V1,
@@ -1630,10 +1629,9 @@ describe('grant', () => {
     expect(await stack.getType('_attachment@1')).not.toBeNull();
   });
 
-  // A grant record used to carry the grantee in record.entityId, which
-  // means "author" everywhere else — so "everything Alice authored" queries
-  // picked up grants *about* Alice that she never touched. Moving the
-  // grantee into content fixes this (#57).
+  // The grantee lives in content.granteeEntityId, not record.entityId,
+  // which means "author" everywhere else — so "everything Alice authored"
+  // queries don't pick up grants that merely name her.
   test('an authorship query does not pick up grants naming that entity', async () => {
     await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
     const result = await stack.query({ filter: { entityId: 'entity-abc' } });
@@ -1646,7 +1644,7 @@ describe('grant', () => {
     expect(record.content.text).toBe('hi');
   });
 
-  // #116/F4 — an unrecognized action string would otherwise be stored
+  // an unrecognized action string would otherwise be stored
   // silently and simply never match at check time (hasGrant).
   test('rejects an unknown grant action', async () => {
     await expect(
@@ -1665,7 +1663,7 @@ describe('grant', () => {
     expect(grants).toHaveLength(0);
   });
 
-  // #116/F4 — typeId must be a well-formed bare baseId or versioned TypeId.
+  // typeId must be a well-formed bare baseId or versioned TypeId.
   test('rejects an empty typeId', async () => {
     await expect(stack.grant('entity-abc', [{ actions: ['create'], typeId: '' }])).rejects.toThrow(
       StackValidationError,
@@ -1685,7 +1683,7 @@ describe('grant', () => {
     expect(records).toHaveLength(1);
   });
 
-  // #116/F5 — grants on _grant/_config are refused outright; other reserved
+  // grants on _grant/_config are refused outright; other reserved
   // types (_attachment, _entity, _group) stay grantable.
   test('rejects a grant targeting _grant@1', async () => {
     await expect(
@@ -1818,7 +1816,7 @@ describe('associate / dissociate', () => {
     const updated = await adapter.getRecord(record.id);
     // Dissociating the only association leaves the key omitted entirely
     // (associations: undefined), mirroring the SQL adapters' rowToRecord
-    // rather than a bare `[]` — see #111.
+    // rather than a bare `[]` — matching the SQL adapters' rowToRecord.
     expect(updated?.associations).toBeUndefined();
   });
 
@@ -1910,7 +1908,7 @@ describe('setPermissions', () => {
     );
   });
 
-  test('adding role: "admin" to a group entry persists and bumps version (#107)', async () => {
+  test('adding role: "admin" to a group entry persists and bumps version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.setPermissions(record.id, [
       { access: 'group', groupId: 'group-1', read: true, write: true },
@@ -1925,7 +1923,7 @@ describe('setPermissions', () => {
     ]);
   });
 
-  test('removing role: "admin" from a group entry persists and bumps version (#107)', async () => {
+  test('removing role: "admin" from a group entry persists and bumps version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.setPermissions(record.id, [
       { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
@@ -1940,7 +1938,7 @@ describe('setPermissions', () => {
     ]);
   });
 
-  test('a genuinely-identical group entry (matching role) still no-ops (#107)', async () => {
+  test('a genuinely-identical group entry (matching role) still no-ops', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.setPermissions(record.id, [
       { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
@@ -1985,15 +1983,12 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
-// putAttachment — maxAttachmentBytes pre-check (#114 C4): a local ceiling
-// check that fails fast, before any bytes reach the adapter. Local adapters
-// (MemoryAdapter included) declare maxAttachmentBytes: null — no code path
-// exercises this against a real local adapter, so these tests fake a finite
-// ceiling the same way the atomic-adapter-path tests above fake
-// putAttachmentWithMetadata: Object.assign over a MemoryAdapter instance.
+// putAttachment — maxAttachmentBytes pre-check: fails fast before any
+// bytes reach the adapter. Local adapters declare null, so these tests
+// fake a finite ceiling via Object.assign over a MemoryAdapter instance.
 // -------------------------------------------------------
 
-describe('putAttachment — maxAttachmentBytes pre-check (#114)', () => {
+describe('putAttachment — maxAttachmentBytes pre-check', () => {
   const withCeiling = (maxAttachmentBytes: number): StackAdapter =>
     Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
       capabilities: {
@@ -2031,17 +2026,13 @@ describe('putAttachment — maxAttachmentBytes pre-check (#114)', () => {
 });
 
 // -------------------------------------------------------
-// putAttachment — atomic path (#106): when the adapter implements the
-// optional StackAdapter.putAttachmentWithMetadata() capability (the API
-// adapter, over one POST /attachments request), Stack.putAttachment()
-// delegates the whole operation to it and must not also make its own
-// create() call — that would double-create (and, for a mismatched
-// mimeType, conflict). Local adapters like MemoryAdapter don't implement
-// the capability, so the pre-existing create() fallback is exercised by
-// every other test in this describe block above.
+// putAttachment — atomic path: with putAttachmentWithMetadata() present,
+// Stack.putAttachment() delegates the whole operation and must not also
+// make its own create() call (double-create). The fallback path is
+// exercised by every other test in the describe block above.
 // -------------------------------------------------------
 
-describe('putAttachment — atomic adapter path (#106)', () => {
+describe('putAttachment — atomic adapter path', () => {
   test('delegates to putAttachmentWithMetadata() when present, skipping its own create() call', async () => {
     const data = new Uint8Array([1, 2, 3]);
     const fabricatedRecord: StackRecord = {
@@ -2081,7 +2072,7 @@ describe('putAttachment — atomic adapter path (#106)', () => {
 });
 
 // -------------------------------------------------------
-// _attachment@1 mimeType invariant (#65): first-recorded wins for serving,
+// _attachment@1 mimeType invariant: first-recorded wins for serving,
 // a conflicting later upload is rejected rather than silently coexisting.
 // -------------------------------------------------------
 
@@ -2107,10 +2098,10 @@ describe('_attachment@1 mimeType conflict on create', () => {
     expect(result.records).toHaveLength(1);
   });
 
-  // Anti-oracle (#106): the established mimeType must never appear in the
+  // Anti-oracle: the established mimeType must never appear in the
   // conflict message — naming it would confirm the fileId's existing
   // content type to a caller who only guessed the fileId, reintroducing the
-  // confirmation-oracle #51's anti-oracle rule exists to prevent.
+  // confirmation-oracle the anti-oracle rule exists to prevent.
   test('the conflict message never names the established mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, 'text/markdown');
@@ -2127,7 +2118,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     expect(message).not.toContain('text/plain');
   });
 
-  // #90/#113: forces contentFieldQuery: false so this exercises the
+  // forces contentFieldQuery: false so this exercises the
   // cursor-walk fallback the test name describes, rather than the fast
   // content-filtered query a compliant local adapter (MemoryAdapter's
   // real-world default) would take.
@@ -2185,7 +2176,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
 });
 
 // -------------------------------------------------------
-// _attachment@1 immutable fields on update (#65): filename is the only
+// _attachment@1 immutable fields on update: filename is the only
 // field that may change after a metadata record is created.
 // -------------------------------------------------------
 
@@ -2261,7 +2252,7 @@ describe('deleteAttachment', () => {
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
   });
 
-  // #64: a soft-deleted record is recoverable via undelete() — deleting the
+  // a soft-deleted record is recoverable via undelete() — deleting the
   // file it still references now would leave that reference dangling the
   // moment the record comes back.
   test('throws StackConflictError when only a soft-deleted record still references the file', async () => {
@@ -2315,14 +2306,9 @@ describe('deleteAttachment', () => {
     );
   });
 
-  // #50: the fallback's metadata scan used to take a single unbounded
-  // query() page, so on adapters without contentFieldQuery — where matching
-  // happens in memory — metadata beyond page one was never found, leaving
-  // it orphaned once the bytes were deleted.
-  // #90/#113: forces contentFieldQuery: false so the metadata scan below
-  // takes the in-memory cursor-walk fallback the test name describes,
-  // rather than the fast content-filtered query a compliant local adapter
-  // (MemoryAdapter's real-world default) would take.
+  // The fallback's metadata scan cursor-walks, so metadata past page one
+  // is deleted too rather than orphaned. IncapableMemoryAdapter forces the
+  // in-memory fallback the test name describes.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
@@ -2353,7 +2339,7 @@ describe('deleteAttachment', () => {
     ).toBe(false);
   });
 
-  // #63: a fileId held in a file-ref content field is a real reference —
+  // a fileId held in a file-ref content field is a real reference —
   // deleteAttachment()'s 409 check must see it, not just attachment associations.
   test('throws StackConflictError when only a file-ref content field references the file (fallback path)', async () => {
     const attachmentTypeId = 'com.example.test/photo-note@1';
@@ -2448,7 +2434,7 @@ describe('collectAttachmentGarbage', () => {
     expect(result.deleted).toEqual([]);
   });
 
-  // #64 rule 1: soft-deleted records are recoverable via undelete() (#59/#60)
+  // Soft-deleted records are recoverable via undelete()
   // and must find their attachments intact — so they still count as references.
   test('does not collect a file referenced only by a soft-deleted record', async () => {
     const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
@@ -2465,7 +2451,7 @@ describe('collectAttachmentGarbage', () => {
     expect(result.deleted).toEqual([]);
   });
 
-  // #63: a file-ref content field is a real reference too, same as an
+  // a file-ref content field is a real reference too, same as an
   // attachment Association.
   test('does not collect a file referenced only via a file-ref content field', async () => {
     const photoType = 'com.example.test/photo-note@1';

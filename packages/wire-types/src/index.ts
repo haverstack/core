@@ -111,16 +111,11 @@ export function parseDate(val: unknown): Date | undefined {
 // Error responses
 // -------------------------------------------------------
 //
-// core defines a typed error taxonomy (StackValidationError,
-// StackPermissionError, StackNotFoundError, StackConflictError,
-// StackVersionConflictError, StackMigrationError, StackQueryError,
-// StackSchemaDriftError, StackPayloadTooLargeError), each with a static
-// `code`. The wire error body below is the round-trip
-// contract: a server serializes a caught core error to { status, body }
-// via serializeError(), and APIAdapter reconstructs the same class via
-// deserializeError(). `code` is the authoritative discriminator — status
-// is a transport hint that proxies and legacy servers are more likely to
-// preserve than a body.
+// The round-trip contract for core's typed error taxonomy: a server
+// serializes a caught core error via serializeError(), and APIAdapter
+// reconstructs the same class via deserializeError(). `code` is the
+// authoritative discriminator; status is a transport hint. See
+// docs/spec/wire-format.md § Error responses.
 
 export type WireErrorCode =
   | 'bad_request'
@@ -173,13 +168,10 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
    * future server-side migration-graph check has a defined status to use.
    */
   migration: 500,
-  // Shares 409 with 'conflict' — both are "operation conflicts with a
-  // constraint" in HTTP terms, and unlike version_conflict there's no
-  // competing convention pulling schema_drift to its own status. The
-  // shared status means STATUS_TO_CODE below can only pick one canonical
-  // code for status-only reconstruction (see its doc comment) — that's
-  // 'conflict'; a schema-drift response without a parseable body degrades
-  // to a generic StackConflictError rather than being lost entirely.
+  // Shares 409 with 'conflict', so a schema-drift response without a
+  // parseable body degrades to a generic StackConflictError in
+  // status-only reconstruction. See docs/spec/wire-format.md § Wire error
+  // body.
   schema_drift: 409,
   // 413 is unambiguous — no other wire code shares it — so status-only
   // reconstruction (STATUS_TO_CODE below) recovers this class even from a
@@ -191,16 +183,9 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
 /**
  * Statuses that unambiguously imply a wire error code, for reconstructing
  * an error from status alone when a response has no parseable wire error
- * body (a foreign/legacy server, or a proxy that strips bodies but
- * preserves status). 500 is deliberately excluded: it's the generic
- * "unhandled server exception" status, not a reliable signal that a
- * StackMigrationError specifically occurred — status-only reconstruction
- * would misclassify ordinary server bugs.
- *
- * Every other status here maps to exactly one code, including 412 →
- * 'version_conflict' — since it doesn't share a status with 'conflict',
- * status-only reconstruction recovers the precise error even without a
- * parseable body, not just the generic StackConflictError.
+ * body. 500 is deliberately excluded — it would misclassify ordinary
+ * server bugs as StackMigrationError. See docs/spec/wire-format.md
+ * § Wire error body.
  */
 export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
   400: 'bad_request',

@@ -148,12 +148,10 @@ export const _resetIdState = (): void => {
 // -------------------------------------------------------
 
 /**
- * Generate a new Stack record ID.
- *
- * IDs are time-sortable: lexicographic order matches creation order.
- * Same-millisecond IDs are monotonically incremented to preserve order
- * and avoid collisions. Throws IdGenerationOverflowError if more than
- * BASE^RAND_SUFFIX_LENGTH (32^3 = 32,768) IDs are generated in one millisecond.
+ * Generate a new Stack record ID. Time-sortable: lexicographic order
+ * matches creation order, with same-millisecond IDs monotonically
+ * incremented. Throws IdGenerationOverflowError past 32^3 IDs in one
+ * millisecond.
  *
  * @param timestamp - Override the timestamp (ms since epoch). Defaults to Date.now().
  */

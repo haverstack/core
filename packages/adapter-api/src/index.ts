@@ -74,12 +74,10 @@ export class APIAdapterConnectionError extends APIAdapterError {
 }
 
 /**
- * Thrown locally — before any request is sent — when a query uses a filter
- * the connected server has declared it doesn't support (`capabilities.
- * contentFieldQuery` or `capabilities.fullTextSearch` is false). Servers
- * without these capabilities have no endpoint that honors the filter at
- * all, so silently sending it anyway would return an unfiltered superset
- * presented as the filtered result (see #56) rather than erroring.
+ * Thrown locally — before any request is sent — when a query uses a
+ * filter the connected server has declared it doesn't support. Sending it
+ * anyway would return an unfiltered superset presented as the filtered
+ * result. See docs/spec/wire-format.md § Records.
  */
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
@@ -246,7 +244,7 @@ export class APIAdapter implements StackAdapter {
       opts.token,
       discovery.entityId,
       // Passthrough metadata only — no 'UTC' default, which would claim
-      // knowledge the discovery response didn't actually provide (#69).
+      // knowledge the discovery response didn't actually provide.
       discovery.timezone,
       discovery.capabilities,
     );
@@ -257,13 +255,10 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
-   * Build the typed error for a failed response. `code` in the wire error
-   * body is authoritative and reconstructs the corresponding core error
-   * class (StackPermissionError, StackNotFoundError, StackConflictError,
-   * StackValidationError, StackQueryError, StackMigrationError). Falls back
-   * to status-based reconstruction when the body is missing or foreign
-   * (unrecognized shape), then to a generic APIAdapterError when neither
-   * yields an unambiguous mapping.
+   * Build the typed error for a failed response: `code` in the wire error
+   * body is authoritative, falling back to status-based reconstruction,
+   * then to a generic APIAdapterError. See docs/spec/wire-format.md
+   * § Error responses.
    */
   private async errorForResponse(res: Response, method: string, path: string): Promise<Error> {
     let body: unknown;
@@ -327,7 +322,7 @@ export class APIAdapter implements StackAdapter {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  /** POST /attachments always returns the created _attachment@1 record (#106) — see putAttachmentWithMetadata() below. */
+  /** POST /attachments always returns the created _attachment@1 record — see putAttachmentWithMetadata() below. */
   private async uploadBinary(
     path: string,
     data: Uint8Array,
@@ -421,10 +416,9 @@ export class APIAdapter implements StackAdapter {
       total: number | null;
     };
 
-    // Delegates the fail-loud decision to core's shared assertQueryCapabilities
-    // (see #56, #90, #113) so the wire path and the local/in-process path
-    // (Stack.query()) enforce one rule — re-thrown as APIAdapterCapabilityError
-    // for callers matching on this adapter's own error type.
+    // Delegates the fail-loud decision to core's shared
+    // assertQueryCapabilities so the wire and local paths enforce one rule
+    // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
     try {
       assertQueryCapabilities(query.filter, this.capabilities);
     } catch (err) {
@@ -474,7 +468,7 @@ export class APIAdapter implements StackAdapter {
     opts: { expectedVersion?: number } = {},
   ): Promise<void> {
     // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
-    // §9.3.5) and proxies/gateways are free to drop or reject it. See #56.
+    // §9.3.5) and proxies/gateways are free to drop or reject it.
     await this.request<void>('POST', `/records/${id}/associations/delete`, association, {
       ifMatch: opts.expectedVersion,
     });
@@ -566,35 +560,25 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
-   * Unsupported over the wire — always throws. POST /attachments is the
-   * only upload endpoint, and it always creates the accompanying
-   * _attachment@1 record (#106): the whole point of the endpoint is that
-   * the record's fileId comes from bytes the server received in the same
-   * request, so there is no bytes-only wire mode for this method to map
-   * to. Implementing it anyway would silently mint a record with a default
-   * mimeType and no filename — a bytes-only upload that isn't. Bytes-only
-   * storage is a local-adapter primitive with no public Stack surface
-   * (spec §Attachments); Stack.putAttachment() never reaches this method
-   * on this adapter (it takes the putAttachmentWithMetadata() path), so
-   * this throw is a guard against direct adapter-level callers, not a
-   * reachable Stack code path.
+   * Unsupported over the wire — always throws. There is no bytes-only
+   * upload endpoint to map to, and implementing one anyway would silently
+   * mint a record with a default mimeType. Stack.putAttachment() never
+   * reaches this on this adapter; the throw guards direct adapter-level
+   * callers. See docs/spec/wire-format.md § Upload.
    */
   async putAttachment(_data: Uint8Array): Promise<FileId> {
     throw new APIAdapterError(
       'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
-        'an _attachment@1 record (#106). Use Stack.putAttachment(data, mimeType, filename?).',
+        'an _attachment@1 record. Use Stack.putAttachment(data, mimeType, filename?).',
     );
   }
 
   /**
-   * StackAdapter's optional atomic-upload capability: store bytes and
-   * create the _attachment@1 record in one POST /attachments request — the
-   * wire counterpart of Stack.putAttachment() (#106). This adapter is the
-   * one implementation that can offer it, because bytes and records live
-   * behind the same boundary here (the server). Not an efficiency
-   * shortcut: the record's fileId is established from bytes the server
-   * received in *this* request, which is what makes the operation safe for
-   * a non-owner requester — see StackAdapter.putAttachmentWithMetadata.
+   * StackAdapter's optional atomic-upload capability: bytes + _attachment@1
+   * record in one POST /attachments request. The one adapter that can
+   * offer it — bytes and records live behind the same boundary (the
+   * server). A security boundary, not an efficiency shortcut; see
+   * docs/spec/wire-format.md § Upload.
    */
   async putAttachmentWithMetadata(
     data: Uint8Array,

@@ -233,12 +233,12 @@ describe('getVersion fixtures', () => {
   }
 });
 
-// #110: pins the response shape a version-count-increment check would parse
+// pins the response shape a version-count-increment check would parse
 // after POST /migrate or POST /restore/:version. See the fixtures'
 // description for why this suite (mocked transport, no real backing store)
 // can't itself observe the count actually growing — a real server-side
 // conformance run dispatches the paired mutating fixture first.
-describe('getVersions after migrate/restore fixtures (#110)', () => {
+describe('getVersions after migrate/restore fixtures', () => {
   for (const fixture of getVersionsAfterMutateFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
@@ -290,7 +290,7 @@ describe('commitMigration fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Error responses (#53) — pins that APIAdapter reconstructs the documented
+// Error responses — pins that APIAdapter reconstructs the documented
 // core error class from each fixture's wire error body.
 // -------------------------------------------------------
 
@@ -383,12 +383,10 @@ describe('error response fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Attachment upload fixtures (#106) — POST /attachments carries Content-Type
-// and creates the record. Only fixtures with a Content-Type header are
-// dispatched here: putAttachmentWithMetadata()'s mimeType is required, so
-// there is no way to drive the "header omitted" fixture through it — that
-// one documents the raw wire contract for non-SDK callers only, same as
-// attachmentDownloadFixtures aren't all exercised via APIAdapter either.
+// Attachment upload fixtures. Only fixtures with a Content-Type header
+// are dispatched here: putAttachmentWithMetadata()'s mimeType is
+// required, so the "header omitted" fixture documents the raw wire
+// contract for non-SDK callers only.
 // -------------------------------------------------------
 
 describe('attachment upload fixtures', () => {
