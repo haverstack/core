@@ -12,6 +12,7 @@
 export {
   Stack,
   ScopedStack,
+  StackError,
   StackValidationError,
   StackMigrationError,
   StackPermissionError,
@@ -24,6 +25,7 @@ export {
   assertQueryCapabilities,
 } from './stack.js';
 export type {
+  StackErrorCode,
   StackClient,
   CreateRecordOptions,
   StackOptions,

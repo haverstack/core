@@ -151,8 +151,46 @@ export type DefineTypeOptions = {
   migratesFrom?: TypeId;
 };
 
-export class StackValidationError extends Error {
+/**
+ * The wire-protocol discriminator vocabulary, one code per Stack-domain
+ * error class. Lives here rather than in @haverstack/wire-types because the
+ * classes that carry these codes are defined here; wire-types re-exports it
+ * as WireErrorCode. See docs/spec/wire-format.md § Wire error body.
+ */
+export type StackErrorCode =
+  | 'bad_request'
+  | 'permission'
+  | 'not_found'
+  | 'conflict'
+  | 'version_conflict'
+  | 'validation'
+  | 'migration'
+  | 'schema_drift'
+  | 'payload_too_large';
+
+/**
+ * Root of the Stack error taxonomy. A single `instanceof StackError` answers
+ * "is this a Stack-domain error or a bug?" — the question a server's error
+ * middleware asks before serializing a wire body, and one a nine-arm
+ * instanceof ladder answers only by exhaustion. Every subclass carries its
+ * discriminator as an instance `code`, so serialization is a lookup rather
+ * than a chain of class tests.
+ *
+ * Membership implies a wire mapping: every code has an entry in
+ * WIRE_ERROR_STATUS. Errors with no wire representation (IdGenerationError,
+ * InvalidDidError) deliberately stay outside this hierarchy.
+ *
+ * Subclassing adds no hierarchy beyond this root — notably
+ * StackVersionConflictError is a sibling of StackConflictError, not a
+ * subtype. See docs/spec/wire-format.md § Error responses.
+ */
+export abstract class StackError extends Error {
+  abstract readonly code: StackErrorCode;
+}
+
+export class StackValidationError extends StackError {
   static readonly code = 'validation' as const;
+  override readonly code = StackValidationError.code;
   constructor(public readonly errors: ValidationError[]) {
     super(
       `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
@@ -161,8 +199,9 @@ export class StackValidationError extends Error {
   }
 }
 
-export class StackMigrationError extends Error {
+export class StackMigrationError extends StackError {
   static readonly code = 'migration' as const;
+  override readonly code = StackMigrationError.code;
   constructor(message: string) {
     super(message);
     this.name = 'StackMigrationError';
@@ -170,8 +209,9 @@ export class StackMigrationError extends Error {
 }
 
 /** Thrown by ScopedStack when a requester lacks permission for the operation. */
-export class StackPermissionError extends Error {
+export class StackPermissionError extends StackError {
   static readonly code = 'permission' as const;
+  override readonly code = StackPermissionError.code;
   constructor(message = 'Permission denied') {
     super(message);
     this.name = 'StackPermissionError';
@@ -179,8 +219,9 @@ export class StackPermissionError extends Error {
 }
 
 /** Thrown when a record (or specific version) does not exist. */
-export class StackNotFoundError extends Error {
+export class StackNotFoundError extends StackError {
   static readonly code = 'not_found' as const;
+  override readonly code = StackNotFoundError.code;
   constructor(message: string) {
     super(message);
     this.name = 'StackNotFoundError';
@@ -188,8 +229,9 @@ export class StackNotFoundError extends Error {
 }
 
 /** Thrown when an operation cannot proceed due to a constraint violation (e.g. deleting an attachment that is still referenced). */
-export class StackConflictError extends Error {
+export class StackConflictError extends StackError {
   static readonly code = 'conflict' as const;
+  override readonly code = StackConflictError.code;
   constructor(message: string) {
     super(message);
     this.name = 'StackConflictError';
@@ -202,8 +244,9 @@ export class StackConflictError extends Error {
  * different recovery stories and HTTP statuses (409 vs. 412). See
  * docs/spec/versioning.md § Optimistic concurrency.
  */
-export class StackVersionConflictError extends Error {
+export class StackVersionConflictError extends StackError {
   static readonly code = 'version_conflict' as const;
+  override readonly code = StackVersionConflictError.code;
   constructor(
     message: string,
     readonly recordId: string,
@@ -221,8 +264,9 @@ export class StackVersionConflictError extends Error {
  * undecodable pagination cursor). Distinct from StackValidationError, which
  * means the request was well-formed but content failed schema validation.
  */
-export class StackQueryError extends Error {
+export class StackQueryError extends StackError {
   static readonly code = 'bad_request' as const;
+  override readonly code = StackQueryError.code;
   constructor(message: string) {
     super(message);
     this.name = 'StackQueryError';
@@ -258,8 +302,9 @@ export function assertQueryCapabilities(
  * sent; a server still enforces 413 authoritatively regardless. See
  * docs/spec/wire-format.md § Attachments.
  */
-export class StackPayloadTooLargeError extends Error {
+export class StackPayloadTooLargeError extends StackError {
   static readonly code = 'payload_too_large' as const;
+  override readonly code = StackPayloadTooLargeError.code;
   constructor(message: string) {
     super(message);
     this.name = 'StackPayloadTooLargeError';
@@ -281,8 +326,9 @@ function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | n
  * in-place redefinition. See docs/spec/data-model.md § Schema drift
  * detection.
  */
-export class StackSchemaDriftError extends Error {
+export class StackSchemaDriftError extends StackError {
   static readonly code = 'schema_drift' as const;
+  override readonly code = StackSchemaDriftError.code;
   constructor(
     public readonly typeId: TypeId,
     public readonly violations: SchemaDriftViolation[],
