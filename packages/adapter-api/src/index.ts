@@ -14,6 +14,7 @@
  * patchContent()/deleteRecord()/etc.'s expectedVersion option.
  */
 
+import { assertQueryCapabilities, StackQueryError } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
@@ -420,23 +421,19 @@ export class APIAdapter implements StackAdapter {
       total: number | null;
     };
 
-    // Fail loudly rather than silently widening the result set: a server
-    // that hasn't declared these capabilities has no endpoint that honors
-    // the corresponding filter, so sending it anyway would drop the filter
-    // without signal (see #56).
-    if (query.filter?.content && !this.capabilities.contentFieldQuery) {
-      throw new APIAdapterCapabilityError(
-        'contentFieldQuery',
-        'Query uses filter.content, but this server does not declare the contentFieldQuery ' +
-          'capability — there is no endpoint that would honor it.',
-      );
-    }
-    if (query.filter?.search && !this.capabilities.fullTextSearch) {
-      throw new APIAdapterCapabilityError(
-        'fullTextSearch',
-        'Query uses filter.search, but this server does not declare the fullTextSearch ' +
-          'capability — there is no endpoint that would honor it.',
-      );
+    // Delegates the fail-loud decision to core's shared assertQueryCapabilities
+    // (see #56, #90, #113) so the wire path and the local/in-process path
+    // (Stack.query()) enforce one rule — re-thrown as APIAdapterCapabilityError
+    // for callers matching on this adapter's own error type.
+    try {
+      assertQueryCapabilities(query.filter, this.capabilities);
+    } catch (err) {
+      if (!(err instanceof StackQueryError)) throw err;
+      const capability: keyof AdapterCapabilities =
+        query.filter?.search && !this.capabilities.fullTextSearch
+          ? 'fullTextSearch'
+          : 'contentFieldQuery';
+      throw new APIAdapterCapabilityError(capability, err.message);
     }
 
     let raw: Envelope;

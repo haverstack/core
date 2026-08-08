@@ -237,6 +237,22 @@ describe('FTS4 -> FTS5 migration', () => {
 });
 
 // -------------------------------------------------------
+// Capabilities
+// -------------------------------------------------------
+
+describe('capabilities', () => {
+  // #90 regression guard: this is a local, in-process adapter, so it has no
+  // legitimate reason to decline content-field filtering — a future
+  // refactor that regressed this to `false` would silently widen every
+  // caller's query() results instead of erroring (see assertQueryCapabilities
+  // in @haverstack/core).
+  test('declares contentFieldQuery: true', async () => {
+    const adapter = await initAdapter();
+    expect(adapter.capabilities.contentFieldQuery).toBe(true);
+  });
+});
+
+// -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
@@ -641,6 +657,19 @@ describe('records — queries', () => {
     const result = await adapter.queryRecords({ filter: { search: 'SQLite' } });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
+  });
+
+  // #113 C1: a search term that sanitizes to nothing (here, a bare wildcard
+  // FTS5 strips outright) must match nothing, not silently drop the search
+  // clause and return the whole table as the "search result".
+  test('a search term that sanitizes to empty matches nothing, not everything', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
+    );
+    const result = await adapter.queryRecords({ filter: { search: '*' } });
+    expect(result.records).toEqual([]);
   });
 
   test('full-text search reflects patchContent updates (not stale index entries)', async () => {

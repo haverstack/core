@@ -8,7 +8,7 @@ import {
   StackPayloadTooLargeError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
-import { MemoryAdapter } from '../src/testing.js';
+import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import type { StackRecord, Association, Permission } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -857,23 +857,32 @@ describe('ScopedStack.getAttachment', () => {
   // #50: on adapters without contentFieldQuery, the uploader check used
   // limit: 1 even though matching happens in memory — it could only ever
   // see one of the requester's uploads, false-denying every other one.
-  // MemoryAdapter returns records in insertion order with no sort applied,
-  // so under the old code this second upload was never even considered.
+  // Uses IncapableMemoryAdapter (#90/#113) to force that code path — a
+  // compliant local adapter (MemoryAdapter's real-world default) would
+  // take the fast content-filtered query instead, which this regression
+  // isn't about. IncapableMemoryAdapter returns records in insertion order
+  // with no sort applied, so under the old code this second upload was
+  // never even considered.
   test('uploader can access an upload that is not their first (#50 regression)', async () => {
-    adapter.blobs.set('file-first', { data: new Uint8Array([1]), modifiedAt: new Date() });
-    adapter.blobs.set('file-second', { data: new Uint8Array([2]), modifiedAt: new Date() });
-    await stack.create(
+    const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const incapableStack = await Stack.create(incapableAdapter);
+    incapableAdapter.blobs.set('file-first', { data: new Uint8Array([1]), modifiedAt: new Date() });
+    incapableAdapter.blobs.set('file-second', {
+      data: new Uint8Array([2]),
+      modifiedAt: new Date(),
+    });
+    await incapableStack.create(
       '_attachment@1',
       { fileId: 'file-first', mimeType: 'image/png', size: 1 },
       { entityId: MEMBER },
     );
-    await stack.create(
+    await incapableStack.create(
       '_attachment@1',
       { fileId: 'file-second', mimeType: 'image/png', size: 1 },
       { entityId: MEMBER },
     );
 
-    const bytes = await stack.asEntity(MEMBER).getAttachment('file-second');
+    const bytes = await incapableStack.asEntity(MEMBER).getAttachment('file-second');
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
@@ -885,6 +894,7 @@ describe('ScopedStack.getAttachment', () => {
   // sort applied, so the 11th-created record lands past that old cutoff.
   test('requester can download when the only readable referencing record is past the first 10 (#108 regression)', async () => {
     const fileId = 'file-widely-referenced';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     for (let i = 0; i < 10; i++) {
       await stack.create(
         NOTE,

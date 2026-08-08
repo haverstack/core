@@ -373,6 +373,22 @@ export type Migration = {
 
 export type AdapterCapabilities = {
   fullTextSearch: boolean;
+  /**
+   * Required `true` for local/in-process adapters — reads/writes storage
+   * directly, with no network hop to a server that could have its own
+   * opinion (`record-adapter-sqlite`, `record-adapter-sqljs`, any future
+   * JSON-file adapter, and first-party test doubles standing in for one).
+   * Filtering by `content` is just a linear scan over data the adapter
+   * already holds resident, so there's no legitimate reason for a local
+   * adapter to decline it (#90). Wire adapters (`adapter-api`) remain free
+   * to report `false`, driven by the connected server's own discovery
+   * response — `content` is an arbitrary, app-defined JSON blob rather than
+   * the server's fixed, indexable native schema, and a server may
+   * reasonably decline to index or full-scan it. `Stack.query()` enforces
+   * this at the invariant layer regardless: a query using `content` against
+   * an adapter that declares `false` throws `StackQueryError` rather than
+   * silently returning the unfiltered superset (#113).
+   */
   contentFieldQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
   /**

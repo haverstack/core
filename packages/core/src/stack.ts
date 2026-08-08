@@ -245,6 +245,32 @@ export class StackQueryError extends Error {
 }
 
 /**
+ * Fail loud rather than silently widen: a `filter.search`/`filter.content`
+ * against an adapter that hasn't declared the matching capability has no
+ * code path that would honor it, so dispatching anyway would silently drop
+ * the filter and return an unfiltered superset presented as the filtered
+ * result (#56). Shared by `Stack.query()` (the local/in-process path) and
+ * `APIAdapter.queryRecords()` (the wire path, which additionally has no
+ * server endpoint that would even accept the filter) — one rule, checked
+ * before either ever dispatches to storage.
+ */
+export function assertQueryCapabilities(
+  filter: RecordFilter | undefined,
+  capabilities: Pick<StackFeatures, 'fullTextSearch' | 'contentFieldQuery'>,
+): void {
+  if (filter?.search && !capabilities.fullTextSearch) {
+    throw new StackQueryError(
+      'Query uses filter.search, but this adapter does not declare the fullTextSearch capability.',
+    );
+  }
+  if (filter?.content && !capabilities.contentFieldQuery) {
+    throw new StackQueryError(
+      'Query uses filter.content, but this adapter does not declare the contentFieldQuery capability.',
+    );
+  }
+}
+
+/**
  * Thrown when an attachment upload exceeds the adapter's declared
  * `maxAttachmentBytes` ceiling. Checked client-side in Stack.putAttachment()/
  * ScopedStack.putAttachment() before any bytes are sent — local adapters
@@ -1114,6 +1140,7 @@ export class Stack implements StackClient {
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
+    assertQueryCapabilities(filter, this.adapter.capabilities);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);

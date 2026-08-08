@@ -7,10 +7,11 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackSchemaDriftError,
+  StackQueryError,
   StackPayloadTooLargeError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
-import { MemoryAdapter } from '../src/testing.js';
+import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import type { BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -528,6 +529,42 @@ describe('query — content filter null semantics', () => {
     const result = await stack.query({ filter: { content: { priority: null } } });
     expect(result.records).toHaveLength(1);
     expect(result.records[0].content.text).toBe('explicit null');
+  });
+});
+
+// -------------------------------------------------------
+// query() fails loud rather than silently widening (#113 C2): a filter
+// Stack can't honor against this adapter's declared capabilities must
+// throw before dispatching, not quietly return the unfiltered superset.
+// -------------------------------------------------------
+
+describe('query — capability fail-loud (#113)', () => {
+  test('filter.search against an adapter without fullTextSearch throws, not returns everything', async () => {
+    await stack.create(NOTE_V1, { text: 'findable' });
+    await expect(stack.query({ filter: { search: 'findable' } })).rejects.toThrow(StackQueryError);
+  });
+
+  test('filter.content against an adapter without contentFieldQuery throws, not returns everything', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
+
+    await expect(incapableStack.query({ filter: { content: { priority: 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a query with neither filter still works against an incapable adapter', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.create(NOTE_V1, { text: 'plain' });
+
+    const result = await incapableStack.query({ filter: { typeId: NOTE_V1 } });
+    expect(result.records).toHaveLength(1);
   });
 });
 
@@ -1985,18 +2022,27 @@ describe('_attachment@1 mimeType conflict on create', () => {
     expect(message).not.toContain('text/plain');
   });
 
+  // #90/#113: forces contentFieldQuery: false so this exercises the
+  // cursor-walk fallback the test name describes, rather than the fast
+  // content-filtered query a compliant local adapter (MemoryAdapter's
+  // real-world default) would take.
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
     for (let i = 0; i < 55; i++) {
-      await stack.create('_attachment@1', {
+      await incapableStack.create('_attachment@1', {
         fileId: `filler-${i}`,
         mimeType: 'image/png',
         size: 1,
       });
     }
     const data = new Uint8Array([9, 9, 9]);
-    await stack.putAttachment(data, 'text/markdown');
+    await incapableStack.putAttachment(data, 'text/markdown');
 
-    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+    await expect(incapableStack.putAttachment(data, 'text/plain')).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   test('a soft-deleted earlier record still establishes the mimeType', async () => {
@@ -2168,25 +2214,35 @@ describe('deleteAttachment', () => {
   // query() page, so on adapters without contentFieldQuery — where matching
   // happens in memory — metadata beyond page one was never found, leaving
   // it orphaned once the bytes were deleted.
+  // #90/#113: forces contentFieldQuery: false so the metadata scan below
+  // takes the in-memory cursor-walk fallback the test name describes,
+  // rather than the fast content-filtered query a compliant local adapter
+  // (MemoryAdapter's real-world default) would take.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
     const targetFileId = 'target-file-abc';
     for (let i = 0; i < 55; i++) {
-      await stack.create('_attachment@1', {
+      await incapableStack.create('_attachment@1', {
         fileId: `filler-${i}`,
         mimeType: 'image/png',
         size: 1,
       });
     }
-    const target = await stack.create('_attachment@1', {
+    const target = await incapableStack.create('_attachment@1', {
       fileId: targetFileId,
       mimeType: 'image/png',
       size: 1,
     });
 
-    await stack.deleteAttachment(targetFileId);
+    await incapableStack.deleteAttachment(targetFileId);
 
-    expect(await stack.get(target.id)).toBeNull();
-    const remaining = await stack.query({ filter: { typeId: '_attachment@1' }, limit: 1000 });
+    expect(await incapableStack.get(target.id)).toBeNull();
+    const remaining = await incapableStack.query({
+      filter: { typeId: '_attachment@1' },
+      limit: 1000,
+    });
     expect(
       remaining.records.some((r) => (r.content as Record<string, unknown>).fileId === targetFileId),
     ).toBe(false);

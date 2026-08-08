@@ -21,6 +21,7 @@ export {
   StackQueryError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  assertQueryCapabilities,
 } from './stack.js';
 export type {
   StackClient,
