@@ -30,8 +30,14 @@ import type {
   RecordId,
   FileId,
 } from '@haverstack/core';
-import type { WireRecord, WireType, WireVersion } from '@haverstack/wire-types';
-import { isWireError, deserializeError, errorForStatus } from '@haverstack/wire-types';
+import type { WireRecord, WireType, WireVersion, DiscoveryResponse } from '@haverstack/wire-types';
+import {
+  isWireError,
+  deserializeError,
+  errorForStatus,
+  isProtocolCompatible,
+  WIRE_PROTOCOL_VERSION,
+} from '@haverstack/wire-types';
 
 // -------------------------------------------------------
 // Public option types
@@ -89,16 +95,22 @@ export class APIAdapterCapabilityError extends APIAdapterError {
   }
 }
 
-// -------------------------------------------------------
-// Discovery response shape
-// -------------------------------------------------------
-
-type DiscoveryResponse = {
-  version: string;
-  entityId: string;
-  timezone?: string;
-  capabilities: AdapterCapabilities;
-};
+/**
+ * Thrown by open() when the server's protocol major differs from this
+ * client's, or when discovery reports no parseable version at all. Refusing
+ * at the door beats the alternative: a major difference means some response
+ * reads wrongly, and finding out mid-session leaves the caller unsure which
+ * writes landed. See docs/spec/wire-format.md § Version negotiation.
+ */
+export class APIAdapterVersionError extends APIAdapterError {
+  constructor(
+    public readonly serverVersion: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'APIAdapterVersionError';
+  }
+}
 
 // -------------------------------------------------------
 // Domain object parsers (wire JSON → typed domain objects)
@@ -238,6 +250,17 @@ export class APIAdapter implements StackAdapter {
     }
 
     const discovery = (await res.json()) as DiscoveryResponse;
+
+    if (!isProtocolCompatible(discovery.version ?? '')) {
+      throw new APIAdapterVersionError(
+        discovery.version,
+        discovery.version
+          ? `Server at "${baseUrl}" speaks wire protocol "${discovery.version}"; this client ` +
+              `speaks "${WIRE_PROTOCOL_VERSION}".`
+          : `Server at "${baseUrl}" reported no wire protocol version in discovery; ` +
+              `"${WIRE_PROTOCOL_VERSION}" is required.`,
+      );
+    }
 
     return new APIAdapter(
       baseUrl,

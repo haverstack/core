@@ -21,6 +21,7 @@ import {
   getVersionsAfterMutateFixtures,
   restoreVersionFixtures,
   commitMigrationFixtures,
+  discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
 } from '@haverstack/conformance-fixtures';
@@ -74,6 +75,21 @@ const openAdapter = async (): Promise<APIAdapter> => {
 
 /** Record id embedded in a fixture path like "/records/rec-1" or ".../rec-1/permissions". */
 const idFromPath = (path: string): string => path.split('/')[2].split('?')[0];
+
+describe('discovery fixtures', () => {
+  for (const fixture of discoveryFixtures) {
+    test(fixture.name, async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      const adapter = await APIAdapter.open({ url: BASE_URL });
+
+      const [url] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(adapter.ownerEntityId).toBe(fixture.responseBody!.entityId);
+      expect(adapter.timezone).toBe(fixture.responseBody!.timezone);
+      expect(adapter.capabilities).toEqual(fixture.responseBody!.capabilities);
+    });
+  }
+});
 
 describe('createRecord fixtures', () => {
   for (const fixture of createRecordFixtures) {

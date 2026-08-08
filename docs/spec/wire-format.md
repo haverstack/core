@@ -24,6 +24,18 @@ GET /.well-known/stack
 }
 ```
 
+### Version negotiation
+
+`version` is the wire protocol's own version, `MAJOR.MINOR`, and it is required — not the server's software version, which is the server's business and appears nowhere in this spec.
+
+**A client refuses a server whose major differs from its own**, at `open()`, before any other request. A major bump is defined as a change that would make a client of an earlier major read a response wrongly — a field whose meaning changed, a shape that no longer parses the same way. There is no way to use such a server safely, and discovering it mid-session is worse than refusing: the caller is left unsure which writes landed.
+
+**A minor difference is never a refusal, in either direction.** A higher server minor is additive fields an older client ignores; a higher client minor is optional fields the server may omit. Neither can make a response read wrongly — that is what makes them minor.
+
+A response with no `version`, or one that isn't `MAJOR.MINOR`, is refused the same way a major mismatch is. The field is mandatory here, so its absence is a server that isn't implementing this spec, and guessing on its behalf would defeat the check.
+
+`@haverstack/wire-types` exports the current `WIRE_PROTOCOL_VERSION` along with `parseProtocolVersion()` and `isProtocolCompatible()`, so a server implementation applies the same rule as `adapter-api` rather than reimplementing it.
+
 ## Authentication
 
 Bearer token in the `Authorization` header. Token issuance itself is out of scope for this spec — that is the server's concern — but _how a token is earned_ has a shape worth stating: see [Authentication: challenge–response](./identity.md#authentication-challengeresponse) for the nonce/signature handshake a server implements before calling `createToken()`. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).

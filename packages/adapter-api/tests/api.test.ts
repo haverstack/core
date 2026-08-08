@@ -5,7 +5,9 @@ import {
   APIAdapterConnectionError,
   APIAdapterError,
   APIAdapterCapabilityError,
+  APIAdapterVersionError,
 } from '../src/index.js';
+import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
 import {
   StackPermissionError,
@@ -164,6 +166,63 @@ describe('open', () => {
   test('throws APIAdapterError on non-401 error status', async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
     await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(APIAdapterError);
+  });
+});
+
+// -------------------------------------------------------
+// open() — wire protocol version negotiation
+// -------------------------------------------------------
+
+describe('open — version negotiation', () => {
+  test('opens against a server declaring this client’s protocol version', async () => {
+    const adapter = await openAdapter({ ...DISCOVERY, version: WIRE_PROTOCOL_VERSION });
+    expect(adapter.ownerEntityId).toBe('entity-owner-123');
+  });
+
+  test('refuses a server whose protocol major differs', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, version: '2.0' }));
+    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(
+      APIAdapterVersionError,
+    );
+  });
+
+  test('a higher server minor opens — added fields an older client ignores', async () => {
+    const adapter = await openAdapter({ ...DISCOVERY, version: '1.7' });
+    expect(adapter.ownerEntityId).toBe('entity-owner-123');
+  });
+
+  test('a lower server minor opens — omitted fields an older server never had', async () => {
+    const adapter = await openAdapter({ ...DISCOVERY, version: '1.0' });
+    expect(adapter.ownerEntityId).toBe('entity-owner-123');
+  });
+
+  test('refuses discovery with no version at all', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, version: undefined }));
+    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(
+      APIAdapterVersionError,
+    );
+  });
+
+  test('refuses a version that is not MAJOR.MINOR', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, version: 'v1' }));
+    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(
+      APIAdapterVersionError,
+    );
+  });
+
+  test('carries the offending version for a caller that wants to report it', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, version: '2.0' }));
+    const err = await APIAdapter.open({ url: BASE_URL, token: TOKEN }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterVersionError);
+    expect((err as APIAdapterVersionError).serverVersion).toBe('2.0');
+  });
+
+  test('refuses before sending any other request', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, version: '2.0' }));
+    await expect(APIAdapter.open({ url: BASE_URL, token: TOKEN })).rejects.toThrow(
+      APIAdapterVersionError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 

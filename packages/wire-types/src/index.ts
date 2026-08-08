@@ -7,6 +7,7 @@ import type {
   ValidationError,
   SchemaDriftViolation,
   StackErrorCode,
+  AdapterCapabilities,
 } from '@haverstack/core';
 import {
   StackError,
@@ -271,4 +272,42 @@ export function deserializeError(body: WireError): Error {
 export function errorForStatus(status: number, message: string): Error | null {
   const code = STATUS_TO_CODE[status];
   return code ? deserializeError({ error: { code, message } }) : null;
+}
+
+// -------------------------------------------------------
+// Discovery
+// -------------------------------------------------------
+
+/**
+ * The wire protocol this package describes. Bump the major when a change
+ * would make an older client read a response wrongly; bump the minor for
+ * additions an older client can ignore. See docs/spec/wire-format.md
+ * § Version negotiation.
+ */
+export const WIRE_PROTOCOL_VERSION = '1.0';
+
+/** GET /.well-known/stack. See docs/spec/wire-format.md § Discovery. */
+export type DiscoveryResponse = {
+  version: string;
+  entityId: string;
+  timezone?: string;
+  capabilities: AdapterCapabilities;
+};
+
+/** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */
+export function parseProtocolVersion(version: string): { major: number; minor: number } | null {
+  const match = /^(\d+)\.(\d+)$/.exec(version);
+  return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
+}
+
+/**
+ * Majors must match; minors never have to. A higher server minor is additive
+ * fields this client ignores, and a higher client minor is optional fields
+ * the server may omit — neither can make a response read wrongly, which is
+ * the only thing a major bump signals.
+ */
+export function isProtocolCompatible(version: string, against = WIRE_PROTOCOL_VERSION): boolean {
+  const server = parseProtocolVersion(version);
+  const client = parseProtocolVersion(against);
+  return server !== null && client !== null && server.major === client.major;
 }
