@@ -16,6 +16,9 @@ import {
   associateFixtures,
   dissociateFixtures,
   setPermissionsFixtures,
+  getVersionsFixtures,
+  getVersionFixtures,
+  getVersionsAfterMutateFixtures,
   restoreVersionFixtures,
   commitMigrationFixtures,
   errorResponseFixtures,
@@ -196,6 +199,61 @@ describe('setPermissions fixtures', () => {
   }
 });
 
+describe('getVersions fixtures', () => {
+  for (const fixture of getVersionsFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.getVersions(idFromPath(fixture.path));
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(result).toHaveLength(fixture.responseBody!.length);
+      expect(result[0].permissions).toEqual(fixture.responseBody![0].permissions);
+    });
+  }
+});
+
+describe('getVersion fixtures', () => {
+  for (const fixture of getVersionFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const [id, , version] = fixture.path.split('/').slice(2);
+      const result = await adapter.getVersion(id, Number(version));
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(result?.permissions).toBeUndefined();
+    });
+  }
+});
+
+// #110: pins the response shape a version-count-increment check would parse
+// after POST /migrate or POST /restore/:version. See the fixtures'
+// description for why this suite (mocked transport, no real backing store)
+// can't itself observe the count actually growing — a real server-side
+// conformance run dispatches the paired mutating fixture first.
+describe('getVersions after migrate/restore fixtures (#110)', () => {
+  for (const fixture of getVersionsAfterMutateFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.getVersions(idFromPath(fixture.path));
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(result.map((v) => v.version)).toEqual(fixture.responseBody!.map((v) => v.version));
+    });
+  }
+});
+
 describe('restoreVersion fixtures', () => {
   for (const fixture of restoreVersionFixtures) {
     test(fixture.name, async () => {
@@ -278,6 +336,9 @@ describe('error response fixtures', () => {
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
           const version = Number(fixture.path.split('/').pop());
           return adapter.restoreVersion(idFromPath(fixture.path), version);
+        }
+        if (fixture.method === 'GET' && fixture.path.endsWith('/versions')) {
+          return adapter.getVersions(idFromPath(fixture.path));
         }
         if (fixture.method === 'DELETE') {
           return adapter.deleteRecord(idFromPath(fixture.path));

@@ -1850,6 +1850,19 @@ function stampGroupAdmin(associations: Association[] | undefined, creator: strin
 }
 
 /**
+ * Drops a snapshot's `permissions` field (#109) — owner/creator-only audit
+ * data per setPermissions(), never served to a non-owner history reader
+ * regardless of whether they reached history via read or write access.
+ * `entityId` (change attribution) stays: useful for group attribution and
+ * far less sensitive than the ACL trail.
+ */
+function stripVersionPermissions(version: RecordVersion): RecordVersion {
+  if (version.permissions === undefined) return version;
+  const { permissions: _permissions, ...rest } = version;
+  return rest;
+}
+
+/**
  * A permission-enforcing view of a Stack for a single requester. Obtained
  * via `stack.asEntity(entityId)` — see there for when to use it.
  *
@@ -2328,26 +2341,61 @@ export class ScopedStack implements StackClient {
     return this.stack.undelete(id, opts);
   }
 
+  /**
+   * History is the mutation/recovery surface, not a read surface (#109): a
+   * record that is public *now* would otherwise have a transitively public
+   * *past* just because history reads gated on current read access. Gated
+   * the same as update/associate/restoreVersion — the write bit's own
+   * justification ("anything a write-holder does, the owner can undo") is
+   * exactly why the undo surface belongs to whoever can mutate the record,
+   * not to plain readers. Snapshot `permissions` are additionally stripped
+   * for everyone but the owner — owner/creator-only audit data per
+   * setPermissions(), never a reader's or write-holder's business.
+   */
   async getVersions(id: string): Promise<RecordVersion[]> {
-    const existing = await this.stack.get(id);
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.canRead(existing))) throw new StackPermissionError();
-    return this.stack.getVersions(id);
+    await this.requireUpdatable(id);
+    const versions = await this.stack.getVersions(id);
+    return this.requesterEntityId === this.stack.ownerEntityId
+      ? versions
+      : versions.map(stripVersionPermissions);
   }
 
+  /** See getVersions() — same mutate-surface gate, same permissions stripping. */
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    const existing = await this.stack.get(id);
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (!(await this.canRead(existing))) throw new StackPermissionError();
-    return this.stack.getVersion(id, version);
+    await this.requireUpdatable(id);
+    const target = await this.stack.getVersion(id, version);
+    if (!target) return null;
+    return this.requesterEntityId === this.stack.ownerEntityId
+      ? target
+      : stripVersionPermissions(target);
   }
 
+  /**
+   * Restoring re-attaches whatever associations and file-ref fields the
+   * snapshot carried — for a non-owner write-holder, that can re-convey
+   * access to a file or record the requester can no longer reach today
+   * (the reference was legitimate when created, but access since moved on).
+   * Re-running #51's reference-creation checks against the *snapshot's*
+   * associations/content closes that: a write-holder can only restore
+   * references they could create fresh right now. The owner is exempt, per
+   * the same recoverability principle that exempts them from every other
+   * write-path gate — restoreVersion is how the owner undoes anything.
+   */
   async restoreVersion(
     id: string,
     version: number,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     await this.requireUpdatable(id);
+    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+      const target = await this.stack.getVersion(id, version);
+      if (target) {
+        await this.requireFileRefAccess(target.typeId, target.content);
+        for (const association of target.associations ?? []) {
+          await this.requireAssociationAccess(target.typeId, association);
+        }
+      }
+    }
     return this.stack.restoreVersion(id, version, opts);
   }
 
