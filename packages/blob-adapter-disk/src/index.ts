@@ -15,13 +15,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
+import { StackNotFoundError, StackQueryError } from '@haverstack/core';
 import type { StackBlobAdapter, BlobFileInfo, FileId } from '@haverstack/core';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 const assertFileId = (fileId: string): void => {
   if (!SHA256_HEX_RE.test(fileId)) {
-    throw new Error(`Invalid fileId: expected 64-character lowercase hex string`);
+    throw new StackQueryError(`Invalid fileId: expected 64-character lowercase hex string`);
   }
 };
 
@@ -48,7 +49,8 @@ export class DiskBlobAdapter implements StackBlobAdapter {
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
     assertFileId(fileId);
-    if (!existsSync(join(this.dir, fileId))) throw new Error(`Attachment not found: "${fileId}"`);
+    if (!existsSync(join(this.dir, fileId)))
+      throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return readFile(join(this.dir, fileId));
   }
 

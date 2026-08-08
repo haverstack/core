@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { StackNotFoundError, StackQueryError } from '@haverstack/core';
 import { DiskBlobAdapter } from '../src/index.js';
 
 let testDir: string;
@@ -42,12 +43,13 @@ describe('DiskBlobAdapter', () => {
     expect(files).toContain(fileId);
   });
 
-  test('getAttachment throws for unknown fileId', async () => {
+  test('getAttachment throws StackNotFoundError for unknown fileId', async () => {
     const validHash = 'a'.repeat(64);
-    await expect(adapter.getAttachment(validHash)).rejects.toThrow();
+    await expect(adapter.getAttachment(validHash)).rejects.toThrow(StackNotFoundError);
   });
 
-  test('getAttachment throws for invalid fileId format', async () => {
+  test('getAttachment throws StackQueryError for invalid fileId format', async () => {
+    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackQueryError);
     await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(/Invalid fileId/);
   });
 
@@ -88,10 +90,10 @@ describe('DiskBlobAdapter', () => {
     expect((stored as Buffer).equals(data)).toBe(true);
   });
 
-  test('getAttachment throws after deleteAttachment', async () => {
+  test('getAttachment throws StackNotFoundError after deleteAttachment', async () => {
     const fileId = await adapter.putAttachment(Buffer.from('bye'));
     await adapter.deleteAttachment(fileId);
-    await expect(adapter.getAttachment(fileId)).rejects.toThrow();
+    await expect(adapter.getAttachment(fileId)).rejects.toThrow(StackNotFoundError);
   });
 
   test('deleteAttachment removes file from disk', async () => {

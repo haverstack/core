@@ -16,6 +16,7 @@ import {
   StackMigrationError,
   StackQueryError,
   StackSchemaDriftError,
+  StackPayloadTooLargeError,
 } from '@haverstack/core';
 
 export type WireRecord = {
@@ -112,8 +113,9 @@ export function parseDate(val: unknown): Date | undefined {
 //
 // core defines a typed error taxonomy (StackValidationError,
 // StackPermissionError, StackNotFoundError, StackConflictError,
-// StackVersionConflictError, StackMigrationError, StackQueryError), each
-// with a static `code`. The wire error body below is the round-trip
+// StackVersionConflictError, StackMigrationError, StackQueryError,
+// StackSchemaDriftError, StackPayloadTooLargeError), each with a static
+// `code`. The wire error body below is the round-trip
 // contract: a server serializes a caught core error to { status, body }
 // via serializeError(), and APIAdapter reconstructs the same class via
 // deserializeError(). `code` is the authoritative discriminator — status
@@ -128,7 +130,8 @@ export type WireErrorCode =
   | 'version_conflict'
   | 'validation'
   | 'migration'
-  | 'schema_drift';
+  | 'schema_drift'
+  | 'payload_too_large';
 
 export type WireError = {
   error: {
@@ -178,6 +181,11 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
   // 'conflict'; a schema-drift response without a parseable body degrades
   // to a generic StackConflictError rather than being lost entirely.
   schema_drift: 409,
+  // 413 is unambiguous — no other wire code shares it — so status-only
+  // reconstruction (STATUS_TO_CODE below) recovers this class even from a
+  // bodyless response (e.g. a reverse proxy's own request-entity-too-large
+  // page, not the server's JSON error body).
+  payload_too_large: 413,
 };
 
 /**
@@ -201,6 +209,7 @@ export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
   409: 'conflict',
   412: 'version_conflict',
   422: 'validation',
+  413: 'payload_too_large',
 };
 
 const KNOWN_CODES = new Set<string>(Object.keys(WIRE_ERROR_STATUS));
@@ -285,6 +294,12 @@ export function serializeError(err: unknown): { status: number; body: WireError 
       },
     };
   }
+  if (err instanceof StackPayloadTooLargeError) {
+    return {
+      status: WIRE_ERROR_STATUS.payload_too_large,
+      body: { error: { code: 'payload_too_large', message: err.message } },
+    };
+  }
   return null;
 }
 
@@ -313,6 +328,8 @@ export function deserializeError(body: WireError): Error {
       return new StackMigrationError(message);
     case 'schema_drift':
       return new StackSchemaDriftError(schemaDrift?.typeId ?? '', schemaDrift?.violations ?? []);
+    case 'payload_too_large':
+      return new StackPayloadTooLargeError(message);
   }
 }
 

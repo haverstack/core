@@ -245,6 +245,32 @@ export class StackQueryError extends Error {
 }
 
 /**
+ * Thrown when an attachment upload exceeds the adapter's declared
+ * `maxAttachmentBytes` ceiling. Checked client-side in Stack.putAttachment()/
+ * ScopedStack.putAttachment() before any bytes are sent — local adapters
+ * declare `maxAttachmentBytes: null` (unbounded), so the check is a no-op
+ * for them; only a server behind the API adapter enforces a real ceiling,
+ * and it still enforces 413 authoritatively over the wire regardless of
+ * this pre-check.
+ */
+export class StackPayloadTooLargeError extends Error {
+  static readonly code = 'payload_too_large' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackPayloadTooLargeError';
+  }
+}
+
+/** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
+function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | null): void {
+  if (maxAttachmentBytes !== null && byteLength > maxAttachmentBytes) {
+    throw new StackPayloadTooLargeError(
+      `Attachment (${byteLength} bytes) exceeds the ${maxAttachmentBytes}-byte limit.`,
+    );
+  }
+}
+
+/**
  * Thrown by defineType() when redefining an existing typeId with a schema
  * change that isn't a legal in-place evolution (see diffSchemas() in
  * schema.ts) — same typeId, a shape change beyond "new optional fields
@@ -1291,6 +1317,7 @@ export class Stack implements StackClient {
    * here.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
       return (record.content as AttachmentContent).fileId;
@@ -2255,6 +2282,7 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
+    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
     const isOwner = requester === this.stack.ownerEntityId;
     await this.stack.create(
