@@ -23,7 +23,7 @@
  * prior state — that's the consumer's test setup.
  */
 
-import type { WireRecord, WireError } from '@haverstack/wire-types';
+import type { WireRecord, WireError, WireVersion } from '@haverstack/wire-types';
 
 export type WireMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -296,6 +296,156 @@ export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[]
 ];
 
 // -------------------------------------------------------
+// Versions: read (#109)
+// -------------------------------------------------------
+//
+// GET /records/:id/versions[/:version] require the same mutate-surface
+// authorization as a write to the record — not plain read access — because
+// history is the recovery surface, not a read surface: gating it on current
+// read access would make a record's entire past exactly as public as its
+// present. The 403-for-a-read-only-requester case lives in
+// errorResponseFixtures below (error-permission-denied-versions-read-only);
+// these pin the success shape for a requester who does hold write access.
+// Snapshot `permissions` — owner/creator-only audit data — are additionally
+// omitted from the response for any non-owner, including a write-holder who
+// passes the gate; `entityId` (change attribution) is not stripped.
+
+export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
+  {
+    name: 'get-versions-owner-includes-permissions',
+    description:
+      'GET /records/:id/versions for the stack owner returns every snapshot field verbatim, ' +
+      'including permissions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        permissions: [
+          { access: 'entity', entityId: 'entity-member-456', read: true, write: false },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'get-versions-non-owner-write-holder-strips-permissions',
+    description:
+      'GET /records/:id/versions for a non-owner write-holder — who passes the mutate-surface ' +
+      'gate above — omits permissions from every returned snapshot. entityId is not stripped.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        entityId: 'entity-contributor-789',
+      },
+    ],
+  },
+];
+
+export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = [
+  {
+    name: 'get-version-single-strips-permissions-for-non-owner',
+    description:
+      'GET /records/:id/versions/:version applies the same non-owner permissions-stripping as ' +
+      'the list endpoint above, for the single-version fetch.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions/1',
+    responseStatus: 200,
+    responseBody: {
+      version: 1,
+      typeId: 'com.example/note@1',
+      content: { title: 'original title' },
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    },
+  },
+];
+
+// -------------------------------------------------------
+// Versions: read after migrate/restore (#110)
+// -------------------------------------------------------
+//
+// APIAdapter.saveVersion() is a deliberate no-op — the server is the only
+// snapshot writer, snapshotting prior state as a side effect of each
+// mutating endpoint. These pin that a version row appears after
+// POST /migrate and after POST /restore/:version specifically, not just the
+// five endpoints the spec's older enumeration listed (PATCH, associations,
+// permissions, delete, undelete) — the drift #110 closes. Paired with
+// commitMigrationFixtures' "commit-migration" and restoreVersionFixtures'
+// "restore-version": a server-side conformance run dispatches the mutating
+// fixture first, then this one, and asserts the version count actually grew
+// by one; a mocked-transport run (as in this package's own adapter-api
+// tests) can only assert the response shape parses, since there's no real
+// backing store behind the mock to observe state through.
+
+export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
+  {
+    name: 'get-versions-after-restore-includes-pre-restore-snapshot',
+    description:
+      'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
+      'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
+      "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
+      'alongside the pre-existing version 1 snapshot being restored from.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 3,
+        typeId: 'com.example/note@1',
+        content: { title: 'title before restore' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ],
+  },
+  {
+    name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
+    description:
+      'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
+      'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
+      "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
+      'typeId — on top of everything restore-version already produced.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 4,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 3,
+        typeId: 'com.example/note@1',
+        content: { title: 'title before restore' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ],
+  },
+];
+
+// -------------------------------------------------------
 // Versions: restore
 // -------------------------------------------------------
 
@@ -374,6 +524,32 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { title: 'New title' },
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-permission-denied-versions-read-only',
+    description:
+      '(#109) GET /records/:id/versions from a requester who can read the record but cannot ' +
+      'write it returns 403 / code "permission" — history is the mutation/recovery surface, ' +
+      'gated the same as a write, not exposed to plain readers. Same shape for ' +
+      'GET /records/:id/versions/:version.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-permission-denied-restore-reference-reconveyance',
+    description:
+      '(#109 restoreVersion follow-up) POST /records/:id/restore/:version from a non-owner ' +
+      'write-holder is refused with 403 / code "permission" when the target snapshot carries an ' +
+      'attachment association (or file-ref content field) the requester cannot currently attach ' +
+      'fresh — restoring must not re-convey access to a file or record the requester can no ' +
+      'longer reach today. The owner is exempt; a plain content-only restore by a write-holder ' +
+      'still succeeds (see restore-version).',
+    method: 'POST',
+    path: '/records/1hk153x00001/restore/1',
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -1054,6 +1230,9 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...associateFixtures,
   ...dissociateFixtures,
   ...setPermissionsFixtures,
+  ...getVersionsFixtures,
+  ...getVersionFixtures,
+  ...getVersionsAfterMutateFixtures,
   ...restoreVersionFixtures,
   ...commitMigrationFixtures,
   ...errorResponseFixtures,

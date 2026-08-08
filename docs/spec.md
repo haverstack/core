@@ -565,6 +565,14 @@ type RecordVersion = {
 - `stack.getVersions(recordId)` — retrieve version history
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Permissions](#permissions)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore.
 
+**History is the mutation/recovery surface, not a read surface.** Under `ScopedStack`, `getVersions()`/`getVersion()` require the same access `update()`/`associate()` require — a write-holder, or the owner/creator (or a Group's admin, for a `_group`'s own history) — not plain read access. Gating history on current read access would make a Record's entire past exactly as public as its present: share a Record after editing out something sensitive, and every current reader would see the pre-edit revisions too, as an automatic side effect of an ACL that only describes _now_. Requiring the mutate surface instead ties history access to "can undo," the same justification the `write` bit already rests on (see [The `write` bit](#the-write-bit-a-recoverability-trust-model)) — deliberately **not** time-sliced per reader (a contributor added today sees the same history a contributor added last year would, including pre-their-involvement content); ACLs aren't per-version timestamped, and building that slicing is out of scope. A denied requester gets `StackPermissionError`, matching every other write-gated verb.
+
+Independently of the above, snapshot `permissions` — audit data by design (above) — are **stripped from every `RecordVersion` returned to a non-owner**, including a write-holder who passes the history gate. A write-holder never needs the ACL trail to undo content or associations; only the owner sees it. `entityId` (change attribution) is not stripped — useful for Group attribution and far less sensitive than a permissions history.
+
+**Publishing history is a projection, not a history read.** An app that wants to expose a Record's revisions publicly (e.g. a static-site generator's changelog) does not do so by relaxing the rule above — it materializes the chosen revisions as first-class, app-defined Records (their own content, their own `permissions`, decoupled from `RecordVersion`'s audit shape), built at the point the app decides to publish. That's a deliberate, curatable act — the embarrassing draft or the edited-out paragraph never leaks unless the owner chooses to include it — as opposed to raw history being public as a side effect of the current ACL.
+
+**`restoreVersion()` re-runs reference-creation checks against the snapshot, for non-owner requesters.** Restoring re-attaches whatever `associations` and file-ref content fields the target snapshot carried. For a write-holder who is not the owner, that could re-convey access to a file or Record they can no longer reach today — the reference was legitimate when it was created, but access has since moved on. `ScopedStack.restoreVersion()` closes this by applying the same [reference-creation gating](#permissions) `associate()`/`create()` already apply, against the snapshot's associations and file-ref fields: an `attachment` association or file-ref field the requester couldn't currently attach fresh is rejected (`StackPermissionError`), and a `relationship` association requires current read access to its target. The owner is exempt, per the same recoverability principle that exempts them from every other write-path gate.
+
 ### Optimistic concurrency (`ifVersion`)
 
 `version` is not conflict detection by itself — it exists to power rollback and soft-delete recovery. Nothing reads or writes it unless a caller opts in. Every mutating method (`update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `restoreVersion`) accepts an optional `ifVersion`:
@@ -590,7 +598,7 @@ Restoring a pre-migration snapshot therefore also restores its old `typeId`, lea
 
 - JSON: sibling file `{id}.versions.json`
 - SQLite: `versions` table
-- API: server snapshots automatically on every mutating endpoint (`PATCH /records/:id`, associations, permissions, delete, undelete); history is read via `/records/:id/versions`
+- API: **the server snapshots prior state on every mutating endpoint that bumps `version`**, exhaustively: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version — see above). This list is exhaustive on purpose: `saveVersion()` is a deliberate no-op over `APIAdapter` (the server is the only snapshot writer for this adapter), so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations. History is read via `GET /records/:id/versions[/:version]`, gated the same as any other mutate-surface operation (a read-only requester gets `403`) — see above.
 
 ---
 
@@ -1046,13 +1054,15 @@ Both endpoints use the envelope `{ "permissions": [...] }` as the request/respon
 
 ### Versions
 
-The server snapshots a record's state automatically on every mutating endpoint — content, associations, permissions, delete, undelete (see [Versions](#versions) for the full rule) — there is no client-initiated endpoint to write a version directly.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — content (`PATCH`), associations, permissions, delete (soft), undelete, `POST .../migrate`, and `POST .../restore/:version` itself (see [Versions](#versions) for the full rule and the exhaustive per-endpoint list) — there is no client-initiated endpoint to write a version directly.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
 GET  /records/:id/versions/:version   — get a specific version
 POST /records/:id/restore/:version    — restore a version (creates new version, no rewrite)
 ```
+
+Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Snapshot `permissions` are additionally omitted from the response body for any non-owner requester, including a write-holder who passes the gate above. See [Versions](#versions) for the rationale.
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records).
 

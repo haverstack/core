@@ -295,18 +295,185 @@ describe('ScopedStack — versions', () => {
     expect(restored.content.text).toBe('old');
   });
 
-  test('getVersions/getVersion enforce read access', async () => {
-    const record = await adapter.createRecord(makeRecord());
+  // #109: history is the mutate/recovery surface, not a read surface — a
+  // plain reader (read access but no write) must be denied, matching
+  // update()/associate()'s gate exactly.
+  test('getVersions/getVersion deny a read-only requester', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE,
       content: {},
       updatedAt: new Date(),
     });
-    await expect(stack.asEntity(STRANGER).getVersions(record.id)).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).getVersions(record.id)).rejects.toThrow(
       StackPermissionError,
     );
-    await expect(stack.asEntity(OWNER).getVersions(record.id)).resolves.toHaveLength(1);
+    await expect(stack.asEntity(MEMBER).getVersion(record.id, 1)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('getVersions/getVersion allow a write-holder', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE,
+      content: {},
+      updatedAt: new Date(),
+    });
+    await expect(stack.asEntity(MEMBER).getVersions(record.id)).resolves.toHaveLength(1);
+    await expect(stack.asEntity(MEMBER).getVersion(record.id, 1)).resolves.not.toBeNull();
+  });
+
+  test('getVersions/getVersion strip snapshot permissions for a non-owner write-holder, but not for the owner', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE,
+      content: {},
+      updatedAt: new Date(),
+      permissions: [{ access: 'entity', entityId: 'someone-else', read: true, write: false }],
+    });
+
+    const [memberList, memberSingle] = await Promise.all([
+      stack.asEntity(MEMBER).getVersions(record.id),
+      stack.asEntity(MEMBER).getVersion(record.id, 1),
+    ]);
+    expect(memberList[0].permissions).toBeUndefined();
+    expect(memberSingle?.permissions).toBeUndefined();
+
+    const [ownerList, ownerSingle] = await Promise.all([
+      stack.asEntity(OWNER).getVersions(record.id),
+      stack.asEntity(OWNER).getVersion(record.id, 1),
+    ]);
+    expect(ownerList[0].permissions).toEqual([
+      { access: 'entity', entityId: 'someone-else', read: true, write: false },
+    ]);
+    expect(ownerSingle?.permissions).toEqual([
+      { access: 'entity', entityId: 'someone-else', read: true, write: false },
+    ]);
+  });
+
+  test('getVersions/getVersion on a group require admin, not just membership (#58)', async () => {
+    const ADMIN = 'group-version-admin';
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'admin', recordId: ADMIN },
+          { kind: 'relationship', label: 'member', recordId: MEMBER },
+        ],
+      }),
+    );
+    await adapter.saveVersion(group.id, {
+      version: 1,
+      typeId: '_group@1',
+      content: {},
+      updatedAt: new Date(),
+    });
+    await expect(stack.asEntity(MEMBER).getVersions(group.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(stack.asEntity(ADMIN).getVersions(group.id)).resolves.toHaveLength(1);
+  });
+
+  // #109's related follow-up: restoreVersion() restores associations/file-ref
+  // fields straight from the snapshot, which for a non-owner write-holder
+  // could re-convey access to a file or record they can no longer reach —
+  // the reference was legitimate when created, but access moved on since.
+  // Re-running #51's reference-creation checks against the snapshot closes
+  // that: a write-holder may only restore references they could create fresh.
+  describe('restoreVersion — reference-reconveyance gating', () => {
+    test('rejects restoring an attachment association to a file the requester can no longer access', async () => {
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        associations: [{ kind: 'attachment', label: 'x', fileId: 'unreachable-file' }],
+      });
+      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
+    });
+
+    test('allows restoring an attachment association to a file the requester can currently access', async () => {
+      await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+      const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.associations).toContainEqual({ kind: 'attachment', label: 'x', fileId });
+    });
+
+    test('rejects restoring a file-ref content field the requester can no longer access', async () => {
+      const PHOTO_NOTE = 'com.example.test/photo-note-restore@1';
+      await stack.defineType(PHOTO_NOTE, 'Photo note', { coverFileId: { kind: 'file-ref' } });
+      await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: PHOTO_NOTE }]);
+      const record = await adapter.createRecord(
+        makeRecord({
+          typeId: PHOTO_NOTE,
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: PHOTO_NOTE,
+        content: { coverFileId: 'unreachable-file' },
+        updatedAt: new Date(),
+      });
+      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
+    });
+
+    test('the owner is exempt from the reference-reconveyance gate', async () => {
+      const record = await adapter.createRecord(makeRecord({ version: 2 }));
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        associations: [{ kind: 'attachment', label: 'x', fileId: 'anything-at-all' }],
+      });
+      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
+      expect(restored.associations).toContainEqual({
+        kind: 'attachment',
+        label: 'x',
+        fileId: 'anything-at-all',
+      });
+    });
   });
 });
 
