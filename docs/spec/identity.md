@@ -26,11 +26,15 @@ Crucially, an `_entity` record is a **stack-local profile card about a DID** —
 type EntityContent = {
   did: string; // The identity this profile is about, e.g. "did:key:z6Mk..."
   name: string; // Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith"
-  handle?: string; // Short unique identifier — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities.
+  handle?: string; // Short, conventionally URL-safe label. e.g. "janesmith". Optional.
 };
 ```
 
 `name`/`handle` are _this stack owner's_ labels for that DID — the petname pattern (Zooko's triangle: global, human-readable, decentralized — pick two; the escape is names local to the observer). Two stacks holding `_entity` cards with different display names for the same `did:key:...` is correct behavior: each is its owner's own contact card for that identity. Cross-stack ID collisions are a non-issue mechanically — DIDs are globally unique by construction, unlike a `RecordId` (unique within a stack only; see [Record IDs](./data-model.md#record-ids)).
+
+**`handle` is a label, not a key, and nothing enforces its uniqueness — deliberately.** The petname model makes global uniqueness incoherent: a handle is one observer's name for a DID, so two stacks are free to use the same handle for different people, or different handles for the same person. Uniqueness _within_ a stack is coherent but pointless, since `did` already identifies the profile and nothing in the library ever resolves an entity by handle. Two cards labeled `janesmith` are a display problem for the app that allowed it, not a data-integrity violation — and forbidding them would reject ordinary states like a half-finished rename or a contact import. The URL-safe, no-spaces shape is likewise conventional: `_entity@1` declares `handle` as a plain string and validates nothing beyond that.
+
+An app that wants handle lookup anyway builds it on `query({ filter: { content: { handle } } })` and must handle duplicates itself. Note that filtering on `content` requires the `contentFieldQuery` capability, which a server behind `adapter-api` may decline (see [Adapters](./adapters.md#adapter-capabilities)) — another reason not to design a lookup around it.
 
 The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
 
@@ -59,10 +63,12 @@ A permission group can be promoted to a collaborative group at any time by addin
 ```ts
 type GroupContent = {
   name: string; // Display name — human-friendly, not necessarily unique. e.g. "Jane's Book Club"
-  handle?: string; // Short unique identifier — URL-safe, no spaces. e.g. "janes-book-club". Optional for private groups.
+  handle?: string; // Short, conventionally URL-safe label. e.g. "janes-book-club". Optional.
   stackUrl?: string; // If present, this group owns a shared collaborative stack at this URL. Absent = permission-only group.
 };
 ```
+
+A group's `handle` is a label on the same terms as an entity's — unenforced, not a key, and not what addresses the group. A collaborative group is reached at its `stackUrl`; a permission group is referenced by its record id.
 
 **Group identity.** "A group with cohesive identity" is anything that controls a key: a group can be given its own keypair (held by its admins), so it can be granted access, own a collaborative stack (`stackUrl`), and sign as itself. Membership associations list member DIDs, same as any other entity reference — no new machinery. Group key generation/custody is deferred; nothing here blocks it.
 

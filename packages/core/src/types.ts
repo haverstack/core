@@ -180,7 +180,11 @@ export type EntityContent = {
   did: string;
   /** Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith" */
   name: string;
-  /** Short unique identifier within a namespace — URL-safe, no spaces. e.g. "janesmith". Like a username. Optional for private entities. */
+  /**
+   * Short, conventionally URL-safe label. e.g. "janesmith". A label, not a
+   * key: duplicates are legitimate and `did` is what identifies this
+   * profile. See docs/spec/identity.md § Entity.
+   */
   handle?: string;
 };
 
@@ -200,7 +204,12 @@ export type AppContent = {
 export type GroupContent = {
   /** Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane's Book Club" */
   name: string;
-  /** Short unique identifier — URL-safe, no spaces. e.g. "janes-book-club". Useful for groups other people need to reference. Optional for private groups. */
+  /**
+   * Short, conventionally URL-safe label. e.g. "janes-book-club". A label,
+   * not a key: duplicates are legitimate, and a group is addressed by
+   * `stackUrl` when it has one and by its record id otherwise. See
+   * docs/spec/identity.md § Group.
+   */
   handle?: string;
   /** If present, this group owns a shared collaborative stack at this URL. Absent = permission-only group. */
   stackUrl?: string;
