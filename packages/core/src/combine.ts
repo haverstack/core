@@ -37,7 +37,8 @@ export function combineAdapters(parts: {
     getVersion: (id, v) => parts.record.getVersion(id, v),
     saveVersion: (id, v) => parts.record.saveVersion(id, v),
     restoreVersion: (id, v, opts) => parts.record.restoreVersion(id, v, opts),
-    commitMigration: (id, toTypeId, content) => parts.record.commitMigration(id, toTypeId, content),
+    commitMigration: (id, toTypeId, content, opts) =>
+      parts.record.commitMigration(id, toTypeId, content, opts),
 
     saveType: (t) => parts.record.saveType(t),
     getType: (id) => parts.record.getType(id),

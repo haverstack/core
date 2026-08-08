@@ -183,20 +183,28 @@ export class SharedSqlRecordLogic {
   async patchContent(
     id: string,
     patch: Record<string, unknown | null>,
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
     const merged = applyMergePatch(existing.content, patch);
-    this.fts.remove(this.exec, id);
-    this.exec.run(
-      'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      [JSON.stringify(merged), toMs(new Date()), id],
-    );
-    this.fts.insert(this.exec, id, JSON.stringify(merged));
-    this.syncFileRefs(id, existing.typeId, merged);
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      this.fts.remove(this.exec, id);
+      this.exec.run(
+        'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+        [JSON.stringify(merged), toMs(new Date()), id],
+      );
+      this.fts.insert(this.exec, id, JSON.stringify(merged));
+      this.syncFileRefs(id, existing.typeId, merged);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -206,17 +214,25 @@ export class SharedSqlRecordLogic {
 
   async deleteRecord(
     id: string,
-    opts: { hard?: boolean; expectedVersion?: number } = {},
+    opts: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<void> {
     if (opts.hard) {
       this.hardDeleteRecord(id, opts.expectedVersion);
     } else {
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const changed = this.exec.run(
-        `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-        [toMs(new Date()), toMs(new Date()), id, ...verParams],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.exec.exec('BEGIN');
+      try {
+        if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+        const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+        const changed = this.exec.run(
+          `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+          [toMs(new Date()), toMs(new Date()), id, ...verParams],
+        );
+        if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+        this.exec.exec('COMMIT');
+      } catch (err) {
+        this.exec.exec('ROLLBACK');
+        throw err;
+      }
     }
     await this.write();
   }
@@ -254,13 +270,24 @@ export class SharedSqlRecordLogic {
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
   }
 
-  async undeleteRecord(id: string, opts: { expectedVersion?: number } = {}): Promise<StackRecord> {
-    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-    const changed = this.exec.run(
-      `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-      [toMs(new Date()), id, ...verParams],
-    );
-    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+  async undeleteRecord(
+    id: string,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ): Promise<StackRecord> {
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const changed = this.exec.run(
+        `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+        [toMs(new Date()), id, ...verParams],
+      );
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -271,21 +298,34 @@ export class SharedSqlRecordLogic {
   async setPermissions(
     id: string,
     permissions: Permission[],
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<void> {
-    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-    const changed = this.exec.run(
-      `UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-      [permissions.length ? JSON.stringify(permissions) : null, toMs(new Date()), id, ...verParams],
-    );
-    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const changed = this.exec.run(
+        `UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+        [
+          permissions.length ? JSON.stringify(permissions) : null,
+          toMs(new Date()),
+          id,
+          ...verParams,
+        ],
+      );
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
   }
 
   async restoreVersion(
     id: string,
     version: number,
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
@@ -294,17 +334,25 @@ export class SharedSqlRecordLogic {
     const target = await this.getVersion(id, version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
 
-    this.fts.remove(this.exec, id);
-    this.exec.run(
-      'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      [target.typeId, JSON.stringify(target.content), toMs(new Date()), id],
-    );
-    if (target.associations !== undefined) {
-      this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
-      if (target.associations.length) this.insertAssociations(id, target.associations);
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      this.fts.remove(this.exec, id);
+      this.exec.run(
+        'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+        [target.typeId, JSON.stringify(target.content), toMs(new Date()), id],
+      );
+      if (target.associations !== undefined) {
+        this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
+        if (target.associations.length) this.insertAssociations(id, target.associations);
+      }
+      this.fts.insert(this.exec, id, JSON.stringify(target.content));
+      this.syncFileRefs(id, target.typeId, target.content);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
     }
-    this.fts.insert(this.exec, id, JSON.stringify(target.content));
-    this.syncFileRefs(id, target.typeId, target.content);
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -316,14 +364,23 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts: { snapshot?: RecordVersion } = {},
   ): Promise<StackRecord> {
-    this.fts.remove(this.exec, id);
-    this.exec.run(
-      'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-      [toTypeId, JSON.stringify(content), toMs(new Date()), id],
-    );
-    this.fts.insert(this.exec, id, JSON.stringify(content));
-    this.syncFileRefs(id, toTypeId, content);
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      this.fts.remove(this.exec, id);
+      this.exec.run(
+        'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
+        [toTypeId, JSON.stringify(content), toMs(new Date()), id],
+      );
+      this.fts.insert(this.exec, id, JSON.stringify(content));
+      this.syncFileRefs(id, toTypeId, content);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
 
     const updated = await this.getRecord(id);
@@ -432,14 +489,9 @@ export class SharedSqlRecordLogic {
    * silently discarded snapshot leaving a hole in the rollback history.
    * A plain INSERT throws on the UNIQUE constraint instead of swallowing
    * it; mapped to StackConflictError so callers get a typed error instead
-   * of a raw SQLite exception. This also catches the case ifVersion is
-   * meant to prevent even when nobody opted into it: two last-writer-wins
-   * updates that both read the same stale version race to snapshot it,
-   * the loser's saveVersion() throws here before it ever reaches the
-   * actual content/association/permission write, so the loser's mutation
-   * never partially applies.
+   * of a raw SQLite exception.
    */
-  async saveVersion(id: string, version: RecordVersion): Promise<void> {
+  private insertVersionRow(id: string, version: RecordVersion): void {
     try {
       this.exec.run(
         `INSERT INTO versions
@@ -465,7 +517,79 @@ export class SharedSqlRecordLogic {
       }
       throw err;
     }
+  }
+
+  private overwriteVersionRow(id: string, version: RecordVersion): void {
+    this.exec.run(
+      `UPDATE versions
+         SET type_id = ?, content = ?, updated_at = ?, entity_id = ?, associations = ?, permissions = ?
+       WHERE record_id = ? AND version = ?`,
+      [
+        version.typeId,
+        JSON.stringify(version.content),
+        toMs(version.updatedAt),
+        version.entityId ?? null,
+        version.associations ? JSON.stringify(version.associations) : null,
+        version.permissions ? JSON.stringify(version.permissions) : null,
+        id,
+        version.version,
+      ],
+    );
+  }
+
+  /**
+   * Standalone snapshot write, outside of a mutation's own atomic path —
+   * for tooling and tests. Loud on a collision, unconditionally: nothing
+   * here is about to bump the record's version, so a colliding row can
+   * only mean a genuine double-write, never something to paper over.
+   * Mutating methods take a `snapshot` option instead — see
+   * snapshotBeforeMutation, which is more forgiving because it always
+   * bumps the version right after.
+   */
+  async saveVersion(id: string, version: RecordVersion): Promise<void> {
+    this.insertVersionRow(id, version);
     await this.write();
+  }
+
+  /**
+   * The snapshot half of a mutating method's atomic snapshot-then-mutate
+   * transaction, called immediately before the method applies its version
+   * bump. A (record_id, version) collision is usually a genuine conflict —
+   * two writers who both read the same stale version race to snapshot it,
+   * and the loser must be rejected here, before its mutation ever applies
+   * (regression coverage: two racers snapshotting the same version, the
+   * loser gets StackConflictError with no partial apply).
+   *
+   * But a versions row can only ever legitimately describe a version
+   * strictly *less than* the record's current version — it's written in
+   * the same breath as the bump past it. A colliding row whose version
+   * equals the record's CURRENT version therefore cannot be a legitimate
+   * snapshot: the bump that should have accompanied it never landed. That
+   * combination is impossible to produce going forward (this transaction
+   * commits the snapshot and the bump together), but it's exactly the
+   * state an already-bricked stack — one carrying an orphan row left by
+   * the old two-call, non-atomic design — is stuck in (#112). Recognizing
+   * it is a pure *version-number* comparison against the live record,
+   * never a comparison of the snapshot's content: the forbidden "same
+   * payload ⇒ treat as success" shortcut would let two genuinely
+   * concurrent writers both proceed, corrupting history. This can't,
+   * because it only ever fires when the record hasn't moved at all —
+   * overwrite the stale row and let this call's own mutation, right
+   * below, finally complete the bump it never got.
+   */
+  private snapshotBeforeMutation(id: string, version: RecordVersion): void {
+    try {
+      this.insertVersionRow(id, version);
+    } catch (err) {
+      if (!(err instanceof StackConflictError)) throw err;
+
+      const row = this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [
+        id,
+      ]);
+      if (!row || row.version !== version.version) throw err;
+
+      this.overwriteVersionRow(id, version);
+    }
   }
 
   // -------------------------------------------------------
@@ -514,36 +638,52 @@ export class SharedSqlRecordLogic {
   async associate(
     recordId: string,
     association: Association,
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<void> {
-    // Bump (and CAS-check) first, before the associations-table write, so
-    // a lost race never partially applies.
-    this.bumpVersion(recordId, opts.expectedVersion);
-    this.insertAssociations(recordId, [association]);
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
+      // Bump (and CAS-check) first, before the associations-table write, so
+      // a lost race never partially applies.
+      this.bumpVersion(recordId, opts.expectedVersion);
+      this.insertAssociations(recordId, [association]);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
   }
 
   async dissociate(
     recordId: string,
     association: Association,
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<void> {
-    this.bumpVersion(recordId, opts.expectedVersion);
-    this.exec.run(
-      `DELETE FROM associations
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
+      this.bumpVersion(recordId, opts.expectedVersion);
+      this.exec.run(
+        `DELETE FROM associations
        WHERE record_id = ?
          AND kind = ?
          AND label = ?
          AND file_id    = ?
          AND related_id = ?`,
-      [
-        recordId,
-        association.kind,
-        association.label,
-        association.kind === 'attachment' ? association.fileId : '',
-        association.kind === 'relationship' ? association.recordId : '',
-      ],
-    );
+        [
+          recordId,
+          association.kind,
+          association.label,
+          association.kind === 'attachment' ? association.fileId : '',
+          association.kind === 'relationship' ? association.recordId : '',
+        ],
+      );
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
     await this.write();
   }
 

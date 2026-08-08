@@ -968,6 +968,22 @@ describe('migrateAll', () => {
     expect(raw?.typeId).toBe(NOTE_V1); // never committed
     expect(await buggyStack.getVersions(record.id)).toEqual([]); // no snapshot either
   });
+
+  test("an orphan snapshot at a record's current version does not block migrateAll from healing it (#112)", async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
+    // Simulate a migrateAll() interrupted between its snapshot and its
+    // commitMigration() call under the old two-call design.
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE_V1,
+      content: { text: 'original' },
+      updatedAt: record.updatedAt,
+    });
+
+    const result = await stack.migrateAll('com.example.test/note');
+    expect(result.migrated).toBe(1);
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V2);
+  });
 });
 
 // -------------------------------------------------------
@@ -1073,6 +1089,17 @@ describe('versions', () => {
     const restored = await stack.restoreVersion(record.id, 2); // v5
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
+  });
+
+  test('restoreVersion removes an association that did not exist at the target version, even though the target had none at all (#111)', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1, no associations
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2, snapshots v1
+    const restored = await stack.restoreVersion(record.id, 1); // v3
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.associations).toBeUndefined();
+
+    const raw = await adapter.getRecord(record.id);
+    expect(raw?.associations).toBeUndefined();
   });
 
   test('restoreVersion never restores permissions, even when the snapshot has them', async () => {
@@ -1235,6 +1262,81 @@ describe('ifVersion', () => {
     await expect(stack.update('nonexistent', { text: 'x' }, { ifVersion: 1 })).rejects.toThrow(
       StackNotFoundError,
     );
+  });
+});
+
+// -------------------------------------------------------
+// Orphan version row recovery (#112)
+// -------------------------------------------------------
+
+describe('orphan version row recovery (#112)', () => {
+  test("a pre-existing orphan snapshot at the record's current version does not permanently block update()", async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    // Simulate the old two-call design being interrupted: the snapshot for
+    // v1 committed, but the mutation that should have bumped past it never
+    // did — an orphan row sitting at the record's own current version.
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE_V1,
+      content: { text: 'hello' },
+      updatedAt: record.updatedAt,
+    });
+
+    const updated = await stack.update(record.id, { text: 'v2' });
+    expect(updated.version).toBe(2);
+    expect(updated.content.text).toBe('v2');
+
+    // The orphan is healed (overwritten), not duplicated.
+    const versions = await stack.getVersions(record.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].version).toBe(1);
+  });
+
+  test('an orphan does not block associate()/dissociate()/setPermissions()/delete()/undelete()/restoreVersion()', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2, snapshots v1
+
+    await adapter.saveVersion(record.id, {
+      version: 2,
+      typeId: NOTE_V1,
+      content: { text: 'v2' },
+      updatedAt: new Date(),
+    }); // orphan sitting at the record's current version (2)
+
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v3
+    expect((await stack.get(record.id))?.version).toBe(3);
+  });
+
+  test('genuinely concurrent last-writer-wins updates: the loser is still rejected with no partial apply', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    const staleRead = await stack.get(record.id);
+
+    // Writer A completes first, moving the record to v2.
+    await stack.update(record.id, { text: 'from A' });
+
+    // Writer B built its mutation from the same stale v1 read and tries to
+    // snapshot v1 again — but the record has since moved to v2, so this is
+    // a genuine conflict (not a recoverable orphan: the row it collides
+    // with is v1's real, already-superseded history entry) and must be
+    // rejected before any part of B's mutation applies.
+    await expect(
+      adapter.patchContent(
+        record.id,
+        { text: 'from B' },
+        {
+          snapshot: {
+            version: 1,
+            typeId: NOTE_V1,
+            content: { text: 'hello' },
+            updatedAt: staleRead!.updatedAt,
+          },
+        },
+      ),
+    ).rejects.toThrow(StackConflictError);
+
+    const current = await stack.get(record.id);
+    expect(current?.content.text).toBe('from A');
+    expect(current?.version).toBe(2);
   });
 });
 
@@ -1714,7 +1816,10 @@ describe('associate / dissociate', () => {
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
     await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.associations?.some((a) => a.label === 'favourite')).toBe(false);
+    // Dissociating the only association leaves the key omitted entirely
+    // (associations: undefined), mirroring the SQL adapters' rowToRecord
+    // rather than a bare `[]` — see #111.
+    expect(updated?.associations).toBeUndefined();
   });
 
   test('associate bumps version and snapshots the prior state', async () => {

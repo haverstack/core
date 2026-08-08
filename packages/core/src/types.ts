@@ -425,6 +425,22 @@ export type ExpectedVersionOptions = {
   expectedVersion?: number;
 };
 
+/**
+ * Accepted by every mutating StackRecordAdapter method alongside
+ * ExpectedVersionOptions. When present, the adapter persists this prior
+ * full-state snapshot as part of the SAME atomic write as the mutation —
+ * never as a separate call — so a crash between "snapshot" and "mutate"
+ * can't leave an orphan `versions` row that permanently blocks future
+ * mutations (#112). Stack builds the snapshot from the record it already
+ * read and passes it through; local adapters fold the insert into their
+ * own transaction. Server-backed adapters (already atomic per-request,
+ * e.g. the API adapter) can ignore it — saveVersion() there is a no-op
+ * for the same reason.
+ */
+export type SnapshotOptions = {
+  snapshot?: RecordVersion;
+};
+
 export interface StackRecordAdapter {
   readonly capabilities: AdapterCapabilities;
 
@@ -459,27 +475,46 @@ export interface StackRecordAdapter {
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: ExpectedVersionOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
   ): Promise<StackRecord>;
-  deleteRecord(id: RecordId, opts?: { hard?: boolean } & ExpectedVersionOptions): Promise<void>;
+  deleteRecord(
+    id: RecordId,
+    opts?: { hard?: boolean } & ExpectedVersionOptions & SnapshotOptions,
+  ): Promise<void>;
   /** Reverse a soft delete. Returns the record as it now stands. */
-  undeleteRecord(id: RecordId, opts?: ExpectedVersionOptions): Promise<StackRecord>;
+  undeleteRecord(
+    id: RecordId,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
+  ): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations
-  associate(id: RecordId, association: Association, opts?: ExpectedVersionOptions): Promise<void>;
-  dissociate(id: RecordId, association: Association, opts?: ExpectedVersionOptions): Promise<void>;
+  associate(
+    id: RecordId,
+    association: Association,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
+  ): Promise<void>;
+  dissociate(
+    id: RecordId,
+    association: Association,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
+  ): Promise<void>;
 
   /** Replace all permissions on a record. Bumps version internally. */
   setPermissions(
     id: RecordId,
     permissions: Permission[],
-    opts?: ExpectedVersionOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
   ): Promise<void>;
 
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
+  /**
+   * Standalone snapshot write, outside of a mutation's own atomic path.
+   * Mutating methods above take a `snapshot` option instead, so the
+   * snapshot and the mutation land in one write — see SnapshotOptions.
+   */
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
   /**
    * Restore a record to a previous version's content (and associations,
@@ -489,7 +524,7 @@ export interface StackRecordAdapter {
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
   ): Promise<StackRecord>;
 
   /**
@@ -502,6 +537,7 @@ export interface StackRecordAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts?: SnapshotOptions,
   ): Promise<StackRecord>;
 
   // Types

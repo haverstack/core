@@ -953,6 +953,10 @@ describe('associations', () => {
     const retrieved = await adapter.getRecord(record.id);
     const hasStarred = (retrieved?.associations ?? []).some((a) => a.label === 'starred');
     expect(hasStarred).toBe(false);
+    // #111: dissociating the only association omits the key entirely
+    // (undefined), never a bare `[]` — this is the shape MemoryAdapter must
+    // match too, since it's what a fresh record's snapshot also uses.
+    expect(retrieved?.associations).toBeUndefined();
   });
 
   test('associate is idempotent — duplicate does not create two entries', async () => {
@@ -1114,6 +1118,96 @@ describe('versions', () => {
     await expect(adapter.saveVersion(record.id, v)).rejects.toThrow(StackConflictError);
     const versions = await adapter.getVersions(record.id);
     expect(versions.length).toBe(1);
+  });
+
+  // #112: the old Stack design called saveVersion() and the mutation as two
+  // separate adapter calls; a crash between them left an orphan versions
+  // row at the record's own current version, permanently colliding with
+  // every future mutation's snapshot attempt. Mutating methods now take
+  // the snapshot as part of their own call (opts.snapshot), so it commits
+  // atomically with the mutation — but a stack that already carries an
+  // orphan from before this fix (or one manufactured directly here, same
+  // shape) must still be able to heal.
+  describe('orphan version row recovery (#112)', () => {
+    test("a mutating call's snapshot heals a pre-existing orphan at the record's current version instead of colliding with it forever", async () => {
+      const adapter = await initAdapter();
+      const record = makeRecord({ version: 1, content: { text: 'original' } });
+      await adapter.createRecord(record);
+      // Simulate the interrupted old two-call design: the v1 snapshot
+      // committed, but the mutation that should have bumped past it
+      // never did.
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: record.typeId,
+        content: { text: 'original' },
+        updatedAt: record.updatedAt,
+      });
+
+      const updated = await adapter.patchContent(
+        record.id,
+        { text: 'healed' },
+        {
+          snapshot: {
+            version: 1,
+            typeId: record.typeId,
+            content: { text: 'original' },
+            updatedAt: record.updatedAt,
+          },
+        },
+      );
+
+      expect(updated.version).toBe(2);
+      expect(updated.content).toEqual({ text: 'healed' });
+      const versions = await adapter.getVersions(record.id);
+      expect(versions).toHaveLength(1); // healed, not duplicated
+      expect(versions[0].content).toEqual({ text: 'original' });
+    });
+
+    test('a snapshot for a version the record has already moved past is a genuine conflict, rejected with no partial apply', async () => {
+      const adapter = await initAdapter();
+      const record = makeRecord({ version: 1, content: { text: 'original' } });
+      await adapter.createRecord(record);
+
+      // Writer A completes first, bumping the record to v2 and legitimately
+      // owning the v1 history slot.
+      await adapter.patchContent(
+        record.id,
+        { text: 'from A' },
+        {
+          snapshot: {
+            version: 1,
+            typeId: record.typeId,
+            content: { text: 'original' },
+            updatedAt: record.updatedAt,
+          },
+        },
+      );
+
+      // Writer B built its mutation from the same stale v1 read. Its
+      // snapshot attempt for v1 collides with A's real (not orphaned)
+      // history entry — the record's current version is 2, not 1 — so it
+      // must be rejected outright, not treated as recoverable.
+      await expect(
+        adapter.patchContent(
+          record.id,
+          { text: 'from B' },
+          {
+            snapshot: {
+              version: 1,
+              typeId: record.typeId,
+              content: { text: 'original' },
+              updatedAt: record.updatedAt,
+            },
+          },
+        ),
+      ).rejects.toThrow(StackConflictError);
+
+      const current = await adapter.getRecord(record.id);
+      expect(current?.content).toEqual({ text: 'from A' });
+      expect(current?.version).toBe(2);
+      const versions = await adapter.getVersions(record.id);
+      expect(versions).toHaveLength(1); // B never wrote anything
+    });
   });
 
   test('saveVersion and getVersion roundtrip associations and permissions', async () => {
