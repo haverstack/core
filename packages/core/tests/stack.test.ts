@@ -11,6 +11,7 @@ import {
   StackSchemaDriftError,
   StackQueryError,
   StackPayloadTooLargeError,
+  StackClosedError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
@@ -1619,6 +1620,63 @@ describe('flush / close', () => {
     await stack.close();
     await stack.close();
     expect(closes).toBe(1);
+  });
+});
+
+describe('use after close', () => {
+  beforeEach(async () => {
+    await stack.close();
+  });
+
+  test('reads throw StackClosedError', async () => {
+    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.query()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.listTypes()).rejects.toBeInstanceOf(StackClosedError);
+  });
+
+  test('writes throw StackClosedError', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+  });
+
+  test('flush() throws, since flushing is work — only close() is idempotent', async () => {
+    await expect(stack.flush()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.close()).resolves.toBeUndefined();
+  });
+
+  test('attachment uploads throw StackClosedError', async () => {
+    await expect(stack.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+  });
+
+  test('identity getters still read — they touch no storage', () => {
+    expect(stack.ownerEntityId).toBe('owner-123');
+    expect(stack.features).toBeDefined();
+  });
+
+  test('StackClosedError stays outside the wire taxonomy', () => {
+    expect(new StackClosedError()).not.toBeInstanceOf(StackError);
+  });
+});
+
+describe('use after close — scoped views', () => {
+  test('a view taken before close writes no attachment bytes after it', async () => {
+    const scoped = stack.asEntity('owner-123');
+    await stack.close();
+
+    await expect(scoped.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+    expect(await adapter.listFiles!()).toHaveLength(0);
+  });
+
+  test('asEntity() itself refuses once closed', async () => {
+    await stack.close();
+    expect(() => stack.asEntity('owner-123')).toThrow(StackClosedError);
   });
 });
 

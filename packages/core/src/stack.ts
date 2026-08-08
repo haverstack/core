@@ -343,6 +343,20 @@ export class StackSchemaDriftError extends StackError {
   }
 }
 
+/**
+ * Thrown when a Stack or ScopedStack is used after close(). Deliberately
+ * outside the StackError taxonomy, alongside IdGenerationError and
+ * InvalidDidError: a caller holding a closed client is a local programming
+ * error with no wire representation — no server ever responds with it.
+ * See docs/spec/adapters.md § Lifecycle.
+ */
+export class StackClosedError extends Error {
+  constructor(message = 'This Stack has been closed.') {
+    super(message);
+    this.name = 'StackClosedError';
+  }
+}
+
 // -------------------------------------------------------
 // Record ID validation
 // -------------------------------------------------------
@@ -597,6 +611,7 @@ export class Stack implements StackClient {
    * entities. See docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
   asEntity(entityId: EntityId | null): ScopedStack {
+    this.assertOpen();
     return new ScopedStack(this, entityId, this.idTimestampSkewMsValue, this.adapter);
   }
 
@@ -617,6 +632,7 @@ export class Stack implements StackClient {
     schema: TypeSchema,
     opts: DefineTypeOptions = {},
   ): Promise<StackType> {
+    this.assertOpen();
     const parsed = parseTypeId(id);
     if (!parsed) {
       throw new Error(
@@ -662,11 +678,13 @@ export class Stack implements StackClient {
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
+    this.assertOpen();
     return this.getTypeCached(id);
   }
 
   /** Refreshes typeCache wholesale — the explicit way to see a rename made by another writer. */
   async listTypes(): Promise<StackType[]> {
+    this.assertOpen();
     const types = await this.adapter.listTypes();
     for (const type of types) this.typeCache.set(type.id, type);
     return types;
@@ -677,6 +695,7 @@ export class Stack implements StackClient {
    * Useful for duck-typed consumption across types.
    */
   async typeIsCompatible(typeId: TypeId, requiredSchema: TypeSchema): Promise<boolean> {
+    this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) return false;
     return isCompatible(type.schema, requiredSchema);
@@ -693,6 +712,7 @@ export class Stack implements StackClient {
    * automatically.
    */
   registerMigration(migration: Migration): void {
+    this.assertOpen();
     if (this.migrations.has(migration.from)) {
       throw new StackMigrationError(`A migration from "${migration.from}" is already registered.`);
     }
@@ -748,6 +768,7 @@ export class Stack implements StackClient {
    * validation failure. See docs/spec/data-model.md § Type migrations.
    */
   async migrateAll(baseTypeId: string): Promise<{ migrated: number }> {
+    this.assertOpen();
     const types = await this.adapter.listTypes();
     const familyTypeIds = types.filter((t) => t.baseId === baseTypeId).map((t) => t.id);
 
@@ -814,6 +835,7 @@ export class Stack implements StackClient {
     content: T,
     opts: CreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
+    this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
@@ -894,6 +916,7 @@ export class Stack implements StackClient {
    * commits migrations to disk.
    */
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
+    this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
     return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
@@ -911,6 +934,7 @@ export class Stack implements StackClient {
     content: Record<string, unknown | null>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -962,6 +986,7 @@ export class Stack implements StackClient {
     association: Association,
     opts: IfVersionOptions = {},
   ): Promise<void> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -984,6 +1009,7 @@ export class Stack implements StackClient {
     association: Association,
     opts: IfVersionOptions = {},
   ): Promise<void> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1007,6 +1033,7 @@ export class Stack implements StackClient {
     permissions: Permission[],
     opts: IfVersionOptions = {},
   ): Promise<void> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1028,6 +1055,7 @@ export class Stack implements StackClient {
    * § Deletion.
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
+    this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
       throw new StackConflictError(
         "Cannot delete the _config record: it holds the stack's identity and is required for every permission check.",
@@ -1057,6 +1085,7 @@ export class Stack implements StackClient {
    * Snapshots and bumps version, same as delete().
    */
   async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1077,6 +1106,7 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
+    this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
@@ -1128,10 +1158,12 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   async getVersions(id: string): Promise<RecordVersion[]> {
+    this.assertOpen();
     return this.adapter.getVersions(id);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
+    this.assertOpen();
     return this.adapter.getVersion(id, version);
   }
 
@@ -1147,6 +1179,7 @@ export class Stack implements StackClient {
     version: number,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
+    this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1279,6 +1312,7 @@ export class Stack implements StackClient {
    * bytes-then-create(). See docs/spec/wire-format.md § Attachments.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    this.assertOpen();
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
@@ -1295,6 +1329,7 @@ export class Stack implements StackClient {
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
+    this.assertOpen();
     return this.adapter.getAttachment(fileId);
   }
 
@@ -1304,6 +1339,7 @@ export class Stack implements StackClient {
    * Throws StackNotFoundError if neither metadata records nor bytes exist.
    */
   async deleteAttachment(fileId: string): Promise<void> {
+    this.assertOpen();
     const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
     const deletedRecordIds = this.adapter.deleteUnreferencedAttachmentRecords
       ? await this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)
@@ -1369,6 +1405,7 @@ export class Stack implements StackClient {
   async collectAttachmentGarbage(
     opts: CollectAttachmentGarbageOptions = {},
   ): Promise<CollectAttachmentGarbageResult> {
+    this.assertOpen();
     const graceMs = opts.graceMs ?? DEFAULT_GC_GRACE_MS;
     const dryRun = opts.dryRun ?? false;
     const now = Date.now();
@@ -1451,6 +1488,7 @@ export class Stack implements StackClient {
    * close() covers the teardown case on its own.
    */
   async flush(): Promise<void> {
+    this.assertOpen();
     await this.adapter.flush?.();
   }
 
@@ -1462,12 +1500,23 @@ export class Stack implements StackClient {
    */
   async close(): Promise<void> {
     if (this.closed) return;
+    // Marked closed up front so a failed flush can't leave the stack
+    // half-open and invite a second close() onto an already-closed adapter.
+    // Flushes through the adapter directly, past the now-tripped guard.
     this.closed = true;
     try {
-      await this.flush();
+      await this.adapter.flush?.();
     } finally {
       await this.adapter.close?.();
     }
+  }
+
+  /**
+   * Throws once close() has run. Public only so ScopedStack can gate the
+   * one path it takes to the adapter directly; not an app-facing API.
+   */
+  assertOpen(): void {
+    if (this.closed) throw new StackClosedError();
   }
 
   // -------------------------------------------------------
@@ -1485,6 +1534,7 @@ export class Stack implements StackClient {
     entityId: EntityId | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
+    this.assertOpen();
     this.checkGrantsValid(grants);
     const records: StackRecord[] = [];
     for (const g of grants) {
@@ -1506,6 +1556,7 @@ export class Stack implements StackClient {
    * grant) — the same resolution hasGrant() uses.
    */
   async listGrants(entityId?: EntityId | null): Promise<StackRecord[]> {
+    this.assertOpen();
     const all = await queryAllPages((q) => this.query(q), {
       filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
     });
@@ -1528,6 +1579,7 @@ export class Stack implements StackClient {
     entityId: EntityId | null,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<void> {
+    this.assertOpen();
     const all = await queryAllPages((q) => this.query(q), {
       filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
     });
@@ -2171,6 +2223,10 @@ export class ScopedStack implements StackClient {
    * create() applies.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    // The one ScopedStack path that reaches the adapter without going
+    // through Stack first — without this, a closed stack would still write
+    // bytes before the delegated create() refused.
+    this.stack.assertOpen();
     const requester = this.requesterEntityId;
     if (!requester) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');

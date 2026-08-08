@@ -115,3 +115,7 @@ A failed flush still releases resources before the error propagates. The alterna
 **`close()` is idempotent; calling it twice is a no-op and never reaches the adapter twice.** Adapters are not independently required to tolerate a double close (`node:sqlite` throws on an already-closed handle, and lock release is not re-entrant), so `Stack` absorbs it.
 
 **`flush()` alone is for a stack that stays open** — checkpointing before a backup, or forcing a buffered adapter to persist at a known point. It is not part of teardown.
+
+**Every other method throws `StackClosedError` once closed**, on both `Stack` and `ScopedStack`. Without the guard the failure surfaces as whatever the underlying engine says about a dangling handle — `node:sqlite`'s `ERR_INVALID_STATE`, or nothing at all on an adapter that silently accepts writes it will never persist. The asymmetry with `close()` is deliberate: teardown is idempotent because a caller cannot always know whether it already ran, while doing _work_ through a closed client is unambiguously a bug, and `flush()` is work.
+
+`StackClosedError` sits outside the `StackError` taxonomy, alongside `IdGenerationError` and `InvalidDidError` (see [Wire format § The taxonomy root](./wire-format.md#the-taxonomy-root)). Every `StackError` maps to a wire status, and no server ever answers "your client is closed" — it is a local programming error, not a transportable failure. The stack-identity getters (`ownerEntityId`, `timezone`, `features`) keep working after close: they read values cached at open and touch no storage.
