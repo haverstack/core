@@ -197,12 +197,15 @@ pnpm install
 # Run all tests
 pnpm test
 
-# Typecheck all packages
-pnpm typecheck
-
 # Build all packages
 pnpm build
+
+# Typecheck all packages (requires a build first — packages resolve
+# each other through dist/*.d.ts)
+pnpm typecheck
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, comment and commit conventions, and the architecture conventions this codebase follows.
 
 ### Project structure
 
