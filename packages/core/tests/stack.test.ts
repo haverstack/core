@@ -7,6 +7,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackSchemaDriftError,
+  StackPayloadTooLargeError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -1810,6 +1811,52 @@ describe('putAttachment', () => {
     await stack.putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records[0].entityId).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// putAttachment — maxAttachmentBytes pre-check (#114 C4): a local ceiling
+// check that fails fast, before any bytes reach the adapter. Local adapters
+// (MemoryAdapter included) declare maxAttachmentBytes: null — no code path
+// exercises this against a real local adapter, so these tests fake a finite
+// ceiling the same way the atomic-adapter-path tests above fake
+// putAttachmentWithMetadata: Object.assign over a MemoryAdapter instance.
+// -------------------------------------------------------
+
+describe('putAttachment — maxAttachmentBytes pre-check (#114)', () => {
+  const withCeiling = (maxAttachmentBytes: number): StackAdapter =>
+    Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: false,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes,
+      },
+    });
+
+  test('throws StackPayloadTooLargeError without touching the adapter', async () => {
+    const limitedAdapter = withCeiling(2);
+    const putAttachmentSpy = vi.spyOn(limitedAdapter, 'putAttachment');
+    const limitedStack = await Stack.create(limitedAdapter);
+
+    await expect(
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).rejects.toThrow(StackPayloadTooLargeError);
+    expect(putAttachmentSpy).not.toHaveBeenCalled();
+  });
+
+  test('allows an upload at exactly the ceiling', async () => {
+    const limitedAdapter = withCeiling(3);
+    const limitedStack = await Stack.create(limitedAdapter);
+
+    await expect(
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).resolves.toEqual(expect.any(String));
+  });
+
+  test('null maxAttachmentBytes never throws, regardless of size', async () => {
+    const data = new Uint8Array(1000);
+    await expect(stack.putAttachment(data, 'image/png')).resolves.toEqual(expect.any(String));
   });
 });
 

@@ -1016,6 +1016,24 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
+  {
+    name: 'attachment-upload-payload-too-large',
+    description:
+      "(#114 C4) A body exceeding the server's configured MAX_ATTACHMENT_BYTES ceiling " +
+      '(exposed ahead of time as maxAttachmentBytes in discovery — see docs/spec.md §Discovery) ' +
+      'returns 413 with code "payload_too_large" — reconstructed client-side as ' +
+      'StackPayloadTooLargeError. 413 is unambiguous (no other wire code shares it), so this is ' +
+      'also recoverable from status alone when the response has no parseable body — e.g. a ' +
+      "reverse proxy's own request-entity-too-large page in front of the server. The request " +
+      'body below stands in for one that exceeds the ceiling; the fixture pins the error shape, ' +
+      'not a specific size.',
+    requestHeaders: { 'Content-Type': 'text/plain' },
+    requestBodyBytes: HELLO_BYTES,
+    responseStatus: 413,
+    responseBody: {
+      error: { code: 'payload_too_large', message: 'Attachment exceeds the server size limit' },
+    },
+  },
 ];
 
 // -------------------------------------------------------

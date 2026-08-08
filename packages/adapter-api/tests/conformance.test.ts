@@ -30,6 +30,7 @@ import {
   StackQueryError,
   StackVersionConflictError,
   StackSchemaDriftError,
+  StackPayloadTooLargeError,
 } from '@haverstack/core';
 
 const BASE_URL = 'https://stack.example.com';
@@ -243,6 +244,7 @@ const ERROR_CLASS_FOR_CODE = {
   bad_request: StackQueryError,
   version_conflict: StackVersionConflictError,
   schema_drift: StackSchemaDriftError,
+  payload_too_large: StackPayloadTooLargeError,
 } as const;
 
 describe('error response fixtures', () => {
