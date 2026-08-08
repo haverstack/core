@@ -40,7 +40,9 @@ Commit subjects follow [Conventional Commits](https://www.conventionalcommits.or
 
 Issue references (`#123`) belong in commit messages, PR titles, and PR bodies. They do **not** belong in code comments — see [Comments](#comments) below.
 
-Work on a branch and open a PR; CI must be green before merge.
+Work on a branch and open a PR; CI must be green before merge. The PR template asks whether the change needs a spec update — answer it, including when the answer is "no behavior change."
+
+If you're an AI coding agent, [AGENTS.md](./AGENTS.md) is the condensed, checkable form of this document.
 
 ---
 
