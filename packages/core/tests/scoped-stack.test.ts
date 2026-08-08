@@ -876,6 +876,83 @@ describe('ScopedStack.getAttachment', () => {
     const bytes = await stack.asEntity(MEMBER).getAttachment('file-second');
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
+
+  // #108: hasReadableReference() used to check readability via
+  // ScopedStack.query({ limit: 1 }), which stops after limit * 10 = 10
+  // underlying records. A file referenced by more than 10 records the
+  // requester can't read, plus one further down that they can, was
+  // false-denied. MemoryAdapter returns records in insertion order with no
+  // sort applied, so the 11th-created record lands past that old cutoff.
+  test('requester can download when the only readable referencing record is past the first 10 (#108 regression)', async () => {
+    const fileId = 'file-widely-referenced';
+    for (let i = 0; i < 10; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+    await stack.create(
+      NOTE,
+      { text: 'readable' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('reference creation (#51 gate) succeeds when the only readable referencing record is past the first 10 (#108)', async () => {
+    const fileId = 'file-widely-referenced-2';
+    for (let i = 0; i < 10; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+    // The 11th record referencing fileId is one MEMBER can already read —
+    // that's what should let MEMBER attach fileId to a brand-new record too.
+    await stack.create(
+      NOTE,
+      { text: 'readable' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+
+    await stack.grant(MEMBER, [{ actions: ['create', 'update-own'], typeId: NOTE }]);
+    const own = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+    await stack.asEntity(MEMBER).associate(own.id, { kind: 'attachment', label: 'y', fileId });
+
+    const updated = await stack.get(own.id);
+    expect(updated?.associations).toContainEqual({ kind: 'attachment', label: 'y', fileId });
+  });
+
+  test('requester who can read none of >10 referencing records is still denied (no false positive, #108)', async () => {
+    const fileId = 'file-widely-referenced-3';
+    for (let i = 0; i < 12; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
 });
 
 // -------------------------------------------------------

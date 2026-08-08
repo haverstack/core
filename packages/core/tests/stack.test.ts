@@ -123,6 +123,34 @@ describe('Stack.create', () => {
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       expect(records[0].entityId).toBeUndefined();
     });
+
+    // design-assessment §E2: the idempotency check used to read a single,
+    // unpaginated page of `_entity@1` records. An owner card that already
+    // exists but lands past page one (>50 `_entity` records, e.g. an
+    // address book) was invisible to that check, so every subsequent
+    // Stack.create({ ownerProfile }) minted a duplicate owner card.
+    test('does not duplicate the owner record when it exists past the first query page (#108/§E2 regression)', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s0 = await Stack.create(emptyAdapter);
+      for (let i = 0; i < 55; i++) {
+        await s0.create('_entity@1', { did: `did:key:filler-${i}`, name: `Filler ${i}` });
+      }
+      // The owner's own card, created directly (not through ensureOwnerEntity),
+      // lands after the filler records in insertion order — past page one.
+      await s0.create('_entity@1', { did: 'did:key:owner', name: 'Original Name' });
+
+      await Stack.create(emptyAdapter, { ownerProfile: { name: 'New Name' } });
+
+      const { records } = await s0.query({
+        filter: { typeId: '_entity@1' },
+        limit: 100,
+      });
+      const ownerRecords = records.filter(
+        (r) => (r.content as Record<string, unknown>).did === 'did:key:owner',
+      );
+      expect(ownerRecords).toHaveLength(1);
+      expect(ownerRecords[0].content).toMatchObject({ name: 'Original Name' });
+    });
   });
 });
 
