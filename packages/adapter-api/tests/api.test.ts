@@ -988,7 +988,7 @@ describe('error taxonomy reconstruction', () => {
   test('reconstructs StackVersionConflictError from a bare 412 status with no parseable body', async () => {
     // 412 maps 1:1 to version_conflict (unlike 409, which stays generic
     // 'conflict') — status-only reconstruction recovers the precise type
-    // even without a body, from a legacy server or a body-stripping proxy.
+    // even without a body, from a foreign server or a body-stripping proxy.
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response('not json', { status: 412 }));
     await expect(
