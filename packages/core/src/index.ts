@@ -20,6 +20,7 @@ export {
   StackVersionConflictError,
   StackQueryError,
   StackSchemaDriftError,
+  StackPayloadTooLargeError,
   assertQueryCapabilities,
 } from './stack.js';
 export type {

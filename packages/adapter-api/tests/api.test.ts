@@ -15,6 +15,7 @@ import {
   StackValidationError,
   StackQueryError,
   StackMigrationError,
+  StackPayloadTooLargeError,
 } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -993,6 +994,33 @@ describe('error taxonomy reconstruction', () => {
     await expect(
       adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 }),
     ).rejects.toThrow(StackVersionConflictError);
+  });
+
+  test('reconstructs StackPayloadTooLargeError from a 413 payload_too_large wire error body (#114)', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: { code: 'payload_too_large', message: 'Attachment exceeds the server size limit' },
+        },
+        413,
+      ),
+    );
+    await expect(
+      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).rejects.toThrow(StackPayloadTooLargeError);
+  });
+
+  test('reconstructs StackPayloadTooLargeError from a bare 413 status with no parseable body (#114)', async () => {
+    // 413 is unambiguous — no other wire code shares it — so status-only
+    // reconstruction recovers the precise type even without a body, e.g. a
+    // reverse proxy's own request-entity-too-large page in front of the
+    // server rather than the server's own JSON error body.
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response('too large', { status: 413 }));
+    await expect(
+      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).rejects.toThrow(StackPayloadTooLargeError);
   });
 
   test('reconstructs StackValidationError from a 422 wire error body, preserving details as .errors', async () => {

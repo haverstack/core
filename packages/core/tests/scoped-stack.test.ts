@@ -1,10 +1,11 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   Stack,
   StackPermissionError,
   StackNotFoundError,
   StackValidationError,
   StackConflictError,
+  StackPayloadTooLargeError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
@@ -792,6 +793,22 @@ describe('ScopedStack.putAttachment', () => {
     expect(result.records).toHaveLength(1);
     expect(result.records[0].entityId).toBeUndefined();
   });
+
+  // #114 C4: the maxAttachmentBytes pre-check applies to ScopedStack's own
+  // upload path too, after the permission checks (grant checks run against
+  // adapter.query(), which is unaffected by upload size).
+  test('over-ceiling upload throws StackPayloadTooLargeError without touching the adapter', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    Object.assign(adapter, {
+      capabilities: { ...adapter.capabilities, maxAttachmentBytes: 2 },
+    });
+    const putAttachmentSpy = vi.spyOn(adapter, 'putAttachment');
+
+    await expect(stack.asEntity(MEMBER).putAttachment(data, 'image/png')).rejects.toThrow(
+      StackPayloadTooLargeError,
+    );
+    expect(putAttachmentSpy).not.toHaveBeenCalled();
+  });
 });
 
 // -------------------------------------------------------
@@ -800,11 +817,13 @@ describe('ScopedStack.putAttachment', () => {
 
 describe('ScopedStack.getAttachment', () => {
   test('owner can always download', async () => {
+    adapter.blobs.set('any-file-id', { data: new Uint8Array([1]), modifiedAt: new Date() });
     const bytes = await stack.asEntity(OWNER).getAttachment('any-file-id');
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
   test('requester who can read a record referencing the file can download', async () => {
+    adapter.blobs.set('file-referenced', { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
     const record = await stack.create(NOTE, { text: 'has attachment' });
     await stack.associate(record.id, {
@@ -818,6 +837,7 @@ describe('ScopedStack.getAttachment', () => {
   });
 
   test('uploader can download their own upload before it is associated with any record', async () => {
+    adapter.blobs.set('file-mine', { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.create(
       '_attachment@1',
       { fileId: 'file-mine', mimeType: 'image/png', size: 1 },
@@ -844,9 +864,13 @@ describe('ScopedStack.getAttachment', () => {
   // with no sort applied, so under the old code this second upload was
   // never even considered.
   test('uploader can access an upload that is not their first (#50 regression)', async () => {
-    const incapableStack = await Stack.create(
-      new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const incapableStack = await Stack.create(incapableAdapter);
+    incapableAdapter.blobs.set('file-first', { data: new Uint8Array([1]), modifiedAt: new Date() });
+    incapableAdapter.blobs.set('file-second', {
+      data: new Uint8Array([2]),
+      modifiedAt: new Date(),
+    });
     await incapableStack.create(
       '_attachment@1',
       { fileId: 'file-first', mimeType: 'image/png', size: 1 },
@@ -861,6 +885,84 @@ describe('ScopedStack.getAttachment', () => {
     const bytes = await incapableStack.asEntity(MEMBER).getAttachment('file-second');
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
+
+  // #108: hasReadableReference() used to check readability via
+  // ScopedStack.query({ limit: 1 }), which stops after limit * 10 = 10
+  // underlying records. A file referenced by more than 10 records the
+  // requester can't read, plus one further down that they can, was
+  // false-denied. MemoryAdapter returns records in insertion order with no
+  // sort applied, so the 11th-created record lands past that old cutoff.
+  test('requester can download when the only readable referencing record is past the first 10 (#108 regression)', async () => {
+    const fileId = 'file-widely-referenced';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    for (let i = 0; i < 10; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+    await stack.create(
+      NOTE,
+      { text: 'readable' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('reference creation (#51 gate) succeeds when the only readable referencing record is past the first 10 (#108)', async () => {
+    const fileId = 'file-widely-referenced-2';
+    for (let i = 0; i < 10; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+    // The 11th record referencing fileId is one MEMBER can already read —
+    // that's what should let MEMBER attach fileId to a brand-new record too.
+    await stack.create(
+      NOTE,
+      { text: 'readable' },
+      {
+        associations: [{ kind: 'attachment', label: 'x', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+
+    await stack.grant(MEMBER, [{ actions: ['create', 'update-own'], typeId: NOTE }]);
+    const own = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+    await stack.asEntity(MEMBER).associate(own.id, { kind: 'attachment', label: 'y', fileId });
+
+    const updated = await stack.get(own.id);
+    expect(updated?.associations).toContainEqual({ kind: 'attachment', label: 'y', fileId });
+  });
+
+  test('requester who can read none of >10 referencing records is still denied (no false positive, #108)', async () => {
+    const fileId = 'file-widely-referenced-3';
+    for (let i = 0; i < 12; i++) {
+      await stack.create(
+        NOTE,
+        { text: `unreadable-${i}` },
+        {
+          associations: [{ kind: 'attachment', label: 'x', fileId }],
+        },
+      );
+    }
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
 });
 
 // -------------------------------------------------------
@@ -873,6 +975,7 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
   const FILE_ID = 'b'.repeat(64);
 
   test('requester who can read a record with a file-ref field referencing the file can download', async () => {
+    adapter.blobs.set(FILE_ID, { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.defineType(PHOTO_NOTE, 'Photo note', {
       coverFileId: { kind: 'file-ref', required: true },
     });

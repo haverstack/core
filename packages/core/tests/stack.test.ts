@@ -8,6 +8,7 @@ import {
   StackVersionConflictError,
   StackSchemaDriftError,
   StackQueryError,
+  StackPayloadTooLargeError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
@@ -122,6 +123,34 @@ describe('Stack.create', () => {
       const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       expect(records[0].entityId).toBeUndefined();
+    });
+
+    // design-assessment §E2: the idempotency check used to read a single,
+    // unpaginated page of `_entity@1` records. An owner card that already
+    // exists but lands past page one (>50 `_entity` records, e.g. an
+    // address book) was invisible to that check, so every subsequent
+    // Stack.create({ ownerProfile }) minted a duplicate owner card.
+    test('does not duplicate the owner record when it exists past the first query page (#108/§E2 regression)', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s0 = await Stack.create(emptyAdapter);
+      for (let i = 0; i < 55; i++) {
+        await s0.create('_entity@1', { did: `did:key:filler-${i}`, name: `Filler ${i}` });
+      }
+      // The owner's own card, created directly (not through ensureOwnerEntity),
+      // lands after the filler records in insertion order — past page one.
+      await s0.create('_entity@1', { did: 'did:key:owner', name: 'Original Name' });
+
+      await Stack.create(emptyAdapter, { ownerProfile: { name: 'New Name' } });
+
+      const { records } = await s0.query({
+        filter: { typeId: '_entity@1' },
+        limit: 100,
+      });
+      const ownerRecords = records.filter(
+        (r) => (r.content as Record<string, unknown>).did === 'did:key:owner',
+      );
+      expect(ownerRecords).toHaveLength(1);
+      expect(ownerRecords[0].content).toMatchObject({ name: 'Original Name' });
     });
   });
 });
@@ -1847,6 +1876,52 @@ describe('putAttachment', () => {
     await stack.putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records[0].entityId).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// putAttachment — maxAttachmentBytes pre-check (#114 C4): a local ceiling
+// check that fails fast, before any bytes reach the adapter. Local adapters
+// (MemoryAdapter included) declare maxAttachmentBytes: null — no code path
+// exercises this against a real local adapter, so these tests fake a finite
+// ceiling the same way the atomic-adapter-path tests above fake
+// putAttachmentWithMetadata: Object.assign over a MemoryAdapter instance.
+// -------------------------------------------------------
+
+describe('putAttachment — maxAttachmentBytes pre-check (#114)', () => {
+  const withCeiling = (maxAttachmentBytes: number): StackAdapter =>
+    Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: false,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes,
+      },
+    });
+
+  test('throws StackPayloadTooLargeError without touching the adapter', async () => {
+    const limitedAdapter = withCeiling(2);
+    const putAttachmentSpy = vi.spyOn(limitedAdapter, 'putAttachment');
+    const limitedStack = await Stack.create(limitedAdapter);
+
+    await expect(
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).rejects.toThrow(StackPayloadTooLargeError);
+    expect(putAttachmentSpy).not.toHaveBeenCalled();
+  });
+
+  test('allows an upload at exactly the ceiling', async () => {
+    const limitedAdapter = withCeiling(3);
+    const limitedStack = await Stack.create(limitedAdapter);
+
+    await expect(
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+    ).resolves.toEqual(expect.any(String));
+  });
+
+  test('null maxAttachmentBytes never throws, regardless of size', async () => {
+    const data = new Uint8Array(1000);
+    await expect(stack.putAttachment(data, 'image/png')).resolves.toEqual(expect.any(String));
   });
 });
 

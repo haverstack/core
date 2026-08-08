@@ -13,7 +13,7 @@ import type {
 } from './types.js';
 import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
-import { StackVersionConflictError, StackConflictError } from './stack.js';
+import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './stack.js';
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements the
@@ -310,12 +310,10 @@ export class MemoryAdapter implements StackAdapter {
     }
     return fileId;
   }
-  // Deliberately lenient for fileIds never actually put (returns empty bytes,
-  // not an error) — a lot of existing tests exercise permission logic with
-  // synthetic fileIds that were never uploaded. Subclass and override this
-  // method to test the genuinely-missing-file path (see stack.test.ts).
   async getAttachment(fileId: string): Promise<Uint8Array> {
-    return this.blobs.get(fileId)?.data ?? new Uint8Array();
+    const blob = this.blobs.get(fileId);
+    if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
+    return blob.data;
   }
   async deleteAttachment(fileId: string) {
     this.blobs.delete(fileId);

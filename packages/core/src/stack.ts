@@ -271,6 +271,32 @@ export function assertQueryCapabilities(
 }
 
 /**
+ * Thrown when an attachment upload exceeds the adapter's declared
+ * `maxAttachmentBytes` ceiling. Checked client-side in Stack.putAttachment()/
+ * ScopedStack.putAttachment() before any bytes are sent — local adapters
+ * declare `maxAttachmentBytes: null` (unbounded), so the check is a no-op
+ * for them; only a server behind the API adapter enforces a real ceiling,
+ * and it still enforces 413 authoritatively over the wire regardless of
+ * this pre-check.
+ */
+export class StackPayloadTooLargeError extends Error {
+  static readonly code = 'payload_too_large' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackPayloadTooLargeError';
+  }
+}
+
+/** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
+function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | null): void {
+  if (maxAttachmentBytes !== null && byteLength > maxAttachmentBytes) {
+    throw new StackPayloadTooLargeError(
+      `Attachment (${byteLength} bytes) exceeds the ${maxAttachmentBytes}-byte limit.`,
+    );
+  }
+}
+
+/**
  * Thrown by defineType() when redefining an existing typeId with a schema
  * change that isn't a legal in-place evolution (see diffSchemas() in
  * schema.ts) — same typeId, a shape change beyond "new optional fields
@@ -430,6 +456,41 @@ async function queryAllPages(
 /** Safety cap for queryAllPages() — generous for personal-stack scale. */
 const QUERY_ALL_MAX = 10_000;
 
+/**
+ * Cursor-walks `run(query)` to exhaustion looking for the first record
+ * matching `predicate`, short-circuiting as soon as one is found rather than
+ * draining every page first (the way queryAllPages() must, since it has no
+ * predicate to stop early on). Shares queryAllPages()'s bounded-scan
+ * discipline: a match past page one is still found (#108's canAccessFile()
+ * false-denial and #(E2)'s ensureOwnerEntity() duplicate-owner-card bug were
+ * both instances of a single bounded query standing in for "does any
+ * matching record exist"), and a pathological non-terminating scan throws
+ * StackQueryError instead of silently giving up.
+ */
+async function findFirstMatch(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  query: StackQuery,
+  predicate: (record: StackRecord) => boolean | Promise<boolean>,
+  max = QUERY_ALL_MAX,
+): Promise<StackRecord | undefined> {
+  let cursor = query.cursor;
+  let totalFetched = 0;
+  do {
+    const page = await run({ ...query, cursor });
+    totalFetched += page.records.length;
+    if (totalFetched > max) {
+      throw new StackQueryError(
+        `findFirstMatch: exceeded max of ${max} records without exhausting the cursor`,
+      );
+    }
+    for (const record of page.records) {
+      if (await predicate(record)) return record;
+    }
+    cursor = page.cursor ?? undefined;
+  } while (cursor);
+  return undefined;
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -494,15 +555,20 @@ export class Stack implements StackClient {
    * `_entity` record if none exists yet for their DID. Queries by typeId
    * only (a universally-supported native filter) and matches `content.did`
    * in memory, rather than relying on RecordFilter.content — which is
-   * capability-gated and not every adapter implements. `_entity` records
-   * are stack-local petname cards, not a global directory, so the result
-   * set here stays small by design (see docs/spec.md § Identity).
+   * capability-gated and not every adapter implements. Walks the cursor to
+   * exhaustion via findFirstMatch() rather than reading a single page: a
+   * stack with more than one page of `_entity` petname cards would
+   * otherwise page the owner's card out of page one, and every subsequent
+   * bootstrap would mint a duplicate owner card (design-assessment §E2).
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
-    const { records } = await this.adapter.queryRecords({ filter: { typeId: entityTypeId } });
-    const exists = records.some((r) => (r.content as EntityContent).did === this.ownerEntityId);
-    if (exists) return;
+    const existing = await findFirstMatch(
+      (q) => this.adapter.queryRecords(q),
+      { filter: { typeId: entityTypeId } },
+      (r) => (r.content as EntityContent).did === this.ownerEntityId,
+    );
+    if (existing) return;
 
     await this.create<EntityContent>(entityTypeId, {
       did: this.ownerEntityId,
@@ -1318,6 +1384,7 @@ export class Stack implements StackClient {
    * here.
    */
   async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
       return (record.content as AttachmentContent).fileId;
@@ -1954,10 +2021,29 @@ export class ScopedStack implements StackClient {
    * using "I hold a metadata record for F" to justify creating *another*
    * metadata record for F would let one successful guess bootstrap
    * unlimited further ones — the exact circularity #106 closes.
+   *
+   * Walks every referencing record via findFirstMatch() over the unscoped
+   * stack.query(), short-circuiting on the first one this requester can
+   * read — not ScopedStack.query()'s bounded refill (capped at
+   * limit * 10 = 10 underlying records for limit: 1), which only ever
+   * checked the first ~10 referencing records and false-denied access when
+   * a readable one existed past that point (#108). The grant prefetch is
+   * still done once up front so the per-record canRead() checks stay cheap
+   * across a large scan.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
-    const refResult = await this.query({ filter: { attachmentFileId: fileId }, limit: 1 });
-    return refResult.records.length > 0;
+    const prefetchedGrants = this.requesterEntityId
+      ? await queryAllPages((q) => this.stack.query(q), {
+          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+        })
+      : undefined;
+
+    const match = await findFirstMatch(
+      (q) => this.stack.query(q),
+      { filter: { attachmentFileId: fileId } },
+      (record) => this.canRead(record, prefetchedGrants),
+    );
+    return match !== undefined;
   }
 
   /**
@@ -2282,6 +2368,7 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
+    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
     const isOwner = requester === this.stack.ownerEntityId;
     await this.stack.create(
