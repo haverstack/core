@@ -161,19 +161,22 @@ export class LocalAdapter implements StackAdapter {
   async patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<StackRecord> {
     return this.record.patchContent(id, patch, opts);
   }
 
   async deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean; expectedVersion?: number },
+    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.deleteRecord(id, opts);
   }
 
-  async undeleteRecord(id: RecordId, opts?: { expectedVersion?: number }): Promise<StackRecord> {
+  async undeleteRecord(
+    id: RecordId,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
+  ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
@@ -191,7 +194,7 @@ export class LocalAdapter implements StackAdapter {
   async associate(
     id: RecordId,
     association: Association,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.associate(id, association, opts);
   }
@@ -199,7 +202,7 @@ export class LocalAdapter implements StackAdapter {
   async dissociate(
     id: RecordId,
     association: Association,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.dissociate(id, association, opts);
   }
@@ -207,7 +210,7 @@ export class LocalAdapter implements StackAdapter {
   async setPermissions(
     id: RecordId,
     permissions: Permission[],
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.setPermissions(id, permissions, opts);
   }
@@ -227,7 +230,7 @@ export class LocalAdapter implements StackAdapter {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -236,8 +239,9 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts?: { snapshot?: RecordVersion },
   ): Promise<StackRecord> {
-    return this.record.commitMigration(id, toTypeId, content);
+    return this.record.commitMigration(id, toTypeId, content, opts);
   }
 
   async saveType(type: StackType): Promise<void> {

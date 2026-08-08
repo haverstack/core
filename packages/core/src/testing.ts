@@ -103,17 +103,21 @@ export class MemoryAdapter implements StackAdapter {
   async patchContent(
     id: string,
     patch: Record<string, unknown | null>,
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...existing, content: applyMergePatch(existing.content, patch) });
     this.records.set(id, updated);
     return updated;
   }
 
-  async deleteRecord(id: string, opts: { hard?: boolean; expectedVersion?: number } = {}) {
+  async deleteRecord(
+    id: string,
+    opts: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ) {
     if (opts.hard) {
       const record = this.records.get(id);
       if (record) this.checkExpectedVersion(record, opts.expectedVersion);
@@ -123,15 +127,20 @@ export class MemoryAdapter implements StackAdapter {
       const record = this.records.get(id);
       if (record) {
         this.checkExpectedVersion(record, opts.expectedVersion);
+        if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
         this.records.set(id, this.bump({ ...record, deletedAt: new Date() }));
       }
     }
   }
 
-  async undeleteRecord(id: string, opts: { expectedVersion?: number } = {}) {
+  async undeleteRecord(
+    id: string,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const { deletedAt: _deletedAt, ...rest } = record;
     const updated = this.bump(rest as StackRecord);
     this.records.set(id, updated);
@@ -220,30 +229,41 @@ export class MemoryAdapter implements StackAdapter {
     return { records: page, cursor, total: results.length };
   }
 
-  async associate(id: string, association: Association, opts: { expectedVersion?: number } = {}) {
+  async associate(
+    id: string,
+    association: Association,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const assocs = record.associations ?? [];
-    this.records.set(id, this.bump({ ...record, associations: [...assocs, association] }));
+    this.records.set(id, this.bump(withAssociations(record, [...assocs, association])));
   }
 
-  async dissociate(id: string, association: Association, opts: { expectedVersion?: number } = {}) {
+  async dissociate(
+    id: string,
+    association: Association,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
-    this.records.set(id, this.bump({ ...record, associations: assocs }));
+    this.records.set(id, this.bump(withAssociations(record, assocs)));
   }
 
   async setPermissions(
     id: string,
     permissions: Permission[],
-    opts: { expectedVersion?: number } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     this.records.set(id, this.bump({ ...record, permissions }));
   }
 
@@ -253,8 +273,12 @@ export class MemoryAdapter implements StackAdapter {
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
   }
-  /** Loud on a (record, version) collision, mirroring the real adapters' UNIQUE constraint. */
-  async saveVersion(id: string, version: RecordVersion) {
+
+  /**
+   * Loud on a (record, version) collision, mirroring the real adapters'
+   * UNIQUE constraint.
+   */
+  private insertVersionRow(id: string, version: RecordVersion): void {
     const existing = this.versions.get(id) ?? [];
     if (existing.some((v) => v.version === version.version)) {
       throw new StackConflictError(
@@ -265,25 +289,85 @@ export class MemoryAdapter implements StackAdapter {
     this.versions.set(id, [...existing, version]);
   }
 
-  async restoreVersion(id: string, version: number, opts: { expectedVersion?: number } = {}) {
+  /**
+   * Standalone snapshot write, outside of a mutation's own atomic path —
+   * for tooling and tests. Loud on a collision, unconditionally: nothing
+   * here is about to bump the record's version, so a colliding row can
+   * only mean a genuine double-write. Mutating methods take a `snapshot`
+   * option instead — see snapshotBeforeMutation, which is more forgiving
+   * because it always bumps the version right after.
+   */
+  async saveVersion(id: string, version: RecordVersion) {
+    this.insertVersionRow(id, version);
+  }
+
+  /**
+   * The snapshot half of a mutating method's atomic snapshot-then-mutate
+   * step, called immediately before the method applies its version bump.
+   * Mirrors the real adapters' snapshotBeforeMutation (see
+   * sqlite-shared/record-logic.ts for the full rationale): a collision is
+   * usually a genuine conflict between two writers racing to snapshot the
+   * same stale version, and the loser must be rejected here before its
+   * mutation ever applies. But a versions row can only ever legitimately
+   * describe a version strictly less than the record's current version —
+   * one that equals it can only be an orphan left by an interrupted write
+   * under the old two-call design (#112), since the bump that should have
+   * accompanied it never landed. That's a pure version-number check
+   * against the live record, never a content comparison (the "same
+   * payload ⇒ success" shortcut is unsound and deliberately not used
+   * here) — recoverable: overwrite the stale row and let this call's own
+   * mutation, right after, finally complete the bump.
+   */
+  private snapshotBeforeMutation(id: string, version: RecordVersion): void {
+    const existing = this.versions.get(id) ?? [];
+    const collision = existing.some((v) => v.version === version.version);
+    if (!collision) {
+      this.versions.set(id, [...existing, version]);
+      return;
+    }
+
+    const record = this.records.get(id);
+    if (!record || record.version !== version.version) {
+      throw new StackConflictError(
+        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
+          `writer raced past this version. Use ifVersion to detect this before it happens.`,
+      );
+    }
+
+    this.versions.set(
+      id,
+      existing.map((v) => (v.version === version.version ? version : v)),
+    );
+  }
+
+  async restoreVersion(
+    id: string,
+    version: number,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     const target = (this.versions.get(id) ?? []).find((v) => v.version === version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
-    const updated = this.bump({
-      ...record,
-      typeId: target.typeId,
-      content: target.content,
-      ...(target.associations !== undefined && { associations: target.associations }),
-    });
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    const merged = { ...record, typeId: target.typeId, content: target.content };
+    const withAssoc =
+      target.associations !== undefined ? withAssociations(merged, target.associations) : merged;
+    const updated = this.bump(withAssoc);
     this.records.set(id, updated);
     return updated;
   }
 
-  async commitMigration(id: string, toTypeId: TypeId, content: Record<string, unknown>) {
+  async commitMigration(
+    id: string,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+    opts: { snapshot?: RecordVersion } = {},
+  ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, typeId: toTypeId, content });
     this.records.set(id, updated);
     return updated;
@@ -351,6 +435,20 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
   };
+}
+
+/**
+ * Sets a record's associations, omitting the key entirely when empty —
+ * mirroring the SQL adapters' rowToRecord, which only sets `associations`
+ * `if (associations.length)`. Without this, MemoryAdapter's dissociate()
+ * left a bare `associations: []` while the SQL adapters produced
+ * `associations: undefined` for the identical post-state, so the same
+ * create/associate/dissociate/restore sequence behaved differently on the
+ * test double than on real storage (#111).
+ */
+function withAssociations(record: StackRecord, associations: Association[]): StackRecord {
+  const { associations: _drop, ...rest } = record;
+  return associations.length ? { ...rest, associations } : (rest as StackRecord);
 }
 
 /**

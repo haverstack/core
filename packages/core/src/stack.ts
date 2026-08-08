@@ -824,8 +824,9 @@ export class Stack implements StackClient {
             throw new StackValidationError(errors);
           }
 
-          await this.saveVersion(record);
-          await this.adapter.commitMigration(record.id, latestId, migratedContent);
+          await this.adapter.commitMigration(record.id, latestId, migratedContent, {
+            snapshot: this.buildVersionSnapshot(record),
+          });
           migrated++;
         }
 
@@ -1006,10 +1007,10 @@ export class Stack implements StackClient {
       );
     }
 
-    // Snapshot the raw stored state before overwriting
-    await this.saveVersion(existing);
-
-    return this.adapter.patchContent(id, content, { expectedVersion: opts.ifVersion });
+    return this.adapter.patchContent(id, content, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1030,8 +1031,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if ((existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
-    await this.saveVersion(existing);
-    await this.adapter.associate(id, association, { expectedVersion: opts.ifVersion });
+    await this.adapter.associate(id, association, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1050,8 +1053,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
-    await this.saveVersion(existing);
-    await this.adapter.dissociate(id, association, { expectedVersion: opts.ifVersion });
+    await this.adapter.dissociate(id, association, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1071,8 +1076,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (permissionsEqual(existing.permissions ?? [], permissions)) return;
 
-    await this.saveVersion(existing);
-    await this.adapter.setPermissions(id, permissions, { expectedVersion: opts.ifVersion });
+    await this.adapter.setPermissions(id, permissions, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1107,8 +1114,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
-    await this.saveVersion(existing);
-    await this.adapter.deleteRecord(id, { expectedVersion: opts.ifVersion });
+    await this.adapter.deleteRecord(id, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1125,8 +1134,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    await this.saveVersion(existing);
-    return this.adapter.undeleteRecord(id, { expectedVersion: opts.ifVersion });
+    return this.adapter.undeleteRecord(id, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   /**
@@ -1252,10 +1263,10 @@ export class Stack implements StackClient {
       );
     }
 
-    // Snapshot current state before restoring
-    await this.saveVersion(existing);
-
-    return this.adapter.restoreVersion(id, version, { expectedVersion: opts.ifVersion });
+    return this.adapter.restoreVersion(id, version, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
   }
 
   // -------------------------------------------------------
@@ -1782,17 +1793,29 @@ export class Stack implements StackClient {
     );
   }
 
-  private async saveVersion(record: StackRecord): Promise<void> {
-    const version: RecordVersion = {
+  /**
+   * Build the RecordVersion snapshot of a record's prior full state, for
+   * the caller to pass as the mutating adapter call's `snapshot` option
+   * (see SnapshotOptions) — never written via a separate adapter.saveVersion()
+   * call, so snapshot and mutation land in one atomic adapter write (#112).
+   *
+   * `associations` is always present, even when empty — "no associations"
+   * snapshots as `[]`, not an omitted key, so restoreVersion() can tell
+   * "never had any" from "had some, now cleared" and can clear an emptied
+   * association set on restore (#111). Legacy snapshots taken before this
+   * fix still omit the key, which restoreVersion() correctly treats as
+   * "leave associations as-is."
+   */
+  private buildVersionSnapshot(record: StackRecord): RecordVersion {
+    return {
       version: record.version,
       typeId: record.typeId,
       content: record.content,
       updatedAt: record.updatedAt,
       ...(record.entityId && { entityId: record.entityId }),
-      ...(record.associations && { associations: record.associations }),
+      associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
-    await this.adapter.saveVersion(record.id, version);
   }
 }
 

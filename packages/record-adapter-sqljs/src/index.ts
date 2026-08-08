@@ -217,23 +217,29 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   patchContent(
     id: string,
     patch: Record<string, unknown | null>,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<StackRecord> {
     return this.record.patchContent(id, patch, opts);
   }
 
-  deleteRecord(id: string, opts?: { hard?: boolean; expectedVersion?: number }): Promise<void> {
+  deleteRecord(
+    id: string,
+    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion },
+  ): Promise<void> {
     return this.record.deleteRecord(id, opts);
   }
 
-  undeleteRecord(id: string, opts?: { expectedVersion?: number }): Promise<StackRecord> {
+  undeleteRecord(
+    id: string,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
+  ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
   setPermissions(
     id: string,
     permissions: Permission[],
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.setPermissions(id, permissions, opts);
   }
@@ -241,7 +247,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   restoreVersion(
     id: string,
     version: number,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -250,8 +256,9 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts?: { snapshot?: RecordVersion },
   ): Promise<StackRecord> {
-    return this.record.commitMigration(id, toTypeId, content);
+    return this.record.commitMigration(id, toTypeId, content, opts);
   }
 
   queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -301,7 +308,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   associate(
     recordId: string,
     association: Association,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.associate(recordId, association, opts);
   }
@@ -309,7 +316,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
   dissociate(
     recordId: string,
     association: Association,
-    opts?: { expectedVersion?: number },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<void> {
     return this.record.dissociate(recordId, association, opts);
   }
