@@ -2,7 +2,7 @@
  * Stack — API Conformance Fixtures
  * -------------------------------------------------------
  * Request/response pairs for every record-mutation endpoint in the Stack
- * API wire format (docs/spec.md § API Adapter Wire Format). These pin down
+ * API wire format (docs/spec/wire-format.md). These pin down
  * the exact wire shape each endpoint accepts and returns — in particular,
  * that PATCH /records/:id carries a content-only merge patch, never
  * record fields like typeId/version/updatedAt (see #52).
@@ -1196,7 +1196,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
     name: 'attachment-upload-payload-too-large',
     description:
       "(#114 C4) A body exceeding the server's configured MAX_ATTACHMENT_BYTES ceiling " +
-      '(exposed ahead of time as maxAttachmentBytes in discovery — see docs/spec.md §Discovery) ' +
+      '(exposed ahead of time as maxAttachmentBytes in discovery — see docs/spec/wire-format.md § Discovery) ' +
       'returns 413 with code "payload_too_large" — reconstructed client-side as ' +
       'StackPayloadTooLargeError. 413 is unambiguous (no other wire code shares it), so this is ' +
       'also recoverable from status alone when the response has no parseable body — e.g. a ' +

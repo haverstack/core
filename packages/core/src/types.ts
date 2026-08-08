@@ -29,7 +29,7 @@ export type FileId = string;
  * RecordId's uniqueness scope implies — it's a self-certifying identifier
  * that means the same thing in every stack. did:key is the mandatory
  * floor method (see did.ts); did:web, did:plc, etc. are also valid values
- * here. See docs/spec.md § Identity.
+ * here. See docs/spec/identity.md.
  */
 export type EntityId = string;
 
@@ -656,7 +656,7 @@ export type TokenInfo = {
  * verifying that the caller actually controls the private key behind it
  * is the server's job, done once, before calling createToken(), via a
  * challenge-response handshake (server nonce, signed by the requester's
- * key, verified with verifyDidSignature() — see docs/spec.md §
+ * key, verified with verifyDidSignature() — see docs/spec/identity.md §
  * Authentication). This interface doesn't change shape for that; it's
  * where issuance lands once verification has already happened.
  *

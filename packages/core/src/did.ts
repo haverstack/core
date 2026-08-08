@@ -1,7 +1,7 @@
 /**
  * Stack — Decentralized Identifiers
  * -------------------------------------------------------
- * entityId values are DID strings (see docs/spec.md § Identity). did:key —
+ * entityId values are DID strings (see docs/spec/identity.md). did:key —
  * an Ed25519 public key, multicodec + multibase(base58btc) encoded — is the
  * mandatory floor: zero infrastructure, zero resolution, verifiable by
  * anyone from the string alone. Other methods (did:web, did:plc, ...) are

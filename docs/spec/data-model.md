@@ -1,0 +1,269 @@
+# Data Model
+
+Records, IDs, associations, types, and queries. For who may read or write them, see [Access control](./access-control.md); for version history and deletion, see [Versioning & deletion](./versioning.md).
+
+## Records
+
+A **Record** is the fundamental unit of data in a Stack.
+
+```ts
+type StackRecord = {
+  // --- Core (always present) ---
+  id: string; // Crockford base-32, time-sortable, unique within a stack
+  typeId: string; // Versioned Type ID e.g. "com.example.myapp/note@2"
+  createdAt: Date;
+  updatedAt: Date;
+  content: Record<string, unknown>; // Validated against the Type's schema
+  version: number; // Increments on each write. Powers rollback and soft-delete recovery; can optionally gate writes via ifVersion (see Versioning & deletion)
+
+  // --- Optional native fields ---
+  parentId?: string; // ID of a parent Record (for hierarchy/folders)
+  entityId?: string; // Author Entity. Absent means owner-created — Records written directly by the stack owner carry no entityId.
+  appId?: string; // App that created this Record
+  deletedAt?: Date; // Present if soft-deleted
+  permissions?: Permission[]; // Access control (see Access control)
+  associations?: Association[]; // Tags, attachments, relationships
+};
+```
+
+**Design principle:** native fields are things the library needs to operate (routing, querying, syncing, hierarchy). Everything semantic and domain-specific goes in `content`.
+
+### Record IDs
+
+IDs are Crockford base-32, lowercase, exactly 12 characters: a 9-character timestamp prefix (so lexicographic order matches creation order) plus a 3-character random suffix, monotonically incremented for IDs generated in the same millisecond.
+
+**Client-minted IDs are the default and stay supported.** `Stack.create()` accepts an optional `id`, so an app that needs the ID before the write round-trips can supply its own; omit it and the library generates one. A server in front of the stack doesn't change this — the client still mints the ID — but the receiver validates it rather than trusting it:
+
+- **Charset and length** — exactly 12 characters, lowercase Crockford base-32 (`0-9`, `a-z` excluding `i`, `l`, `o`, `u`). Violations → **400**.
+- **Reserved prefix** — an `id` beginning with `_` is rejected; that namespace is reserved for system records (`_config`, `_entity`, etc. — see [System types](#system-types)). Violations → **400**.
+- **Duplicate ID** — an `id` that already exists in the stack → **409** (`StackConflictError`), never a silent overwrite.
+
+A server MAY additionally reject an `id` whose timestamp prefix is implausibly far from server time (a clock-skew tolerance measured in hours, not years). This is optional: legitimate offline-created records carry an honest but stale prefix, so it's a per-deployment policy choice, not a spec mandate.
+
+The same rules are enforced locally, so a client-minted ID behaves identically whether it travels over the wire or stays in-process:
+
+- `Stack.create(typeId, content, { id })` validates charset, length, and the reserved prefix, and throws `StackConflictError` on a duplicate. This is a full-trust context (an embedded single-app stack, or the server's own code) — no clock-skew check.
+- `ScopedStack.create()` — a grantee minting an ID — applies the same validation **plus** the timestamp-skew check, since a grantee is exactly the untrusted actor who could otherwise forge a sort position. The tolerance is configurable per Stack via `Stack.create(adapter, { idTimestampSkewMs })` (default 24 hours; pass `null` to disable).
+
+## Associations
+
+Tags, attachments, and relationships are unified under a single **Association** model. All three associate a Record with a labeled payload — the label carries semantic meaning (e.g. `"avatar"`, `"parent"`, `"reply-to"`).
+
+```ts
+type Association =
+  | { kind: 'tag'; label: string }
+  | { kind: 'attachment'; label: string; fileId: string }
+  | { kind: 'relationship'; label: string; recordId: string };
+```
+
+**Examples:**
+
+- A `contact` type uses `{ kind: "attachment", label: "avatar", fileId: "..." }` as a profile picture.
+- A `tweet` type uses `{ kind: "relationship", label: "reply-to", recordId: "..." }` to reference another tweet.
+- Any record can use `{ kind: "tag", label: "starred" }` for user-defined labels.
+
+`parentId` is a separate native field (not an Association) because hierarchical containment is fundamental enough to warrant indexing at the library level. Associations are for metadata and cross-references.
+
+**Reference creation is gated on `ScopedStack`:** an `attachment` association or file-ref content field requires file access, and a `relationship` association or `parentId` requires read access to the target — see [Reference-creation gating](./access-control.md#reference-creation-gating). Plain `Stack` is unscoped and does not apply this.
+
+## Types
+
+A **Type** defines the schema for the `content` field of a Record. Types are identified by a **namespaced, versioned string ID** controlled by the app author — the app is the real coordination mechanism between stacks, so Type identity is scoped to the app that defined it.
+
+```ts
+type ScalarFieldKind =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'text' // Long-form string (e.g. markdown body)
+  | 'record-ref' // Reference to another record by ID
+  | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex)
+
+type FieldDef =
+  | { kind: ScalarFieldKind; required?: boolean }
+  | { kind: 'array'; items: FieldDef; required?: boolean } // recursive
+  | { kind: 'object'; properties: TypeSchema; required?: boolean }; // recursive
+
+type TypeSchema = {
+  [fieldName: string]: FieldDef;
+};
+
+type StackType = {
+  id: string; // Versioned identifier, e.g. "com.example.myapp/note@2"
+  baseId: string; // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
+  version: number; // Incrementing integer
+  name: string; // Human-readable label, e.g. "Note"
+  schema: TypeSchema;
+  schemaHash: string; // SHA-256 of canonical (minified, alpha-sorted) schema
+  migratesFrom?: string; // e.g. "com.example.myapp/note@1" — documents lineage
+  createdAt: Date;
+};
+```
+
+**Array and object fields** are schema-validated on write but opaque to the query engine in v1 — only top-level scalar fields support exact-match content filtering in queries.
+
+**`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
+
+**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way (matching the content-filtering limit above); a `file-ref` nested in an array or object is validated but not indexed as a reference.
+
+**Type identity:** two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
+
+### Schema drift detection
+
+`defineType()` on an `id` that already has a stored Type is checked against it, rather than silently replacing it — same `schemaHash` as stored is unambiguously the same schema (a different `schemaHash` for the same `typeId` with no version bump is the exact corruption `schemaHash` exists to catch):
+
+- **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
+- **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType('...@n+1', ...)` + `registerMigration()`), never redefining the same `id` in place.
+
+`POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
+
+### Type cache
+
+`Stack` caches every Type it fetches or defines in memory, keyed by versioned `id` — populated by `getType()`, `defineType()`, and `listTypes()`. Since a Type's schema is immutable once defined (a legal schema change always gets a new `id` via a version bump), the cache is never invalidated, only added to — `create()`, `update()`, and `restoreVersion()` validate against the cached entry instead of re-fetching the Type on every write. Over the API adapter this removes a `GET /types/:id` round trip from every write after a type's first use in the process. `listTypes()` refreshes the cache wholesale, which is the explicit way to pick up a `name`-only rename made by another writer — the one field `defineType()` permits changing without a version bump.
+
+### Type compatibility
+
+Structural/duck-typed — a Type is **read-compatible** with a required schema if, for every required field, the candidate declares that same field as required, at a read-compatible kind. Array and object fields recurse: their `items`/`properties` must themselves be read-compatible. This licenses _consuming_ Records, not writing them — a consumer writing through a "compatible" view still has to validate against the candidate's full schema (its other required fields, which compatibility checking never inspects).
+
+**Two distinct relations, easy to conflate:** schema drift detection (above) answers _"may this schema replace that one under the same `id`?"_ — evolution legality. Type compatibility answers _"may a consumer expecting this shape read Records of that Type?"_ — read compatibility. They deliberately disagree on `text`/`string`: read-compatible (both are strings at the value level) but **not** evolution-legal — a stored `kind: 'string'` field silently becoming `kind: 'text'` is exactly the kind of change a version bump should surface, even though every existing reader could still consume the value.
+
+A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
+
+| required →   | `string` | `text` | `number` | `boolean` | `date` | `record-ref` | `file-ref` |
+| ------------ | -------- | ------ | -------- | --------- | ------ | ------------ | ---------- |
+| `string`     | ✓        | ✓      |          |           |        |              |            |
+| `text`       | ✓        | ✓      |          |           |        |              |            |
+| `number`     |          |        | ✓        |           |        |              |            |
+| `boolean`    |          |        |          | ✓         |        |              |            |
+| `date`       |          |        |          |           | ✓      |              |            |
+| `record-ref` |          |        |          |           |        | ✓            |            |
+| `file-ref`   |          |        |          |           |        |              | ✓          |
+
+`string` and `text` are mutually read-compatible — the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
+
+Apps that care about semantics filter by exact `typeId`; apps that want flexibility (e.g. "any Type with a required `text` field") use `isCompatible()` — see `packages/core/src/schema.ts` for the authoritative implementation and `packages/core/tests/schema.test.ts` for its behavior under nesting and the string/text equivalence.
+
+### System types
+
+Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), and `_attachment@1` ([Attachments](./attachments.md)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is created via `Stack.create()` — always available without any setup by the caller.
+
+### Type migrations
+
+A Type's defining app is the only serious writer of its own types, so migration is **explicit and owner-driven**, not a side effect of a read or an unrelated write. Disk state changes version only via a deliberate `migrateAll()` pass — the invariant is that all Records of a family sit at version N until the owning app moves them, so `query({ filter: { typeId } })` and grants targeting a type never silently miss not-yet-migrated records.
+
+Apps register migration functions between adjacent Type versions at startup. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
+
+```ts
+stack.registerMigration({
+  from: 'com.example.myapp/note@1',
+  to: 'com.example.myapp/note@2',
+  migrate: (content) => ({ ...content, title: '' }),
+});
+
+stack.registerMigration({
+  from: 'com.example.myapp/note@2',
+  to: 'com.example.myapp/note@3',
+  migrate: (content) => ({ ...content, pinned: false }),
+});
+```
+
+The migration registry is **per-stack-instance** — different stacks can be at different migration states without interfering. Registration is part of app startup, immediately after creating the Stack.
+
+**What the library does with registered migrations:**
+
+- **`get()` and `query()` return Records exactly as stored** — their own `typeId` and `content`, with no implicit migration. This is what makes `query()` a reliable way to find every record of a family regardless of migration state.
+- **`presentAt: 'latest'`** — an explicit opt-in on both `get()` and `query()` that applies the registered migration chain in memory before returning. Nothing is written to disk; this is a read-time convenience, never a persistence mechanism. Throws `StackMigrationError` when a matched Record's version can't be reconciled with what this app instance has registered (see stale-writer behavior below).
+- **`update()` never migrates.** It validates the merge-patched content against the Record's _own current_ stored Type — never the latest — and writes back at the same `typeId`. An unrelated content edit can never fold an invisible schema rewrite into the same version-history entry.
+- **Path composition** — migrations between adjacent versions are automatically chained (v1→v2→v3), so apps only ever register one step at a time.
+- **`migrateAll("com.example.myapp/note")`** is the _only_ way disk state changes version. It eagerly commits all pending migrations for a type family in one deliberate pass — call it at app startup after registering migrations, or after a schema change. It sweeps soft-deleted Records unconditionally (`includeDeleted` is not a caller option in either direction — see [Deletion](./versioning.md#deletion)), validates each migrated result against the target Type's schema before writing, and aborts immediately on the first validation failure (a buggy migration function is a bug to surface, not to paper over by skipping the offending records) — anything already committed earlier in the pass stays committed. Previous content is snapshotted to version history before each write.
+
+**Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it's registered _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
+
+### Additive evolution within a version
+
+Not every schema change needs a version bump. **Additive-in-place** changes — new optional fields only — can be added to a Type's schema without minting a new version, and are the default path for evolving a type family:
+
+- **Readers ignore unknown fields** — validation already permits undeclared content fields.
+- **Writers preserve unknown fields** — the merge-patch semantics of `update()` retain any field the caller didn't touch.
+
+This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it.
+
+**A version bump is a consolidation point**, warranted when:
+
+- a field becomes _required_ (paired with a migration that backfills a real value for existing records),
+- a field's meaning changes, or
+- the shape is restructured.
+
+A schema accumulating many optional fields is a named smell that a consolidating bump is due — but the bump itself stays rare and semantic ("`@2` means `dueDate` is now guaranteed"), not a changelog entry for every field ever added. Bumping per addition costs a full-table rewrite per field and version-number noise, and — since records only reach a new version when the owning app next runs `migrateAll()` — doesn't even deliver per-record schema exactness in the interim; consumers face mixed-version data either way and need `baseId` queries plus duck typing regardless.
+
+The boundary between "accept in place" and "bump the version" is exactly what `defineType()`'s [schema drift detection](#schema-drift-detection) mechanically enforces — a diff, not the hash alone, since the hash necessarily changes on any legal additive diff too.
+
+> **Not yet implemented:** validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
+
+## Queries
+
+Queries are expressed as a `Query` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.
+
+### Filter
+
+```ts
+type Filter = {
+  // Native fields
+  typeId?: string | string[];
+  baseId?: string | string[]; // matches every version of a type family
+  parentId?: string | null; // null = root records only
+  appId?: string | string[];
+  entityId?: string | string[];
+  createdAt?: DateRange;
+  updatedAt?: DateRange;
+
+  // Association filters
+  tags?: string[]; // records that have ALL of these tags
+  hasAttachment?: string; // records with an attachment of this label
+  relatedTo?: { recordId: string; label?: string };
+  attachmentFileId?: string; // records that reference a specific attachment file ID, via an `attachment` Association or a top-level `file-ref` content field
+
+  // Content fields (exact match on top-level keys)
+  content?: { [key: string]: unknown };
+
+  // Full-text search (capability varies by adapter)
+  search?: string;
+};
+
+type DateRange = {
+  before?: Date;
+  after?: Date;
+};
+```
+
+**A `content` filter value of `null` means "the field is absent or stored as `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, implements `IS NULL` / missing-path semantics for a `null` filter value: it matches a record whose content omits the key entirely and one that stores a literal `null` alike, since from the caller's side both mean "no value here."
+
+`baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what keeps `typeId`-filtered queries from silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set. An unknown `baseId` returns an empty result set rather than throwing.
+
+By default, `query()` (like `get()`) returns Records exactly as stored — see [`presentAt: 'latest'`](#type-migrations) to migrate results in memory instead.
+
+**`query()` never returns the `_config` record**, regardless of filter — it's addressable only by ID, via `get('_config')` or the adapter's own typed `ownerEntityId`/`timezone` properties (see [Stack initialization](../spec.md#stack-initialization)). This is the one exception to "adapters are storage engines, `Stack` is the invariant layer": the exclusion must live in the adapter's own query predicate (a `WHERE` clause, or the equivalent for an in-memory adapter) rather than be post-filtered by `Stack`, since post-filtering after the adapter applies `limit` would silently under-fill a page. Every adapter — including test doubles — implements this exclusion directly; it is not optional convention.
+
+### Sorting and pagination
+
+```ts
+type Query = {
+  filter?: Filter;
+  sort?: {
+    field: 'createdAt' | 'updatedAt' | 'version';
+    direction?: 'asc' | 'desc';
+  };
+  limit?: number;
+  cursor?: string; // Opaque cursor for page-based pagination
+};
+```
+
+Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackQueryError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
+
+**`query()` always paginates.** An absent `limit` means one adapter-default page (50), never "every matching Record." Any caller — app code or library-internal — that needs the complete result set MUST follow `cursor` to exhaustion; treating a single `query()` call as exhaustive is a caller bug, not a pagination bug, however the pages are sized.
+
+### Capability-gated filters
+
+`content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically. A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.

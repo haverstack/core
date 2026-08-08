@@ -101,7 +101,7 @@ export type StackOptions = {
    * record with this DID already exists, so it's safe to pass on every
    * open, not just the first one — this is what closes the gap where
    * nothing used to create the owner's `_entity` record at all. See
-   * docs/spec.md § Identity.
+   * docs/spec/identity.md.
    */
   ownerProfile?: { name: string; handle?: string };
   /**
