@@ -13,8 +13,8 @@
  * computes a single candidate type from whichever source wins (explicit
  * param, then filename extension, then stored metadata, then
  * application/octet-stream) and applies the safe-list to *that value* —
- * so a server can't accidentally leave a hole by routing a dangerous type
- * through the one source forcing used to skip.
+ * never to the source that produced it, so no source can route a
+ * dangerous type past the check.
  */
 
 /** MIME types that pass through unforced, regardless of source. */

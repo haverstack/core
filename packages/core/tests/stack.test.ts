@@ -125,11 +125,10 @@ describe('Stack.create', () => {
       expect(records[0].entityId).toBeUndefined();
     });
 
-    // design-assessment §E2: the idempotency check used to read a single,
-    // unpaginated page of `_entity@1` records. An owner card that already
-    // exists but lands past page one (>50 `_entity` records, e.g. an
-    // address book) was invisible to that check, so every subsequent
-    // Stack.create({ ownerProfile }) minted a duplicate owner card.
+    // The idempotency check cursor-walks every `_entity@1` record, so an
+    // owner card past page one (>50 `_entity` records, e.g. an address
+    // book) is still found and Stack.create({ ownerProfile }) stays a
+    // no-op rather than minting a duplicate.
     test('does not duplicate the owner record when it exists past the first query page (regression)', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s0 = await Stack.create(emptyAdapter);
@@ -972,7 +971,7 @@ describe('migrateAll', () => {
   test("an orphan snapshot at a record's current version does not block migrateAll from healing it", async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     // Simulate a migrateAll() interrupted between its snapshot and its
-    // commitMigration() call under the old two-call design.
+    // commitMigration() call, leaving an orphan row at v1.
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
@@ -1272,9 +1271,9 @@ describe('ifVersion', () => {
 describe('orphan version row recovery', () => {
   test("a pre-existing orphan snapshot at the record's current version does not permanently block update()", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    // Simulate the old two-call design being interrupted: the snapshot for
-    // v1 committed, but the mutation that should have bumped past it never
-    // did — an orphan row sitting at the record's own current version.
+    // Simulate an interrupted write: the v1 snapshot committed, but the
+    // mutation that should have bumped past it never did — an orphan row
+    // sitting at the record's own current version.
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
@@ -1630,10 +1629,9 @@ describe('grant', () => {
     expect(await stack.getType('_attachment@1')).not.toBeNull();
   });
 
-  // A grant record used to carry the grantee in record.entityId, which
-  // means "author" everywhere else — so "everything Alice authored" queries
-  // picked up grants *about* Alice that she never touched. Moving the
-  // grantee into content fixes this.
+  // The grantee lives in content.granteeEntityId, not record.entityId,
+  // which means "author" everywhere else — so "everything Alice authored"
+  // queries don't pick up grants that merely name her.
   test('an authorship query does not pick up grants naming that entity', async () => {
     await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
     const result = await stack.query({ filter: { entityId: 'entity-abc' } });
@@ -2308,10 +2306,9 @@ describe('deleteAttachment', () => {
     );
   });
 
-  // Regression: the fallback's metadata scan used a single unbounded page,
-  // orphaning metadata beyond page one on adapters without
-  // contentFieldQuery. IncapableMemoryAdapter forces the in-memory
-  // cursor-walk fallback the test name describes.
+  // The fallback's metadata scan cursor-walks, so metadata past page one
+  // is deleted too rather than orphaned. IncapableMemoryAdapter forces the
+  // in-memory fallback the test name describes.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),

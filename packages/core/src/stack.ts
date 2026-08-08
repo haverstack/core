@@ -1587,7 +1587,7 @@ export class Stack implements StackClient {
    * Snapshot of a record's prior state, passed with the mutating adapter
    * call so snapshot and mutation land in one atomic write. `associations`
    * is always present ([] when empty) so restore can distinguish "cleared"
-   * from a legacy snapshot that omits the key ("leave as-is"). See
+   * from a snapshot that omits the key entirely ("leave as-is"). See
    * docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {

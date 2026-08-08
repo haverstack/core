@@ -769,8 +769,6 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
 
-  // -- Fixtures for later-decided contracts, previously unpinned --
-
   {
     name: 'error-version-conflict-if-match-mismatch',
     description:

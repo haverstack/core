@@ -26,7 +26,7 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
     throw new StackQueryError(`Invalid cursor: malformed "${cursor}"`);
   }
   const parts = decoded.split('|');
-  // New format: field|value|id (3 parts). Legacy format: value|id (2 parts, implies createdAt).
+  // Three parts: field|value|id. Two parts: value|id, implying createdAt.
   const [field, value, id] =
     parts.length === 3
       ? (parts as [string, string, string])

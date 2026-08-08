@@ -626,8 +626,8 @@ describe('records — queries', () => {
   });
 
   // a null content filter means "field absent or null," never "match
-  // nothing" — plain SQL `= NULL` is always false, which used to make this
-  // silently return zero records with no signal.
+  // nothing" — plain SQL `= NULL` is always false, so this needs IS NULL /
+  // missing-path semantics to match at all.
   test('content filter with a null value matches records where the field is absent', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'no priority set' } }));
@@ -999,19 +999,18 @@ describe('versions', () => {
     expect(versions.length).toBe(1);
   });
 
-  // The old two-call design could crash between saveVersion() and the
-  // mutation, leaving an orphan versions row at the record's current
-  // version that collided with every future snapshot. Snapshots now commit
-  // atomically with the mutation, but a stack already carrying an orphan
-  // must still heal. See docs/spec/versioning.md § Snapshot atomicity.
+  // A versions row at the record's own current version is an orphan: no
+  // legitimate snapshot carries that number, since a snapshot commits
+  // atomically with the bump past it. A stack carrying one — left by an
+  // interrupted write — must heal rather than reject every future
+  // mutation. See docs/spec/versioning.md § Snapshot atomicity.
   describe('orphan version row recovery', () => {
     test("a mutating call's snapshot heals a pre-existing orphan at the record's current version instead of colliding with it forever", async () => {
       const adapter = await initAdapter();
       const record = makeRecord({ version: 1, content: { text: 'original' } });
       await adapter.createRecord(record);
-      // Simulate the interrupted old two-call design: the v1 snapshot
-      // committed, but the mutation that should have bumped past it
-      // never did.
+      // Simulate an interrupted write: the v1 snapshot committed, but the
+      // mutation that should have bumped past it never did.
       await adapter.saveVersion(record.id, {
         version: 1,
         typeId: record.typeId,

@@ -555,10 +555,9 @@ describe('ScopedStack.create', () => {
     expect(record.typeId).toBe(COMMENT);
   });
 
-  // the spec says owner-created records carry no entityId — that must
-  // hold whether the owner writes through Stack.create() directly or
-  // through ScopedStack.asEntity(ownerEntityId). Before this fix, only the
-  // former was true.
+  // Owner-created records carry no entityId — that holds whether the owner
+  // writes through Stack.create() directly or through
+  // ScopedStack.asEntity(ownerEntityId).
   test('owner writing through asEntity(ownerEntityId) omits entityId, matching Stack.create()', async () => {
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
     expect(record.entityId).toBeUndefined();
@@ -781,9 +780,9 @@ describe('ScopedStack — grant-based read', () => {
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
 
-  // the grant prefetch used to take a single unbounded query() page,
-  // so a grant past MemoryAdapter's 50-record default page went unseen —
-  // a legitimate grant silently stopped working with no error.
+  // The grant prefetch cursor-walks every _grant record, so a grant past
+  // MemoryAdapter's 50-record default page is still honored rather than
+  // silently unseen.
   test('a grant beyond the first page (>50 _grant records) is still honored', async () => {
     for (let i = 0; i < 55; i++) {
       await stack.grant(STRANGER, [
@@ -1021,10 +1020,10 @@ describe('ScopedStack.getAttachment', () => {
     );
   });
 
-  // Regression: on adapters without contentFieldQuery, the uploader check
-  // used limit: 1 even though matching happens in memory — false-denying
-  // every upload but one. IncapableMemoryAdapter forces that fallback path
-  // (a compliant local adapter would take the content-filtered query).
+  // On adapters without contentFieldQuery the uploader check matches in
+  // memory, cursor-walking so every one of the requester's uploads is
+  // considered. IncapableMemoryAdapter forces that fallback path (a
+  // compliant local adapter takes the content-filtered query).
   test('uploader can access an upload that is not their first (regression)', async () => {
     const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const incapableStack = await Stack.create(incapableAdapter);
@@ -1048,12 +1047,11 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
-  // hasReadableReference() used to check readability via
-  // ScopedStack.query({ limit: 1 }), which stops after limit * 10 = 10
-  // underlying records. A file referenced by more than 10 records the
-  // requester can't read, plus one further down that they can, was
-  // false-denied. MemoryAdapter returns records in insertion order with no
-  // sort applied, so the 11th-created record lands past that old cutoff.
+  // hasReadableReference() cursor-walks every referencing record rather
+  // than a bounded page, so a file referenced by many unreadable records
+  // plus one readable one further down still grants access. MemoryAdapter
+  // returns records in insertion order, so the 11th-created record lands
+  // past a bounded-page cutoff.
   test('requester can download when the only readable referencing record is past the first 10 (regression)', async () => {
     const fileId = 'file-widely-referenced';
     adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });

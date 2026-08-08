@@ -29,7 +29,7 @@ type RecordVersion = {
 
 **A snapshot is written as part of the same atomic write as the mutation it precedes**, never as a separate call before it. Adapters accept the snapshot as an option on every mutating method and fold the insert into their own transaction; `Stack` builds it from the record it has already read and passes it through. A standalone `saveVersion()` exists for tooling, but no mutation path uses it — and it is a deliberate no-op over `APIAdapter`, where the server is the only snapshot writer.
 
-The reason is recoverability of the history mechanism itself. Under a two-call design (snapshot, then mutate), a crash in between leaves a `versions` row at the record's own current version — a version number that no legitimate snapshot can ever carry, since a snapshot is written in the same breath as the bump past it. That orphan then collides with every future mutation's snapshot attempt, permanently blocking writes to the record.
+The reason is recoverability of the history mechanism itself. Were the snapshot a separate call preceding the mutation, a crash in between would leave a `versions` row at the record's own current version — a version number no legitimate snapshot can carry, since a snapshot is written in the same breath as the bump past it. That orphan would then collide with every future mutation's snapshot attempt, permanently blocking writes to the record.
 
 Adapters therefore treat a `(recordId, version)` collision two ways:
 
