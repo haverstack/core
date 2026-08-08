@@ -20,6 +20,7 @@ export {
   StackVersionConflictError,
   StackQueryError,
   StackSchemaDriftError,
+  assertQueryCapabilities,
 } from './stack.js';
 export type {
   StackClient,

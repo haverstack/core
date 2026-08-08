@@ -133,6 +133,12 @@ export const buildWhereClause = (
     if (sanitized) {
       conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
       params.push(sanitized);
+    } else {
+      // A search that sanitizes to nothing (e.g. "*", punctuation-only) is
+      // an honest zero-match result, not "no filter" — omitting the clause
+      // here would silently return the full table as the "search result"
+      // (#113 C1, #56's never-present-a-superset rule).
+      conditions.push('0');
     }
   }
 

@@ -836,12 +836,16 @@ type AdapterCapabilities = {
 
 `AdapterCapabilities` is the adapter-implementer-facing name. On the `StackClient` interface it is exposed as `features: StackFeatures` (`StackFeatures` is a type alias for `AdapterCapabilities`). App and plugin code should read `stack.features` rather than going through the adapter directly.
 
+**`contentFieldQuery` is required-`true` for local adapters, optional and discovery-driven for wire adapters (#90).** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, `record-adapter-sqljs`, any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is just a linear scan over resident data — there's no architectural reason a local adapter can't support it, so declaring `false` is never legitimate there. A remote server reached through `adapter-api` is the one legitimate `false` case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it. `fullTextSearch` has no such local-required rule — a local adapter may legitimately decline it (see the JSON adapter note below).
+
+`query()` fails loud rather than silently widening when a filter isn't honorable: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before ever dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically here, the same "local and remote behave identically" property `ifVersion` already has (#113). This is a backstop for the `contentFieldQuery` rule above, not a substitute for it: a local adapter that (incorrectly) declared `false` would otherwise return an unfiltered superset for every `content` query, not just error at the edges. A `search` that sanitizes to nothing (e.g. a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
+
 **Per-adapter notes:**
 
-- **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1
+- **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1 (local adapters may decline `fullTextSearch`; only `contentFieldQuery` is required-`true`)
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
 - **sql.js adapter** (`record-adapter-sqljs`, browser-only) — same query support as the native adapter, but full-text search via FTS4 (the sql.js WASM build's dialect)
-- **API adapter** — capabilities determined by the server; declared in a discovery endpoint
+- **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false`
 
 Local, embedded adapters (JSON, native SQLite, sql.js) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
 

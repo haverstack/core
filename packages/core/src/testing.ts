@@ -21,11 +21,21 @@ import { StackVersionConflictError, StackConflictError } from './stack.js';
  * permission logic under test exercises real predicates rather than an
  * adapter that quietly ignores most filters. Intended for use in tests —
  * import from `@haverstack/core/testing`.
+ *
+ * Declares `contentFieldQuery: true` — a local, in-process adapter like this
+ * one has no legitimate reason to decline content-field filtering (#90), so
+ * this is the shape a real local adapter should have. `fullTextSearch`
+ * stays `false`: no such requirement applies there, and this adapter never
+ * implements `filter.search`. Tests that specifically need to exercise
+ * Stack's capability-gated fallback/cursor-walk paths (or the fail-loud
+ * check in `assertQueryCapabilities`, #113) should use
+ * `IncapableMemoryAdapter` below instead of reaching for a `false` override
+ * here.
  */
 export class MemoryAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities = {
     fullTextSearch: false,
-    contentFieldQuery: false,
+    contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
   };
@@ -323,6 +333,26 @@ export class MemoryAdapter implements StackAdapter {
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;
+}
+
+/**
+ * A `MemoryAdapter` that declares `contentFieldQuery: false` — deliberately
+ * simulating the one case where that declaration is still legitimate: a
+ * wire adapter whose server has declined the capability (#90). Not a stand-
+ * in for a real local adapter; every actual local adapter must declare
+ * `true`. Its query() still filters `content` correctly under the hood (it
+ * shares MemoryAdapter's implementation), so it's precise for what it's
+ * for: exercising Stack's capability-gated fallback/cursor-walk code paths
+ * and the fail-loud `assertQueryCapabilities` check (#113) in tests,
+ * without also losing correctness on the fallback's own filtering logic.
+ */
+export class IncapableMemoryAdapter extends MemoryAdapter {
+  override readonly capabilities: AdapterCapabilities = {
+    fullTextSearch: false,
+    contentFieldQuery: false,
+    sortableFields: ['createdAt', 'updatedAt', 'version'],
+    maxAttachmentBytes: null,
+  };
 }
 
 /**
