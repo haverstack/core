@@ -1,8 +1,10 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   Stack,
+  StackError,
   StackValidationError,
   StackMigrationError,
+  StackPermissionError,
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
@@ -10,7 +12,8 @@ import {
   StackQueryError,
   StackPayloadTooLargeError,
 } from '../src/stack.js';
-import { generateId, crockford32Encode } from '../src/id.js';
+import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
+import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import type { BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
@@ -2566,5 +2569,77 @@ describe('collectAttachmentGarbage', () => {
 
     expect(result.deleted).toEqual([okFileId]);
     expect(result.reclaimedBytes).toBe(2);
+  });
+});
+
+// -------------------------------------------------------
+// Error taxonomy
+// -------------------------------------------------------
+
+// One instance per member, constructed with the minimum each requires.
+const everyStackError = (): StackError[] => [
+  new StackValidationError([{ path: 'text', message: 'expected string' }]),
+  new StackMigrationError('no migration path'),
+  new StackPermissionError(),
+  new StackNotFoundError('Record "1hk153x0a00b" not found.'),
+  new StackConflictError('Attachment is still referenced.'),
+  new StackVersionConflictError('Version mismatch.', '1hk153x0a00b', 3, 5),
+  new StackQueryError('Undecodable pagination cursor.'),
+  new StackSchemaDriftError(NOTE_V1, [{ path: 'text', message: 'type changed' }]),
+  new StackPayloadTooLargeError('Attachment exceeds the limit.'),
+];
+
+describe('error taxonomy', () => {
+  test('every Stack-domain error descends from StackError and from Error', () => {
+    for (const err of everyStackError()) {
+      expect(err, err.name).toBeInstanceOf(StackError);
+      expect(err, err.name).toBeInstanceOf(Error);
+    }
+  });
+
+  test('each class exposes the same code as an instance property and a static', () => {
+    const statics = [
+      StackValidationError,
+      StackMigrationError,
+      StackPermissionError,
+      StackNotFoundError,
+      StackConflictError,
+      StackVersionConflictError,
+      StackQueryError,
+      StackSchemaDriftError,
+      StackPayloadTooLargeError,
+    ];
+    const instances = everyStackError();
+    for (const [i, cls] of statics.entries()) {
+      expect(instances[i].code, cls.name).toBe(cls.code);
+    }
+  });
+
+  test('codes are distinct, so a code identifies exactly one class', () => {
+    const codes = everyStackError().map((e) => e.code);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  test('a version conflict is a sibling of a plain conflict, never a subtype', () => {
+    const version = new StackVersionConflictError('mismatch', '1hk153x0a00b', 3, 5);
+    expect(version).not.toBeInstanceOf(StackConflictError);
+    expect(new StackConflictError('blocked')).not.toBeInstanceOf(StackVersionConflictError);
+  });
+
+  test('a schema drift is a sibling of a plain conflict, never a subtype', () => {
+    const drift = new StackSchemaDriftError(NOTE_V1, [{ path: 'text', message: 'type changed' }]);
+    expect(drift).not.toBeInstanceOf(StackConflictError);
+  });
+
+  test('errors with no wire representation stay outside the taxonomy', () => {
+    expect(new IdGenerationError('clock went backwards')).not.toBeInstanceOf(StackError);
+    expect(new InvalidDidError('malformed did:key')).not.toBeInstanceOf(StackError);
+    expect(new Error('ordinary bug')).not.toBeInstanceOf(StackError);
+  });
+
+  test('errors thrown by real operations are catchable as StackError', async () => {
+    await expect(stack.create(NOTE_V1, { text: 42 })).rejects.toBeInstanceOf(StackError);
+    await expect(stack.get('1hk153x0a00b')).resolves.toBeNull();
+    await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(StackError);
   });
 });

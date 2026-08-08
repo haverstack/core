@@ -6,8 +6,10 @@ import type {
   Permission,
   ValidationError,
   SchemaDriftViolation,
+  StackErrorCode,
 } from '@haverstack/core';
 import {
+  StackError,
   StackValidationError,
   StackPermissionError,
   StackNotFoundError,
@@ -117,16 +119,12 @@ export function parseDate(val: unknown): Date | undefined {
 // authoritative discriminator; status is a transport hint. See
 // docs/spec/wire-format.md § Error responses.
 
-export type WireErrorCode =
-  | 'bad_request'
-  | 'permission'
-  | 'not_found'
-  | 'conflict'
-  | 'version_conflict'
-  | 'validation'
-  | 'migration'
-  | 'schema_drift'
-  | 'payload_too_large';
+/**
+ * Alias of core's StackErrorCode: the vocabulary belongs with the classes
+ * that carry it, and StackError.code is typed by it, so re-declaring the
+ * union here would be a second copy to drift.
+ */
+export type WireErrorCode = StackErrorCode;
 
 export type WireError = {
   error: {
@@ -211,81 +209,28 @@ export function isWireError(body: unknown): body is WireError {
 
 /**
  * Convert a thrown core error into its wire response. Used by server
- * implementations. Returns null for errors outside the core taxonomy —
- * callers fall back to their own generic error handling.
+ * implementations. Returns null for anything that isn't a StackError —
+ * callers fall back to their own generic error handling, so an ordinary bug
+ * stays a bare 500 rather than being dressed as a protocol error.
  */
 export function serializeError(err: unknown): { status: number; body: WireError } | null {
+  if (!(err instanceof StackError)) return null;
+  const error: WireError['error'] = { code: err.code, message: err.message };
+  // The three classes carrying structured payload still need instanceof: a
+  // literal `code` doesn't narrow a class type to its subclass in TypeScript.
+  // Order-independent, since these are leaves with no subtype relation.
   if (err instanceof StackValidationError) {
-    return {
-      status: WIRE_ERROR_STATUS.validation,
-      body: { error: { code: 'validation', message: err.message, details: err.errors } },
+    error.details = err.errors;
+  } else if (err instanceof StackVersionConflictError) {
+    error.versionConflict = {
+      recordId: err.recordId,
+      expectedVersion: err.expectedVersion,
+      actualVersion: err.actualVersion,
     };
+  } else if (err instanceof StackSchemaDriftError) {
+    error.schemaDrift = { typeId: err.typeId, violations: err.violations };
   }
-  if (err instanceof StackPermissionError) {
-    return {
-      status: WIRE_ERROR_STATUS.permission,
-      body: { error: { code: 'permission', message: err.message } },
-    };
-  }
-  if (err instanceof StackNotFoundError) {
-    return {
-      status: WIRE_ERROR_STATUS.not_found,
-      body: { error: { code: 'not_found', message: err.message } },
-    };
-  }
-  if (err instanceof StackVersionConflictError) {
-    return {
-      status: WIRE_ERROR_STATUS.version_conflict,
-      body: {
-        error: {
-          code: 'version_conflict',
-          message: err.message,
-          versionConflict: {
-            recordId: err.recordId,
-            expectedVersion: err.expectedVersion,
-            actualVersion: err.actualVersion,
-          },
-        },
-      },
-    };
-  }
-  if (err instanceof StackConflictError) {
-    return {
-      status: WIRE_ERROR_STATUS.conflict,
-      body: { error: { code: 'conflict', message: err.message } },
-    };
-  }
-  if (err instanceof StackQueryError) {
-    return {
-      status: WIRE_ERROR_STATUS.bad_request,
-      body: { error: { code: 'bad_request', message: err.message } },
-    };
-  }
-  if (err instanceof StackMigrationError) {
-    return {
-      status: WIRE_ERROR_STATUS.migration,
-      body: { error: { code: 'migration', message: err.message } },
-    };
-  }
-  if (err instanceof StackSchemaDriftError) {
-    return {
-      status: WIRE_ERROR_STATUS.schema_drift,
-      body: {
-        error: {
-          code: 'schema_drift',
-          message: err.message,
-          schemaDrift: { typeId: err.typeId, violations: err.violations },
-        },
-      },
-    };
-  }
-  if (err instanceof StackPayloadTooLargeError) {
-    return {
-      status: WIRE_ERROR_STATUS.payload_too_large,
-      body: { error: { code: 'payload_too_large', message: err.message } },
-    };
-  }
-  return null;
+  return { status: WIRE_ERROR_STATUS[err.code], body: { error } };
 }
 
 /** Reconstruct the core error a WireError body describes. */

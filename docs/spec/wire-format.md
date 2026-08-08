@@ -50,6 +50,12 @@ Authorization: Bearer <token>
 
 The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /records/:id/migrate`, `POST /types`): a 400 means the request couldn't be parsed at all; a 422 means the server understood the request but the content didn't satisfy the type schema.
 
+### The taxonomy root
+
+Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`) stay outside the hierarchy for that reason.
+
+The root adds no other structure. `StackVersionConflictError` remains a sibling of `StackConflictError` rather than a subtype (see the 409/412 rows above), and no other pair is related either, so catching a leaf class never catches a different failure by accident.
+
 ### Wire error body
 
 Every non-2xx response whose failure maps to the core error taxonomy carries a JSON body of the shape:
@@ -68,7 +74,9 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 
 Each error code that carries extra structured data gets its own uniquely-named, uniquely-typed field, present only for that code — `details` for `code: "validation"` (`StackValidationError.errors`), `versionConflict` for `code: "version_conflict"` (the data an `ifVersion` retry loop needs: which record, what it expected, what actually won the race), `schemaDrift` for `code: "schema_drift"` (which Type, and which specific fields made the change non-additive). This keeps each field's shape fixed rather than making any one field polymorphic across codes.
 
-`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping as a static `code` (e.g. `StackPermissionError.code === 'permission'`), so a server serializes a caught error mechanically rather than via a hand-maintained switch, and `APIAdapter` reconstructs the same class from the response.
+`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping both as a static (`StackPermissionError.code === 'permission'`) and on every instance (`err.code`), so serializing a caught error is a status lookup on the instance rather than a hand-maintained chain of class tests, and `APIAdapter` reconstructs the same class from the response. The vocabulary itself is `StackErrorCode` in `@haverstack/core` — it lives with the classes that carry it, and `@haverstack/wire-types` re-exports it as `WireErrorCode`.
+
+Note that an instance `code` discriminates but doesn't narrow: TypeScript won't refine a `StackError` to a subclass from a literal `code` check, so reaching the payload fields (`errors`, `versionConflict` state, `violations`) still means an `instanceof` on the three classes that define them. Those three are leaves with no subtype relation, so unlike a full class ladder the checks are order-independent.
 
 When a response has no parseable wire error body (a foreign server implementation, or a proxy that strips bodies but preserves status), `APIAdapter` still recovers the precise error from status alone for the unambiguous statuses (400/403/404/412/413/422) — **not** for 500, since that status is a generic "unhandled server exception" signal and would misclassify ordinary server bugs as `StackMigrationError`. `schema_drift` is the one deliberate exception to one-code-per-status: it shares **409** with `conflict` (both are "operation conflicts with a constraint" in HTTP terms), so status-only reconstruction of a bodyless 409 degrades to the generic `StackConflictError` — the precise class is only recoverable with a parseable body. When neither the body nor the status yields a typed error, `APIAdapter` throws its own generic `APIAdapterError`.
 
