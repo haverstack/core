@@ -1971,6 +1971,9 @@ export class ScopedStack implements StackClient {
    * request the suffix is read as the bare verb, since which records are
    * reachable is the subject's business. `allowDefault` decides whether a
    * grant naming nobody counts. Anonymous grantees always return false.
+   *
+   * Reached only through subjectAllows()/principalAllows(), which fix those
+   * two flags per side of the intersection. Call one of those instead.
    * See docs/spec/access-control.md § Type-level grants.
    */
   private async hasGrant(
@@ -2042,24 +2045,44 @@ export class ScopedStack implements StackClient {
     });
   }
 
+  /**
+   * The subject half: which records are reachable, answered with `-own`
+   * matching and default grants both in force — the ordinary reading of a
+   * grant, since the subject is the entity a grant is written about.
+   *
+   * Paired with principalAllows() so that the two halves of the
+   * intersection are the only callers of hasGrant(): its flags differ per
+   * side and mean nothing on their own, so no call site sets them by hand.
+   */
+  private subjectAllows(
+    typeId: TypeId,
+    actions: GrantAction[],
+    opts: { record?: StackRecord; prefetchedGrants?: StackRecord[] } = {},
+  ): Promise<boolean> {
+    return this.hasGrant(typeId, actions, {
+      grantee: this.subjectEntityId,
+      record: opts.record,
+      prefetchedGrants: opts.prefetchedGrants,
+    });
+  }
+
   private async canRead(record: StackRecord, prefetchedGrants?: StackRecord[]): Promise<boolean> {
-    const subjectAllows =
+    const reachable =
       (await this.checkRead(record)) ||
-      (await this.hasGrant(record.typeId, ['read-own', 'read-any'], {
-        grantee: this.subjectEntityId,
+      (await this.subjectAllows(record.typeId, ['read-own', 'read-any'], {
         record,
         prefetchedGrants,
       }));
-    if (!subjectAllows) return false;
+    if (!reachable) return false;
     return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
   }
 
   private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
     if (this.requesterEntityId === this.stack.ownerEntityId && !this.delegated) return true;
-    const subjectAllows =
+    const reachable =
       this.subjectEntityId === this.stack.ownerEntityId ||
-      (await this.hasGrant(typeId, ['create'], { grantee: this.subjectEntityId }));
-    if (!subjectAllows) return false;
+      (await this.subjectAllows(typeId, ['create']));
+    if (!reachable) return false;
     return this.principalAllows(typeId, ['create']);
   }
 
@@ -2084,10 +2107,7 @@ export class ScopedStack implements StackClient {
     }
     const allowed =
       ((await this.checkWrite(record)) ||
-        (await this.hasGrant(record.typeId, ['update-own', 'update-any'], {
-          grantee: this.subjectEntityId,
-          record,
-        }))) &&
+        (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
     if (!allowed) throw new StackPermissionError();
     return record;
@@ -2103,10 +2123,7 @@ export class ScopedStack implements StackClient {
     }
     const allowed =
       ((await this.checkWrite(record)) ||
-        (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], {
-          grantee: this.subjectEntityId,
-          record,
-        }))) &&
+        (await this.subjectAllows(record.typeId, ['delete-own', 'delete-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['delete-own', 'delete-any']));
     if (!allowed) throw new StackPermissionError();
     return record;
@@ -2391,9 +2408,11 @@ export class ScopedStack implements StackClient {
       if (!this.isGroupManager(record)) throw new StackPermissionError();
     } else {
       // The creator clause asks an authorship question of the authority
-      // identity, deliberately: under delegation the principal never equals
-      // an authorship field, so no app inherits the reach of the subject it
-      // writes for. create() withholds the same reach via mayGrantAccess().
+      // identity, deliberately: a delegated app never matches the author of
+      // a record it wrote for someone else, so it inherits no reach over its
+      // subject's records. Records it authored alone it does still match —
+      // resharing its own is a reach it holds undelegated anyway.
+      // create() withholds the subject-facing half via mayGrantAccess().
       const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
       const isCreator = this.requesterEntityId === record.entityId;
       if (!isOwner && !isCreator) throw new StackPermissionError();
