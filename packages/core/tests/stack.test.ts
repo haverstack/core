@@ -2879,14 +2879,29 @@ describe('_app.did uniqueness', () => {
     expect(two.id).toBeTruthy();
   });
 
-  // Restore is the third way a did reaches a record, and the one that
-  // carries a value chosen before the current registry existed.
-  test('rejects a restore that reintroduces a DID another card now claims', async () => {
-    const moved = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
-    await stack.update(moved.id, { did: 'did:key:z6MkMoved' });
-    await stack.create('_app@1', { name: 'Real Notes App', did: APP_DID });
+  test('rejects an update that moves a card off the DID it holds', async () => {
+    const app = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await expect(stack.update(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
 
-    await expect(stack.restoreVersion(moved.id, 1)).rejects.toThrow(StackConflictError);
+  test('rejects an update that clears the DID a card holds', async () => {
+    const app = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await expect(stack.update(app.id, { did: null })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a card carrying no DID may adopt one', async () => {
+    const app = await stack.create('_app@1', { name: 'Key Comes Later' });
+    const updated = await stack.update(app.id, { did: APP_DID });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('a card that adopted a DID cannot be rolled back off it', async () => {
+    const app = await stack.create('_app@1', { name: 'Key Comes Later' });
+    await stack.update(app.id, { did: APP_DID });
+
+    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackValidationError);
   });
 
   test('a card may be restored onto the DID it already holds', async () => {

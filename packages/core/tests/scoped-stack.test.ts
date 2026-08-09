@@ -2132,20 +2132,42 @@ describe('ScopedStack — _app.did uniqueness', () => {
     ).rejects.toThrow(StackPermissionError);
   });
 
-  test('a non-owner with write on a card cannot restore it onto a claimed DID', async () => {
-    const shared = await stack.create('_app@1', { name: 'Theirs', did: APP_DID });
-    await stack.update(shared.id, { did: 'did:key:z6MkMoved' });
+  test('a non-owner with write on a card cannot give it a DID', async () => {
+    const shared = await stack.create('_app@1', { name: 'My Notes App' });
     await stack.setPermissions(shared.id, [
       { access: 'entity', entityId: MEMBER, read: true, write: true },
     ]);
-    await stack.create('_app@1', { name: 'Real Notes App', did: APP_DID });
 
-    await expect(stack.asEntity(MEMBER).restoreVersion(shared.id, 1)).rejects.toThrow(
-      StackConflictError,
+    await expect(stack.asEntity(MEMBER).update(shared.id, { did: MEMBER })).rejects.toThrow(
+      StackPermissionError,
     );
 
-    const cards = await stack.query({ filter: { typeId: '_app@1' } });
-    const claiming = cards.records.filter((r) => (r.content as { did?: string }).did === APP_DID);
-    expect(claiming).toHaveLength(1);
+    const after = await stack.get(shared.id);
+    expect((after?.content as { did?: string }).did).toBeUndefined();
+  });
+
+  test('a non-owner with write on a card cannot roll it back off its DID', async () => {
+    const shared = await stack.create('_app@1', { name: 'My Notes App' });
+    await stack.update(shared.id, { did: APP_DID });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    await expect(stack.asEntity(MEMBER).restoreVersion(shared.id, 1)).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const after = await stack.get(shared.id);
+    expect((after?.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('a non-owner with write on a card may still update its other fields', async () => {
+    const shared = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
   });
 });

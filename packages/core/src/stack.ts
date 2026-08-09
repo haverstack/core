@@ -1009,6 +1009,7 @@ export class Stack implements StackClient {
     }
 
     if (baseIdOf(existing.typeId) === SYSTEM_TYPES.APP && 'did' in content) {
+      this.checkAppDidImmutable((existing.content as AppContent).did, (merged as AppContent).did);
       await this.checkAppDidUnique((merged as AppContent).did, id);
     }
 
@@ -1258,11 +1259,16 @@ export class Stack implements StackClient {
       );
     }
 
-    // Restoring is a write like any other, so it owes the same uniqueness
-    // check create() and update() pay — a snapshot taken while this card
-    // held a DID can otherwise put it back after another card claimed it.
+    // Restoring is a write like any other, so it owes the same immutability
+    // check update() pays — a snapshot taken before a card claimed its DID
+    // would otherwise move the binding by rolling content back. Uniqueness
+    // needs no separate check here: a restore can only put back a DID this
+    // same card already held, which immutability already refuses to change.
     if (baseIdOf(target.typeId) === SYSTEM_TYPES.APP) {
-      await this.checkAppDidUnique((target.content as AppContent).did, id);
+      this.checkAppDidImmutable(
+        (existing.content as AppContent).did,
+        (target.content as AppContent).did,
+      );
     }
 
     return this.adapter.restoreVersion(id, version, {
@@ -1276,7 +1282,7 @@ export class Stack implements StackClient {
    * two cards claiming the same DID would make that lookup ambiguous — and
    * ambiguity is all an impersonating card needs. Enforced here rather than
    * by schema, since uniqueness is a property of the set, not the value.
-   * Every path that writes a `did` calls this: create, update, and restore.
+   * Called by the paths that can introduce a new binding: create and update.
    *
    * Read-then-write, so two creates racing on the same DID can both pass.
    * Registering an app is owner-only — `_app` is ungrantable — which makes
@@ -1300,6 +1306,27 @@ export class Stack implements StackClient {
     if (clash) {
       throw new StackConflictError(`Another _app record already claims the DID "${did}"`);
     }
+  }
+
+  /**
+   * A card's DID binding is permanent once made: uniqueness stops a second
+   * card claiming a DID, but only immutability stops an existing card being
+   * moved onto one, which reaches the same impersonation by another route.
+   * Adopting a key is therefore a one-way step, and an app whose key changes
+   * is a new card — matching identity.md's deferral of key rotation, where a
+   * new key is a new identity rather than the same one relabelled.
+   * See docs/spec/identity.md § App.
+   */
+  private checkAppDidImmutable(existingDid: unknown, nextDid: unknown): void {
+    if (typeof existingDid !== 'string' || existingDid === '') return;
+    if (nextDid === existingDid) return;
+    throw new StackValidationError([
+      {
+        path: 'did',
+        message:
+          'did is immutable once set; register a new _app record for an app with a different key',
+      },
+    ]);
   }
 
   // -------------------------------------------------------
@@ -2307,8 +2334,27 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.APP && 'did' in content) {
+      this.requireOwnerForAppDid();
+    }
     await this.requireFileRefAccess(record.typeId, content);
     return this.stack.update(id, content, opts);
+  }
+
+  /**
+   * Naming the DID behind an app is the trust decision the registry exists
+   * to record, so it belongs to the owner alone — the same reasoning that
+   * makes `_app` ungrantable, applied to the one field a lookup reads.
+   * Registering a card is already owner-only; without this, record-level
+   * `write` shared on a card would be a second way in, and a card that
+   * carries no DID yet could be pointed at a write-holder's own key while
+   * keeping the name the owner gave it.
+   * See docs/spec/identity.md § App.
+   */
+  private requireOwnerForAppDid(): void {
+    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+      throw new StackPermissionError('Only the stack owner may set an _app record’s did');
+    }
   }
 
   async associate(
@@ -2413,10 +2459,18 @@ export class ScopedStack implements StackClient {
     version: number,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    await this.requireUpdatable(id);
+    const record = await this.requireUpdatable(id);
     if (this.requesterEntityId !== this.stack.ownerEntityId) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
+        // A rollback that would move the card's DID is the same trust
+        // decision update() reserves to the owner, reached by another route.
+        if (
+          baseIdOf(record.typeId) === SYSTEM_TYPES.APP &&
+          (target.content as AppContent).did !== (record.content as AppContent).did
+        ) {
+          this.requireOwnerForAppDid();
+        }
         await this.requireFileRefAccess(target.typeId, target.content);
         for (const association of target.associations ?? []) {
           await this.requireAssociationAccess(target.typeId, association);
