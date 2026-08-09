@@ -75,6 +75,10 @@ An app that holds a key acts in one of two ways. Alone — an indexer with no pe
 
 So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. It is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
 
+**Both fields describe the write that created the Record, and are never restamped.** `update()` is a content patch: it leaves `appId` and `principalId` naming whoever authored the Record, so a Record edited later by different software still reports its creator — as `entityId` does, and for the same reason. The cross-check above therefore answers "which app _wrote_ this", not "which app touched it last".
+
+**Per-edit app attribution does not exist**, and version history is not a way around that: a [snapshot](./versioning.md#version-history) carries `content`, `associations`, `permissions` and the author's `entityId`, never `appId` or `principalId`. So a Record whose creator is a verified delegated app says nothing about the software behind any later edit, and nothing records it. An app that needs edits attributable individually should model them as Records of its own rather than reading attribution off the edited one.
+
 Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
 
 **The `_app` registry is integrity-bearing.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it. Two protections apply, and they close different routes to the same end — a card bearing a name the owner trusts, pointing at a key someone else holds:

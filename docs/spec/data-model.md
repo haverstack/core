@@ -18,7 +18,7 @@ type StackRecord = {
 
   // --- Optional native fields ---
   parentId?: string; // ID of a parent Record (for hierarchy/folders)
-  entityId?: string; // Author Entity. Absent means owner-created — Records written directly by the stack owner carry no entityId.
+  entityId?: string; // Author Entity. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Access control)
   appId?: string; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
   principalId?: string; // The authenticated principal, when it isn't the author — a delegated app's own DID. Absent means the writer authenticated as the author (see Identity)
   deletedAt?: Date; // Present if soft-deleted
