@@ -2017,6 +2017,17 @@ export class ScopedStack implements StackClient {
     return this.subjectEntityId !== this.principalEntityId;
   }
 
+  /**
+   * Whether unconditional owner authority applies — the owner acting as
+   * itself. The verbs that rest on it are irreversible or disclose the
+   * sharing graph, so delegation never carries one to a subject, whichever
+   * side the owner is on. See
+   * docs/spec/access-control.md § Delegation: principal and subject.
+   */
+  private get ownerActingAlone(): boolean {
+    return !this.delegated && this.principalEntityId === this.stack.ownerEntityId;
+  }
+
   private checkRead(record: StackRecord): Promise<boolean> {
     return checkAccess(
       record,
@@ -2158,7 +2169,7 @@ export class ScopedStack implements StackClient {
   }
 
   private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.principalEntityId === this.stack.ownerEntityId && !this.delegated) return true;
+    if (this.ownerActingAlone) return true;
     const reachable =
       this.subjectEntityId === this.stack.ownerEntityId ||
       (await this.subjectAllows(typeId, ['create']));
@@ -2169,12 +2180,19 @@ export class ScopedStack implements StackClient {
   /**
    * `_group` records are managed, not merely written: only the owner or an
    * `admin` roster holder may mutate them — ordinary write permissions and
-   * grants don't apply. See docs/spec/identity.md § Group.
+   * grants don't apply. Asked of both identities under delegation, like
+   * setPermissions(). See docs/spec/identity.md § Group.
    */
   private isGroupManager(record: StackRecord): boolean {
-    if (this.principalEntityId === this.stack.ownerEntityId) return true;
-    if (!this.principalEntityId) return false;
-    return groupRoleFromAssociations(record.associations, this.principalEntityId) === 'admin';
+    if (!this.managesGroup(this.principalEntityId, record)) return false;
+    return !this.delegated || this.managesGroup(this.subjectEntityId, record);
+  }
+
+  /** Whether one identity, on its own, manages `record` — see isGroupManager(). */
+  private managesGroup(entityId: EntityId | null, record: StackRecord): boolean {
+    if (!entityId) return false;
+    if (entityId === this.stack.ownerEntityId) return true;
+    return groupRoleFromAssociations(record.associations, entityId) === 'admin';
   }
 
   /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
@@ -2249,7 +2267,7 @@ export class ScopedStack implements StackClient {
    * hashes. See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canAccessFile(fileId: string): Promise<boolean> {
-    if (!this.delegated && this.principalEntityId === this.stack.ownerEntityId) return true;
+    if (this.ownerActingAlone) return true;
 
     // Reaching a file through a record the requester can read is already
     // fully intersected — canRead() applied the principal's mask against
@@ -2381,8 +2399,9 @@ export class ScopedStack implements StackClient {
    * withholds can't be taken one step earlier while authoring. A delegated
    * app is denied it: widening access is the one thing containment most
    * needs to hold. Refused rather than silently ignored, so an app never
-   * believes it published something it didn't. See
-   * docs/spec/access-control.md § Delegation.
+   * believes it published something it didn't. Not `ownerActingAlone`:
+   * the record is the subject's own, so an owner principal grants it no
+   * reach the subject lacks. See docs/spec/access-control.md § Delegation.
    */
   private mayGrantAccess(): boolean {
     return !this.delegated || this.principalEntityId === this.stack.ownerEntityId;
@@ -2523,11 +2542,12 @@ export class ScopedStack implements StackClient {
   /**
    * Hard delete is owner-only: it is irreversible and destroys version
    * history, so neither the write bit nor delete-own/delete-any grants
-   * reach it. Non-owners are always limited to soft delete.
+   * reach it, and delegation doesn't carry it either. Everyone else is
+   * limited to soft delete.
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     await this.requireDeletable(id);
-    if (opts.hard && this.principalEntityId !== this.stack.ownerEntityId) {
+    if (opts.hard && !this.ownerActingAlone) {
       throw new StackPermissionError('Hard delete is owner-only');
     }
     return this.stack.delete(id, opts);
@@ -2546,14 +2566,14 @@ export class ScopedStack implements StackClient {
   /**
    * History is the mutation/recovery surface, not a read surface — gated
    * like update(), with snapshot `permissions` stripped for everyone but
-   * the owner. See docs/spec/versioning.md § History access.
+   * the owner acting alone — a snapshot's permissions are the stack's
+   * sharing graph, which delegation is not a route to.
+   * See docs/spec/versioning.md § History access.
    */
   async getVersions(id: string): Promise<RecordVersion[]> {
     await this.requireUpdatable(id);
     const versions = await this.stack.getVersions(id);
-    return this.principalEntityId === this.stack.ownerEntityId
-      ? versions
-      : versions.map(stripVersionPermissions);
+    return this.ownerActingAlone ? versions : versions.map(stripVersionPermissions);
   }
 
   /** See getVersions() — same mutate-surface gate, same permissions stripping. */
@@ -2561,16 +2581,15 @@ export class ScopedStack implements StackClient {
     await this.requireUpdatable(id);
     const target = await this.stack.getVersion(id, version);
     if (!target) return null;
-    return this.principalEntityId === this.stack.ownerEntityId
-      ? target
-      : stripVersionPermissions(target);
+    return this.ownerActingAlone ? target : stripVersionPermissions(target);
   }
 
   /**
-   * Re-runs the reference-creation checks against the snapshot for
-   * non-owner requesters, so a restore can't re-convey access to a file or
-   * record the requester can no longer reach today. The owner is exempt.
-   * See docs/spec/versioning.md § Restore semantics.
+   * Re-runs the reference-creation checks against the snapshot, so a
+   * restore can't re-convey access to a file or record the requester can no
+   * longer reach today. Only the owner acting alone is exempt: under
+   * delegation the checks resolve against the subject, which is whose reach
+   * the restore would widen. See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -2578,7 +2597,7 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
-    if (this.principalEntityId !== this.stack.ownerEntityId) {
+    if (!this.ownerActingAlone) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
         // A rollback that would move a card's binding is the same trust
@@ -2653,7 +2672,7 @@ export class ScopedStack implements StackClient {
    * Delegates to Stack.deleteAttachment(), which enforces the "not referenced" check.
    */
   async deleteAttachment(fileId: string): Promise<void> {
-    if (this.principalEntityId !== this.stack.ownerEntityId) {
+    if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner can delete attachments');
     }
     return this.stack.deleteAttachment(fileId);
@@ -2666,7 +2685,7 @@ export class ScopedStack implements StackClient {
   async collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult> {
-    if (this.principalEntityId !== this.stack.ownerEntityId) {
+    if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner can collect attachment garbage');
     }
     return this.stack.collectAttachmentGarbage(opts);

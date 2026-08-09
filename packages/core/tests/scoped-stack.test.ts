@@ -476,6 +476,28 @@ describe('ScopedStack — versions', () => {
         fileId: 'anything-at-all',
       });
     });
+
+    // The exemption is the owner's own, not something an owner principal
+    // lends its subject: the gate resolves against the subject, whose
+    // reach is what a restore would widen.
+    test('the exemption does not extend to an owner principal acting for someone else', async () => {
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        associations: [{ kind: 'attachment', label: 'x', fileId: 'unreachable-file' }],
+      });
+      await expect(
+        stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
+      ).rejects.toThrow(StackPermissionError);
+    });
   });
 });
 
@@ -2147,6 +2169,62 @@ describe('ScopedStack — delegation', () => {
     // The same default grant is all an undelegated requester needs.
     const direct = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' });
     expect(direct.entityId).toBe(MEMBER);
+  });
+
+  // Unconditional owner authority belongs to the owner acting as itself.
+  // The verbs resting on it are irreversible or disclose the sharing
+  // graph, so delegation carries none of them, whichever side the owner
+  // is on. The group rule below is two-sided instead, like setPermissions.
+  test('an owner principal cannot hard delete for its subject', async () => {
+    await grantAll(MEMBER);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
+
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id, { hard: true }),
+    ).rejects.toThrow(StackPermissionError);
+
+    // Soft delete is still reachable, so the refusal is about the verb.
+    await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id);
+    expect((await stack.get(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('an owner principal does not disclose snapshot permissions to its subject', async () => {
+    const record = await stack.create(COMMENT, { text: 'v1' });
+    await stack.setPermissions(record.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.update(record.id, { text: 'v2' });
+
+    const versions = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getVersions(record.id);
+    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
+
+    // The owner acting alone still sees them.
+    const direct = await stack.asEntity(OWNER).getVersions(record.id);
+    expect(direct.some((v) => v.permissions !== undefined)).toBe(true);
+  });
+
+  test('an owner principal cannot delete attachments for its subject', async () => {
+    const attachment = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'text/plain');
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.deleteAttachment(attachment.content.fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.collectAttachmentGarbage()).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an owner principal cannot manage a group its subject does not administer', async () => {
+    const group = await stack.create('_group@1', { name: 'Book Club' });
+
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
+    ).rejects.toThrow(StackPermissionError);
+
+    // An admin subject reaches it, since both identities then manage it.
+    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    expect(
+      await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(group.id, { name: 'Renamed' }),
+    ).toBeTruthy();
   });
 
   test('records are queryable by the principal that wrote them', async () => {

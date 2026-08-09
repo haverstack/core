@@ -130,16 +130,27 @@ Two identities are then in play, and one rule separates them:
 | ------------------------------------------------- | ------------------------------------------ |
 | Grant lookup for the app's own reach              | `record.entityId` on writes                |
 | Setting `permissions` at create time              | `-own` matching                            |
-| `_group` admin-or-owner management                | Record-level `permissions` resolution      |
-| Hard delete                                       | The `getAttachment()` uploader clause      |
+|                                                   | Record-level `permissions` resolution      |
+|                                                   | The `getAttachment()` uploader clause      |
 
-`setPermissions()` is the one verb both columns govern: its owner-or-creator rule is asked of the principal **and**, under delegation, of the subject as well. Deciding who else reaches a Record is a privileged verb, so the principal must hold it; but it also acts on a specific Record, so the subject must be able to reach that Record. Requiring only the first would let an owner principal — software the owner trusts unconditionally — carry its subject to Records the subject could not otherwise touch, which is the reach `create()` already withholds. Both identities must independently be the owner or the Record's author.
+Two rules sit across both columns rather than in either. **`setPermissions()` and `_group` management are asked of both identities**: each is a privileged verb, so the principal must hold it, and each acts on a named Record, so the subject must be able to reach that Record. Both identities must independently satisfy the rule — owner-or-creator for `setPermissions()`, owner-or-admin for a Group. Requiring only the principal would let an owner principal — software the owner trusts unconditionally — carry its subject to Records the subject could not otherwise touch, which is the reach `create()` already withholds.
 
 Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has: the second check asks the same question of the same identity. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
 
-**Unconditional owner access follows the same split**, rather than belonging to one identity. It answers two questions: _what data is reachable_, which resolves against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_, which resolves against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
+**Unconditional owner access splits across both identities**, rather than belonging to one. It answers _what data is reachable_ against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_ against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
 
-Read in the other direction — an **owner principal** acting for someone else, which is what the owner's own server does when it serves a visitor — the same split says the privileged verbs stay available while the data in reach stays the subject's. Verbs that act on a named Record get there by running the subject's reachability check first: `delete()` and `restoreVersion()` through the update/delete gate, `setPermissions()` through the rule above. A subject is never carried past a check by the software acting for it.
+Read in the other direction, an **owner principal** acting for someone else — what the owner's own server does when it serves a visitor — would otherwise hand that visitor the owner's own powers. Being the owner is therefore never on its own enough under delegation. Where a privileged verb has a rule to apply, it is applied to both identities; where it rests on nothing but ownership, it is refused outright:
+
+| Verb                                               | Why delegation doesn't carry it                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------ |
+| Hard delete                                        | Irreversible; the subject holds soft delete already                      |
+| `deleteAttachment()`, `collectAttachmentGarbage()` | Irreversible, and neither takes a Record to gate on                      |
+| Unstripped snapshot `permissions`                  | Discloses the stack's sharing graph                                      |
+| The `restoreVersion()` reference-gate exemption    | The gate resolves against the subject, whose reach a restore would widen |
+
+Everything else an owner principal does still runs the subject's checks first, so a subject is never carried past one by the software acting for it: `delete()` and `restoreVersion()` through the update/delete gate, `setPermissions()` and Group management through the two-sided rule above, reads through the ordinary permission and grant path.
+
+The one place an owner principal is deliberately unbounded is grant lookup — it is the owner's own software, so its side of the intersection is not fenced by grants. The subject's side still is, which is what keeps that from being a way around anything.
 
 The right-hand column is why delegation is worth having: `-own` keeps meaning "this person's Records, through whichever app they used", so two apps writing the same commons type still interoperate. The principal's column is why it is safe. Those operations have no grant fence at all — `setPermissions()` has only owner-or-creator behind it, and `_group` mutation bypasses grants entirely — so resolving them against the subject _alone_ would let any delegated app reshare its subject's data or seize a group it was never granted. A contained app is refused them outright.
 
