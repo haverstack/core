@@ -124,6 +124,74 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     },
   },
   {
+    name: 'create-record-ignores-client-supplied-entity-and-principal',
+    description:
+      'entityId and principalId are assigned by the server from the authenticated session, so a ' +
+      'body carrying them is ignored rather than honoured — here the session is an undelegated ' +
+      'contributor, so the response names that contributor as author and omits principalId ' +
+      'entirely, discarding both values the client sent. These are the two fields that answer ' +
+      '"who did this", and principalId exists to be the one a client cannot assert: honouring ' +
+      'it would let any requester dress a write up as a verified app action and defeat the _app ' +
+      'cross-check that reads it. appId is the deliberate exception, self-reported by design. ' +
+      'See docs/spec/wire-format.md § Records.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x00002',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Forged', body: 'World' },
+      version: 1,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      principalId: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      appId: 'com.example.myapp',
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00002',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Forged', body: 'World' },
+      version: 1,
+      entityId: 'entity-contributor-789',
+      appId: 'com.example.myapp',
+    },
+  },
+  {
+    name: 'create-record-response-carries-principal-under-delegation',
+    description:
+      'A write made by a delegated app comes back with entityId naming the subject it acted for ' +
+      'and principalId naming the app that authenticated — the pair a reader needs to tell ' +
+      'verified app attribution from a bare appId self-report. An undelegated write omits ' +
+      'principalId (see create-record above), so its presence is itself the signal. ' +
+      'See docs/spec/identity.md § Attribution and what can be trusted.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x00003',
+      typeId: 'com.example/comment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { body: 'Posted through a blog server' },
+      version: 1,
+      appId: 'com.example.blog',
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00003',
+      typeId: 'com.example/comment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { body: 'Posted through a blog server' },
+      version: 1,
+      entityId: 'entity-contributor-789',
+      principalId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      appId: 'com.example.blog',
+    },
+  },
+  {
     name: 'create-attachment-record-matching-mimetype-succeeds',
     description:
       'mimeType is a property of the fileId, established by the first _attachment@1 ' +
@@ -1128,6 +1196,8 @@ export type AttachmentUploadFixture = {
   description: string;
   /** Request headers this POST must send. Authorization is omitted — every fixture here assumes a valid bearer token for the described requester. */
   requestHeaders: Record<string, string>;
+  /** Value of the optional `?appId=` query param, which carries attribution a binary body has nowhere to put. Absent when the upload names no app. */
+  appId?: string;
   /** Raw request body bytes, as an array of byte values (0-255), so the fixture stays plain data with no binary encoding. */
   requestBodyBytes: number[];
   /** Expected HTTP status code. */
@@ -1167,6 +1237,36 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
         filename: 'hello.txt',
       },
       version: 1,
+    },
+  },
+  {
+    name: 'attachment-upload-carries-appid-query-param',
+    description:
+      'An optional ?appId= query param stamps the writing app onto the created record. It rides ' +
+      'the URL because the request body is the raw binary, leaving nowhere for the field that ' +
+      'POST /records takes inline — without it, attachments would be the one record kind that ' +
+      'cannot carry attribution. Self-reported and never a permission input, like every other ' +
+      'appId. See docs/spec/wire-format.md § Upload.',
+    requestHeaders: {
+      'Content-Type': 'text/plain',
+      'Content-Disposition': "attachment; filename*=UTF-8''hello.txt",
+    },
+    appId: 'com.example.myapp',
+    requestBodyBytes: HELLO_BYTES,
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x0800a',
+      typeId: '_attachment@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        fileId: HELLO_FILE_ID,
+        mimeType: 'text/plain',
+        size: HELLO_BYTES.length,
+        filename: 'hello.txt',
+      },
+      version: 1,
+      appId: 'com.example.myapp',
     },
   },
   {

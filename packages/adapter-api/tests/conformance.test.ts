@@ -419,7 +419,8 @@ describe('attachment upload fixtures', () => {
       const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : undefined;
       const data = new Uint8Array(fixture.requestBodyBytes);
 
-      const dispatch = () => adapter.putAttachmentWithMetadata(data, contentType, filename);
+      const dispatch = () =>
+        adapter.putAttachmentWithMetadata(data, contentType, filename, fixture.appId);
 
       if (fixture.responseStatus >= 400) {
         const code = (
@@ -434,7 +435,8 @@ describe('attachment upload fixtures', () => {
       }
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}/attachments`);
+      const query = fixture.appId ? `?appId=${encodeURIComponent(fixture.appId)}` : '';
+      expect(url).toBe(`${BASE_URL}/attachments${query}`);
       expect(init.method).toBe('POST');
       const headers = init.headers as Record<string, string>;
       expect(headers['Content-Type']).toBe(contentType);
