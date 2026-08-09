@@ -2213,6 +2213,11 @@ export class ScopedStack implements StackClient {
         throw new StackPermissionError();
       }
     }
+    if (opts.permissions?.length && !this.mayGrantAccess()) {
+      throw new StackPermissionError(
+        'A delegated principal cannot set permissions, at create time or after',
+      );
+    }
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
       validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
@@ -2226,7 +2231,6 @@ export class ScopedStack implements StackClient {
     await this.requireFileRefAccess(typeId, content);
     return this.stack.create(typeId, content, {
       ...opts,
-      permissions: this.mayGrantAccess() ? opts.permissions : undefined,
       entityId: this.subjectEntityId ?? undefined,
       principalId: this.delegated ? requester : undefined,
     });
@@ -2237,7 +2241,9 @@ export class ScopedStack implements StackClient {
    * setPermissions() enforces, asked at create time too so the reach it
    * withholds can't be taken one step earlier while authoring. A delegated
    * app is denied it: widening access is the one thing containment most
-   * needs to hold. See docs/spec/access-control.md § Delegation.
+   * needs to hold. Refused rather than silently ignored, so an app never
+   * believes it published something it didn't. See
+   * docs/spec/access-control.md § Delegation.
    */
   private mayGrantAccess(): boolean {
     return !this.delegated || this.requesterEntityId === this.stack.ownerEntityId;

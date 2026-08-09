@@ -2037,13 +2037,34 @@ describe('ScopedStack — delegation', () => {
     await grantAll(APP);
     await grantAll(null);
     const view = stack.asEntity(APP, { onBehalfOf: OWNER });
-    const record = await view.create(
-      COMMENT,
-      { text: 'meant to stay private' },
-      { permissions: [{ access: 'public' }] },
-    );
+    await expect(
+      view.create(
+        COMMENT,
+        { text: 'meant to stay private' },
+        { permissions: [{ access: 'public' }] },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+
+    // Refused before the write, so there is no record to have leaked.
+    const all = await stack.query({ filter: { typeId: COMMENT } });
+    expect(all.records).toHaveLength(0);
+  });
+
+  test('a delegated app may still create records it does not try to share', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: OWNER })
+      .create(COMMENT, { text: 'hi' }, { permissions: [] });
     expect(record.permissions).toBeUndefined();
-    await expect(stack.asEntity(null).get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an undelegated requester may still set permissions at create time', async () => {
+    await grantAll(MEMBER);
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { permissions: [{ access: 'public' }] });
+    expect(record.permissions).toEqual([{ access: 'public' }]);
   });
 
   // Bytes follow the same intersection as the records describing them.
