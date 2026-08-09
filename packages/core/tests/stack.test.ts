@@ -2878,4 +2878,22 @@ describe('_app.did uniqueness', () => {
     const two = await stack.create('_app@1', { name: 'Two' });
     expect(two.id).toBeTruthy();
   });
+
+  // Restore is the third way a did reaches a record, and the one that
+  // carries a value chosen before the current registry existed.
+  test('rejects a restore that reintroduces a DID another card now claims', async () => {
+    const moved = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await stack.update(moved.id, { did: 'did:key:z6MkMoved' });
+    await stack.create('_app@1', { name: 'Real Notes App', did: APP_DID });
+
+    await expect(stack.restoreVersion(moved.id, 1)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a card may be restored onto the DID it already holds', async () => {
+    const app = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await stack.update(app.id, { version: '2.0.0' });
+
+    const restored = await stack.restoreVersion(app.id, 1);
+    expect((restored.content as { did?: string }).did).toBe(APP_DID);
+  });
 });

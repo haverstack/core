@@ -2116,3 +2116,36 @@ describe('ScopedStack — delegation', () => {
     expect(viaApp.records.map((r) => r.content.text)).toEqual(['via app']);
   });
 });
+
+// -------------------------------------------------------
+// _app registry integrity, through a scoped view
+// -------------------------------------------------------
+
+// _app is ungrantable, so only the owner registers a card. Record-level
+// write on one is still shareable, and that is enough to reach restore.
+describe('ScopedStack — _app.did uniqueness', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('a non-owner cannot create an _app card', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create('_app@1', { name: 'Impostor', did: APP_DID }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner with write on a card cannot restore it onto a claimed DID', async () => {
+    const shared = await stack.create('_app@1', { name: 'Theirs', did: APP_DID });
+    await stack.update(shared.id, { did: 'did:key:z6MkMoved' });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.create('_app@1', { name: 'Real Notes App', did: APP_DID });
+
+    await expect(stack.asEntity(MEMBER).restoreVersion(shared.id, 1)).rejects.toThrow(
+      StackConflictError,
+    );
+
+    const cards = await stack.query({ filter: { typeId: '_app@1' } });
+    const claiming = cards.records.filter((r) => (r.content as { did?: string }).did === APP_DID);
+    expect(claiming).toHaveLength(1);
+  });
+});

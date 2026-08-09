@@ -1258,6 +1258,13 @@ export class Stack implements StackClient {
       );
     }
 
+    // Restoring is a write like any other, so it owes the same uniqueness
+    // check create() and update() pay — a snapshot taken while this card
+    // held a DID can otherwise put it back after another card claimed it.
+    if (baseIdOf(target.typeId) === SYSTEM_TYPES.APP) {
+      await this.checkAppDidUnique((target.content as AppContent).did, id);
+    }
+
     return this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
@@ -1269,6 +1276,14 @@ export class Stack implements StackClient {
    * two cards claiming the same DID would make that lookup ambiguous — and
    * ambiguity is all an impersonating card needs. Enforced here rather than
    * by schema, since uniqueness is a property of the set, not the value.
+   * Every path that writes a `did` calls this: create, update, and restore.
+   *
+   * Read-then-write, so two creates racing on the same DID can both pass.
+   * Registering an app is owner-only — `_app` is ungrantable — which makes
+   * that race the owner colliding with themselves rather than something an
+   * attacker can drive. Closing it properly means a unique index over a
+   * JSON field, which each adapter would have to enforce separately; that
+   * is a decision about where uniqueness lives, not a local fix.
    * See docs/spec/identity.md § App.
    */
   private async checkAppDidUnique(did: unknown, excludeId?: RecordId): Promise<void> {

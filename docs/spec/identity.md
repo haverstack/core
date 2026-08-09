@@ -78,9 +78,11 @@ Linking the two is the owner's job, not the library's: an `_app` Record with a `
 **The `_app` registry is integrity-bearing, so two rules protect it.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it:
 
 - **`_app` cannot be granted.** It sits alongside `_grant` and `_config` in the types `grant()` refuses (see [Access control § Type-level grants](./access-control.md#type-level-grants)), so only the stack owner writes cards. Otherwise anyone holding `create` on `_app@1` could register a card claiming a DID belonging to a legitimately installed app, and the cross-check would resolve to a name they chose.
-- **`did` is unique within a stack.** A second card claiming a DID already in use is refused with `StackConflictError`, on create and on update alike. Without it, "the `_app` Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
+- **`did` is unique within a stack.** A second card claiming a DID already in use is refused with `StackConflictError` on every path that writes one — create, update, and `restoreVersion()`. Restore matters as much as the other two: a snapshot taken while a card held a DID would otherwise put it back after another card legitimately claimed it, and record-level `write` on a card is shareable, so that path is reachable without being the owner. Without uniqueness, "the `_app` Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
 
 Note the contrast with `_entity`, where duplicate `handle`s are explicitly fine. A handle is a display label nothing resolves by; `did` here is a lookup key that a trust decision reads.
+
+The check reads before it writes, so two creates racing on the same DID can both pass. Registering an app is owner-only, which makes that race the owner colliding with themselves rather than something an attacker can drive — closing it properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
 ## Group
 
