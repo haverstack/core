@@ -2388,6 +2388,17 @@ export class ScopedStack implements StackClient {
     return !this.delegated || this.principalEntityId === this.stack.ownerEntityId;
   }
 
+  /**
+   * Whether one identity, on its own, may decide who else reaches `record`
+   * — the owner-or-creator rule setPermissions() enforces, asked of one
+   * side at a time. See
+   * docs/spec/access-control.md § Delegation: principal and subject.
+   */
+  private mayReshare(entityId: EntityId | null, record: StackRecord): boolean {
+    if (!entityId) return false;
+    return entityId === this.stack.ownerEntityId || entityId === record.entityId;
+  }
+
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
@@ -2495,15 +2506,15 @@ export class ScopedStack implements StackClient {
       // or write the group record. Same gate as update/associate/delete.
       if (!this.isGroupManager(record)) throw new StackPermissionError();
     } else {
-      // The creator clause asks an authorship question of the authority
-      // identity, deliberately: a delegated app never matches the author of
-      // a record it wrote for someone else, so it inherits no reach over its
-      // subject's records. Records it authored alone it does still match —
-      // resharing its own is a reach it holds undelegated anyway.
-      // create() withholds the subject-facing half via mayGrantAccess().
-      const isOwner = this.principalEntityId === this.stack.ownerEntityId;
-      const isCreator = this.principalEntityId === record.entityId;
-      if (!isOwner && !isCreator) throw new StackPermissionError();
+      // Intersected like every other authority here: the principal must
+      // hold the verb, and the subject must be able to reach this record —
+      // without which an owner principal would carry its subject to records
+      // the subject cannot touch. create() withholds the same reach via
+      // mayGrantAccess().
+      if (!this.mayReshare(this.principalEntityId, record)) throw new StackPermissionError();
+      if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
+        throw new StackPermissionError();
+      }
     }
 
     return this.stack.setPermissions(id, permissions, opts);

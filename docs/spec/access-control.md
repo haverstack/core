@@ -129,16 +129,19 @@ Two identities are then in play, and one rule separates them:
 | Governed by the **principal** (who authenticated) | Governed by the **subject** (who it's for) |
 | ------------------------------------------------- | ------------------------------------------ |
 | Grant lookup for the app's own reach              | `record.entityId` on writes                |
-| `setPermissions()`'s owner-or-creator check       | `-own` matching                            |
-| Setting `permissions` at create time              | Record-level `permissions` resolution      |
-| `_group` admin-or-owner management                | The `getAttachment()` uploader clause      |
-| Hard delete                                       |                                            |
+| Setting `permissions` at create time              | `-own` matching                            |
+| `_group` admin-or-owner management                | Record-level `permissions` resolution      |
+| Hard delete                                       | The `getAttachment()` uploader clause      |
 
-Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
+`setPermissions()` is the one verb both columns govern: its owner-or-creator rule is asked of the principal **and**, under delegation, of the subject as well. Deciding who else reaches a Record is a privileged verb, so the principal must hold it; but it also acts on a specific Record, so the subject must be able to reach that Record. Requiring only the first would let an owner principal — software the owner trusts unconditionally — carry its subject to Records the subject could not otherwise touch, which is the reach `create()` already withholds. Both identities must independently be the owner or the Record's author.
+
+Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has: the second check asks the same question of the same identity. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
 
 **Unconditional owner access follows the same split**, rather than belonging to one identity. It answers two questions: _what data is reachable_, which resolves against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_, which resolves against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
 
-The right-hand column is why delegation is worth having: `-own` keeps meaning "this person's Records, through whichever app they used", so two apps writing the same commons type still interoperate. The left-hand column is why it is safe. Those operations have no grant fence at all — `setPermissions()` checks only owner-or-creator, and `_group` mutation bypasses grants entirely — so resolving them against the subject would let any delegated app reshare its subject's data or seize a group it was never granted. A contained app is refused them outright.
+Read in the other direction — an **owner principal** acting for someone else, which is what the owner's own server does when it serves a visitor — the same split says the privileged verbs stay available while the data in reach stays the subject's. Verbs that act on a named Record get there by running the subject's reachability check first: `delete()` and `restoreVersion()` through the update/delete gate, `setPermissions()` through the rule above. A subject is never carried past a check by the software acting for it.
+
+The right-hand column is why delegation is worth having: `-own` keeps meaning "this person's Records, through whichever app they used", so two apps writing the same commons type still interoperate. The principal's column is why it is safe. Those operations have no grant fence at all — `setPermissions()` has only owner-or-creator behind it, and `_group` mutation bypasses grants entirely — so resolving them against the subject _alone_ would let any delegated app reshare its subject's data or seize a group it was never granted. A contained app is refused them outright.
 
 Refusing `setPermissions()` only contains an app if the same reach isn't available a step earlier, so **`permissions` passed to `create()` is refused under delegation** with `StackPermissionError`, unless the principal is the owner. The general argument that create-time `permissions` is "the same capability exercised earlier, not a new one" holds for a human contributor, who genuinely does hold `setPermissions()`. It does not transfer to a principal denied that capability by design.
 

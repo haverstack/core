@@ -2030,6 +2030,49 @@ describe('ScopedStack — delegation', () => {
     );
   });
 
+  // The owner-or-creator rule is asked of both identities. An owner
+  // principal holds the verb, so only the subject half stands between a
+  // delegated subject and every record in the stack.
+  test('an owner principal cannot reshare a record its subject did not author', async () => {
+    const record = await stack.create(COMMENT, { text: 'owner private' });
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.setPermissions(record.id, [{ access: 'public' }])).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect((await stack.get(record.id))?.permissions).toBeUndefined();
+  });
+
+  // The subject half is authorship, not reachability in general: a subject
+  // may still reshare what it wrote, which is the reach it holds undelegated.
+  test('an owner principal may reshare a record its subject authored', async () => {
+    await grantAll(MEMBER);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
+
+    await stack
+      .asEntity(OWNER, { onBehalfOf: MEMBER })
+      .setPermissions(record.id, [{ access: 'public' }]);
+
+    expect((await stack.get(record.id))?.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  // Closes the route from the gate above to the _app registry: a card the
+  // owner wrote is not the subject's to reshare, so record-level write on
+  // it never becomes available to point its did at the subject's own key.
+  test('an owner principal cannot reach an _app card through its subject', async () => {
+    const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(
+      view.setPermissions(card.id, [
+        { access: 'entity', entityId: MEMBER, read: true, write: true },
+      ]),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.update(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
   // The create-time counterpart of the setPermissions gate above. Denying
   // the app setPermissions() only contains it if the same reach isn't
   // available one step earlier, while it is authoring the record.
