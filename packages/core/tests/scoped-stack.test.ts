@@ -2123,17 +2123,22 @@ describe('ScopedStack — delegation', () => {
 
 // _app is ungrantable, so only the owner registers a card. Record-level
 // write on one is still shareable, and that is enough to reach restore.
-describe('ScopedStack — _app.did uniqueness', () => {
+describe('ScopedStack — _app bindings', () => {
   const APP_DID = 'did:key:z6MkNotesApp';
 
   test('a non-owner cannot create an _app card', async () => {
     await expect(
-      stack.asEntity(MEMBER).create('_app@1', { name: 'Impostor', did: APP_DID }),
+      stack
+        .asEntity(MEMBER)
+        .create('_app@1', { appId: 'com.example.impostor', name: 'Impostor', did: APP_DID }),
     ).rejects.toThrow(StackPermissionError);
   });
 
   test('a non-owner with write on a card cannot give it a DID', async () => {
-    const shared = await stack.create('_app@1', { name: 'My Notes App' });
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+    });
     await stack.setPermissions(shared.id, [
       { access: 'entity', entityId: MEMBER, read: true, write: true },
     ]);
@@ -2147,7 +2152,10 @@ describe('ScopedStack — _app.did uniqueness', () => {
   });
 
   test('a non-owner with write on a card cannot roll it back off its DID', async () => {
-    const shared = await stack.create('_app@1', { name: 'My Notes App' });
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+    });
     await stack.update(shared.id, { did: APP_DID });
     await stack.setPermissions(shared.id, [
       { access: 'entity', entityId: MEMBER, read: true, write: true },
@@ -2162,12 +2170,79 @@ describe('ScopedStack — _app.did uniqueness', () => {
   });
 
   test('a non-owner with write on a card may still update its other fields', async () => {
-    const shared = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
     await stack.setPermissions(shared.id, [
       { access: 'entity', entityId: MEMBER, read: true, write: true },
     ]);
 
     const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
     expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+});
+
+// The owner-only rule covers both halves of the attribution lookup: a
+// write-holder who could relabel a card's appId would make their own key
+// verify as another app, reaching the same end as repointing its did.
+describe('ScopedStack — _app.appId is owner-only', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('a non-owner with write on a card cannot change its appId', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    await expect(
+      stack.asEntity(MEMBER).update(shared.id, { appId: 'com.example.bank' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner with write on a card may still update its display fields', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
+    expect(updated.content).toMatchObject({ appId: 'com.example.notes', version: '2.0.0' });
+  });
+});
+
+// _entity stays grantable — naming people is what a contacts app does — so
+// its cards are reachable by grant, and only the binding rules fence them.
+describe('ScopedStack — _entity bindings hold under a grant', () => {
+  const ALICE = 'did:key:z6MkAlice';
+
+  test('a grantee may write a petname card but not repoint an existing one', async () => {
+    const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['create', 'update-any'] }]);
+    const scoped = stack.asEntity(MEMBER);
+
+    // Relabelling is the contacts-app case and stays allowed.
+    await expect(scoped.update(alice.id, { name: 'Alice Smith' })).resolves.toBeDefined();
+
+    // Repointing is the impersonation and is refused.
+    await expect(scoped.update(alice.id, { did: MEMBER })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a grantee cannot mint a second card for a DID already carded', async () => {
+    await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['create'] }]);
+
+    await expect(
+      stack.asEntity(MEMBER).create('_entity@1', { did: ALICE, name: 'Alice (verified)' }),
+    ).rejects.toThrow(StackConflictError);
   });
 });

@@ -44,16 +44,18 @@ Apps that write to a Stack are also modeled as Records, using the built-in syste
 
 ```ts
 type AppContent = {
+  appId: string; // The software this card is about, reverse-DNS. e.g. "com.example.myapp"
   name: string; // Display name of the app e.g. "My Notes App"
-  version?: string; // Semver string e.g. "1.0.0". The app's unique machine-readable identity
-  // is captured by the _app record's appId (e.g. "com.example.myapp"),
-  // so no handle is needed.
+  version?: string; // Semver string e.g. "1.0.0". appId is the machine-readable
+  // identity, so no handle is needed.
   did?: string; // The DID this app authenticates with, when it holds a key of its own.
   // Absent for apps that ride their user's identity.
 };
 ```
 
 `appId` is a **reverse-DNS string** (`"com.example.myapp"`), not a `RecordId` — it names software, not a Record, and the same string means the same app in every stack.
+
+**A card carries two `appId`s, and they answer different questions.** `content.appId` names the software the card is _about_; the card Record's own `appId` names whatever _wrote_ the card, exactly as it does on every other Record. Registering a third-party app through an admin console is the ordinary case where the two differ, so the cross-check below reads `content.appId` — the Record-level field would report the console.
 
 ### Two ways an app reaches a stack
 
@@ -68,24 +70,44 @@ An app that holds a key acts in one of two ways. Alone — an indexer with no pe
 
 `appId` is **self-reported and never a permission input.** Nothing verifies it at the point of write, in any posture. What differs is whether it can be checked afterwards:
 
-- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` can be resolved against the `_app` Record whose `did` matches, and a mismatch detected.
+- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` can be checked: find the `_app` Record whose `content.did` equals `record.principalId`, and compare that card's `content.appId` to `record.appId`. A mismatch means the write claimed software the authenticating key is not registered as.
 - A Record written by an app riding its user's identity carries no `principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
 
 So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. It is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
 
 Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
 
-**The `_app` registry is integrity-bearing, so three rules protect it.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it. Each rule closes one route to the same end — a card bearing a name the owner trusts, pointing at a key someone else holds:
+**The `_app` registry is integrity-bearing.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it. Two protections apply, and they close different routes to the same end — a card bearing a name the owner trusts, pointing at a key someone else holds:
 
 - **`_app` cannot be granted.** It sits alongside `_grant` and `_config` in the types `grant()` refuses (see [Access control § Type-level grants](./access-control.md#type-level-grants)), so no type-level grant ever authorises writing a card. Otherwise anyone holding `create` on `_app@1` could register a card claiming a DID belonging to a legitimately installed app, and the cross-check would resolve to a name they chose.
-- **`did` is unique within a stack.** A second card claiming a DID already in use is refused with `StackConflictError`, on create and on update. A soft-deleted card keeps its claim: a deleted card is `undelete()`-able, so releasing the DID on delete would let a new card take it and the old one come back beside it. Without uniqueness, "the `_app` Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
-- **`did` is immutable once set, and only the owner may set it.** Uniqueness stops a second card claiming a DID; only immutability stops an existing card being _moved_ onto one, which reaches the same impersonation by another route. A card's binding is therefore permanent — `update()` and `restoreVersion()` both refuse to change or clear it with `StackValidationError`, and an app whose key changes gets a new card, matching this document's deferral of [key rotation](#deferred-key-rotation) (a new key is a new identity, not the same one relabelled). Adopting a DID is a one-way step a card carrying none can still take, and `ScopedStack` reserves it to the stack owner with `StackPermissionError`.
+- **`did` and `appId` are owner-only to set.** Both are halves of the lookup — one finds the card, the other is what the claim is checked against — so a write-holder who could set either would reach the same impersonation: repoint a card at their own key, or relabel a card they control to claim another app's `appId`. `ScopedStack` refuses both with `StackPermissionError`.
 
-That last rule is what makes "only the owner writes cards" true, rather than nearly true. Type-level grants are refused, but record-level `write` on an individual card is shareable like on any other Record, so a write-holder is a real writer of that card — free to correct its `name` or `version`, and refused the one field a trust decision reads.
+That second rule is what makes "only the owner writes cards" true, rather than nearly true. Type-level grants are refused, but record-level `write` on an individual card is shareable like on any other Record, so a write-holder is a real writer of that card — free to correct its `name` or `version`, and refused the two fields a trust decision reads.
 
-Note the contrast with `_entity`, where duplicate `handle`s are explicitly fine. A handle is a display label nothing resolves by; `did` here is a lookup key that a trust decision reads.
+Both fields are also **bindings** in the sense defined next, which is where uniqueness and immutability come from.
 
-The uniqueness check reads before it writes, so two creates racing on the same DID can both pass. Naming a DID is owner-only, which makes that race the owner colliding with themselves rather than something an attacker can drive — closing it properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
+## DID bindings
+
+Two system types carry fields that are **lookup keys rather than display values**: something resolves _through_ them to reach a name the owner chose.
+
+| Field         | What resolves through it                        |
+| ------------- | ----------------------------------------------- |
+| `_entity.did` | a Record's `entityId` → who authored it         |
+| `_app.did`    | a Record's `principalId` → which app wrote it   |
+| `_app.appId`  | a verified principal → the `appId` it may claim |
+
+A binding is not a value a card happens to hold; it is what makes the card _about_ something. Two rules follow, and they apply to every field in that table:
+
+- **Unique within a stack.** A second card claiming a value already in use is refused with `StackConflictError`, on create and on update. A soft-deleted card keeps its claim: a deleted card is `undelete()`-able, so releasing the value on delete would let a new card take it and the old one come back beside it. Without uniqueness, "the Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
+- **Immutable once set.** Uniqueness stops a second card claiming a value; only immutability stops an existing card being _moved_ onto one, which reaches the same impersonation by another route. `update()` and `restoreVersion()` both refuse to change or clear a binding with `StackValidationError`. Adopting a value is a one-way step a card carrying none can still take. A subject whose key changes gets a new card, matching this document's deferral of [key rotation](#deferred-key-rotation) — a new key is a new identity, not the same one relabelled.
+
+**`_entity` stays grantable; `_app` does not.** Naming people is ordinary app work — a contacts app creates and relabels cards — so `_entity` cards are reachable by grant and only the two binding rules fence them. Naming software is a trust decision about who may speak as what, so `_app` adds the owner-only rule above. The asymmetry is deliberate: both registries resolve a name, but only one of them is deciding whether to believe a claim.
+
+Note the contrast with `handle`, where duplicates are explicitly fine on both `_entity` and `_group`. A handle is a display label nothing resolves by; the fields above are lookup keys a trust decision reads.
+
+**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for a DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. `_app` has no equivalent gap, being ungrantable.
+
+The uniqueness check reads before it writes, so two creates racing on one value can both pass. Closing that properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
 ## Group
 

@@ -192,7 +192,12 @@ export type StackType = {
  * names for the same DID is correct. See docs/spec/identity.md § Entity.
  */
 export type EntityContent = {
-  /** The identity this profile is about. e.g. "did:key:z6Mk..." */
+  /**
+   * The identity this profile is about. e.g. "did:key:z6Mk...". A binding,
+   * not a value — a Record's `entityId` resolves through it to the name
+   * this card carries, so it is unique per stack and immutable once set.
+   * See docs/spec/identity.md § DID bindings.
+   */
   did: string;
   /** Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith" */
   name: string;
@@ -206,19 +211,25 @@ export type EntityContent = {
 
 /** Content for _app records */
 export type AppContent = {
+  /**
+   * The software this card is about, in reverse-DNS form — the value a
+   * Record's `appId` is checked against. Distinct from the card Record's
+   * own `appId`, which names whatever wrote the card (an admin console
+   * registering a third-party app is the ordinary case, and the two differ
+   * there). See docs/spec/identity.md § App.
+   */
+  appId: AppId;
   /** Display name of the app e.g. "My Notes App" */
   name: string;
-  /**
-   * Semver string e.g. "1.0.0". The app's unique machine-readable identity
-   * is already captured by the _app record's appId (e.g. "com.example.myapp"),
-   * so no handle is needed here.
-   */
+  /** Semver string e.g. "1.0.0". `appId` is the machine-readable identity, so no handle is needed here. */
   version?: string;
   /**
    * The DID this app authenticates with, when it holds a key of its own.
    * Lets an attribution UI resolve a record's `principalId` to this card,
    * and a server check a self-reported `appId` against the principal that
-   * wrote it. Absent for apps that ride their user's identity.
+   * wrote it. Absent for apps that ride their user's identity. Unique per
+   * stack and immutable once set, like `appId` above — see
+   * docs/spec/identity.md § DID bindings.
    */
   did?: string;
 };

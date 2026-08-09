@@ -30,6 +30,7 @@ Through a server, an app you install can be given its own identity instead of ru
 ```ts
 // One-time, from the owner's side: name the app, then grant it types.
 await stack.create('_app@1', {
+  appId: 'com.example.notesapp', // the software this card is about
   name: 'My Notes App',
   did: notesAppDid, // the keypair the app generated at install
 });
@@ -41,6 +42,8 @@ await stack.grant(notesAppDid, [
   },
 ]);
 ```
+
+The containment is the **type list**, not the `-own` suffix. When a delegated app acts for someone, `-own` is read as the bare verb and the subject decides which records are in reach — so in a personal stack, where nearly everything is owner-authored, `read-own` is close to `read-any`. Grant an app the types it needs and no more.
 
 The app then connects with that DID and, when it acts for a person rather than for itself, names them — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
 

@@ -96,7 +96,7 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 **Design decisions:**
 
 - **No wildcard `typeId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
-- **Some system types can't be granted at all**: `grant()` refuses `_grant`, `_config`, and `_app`. Each would hand the grantee the machinery the model rests on — minting their own grants, rewriting stack ownership, or registering an app card claiming a DID that isn't theirs (see [App](./identity.md#app)). Other reserved types (`_attachment`, `_entity`, `_group`) stay grantable.
+- **Some system types can't be granted at all**: `grant()` refuses `_grant`, `_config`, and `_app`. Each would hand the grantee the machinery the model rests on — minting their own grants, rewriting stack ownership, or registering an app card claiming a DID that isn't theirs (see [App](./identity.md#app)). Other reserved types (`_attachment`, `_entity`, `_group`) stay grantable. The refusal is enforced **again at evaluation**: a `_grant` Record naming one of these families confers nothing, however it came to exist. `grant()` is not the only way a Record gets written — an unscoped `Stack`, a JSON import, or a server mapping a request body onto `Stack` can all mint one — so a rule enforced only at the writing helper would hold only for records that went through it.
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
 - **Default grants** (no `granteeEntityId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant. They also **do not count on the principal's side** of a delegated request (see [Delegation](#delegation-principal-and-subject)): "any authenticated entity" means the people who turn up, not software the owner installed, so a contained app reaches only the types it is named in.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
@@ -162,7 +162,7 @@ On the principal's side of the intersection, **`-own` and `-any` mean the same t
 Two consequences worth stating plainly rather than leaving to be discovered:
 
 - **Per-app isolation on a shared type is not offered.** Two apps both granted `commons/note@1` for the same person see the same notes. Containment is per type — an app reaches only the types the owner granted it — which is what keeps shared commons types interoperable by default.
-- **In a personal stack, a delegated `-own` grant is close to `-any`.** Nearly every Record is owner-authored, so `-own` covers nearly all of them. The precision of `-own` pays off in multi-person stacks, not single-owner ones.
+- **In a personal stack, a delegated `-own` grant is close to `-any`.** Nearly every Record is owner-authored, so `-own` covers nearly all of them. The precision of `-own` pays off in multi-person stacks, not single-owner ones. An owner reaching for `read-own` to _contain_ an app should know it buys almost nothing there — containment comes from which types the app is granted, not from the suffix.
 
 ### Reference-creation gating
 
@@ -176,6 +176,8 @@ A `create` grant on a type authorizes writing Records of that type — it does n
 A missing target and an existing-but-inaccessible one **always produce the same `StackPermissionError`**, with no distinguishing detail — otherwise the check itself becomes a confirmation oracle (e.g. for a guessed file hash: content-addressed `fileId`s mean a successful attach-then-read round-trip would otherwise confirm the stack holds those exact bytes). On `update()`, only file-ref fields actually present in the patch are checked — untouched fields carry no new reference.
 
 `appId` and `permissions` are deliberately **not** gated by this: `appId` is self-reported, untrusted metadata everywhere (see [App](./identity.md#app) for what can and cannot be checked after the fact), never a permission input. `permissions` at create time is consistent with `setPermissions()`'s owner-or-creator policy — a contributor authoring a Record in your Stack can already widen its access up to and including `public`; create-time is the same capability exercised earlier, not a new one.
+
+That last argument holds for a requester who genuinely holds `setPermissions()`, which is every undelegated one. It does **not** transfer to a delegated principal, which is denied that capability by design — so create-time `permissions` is refused there rather than ungated. See [Delegation](#delegation-principal-and-subject).
 
 ### Errors and information exposure
 

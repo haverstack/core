@@ -51,7 +51,6 @@ import type {
   EntityId,
   EntityContent,
   AppId,
-  AppContent,
   RecordId,
 } from './types.js';
 
@@ -81,6 +80,19 @@ const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.CONFIG,
   SYSTEM_TYPES.APP,
 ]);
+
+/**
+ * Content fields that are lookup keys rather than display values: a card
+ * claims one, and something later resolves through it. Each is unique per
+ * stack and immutable once set. See docs/spec/identity.md § DID bindings.
+ */
+const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
+  [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
+  [SYSTEM_TYPES.ENTITY, ['did'] as const],
+]);
+
+const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
+  BINDING_FIELDS.get(family) ?? [];
 
 export type CreateRecordOptions = {
   /**
@@ -891,9 +903,7 @@ export class Stack implements StackClient {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
     }
 
-    if (baseIdOf(typeId) === SYSTEM_TYPES.APP) {
-      await this.checkAppDidUnique((content as Record<string, unknown>).did);
-    }
+    await this.checkBindingsOnCreate(typeId, content as Record<string, unknown>);
 
     if (opts.id !== undefined) validateRecordId(opts.id);
 
@@ -1008,10 +1018,13 @@ export class Stack implements StackClient {
       );
     }
 
-    if (baseIdOf(existing.typeId) === SYSTEM_TYPES.APP && 'did' in content) {
-      this.checkAppDidImmutable((existing.content as AppContent).did, (merged as AppContent).did);
-      await this.checkAppDidUnique((merged as AppContent).did, id);
-    }
+    await this.checkBindingsOnUpdate(
+      existing.typeId,
+      id,
+      content,
+      existing.content,
+      merged as Record<string, unknown>,
+    );
 
     if (id === SYSTEM_TYPES.CONFIG) {
       this.checkConfigEntityIdUnchanged(
@@ -1262,12 +1275,14 @@ export class Stack implements StackClient {
     // Restoring is a write like any other, so it owes the same immutability
     // check update() pays — a snapshot taken before a card claimed its DID
     // would otherwise move the binding by rolling content back. Uniqueness
-    // needs no separate check here: a restore can only put back a DID this
+    // needs no separate check here: a restore can only put back a value this
     // same card already held, which immutability already refuses to change.
-    if (baseIdOf(target.typeId) === SYSTEM_TYPES.APP) {
-      this.checkAppDidImmutable(
-        (existing.content as AppContent).did,
-        (target.content as AppContent).did,
+    for (const field of bindingFieldsOf(baseIdOf(target.typeId))) {
+      this.checkBindingImmutable(
+        baseIdOf(target.typeId),
+        field,
+        (existing.content as Record<string, unknown>)[field],
+        (target.content as Record<string, unknown>)[field],
       );
     }
 
@@ -1277,54 +1292,98 @@ export class Stack implements StackClient {
     });
   }
 
-  /**
-   * An app's `did` is what resolves a record's principalId to a name, so
-   * two cards claiming the same DID would make that lookup ambiguous — and
-   * ambiguity is all an impersonating card needs. Enforced here rather than
-   * by schema, since uniqueness is a property of the set, not the value.
-   * Called by the paths that can introduce a new binding: create and update.
-   *
-   * Read-then-write, so two creates racing on the same DID can both pass.
-   * Registering an app is owner-only — `_app` is ungrantable — which makes
-   * that race the owner colliding with themselves rather than something an
-   * attacker can drive. Closing it properly means a unique index over a
-   * JSON field, which each adapter would have to enforce separately; that
-   * is a decision about where uniqueness lives, not a local fix.
-   * See docs/spec/identity.md § App.
-   */
-  private async checkAppDidUnique(did: unknown, excludeId?: RecordId): Promise<void> {
-    if (typeof did !== 'string' || did === '') return;
-
-    const results = await queryAllPages((q) => this.query(q), {
-      filter: {
-        typeId: `${SYSTEM_TYPES.APP}@1`,
-        includeDeleted: true,
-        ...(this.features.contentFieldQuery && { content: { did } }),
-      },
-    });
-    const clash = results.some((r) => r.id !== excludeId && (r.content as AppContent).did === did);
-    if (clash) {
-      throw new StackConflictError(`Another _app record already claims the DID "${did}"`);
+  /** Uniqueness for every binding field a newly created card claims. */
+  private async checkBindingsOnCreate(
+    typeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<void> {
+    const family = baseIdOf(typeId);
+    for (const field of bindingFieldsOf(family)) {
+      await this.checkBindingUnique(family, field, content[field]);
     }
   }
 
   /**
-   * A card's DID binding is permanent once made: uniqueness stops a second
-   * card claiming a DID, but only immutability stops an existing card being
-   * moved onto one, which reaches the same impersonation by another route.
-   * Adopting a key is therefore a one-way step, and an app whose key changes
-   * is a new card — matching identity.md's deferral of key rotation, where a
-   * new key is a new identity rather than the same one relabelled.
-   * See docs/spec/identity.md § App.
+   * Immutability then uniqueness for every binding field a patch touches.
+   * Fields absent from the patch carry no new claim — update() is a merge,
+   * so an untouched binding is the one the card already holds.
    */
-  private checkAppDidImmutable(existingDid: unknown, nextDid: unknown): void {
-    if (typeof existingDid !== 'string' || existingDid === '') return;
-    if (nextDid === existingDid) return;
+  private async checkBindingsOnUpdate(
+    typeId: TypeId,
+    id: RecordId,
+    patch: Record<string, unknown | null>,
+    existing: Record<string, unknown>,
+    merged: Record<string, unknown>,
+  ): Promise<void> {
+    const family = baseIdOf(typeId);
+    for (const field of bindingFieldsOf(family)) {
+      if (!(field in patch)) continue;
+      this.checkBindingImmutable(family, field, existing[field], merged[field]);
+      await this.checkBindingUnique(family, field, merged[field], id);
+    }
+  }
+
+  /**
+   * A card's binding field is what a lookup resolves through — a record's
+   * `principalId` through `_app.did`, its `entityId` through `_entity.did`,
+   * a claimed `appId` through `_app.appId`. Two cards claiming one value
+   * would make that lookup ambiguous, and ambiguity is all an impersonating
+   * card needs. Enforced here rather than by schema, since uniqueness is a
+   * property of the set, not of the value. Called by the paths that can
+   * introduce a binding: create and update.
+   *
+   * Read-then-write, so two creates racing on one value can both pass.
+   * Closing that properly means a unique index over a JSON field, which
+   * each adapter would enforce separately — a decision about where
+   * uniqueness lives, not a local fix.
+   * See docs/spec/identity.md § DID bindings.
+   */
+  private async checkBindingUnique(
+    family: string,
+    field: 'did' | 'appId',
+    value: unknown,
+    excludeId?: RecordId,
+  ): Promise<void> {
+    if (typeof value !== 'string' || value === '') return;
+
+    const results = await queryAllPages((q) => this.query(q), {
+      filter: {
+        baseId: family,
+        includeDeleted: true,
+        ...(this.features.contentFieldQuery && { content: { [field]: value } }),
+      },
+    });
+    const clash = results.some(
+      (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
+    );
+    if (clash) {
+      throw new StackConflictError(
+        `Another ${family} record already claims the ${field} "${value}"`,
+      );
+    }
+  }
+
+  /**
+   * A binding is permanent once made: uniqueness stops a second card
+   * claiming a value, but only immutability stops an existing card being
+   * moved onto one, which reaches the same impersonation by another route.
+   * Adopting a value is therefore a one-way step, and a subject whose key
+   * changes gets a new card — matching identity.md's deferral of key
+   * rotation, where a new key is a new identity rather than the same one
+   * relabelled. See docs/spec/identity.md § DID bindings.
+   */
+  private checkBindingImmutable(
+    family: string,
+    field: 'did' | 'appId',
+    existing: unknown,
+    next: unknown,
+  ): void {
+    if (typeof existing !== 'string' || existing === '') return;
+    if (next === existing) return;
     throw new StackValidationError([
       {
-        path: 'did',
-        message:
-          'did is immutable once set; register a new _app record for an app with a different key',
+        path: field,
+        message: `${field} is immutable once set; register a new ${family} record instead`,
       },
     ]);
   }
@@ -1650,7 +1709,17 @@ export class Stack implements StackClient {
   /**
    * Create _grant records authorizing entities to act on records of
    * specific types; null entityId writes a default grant (any
-   * authenticated entity). The grantee lives in content.granteeEntityId,
+   * authenticated entity).
+   *
+   * Granting an **app** a `-own` action does not contain it the way the
+   * suffix suggests: when that app acts for someone, `-own` is read as the
+   * bare verb and the subject decides which records are in reach, so in a
+   * personal stack — where nearly every record is owner-authored — a
+   * delegated `read-own` is close to `read-any`. Grant an app the types it
+   * needs, not the suffix that looks narrowest. See
+   * docs/spec/access-control.md § Delegation: principal and subject.
+   *
+   * The grantee lives in content.granteeEntityId,
    * not record.entityId. See docs/spec/access-control.md § Type-level
    * grants.
    */
@@ -1754,9 +1823,10 @@ export class Stack implements StackClient {
       }
 
       if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(g.typeId))) {
+        const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
         errors.push({
           path: `grants[${i}].typeId`,
-          message: `Cannot grant on "${baseIdOf(g.typeId)}": grants on _grant and _config are refused to prevent privilege escalation`,
+          message: `Cannot grant on "${baseIdOf(g.typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
         });
       }
     });
@@ -1777,6 +1847,7 @@ export class Stack implements StackClient {
       handle: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.APP}@1`, 'App', {
+      appId: { kind: 'string', required: true },
       name: { kind: 'string', required: true },
       version: { kind: 'string' },
       did: { kind: 'string' },
@@ -1991,6 +2062,12 @@ export class ScopedStack implements StackClient {
     if (!grantee) return false;
 
     const familyId = baseIdOf(typeId);
+
+    // grant() refuses to write these, but a _grant record is an ordinary
+    // Record: an unscoped Stack, an import, or a server mapping a request
+    // body onto Stack can mint one anyway. Refusing at the point of use is
+    // what makes the rule hold regardless of how the record got there.
+    if (UNGRANTABLE_SYSTEM_TYPES.has(familyId)) return false;
 
     let grantRecords: StackRecord[];
     if (prefetchedGrants !== undefined) {
@@ -2351,26 +2428,34 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.APP && 'did' in content) {
-      this.requireOwnerForAppDid();
-    }
+    this.requireOwnerForAppIdentity(record.typeId, (field) => field in content);
     await this.requireFileRefAccess(record.typeId, content);
     return this.stack.update(id, content, opts);
   }
 
   /**
-   * Naming the DID behind an app is the trust decision the registry exists
-   * to record, so it belongs to the owner alone — the same reasoning that
-   * makes `_app` ungrantable, applied to the one field a lookup reads.
-   * Registering a card is already owner-only; without this, record-level
-   * `write` shared on a card would be a second way in, and a card that
-   * carries no DID yet could be pointed at a write-holder's own key while
-   * keeping the name the owner gave it.
-   * See docs/spec/identity.md § App.
+   * Naming the software behind a key is the trust decision the `_app`
+   * registry exists to record, so both halves of that binding — `did` and
+   * `appId` — belong to the owner alone. Same reasoning that makes `_app`
+   * ungrantable, applied to the fields a lookup reads. Registering a card
+   * is already owner-only; without this, record-level `write` shared on a
+   * card would be a second way in: a card carrying no DID yet could be
+   * pointed at a write-holder's own key while keeping the name the owner
+   * gave it, or relabelled to claim another app's `appId`. `name` and
+   * `version` stay writable — they are display, not lookup.
+   *
+   * `_entity` deliberately does not get this rule: naming people is what a
+   * contacts app does, so its cards stay writable by grant. Uniqueness and
+   * immutability still bind them. See docs/spec/identity.md § DID bindings.
    */
-  private requireOwnerForAppDid(): void {
+  private requireOwnerForAppIdentity(
+    typeId: TypeId,
+    touches: (field: 'did' | 'appId') => boolean,
+  ): void {
+    if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
+    if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
     if (this.requesterEntityId !== this.stack.ownerEntityId) {
-      throw new StackPermissionError('Only the stack owner may set an _app record’s did');
+      throw new StackPermissionError('Only the stack owner may set an _app record’s did or appId');
     }
   }
 
@@ -2482,14 +2567,14 @@ export class ScopedStack implements StackClient {
     if (this.requesterEntityId !== this.stack.ownerEntityId) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
-        // A rollback that would move the card's DID is the same trust
+        // A rollback that would move a card's binding is the same trust
         // decision update() reserves to the owner, reached by another route.
-        if (
-          baseIdOf(record.typeId) === SYSTEM_TYPES.APP &&
-          (target.content as AppContent).did !== (record.content as AppContent).did
-        ) {
-          this.requireOwnerForAppDid();
-        }
+        this.requireOwnerForAppIdentity(
+          record.typeId,
+          (field) =>
+            (target.content as Record<string, unknown>)[field] !==
+            (record.content as Record<string, unknown>)[field],
+        );
         await this.requireFileRefAccess(target.typeId, target.content);
         for (const association of target.associations ?? []) {
           await this.requireAssociationAccess(target.typeId, association);
