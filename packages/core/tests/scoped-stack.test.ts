@@ -2095,6 +2095,47 @@ describe('ScopedStack — delegation', () => {
     );
   });
 
+  // The gate above rests on the subject being unable to reach the card at
+  // all. Record-level write is shareable, so where the subject can reach
+  // it, the owner-alone rule on the binding fields is the whole fence.
+  test('an owner principal cannot set a card binding for a subject holding write on it', async () => {
+    const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
+    await stack.setPermissions(card.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.update(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.update(card.id, { appId: 'com.example.bank' })).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const after = await stack.get(card.id);
+    expect(after?.content).toMatchObject({ appId: 'com.trusted' });
+    expect((after?.content as { did?: string }).did).toBeUndefined();
+  });
+
+  // The uploader clause matches on the subject a scoped create stamps, so
+  // the owner's exemption from the _attachment@1 refusal has to be the
+  // owner's own — otherwise naming a fileId is enough to reach its bytes.
+  test('an owner principal cannot mint an attachment card for a file its subject cannot reach', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([9, 9, 9]), 'image/png', 'secret.png');
+
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    await expect(
+      view.create('_attachment@1', { fileId, mimeType: 'image/png', size: 3 }),
+    ).rejects.toThrow(StackPermissionError);
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
   // The create-time counterpart of the setPermissions gate above. Denying
   // the app setPermissions() only contains it if the same reach isn't
   // available one step earlier, while it is authoring the record.

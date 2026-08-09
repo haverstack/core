@@ -73,7 +73,7 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 One carve-out: a non-owner who can already read some record referencing `fileId` may create an additional `_attachment@1` record for it (e.g. to record their own `filename`) without re-uploading bytes — this conveys no access they didn't already have. The carve-out is satisfied only by a readable referencing record, never by the requester's own prior `_attachment@1` record for the same `fileId` — allowing that would let one successful guess unlock unlimited further metadata records for the same guessed `fileId`.
 
-The owner and unscoped `Stack` are unaffected — this applies to `ScopedStack.create()` only. `ScopedStack.putAttachment()` is unaffected too: having already derived `fileId` from bytes it hashed itself, it creates its record directly, bypassing this gate rather than satisfying it.
+The owner and unscoped `Stack` are unaffected — this applies to `ScopedStack.create()` only. The owner's exemption requires the owner [acting alone](./access-control.md#delegation-principal-and-subject): under delegation the refusal applies whichever side the owner is on, since the uploader clause that turns a guess into a read matches the subject a scoped create stamps, not the principal claiming the exemption. `ScopedStack.putAttachment()` is unaffected too: having already derived `fileId` from bytes it hashed itself, it creates its record directly, bypassing this gate rather than satisfying it.
 
 **Anti-oracle.** The `mimeType`-conflict error (above) never names the established `mimeType` — doing so would confirm an existing `fileId`'s content type to a caller who only guessed the `fileId`, exactly the confirmation oracle the create refusal is designed to close.
 

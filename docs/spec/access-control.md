@@ -141,12 +141,14 @@ Omitting `onBehalfOf` makes the two the same entity, which is the undelegated ca
 
 Read in the other direction, an **owner principal** acting for someone else — what the owner's own server does when it serves a visitor — would otherwise hand that visitor the owner's own powers. Being the owner is therefore never on its own enough under delegation. Where a privileged verb has a rule to apply, it is applied to both identities; where it rests on nothing but ownership, it is refused outright:
 
-| Verb                                               | Why delegation doesn't carry it                                          |
-| -------------------------------------------------- | ------------------------------------------------------------------------ |
-| Hard delete                                        | Irreversible; the subject holds soft delete already                      |
-| `deleteAttachment()`, `collectAttachmentGarbage()` | Irreversible, and neither takes a Record to gate on                      |
-| Unstripped snapshot `permissions`                  | Discloses the stack's sharing graph                                      |
-| The `restoreVersion()` reference-gate exemption    | The gate resolves against the subject, whose reach a restore would widen |
+| Verb                                                          | Why delegation doesn't carry it                                                                                      |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Hard delete                                                   | Irreversible; the subject holds soft delete already                                                                  |
+| `deleteAttachment()`, `collectAttachmentGarbage()`            | Irreversible, and neither takes a Record to gate on                                                                  |
+| Unstripped snapshot `permissions`                             | Discloses the stack's sharing graph                                                                                  |
+| The `restoreVersion()` reference-gate exemption               | The gate resolves against the subject, whose reach a restore would widen                                             |
+| Setting an `_app` card's `did` or `appId`                     | Names who may speak as what — the owner's trust decision, not a reach lent to a subject holding record-level `write` |
+| The owner's exemption from the `_attachment@1` create refusal | The refusal fences a guessed `fileId`, and the uploader clause that would then match resolves against the subject    |
 
 Everything else an owner principal does still runs the subject's checks first, so a subject is never carried past one by the software acting for it: `delete()` and `restoreVersion()` through the update/delete gate, `setPermissions()` and Group management through the two-sided rule above, reads through the ordinary permission and grant path.
 

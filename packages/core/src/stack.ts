@@ -2363,8 +2363,11 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
-    const isOwner = principal === this.stack.ownerEntityId;
-    if (!isOwner && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
+    // The exemption is the owner's own, so delegation doesn't carry it: an
+    // owner principal acting for someone else would otherwise let that
+    // subject name any fileId and reach the bytes through the uploader
+    // clause, which matches on the subject this create stamps.
+    if (!this.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
       const fileId = (content as Record<string, unknown>).fileId;
       if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
         throw new StackPermissionError();
@@ -2477,6 +2480,11 @@ export class ScopedStack implements StackClient {
    * gave it, or relabelled to claim another app's `appId`. `name` and
    * `version` stay writable — they are display, not lookup.
    *
+   * Owner *acting alone*, in both directions: a delegated app never holds
+   * it, and an owner principal doesn't lend it to a subject holding
+   * record-level `write` on a card — which would reopen the same route
+   * from the other side.
+   *
    * `_entity` deliberately does not get this rule: naming people is what a
    * contacts app does, so its cards stay writable by grant. Uniqueness and
    * immutability still bind them. See docs/spec/identity.md § DID bindings.
@@ -2487,7 +2495,7 @@ export class ScopedStack implements StackClient {
   ): void {
     if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
     if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
-    if (this.principalEntityId !== this.stack.ownerEntityId) {
+    if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner may set an _app record’s did or appId');
     }
   }
