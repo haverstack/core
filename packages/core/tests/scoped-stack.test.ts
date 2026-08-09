@@ -2030,6 +2030,38 @@ describe('ScopedStack — delegation', () => {
     );
   });
 
+  // The create-time counterpart of the setPermissions gate above. Denying
+  // the app setPermissions() only contains it if the same reach isn't
+  // available one step earlier, while it is authoring the record.
+  test('an app delegated for the owner cannot publish its subject records at create time', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    const record = await view.create(
+      COMMENT,
+      { text: 'meant to stay private' },
+      { permissions: [{ access: 'public' }] },
+    );
+    expect(await stack.asEntity(null).get(record.id)).toBeNull();
+  });
+
+  // Bytes follow the same intersection as the records describing them.
+  // The uploader clause decides *which* files the subject authored; it is
+  // not itself a grant, so the app still needs one of its own.
+  test('an app with no grant of its own cannot download files its subject uploaded', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const attachment = await stack
+      .asEntity(MEMBER)
+      .putAttachment(new Uint8Array([1, 2, 3]), 'text/plain', 'secret.txt');
+    const { fileId } = attachment.content;
+
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    // The record describing the bytes is already refused ...
+    await expect(view.get(attachment.id)).rejects.toThrow(StackPermissionError);
+    // ... so the bytes themselves must be too.
+    await expect(view.getAttachment(fileId)).rejects.toThrow(StackPermissionError);
+  });
+
   test('an app delegated for a group admin cannot manage the group', async () => {
     const group = await stack.create('_group@1', { name: 'Book Club' });
     await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
