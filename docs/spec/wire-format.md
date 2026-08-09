@@ -24,6 +24,18 @@ GET /.well-known/stack
 }
 ```
 
+### Version negotiation
+
+`version` is the wire protocol's own version, `MAJOR.MINOR`, and it is required — not the server's software version, which is the server's business and appears nowhere in this spec.
+
+**A client refuses a server whose major differs from its own**, at `open()`, before any other request. A major bump is defined as a change that would make a client of an earlier major read a response wrongly — a field whose meaning changed, a shape that no longer parses the same way. There is no way to use such a server safely, and discovering it mid-session is worse than refusing: the caller is left unsure which writes landed.
+
+**A minor difference is never a refusal, in either direction.** A higher server minor is additive fields an older client ignores; a higher client minor is optional fields the server may omit. Neither can make a response read wrongly — that is what makes them minor.
+
+A response with no `version`, or one that isn't `MAJOR.MINOR`, is refused the same way a major mismatch is. The field is mandatory here, so its absence is a server that isn't implementing this spec, and guessing on its behalf would defeat the check.
+
+`@haverstack/wire-types` exports the current `WIRE_PROTOCOL_VERSION` along with `parseProtocolVersion()` and `isProtocolCompatible()`, so a server implementation applies the same rule as `adapter-api` rather than reimplementing it.
+
 ## Authentication
 
 Bearer token in the `Authorization` header. Token issuance itself is out of scope for this spec — that is the server's concern — but _how a token is earned_ has a shape worth stating: see [Authentication: challenge–response](./identity.md#authentication-challengeresponse) for the nonce/signature handshake a server implements before calling `createToken()`. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).
@@ -246,6 +258,8 @@ This is not an efficiency shortcut — it's the security boundary itself. The re
 Returns `413 Request Entity Too Large` (code `payload_too_large`, reconstructed client-side as `StackPayloadTooLargeError`) if the payload exceeds the server's configured limit (default 50 MB, controlled by `MAX_ATTACHMENT_BYTES`). The same limit is exposed ahead of time as `maxAttachmentBytes` in [discovery](#discovery); `putAttachment()` pre-checks it client-side and throws `StackPayloadTooLargeError` before sending, so apps normally see the failure without burning the upload — this endpoint's 413 is the authoritative backstop.
 
 **SDK usage.** `Stack.putAttachment()`, when backed by `APIAdapter`, calls this endpoint directly — one request, carrying the real `mimeType`/`filename` — via the optional [`putAttachmentWithMetadata()`](./adapters.md#interface-split) capability. Local storage adapters don't implement that capability — bytes and records are different backends there, with no shared transaction — so `Stack.putAttachment()` falls back to its own `create()` call.
+
+Either way the caller gets the created `_attachment@1` record back, the same thing this endpoint returns — the atomic path passes the server's response through, and the fallback path returns what its own `create()` produced. See [Attachments](./attachments.md#the-_attachment-record-type).
 
 One consequence: there is no bytes-only upload anywhere on the wire — this endpoint always creates a record. Accordingly, **bytes-only upload has no public SDK surface either**: `putAttachment(data, mimeType, filename?)` is the upload operation, everywhere, for everyone. `StackBlobAdapter.putAttachment()` remains the required adapter-level primitive local storage needs (it's what `Stack.putAttachment()`'s fallback writes bytes through), but on `APIAdapter` it is **unsupported and throws** rather than mapping to this endpoint — implementing it anyway would silently create a record with a default `mimeType`, a bytes-only upload that isn't. `Stack.putAttachment()` never reaches it there (the atomic capability takes precedence), so the throw guards direct adapter-level callers only.
 

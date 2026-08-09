@@ -66,7 +66,6 @@ const notes = await stack.query({
 });
 
 // Tear down when done
-await stack.flush();
 await stack.close();
 ```
 

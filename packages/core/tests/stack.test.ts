@@ -11,11 +11,12 @@ import {
   StackSchemaDriftError,
   StackQueryError,
   StackPayloadTooLargeError,
+  StackClosedError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
-import type { BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
+import type { AttachmentContent, BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -1586,6 +1587,97 @@ describe('flush / close', () => {
   test('close() is a no-op when adapter does not implement close', async () => {
     await expect(stack.close()).resolves.toBeUndefined();
   });
+
+  test('close() flushes before releasing resources', async () => {
+    const calls: string[] = [];
+    adapter.flush = async () => {
+      calls.push('flush');
+    };
+    adapter.close = async () => {
+      calls.push('close');
+    };
+    await stack.close();
+    expect(calls).toEqual(['flush', 'close']);
+  });
+
+  test('close() releases resources even when the flush fails, then propagates', async () => {
+    let closed = false;
+    adapter.flush = async () => {
+      throw new Error('disk full');
+    };
+    adapter.close = async () => {
+      closed = true;
+    };
+    await expect(stack.close()).rejects.toThrow('disk full');
+    expect(closed).toBe(true);
+  });
+
+  test('close() is idempotent — the adapter is never closed twice', async () => {
+    let closes = 0;
+    adapter.close = async () => {
+      closes += 1;
+    };
+    await stack.close();
+    await stack.close();
+    expect(closes).toBe(1);
+  });
+});
+
+describe('use after close', () => {
+  beforeEach(async () => {
+    await stack.close();
+  });
+
+  test('reads throw StackClosedError', async () => {
+    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.query()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.listTypes()).rejects.toBeInstanceOf(StackClosedError);
+  });
+
+  test('writes throw StackClosedError', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+  });
+
+  test('flush() throws, since flushing is work — only close() is idempotent', async () => {
+    await expect(stack.flush()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.close()).resolves.toBeUndefined();
+  });
+
+  test('attachment uploads throw StackClosedError', async () => {
+    await expect(stack.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+  });
+
+  test('identity getters still read — they touch no storage', () => {
+    expect(stack.ownerEntityId).toBe('owner-123');
+    expect(stack.features).toBeDefined();
+  });
+
+  test('StackClosedError stays outside the wire taxonomy', () => {
+    expect(new StackClosedError()).not.toBeInstanceOf(StackError);
+  });
+});
+
+describe('use after close — scoped views', () => {
+  test('a view taken before close writes no attachment bytes after it', async () => {
+    const scoped = stack.asEntity('owner-123');
+    await stack.close();
+
+    await expect(scoped.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
+      StackClosedError,
+    );
+    expect(await adapter.listFiles!()).toHaveLength(0);
+  });
+
+  test('asEntity() itself refuses once closed', async () => {
+    await stack.close();
+    expect(() => stack.asEntity('owner-123')).toThrow(StackClosedError);
+  });
 });
 
 // -------------------------------------------------------
@@ -1962,7 +2054,9 @@ describe('setPermissions', () => {
 describe('putAttachment', () => {
   test('stores bytes and returns fileId', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     expect(typeof fileId).toBe('string');
   });
 
@@ -2019,12 +2113,14 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
 
     await expect(
       limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
-    ).resolves.toEqual(expect.any(String));
+    ).resolves.toMatchObject({ typeId: '_attachment@1' });
   });
 
   test('null maxAttachmentBytes never throws, regardless of size', async () => {
     const data = new Uint8Array(1000);
-    await expect(stack.putAttachment(data, 'image/png')).resolves.toEqual(expect.any(String));
+    await expect(stack.putAttachment(data, 'image/png')).resolves.toMatchObject({
+      typeId: '_attachment@1',
+    });
   });
 });
 
@@ -2053,7 +2149,9 @@ describe('putAttachment — atomic adapter path', () => {
     const atomicStack = await Stack.create(atomicAdapter);
     const createSpy = vi.spyOn(atomicStack, 'create');
 
-    const fileId = await atomicStack.putAttachment(data, 'image/png', 'photo.png');
+    const {
+      content: { fileId },
+    } = await atomicStack.putAttachment(data, 'image/png', 'photo.png');
 
     expect(fileId).toBe('atomic-file-id');
     expect(atomicAdapter.putAttachmentWithMetadata).toHaveBeenCalledWith(
@@ -2072,6 +2170,59 @@ describe('putAttachment — atomic adapter path', () => {
 
     expect(createSpy).toHaveBeenCalledTimes(1);
   });
+
+  test('the returned record is the one in storage, on the atomic path', async () => {
+    const fabricatedRecord: StackRecord = {
+      id: generateId(),
+      typeId: '_attachment@1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      content: { fileId: 'atomic-file-id', mimeType: 'image/png', size: 3 },
+      version: 1,
+    };
+    const atomicAdapter: StackAdapter = Object.assign(
+      new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
+    );
+    const atomicStack = await Stack.create(atomicAdapter);
+
+    const record = await atomicStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+
+    expect(record.id).toBe(fabricatedRecord.id);
+    expect(record.content.fileId).toBe('atomic-file-id');
+  });
+});
+
+// -------------------------------------------------------
+// putAttachment returns the _attachment@1 record, matching what
+// POST /attachments returns on the wire. The metadata record's id is the
+// point: filename is the one mutable field, and setting it later needs an
+// id the caller would otherwise have to go query for.
+// -------------------------------------------------------
+
+describe('putAttachment — returned record', () => {
+  test('returns the metadata record, not just the fileId', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+
+    const record = await stack.putAttachment(data, 'image/png', 'photo.png');
+
+    expect(record.typeId).toBe('_attachment@1');
+    expect(record.content).toEqual({
+      fileId: expect.any(String),
+      mimeType: 'image/png',
+      size: 3,
+      filename: 'photo.png',
+    });
+    expect(await stack.get(record.id)).toMatchObject({ id: record.id });
+  });
+
+  test('the returned id sets filename later without a lookup', async () => {
+    const record = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+
+    const renamed = await stack.update(record.id, { filename: 'renamed.png' });
+
+    expect((renamed.content as AttachmentContent).filename).toBe('renamed.png');
+  });
 });
 
 // -------------------------------------------------------
@@ -2082,8 +2233,12 @@ describe('putAttachment — atomic adapter path', () => {
 describe('_attachment@1 mimeType conflict on create', () => {
   test('second upload of identical bytes with a matching mimeType succeeds', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId1 = await stack.putAttachment(data, 'image/png', 'first.png');
-    const fileId2 = await stack.putAttachment(data, 'image/png', 'second.png');
+    const {
+      content: { fileId: fileId1 },
+    } = await stack.putAttachment(data, 'image/png', 'first.png');
+    const {
+      content: { fileId: fileId2 },
+    } = await stack.putAttachment(data, 'image/png', 'second.png');
 
     expect(fileId2).toBe(fileId1);
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
@@ -2244,7 +2399,9 @@ describe('_attachment@1 immutable fields on update', () => {
 describe('deleteAttachment', () => {
   test('throws StackConflictError when a record still references the file (fallback path)', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -2260,7 +2417,9 @@ describe('deleteAttachment', () => {
   // moment the record comes back.
   test('throws StackConflictError when only a soft-deleted record still references the file', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -2274,7 +2433,9 @@ describe('deleteAttachment', () => {
 
   test('hard-deletes a soft-deleted _attachment@1 metadata record too (fallback path)', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     const [metaRecord] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
     await stack.delete(metaRecord.id);
 
@@ -2286,7 +2447,9 @@ describe('deleteAttachment', () => {
 
   test('deletes the _attachment@1 metadata record when unreferenced (fallback path)', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
 
     await stack.deleteAttachment(fileId);
 
@@ -2351,7 +2514,9 @@ describe('deleteAttachment', () => {
     });
 
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     await stack.create(attachmentTypeId, { coverFileId: fileId });
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
@@ -2364,7 +2529,9 @@ describe('deleteAttachment', () => {
     });
 
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(data, 'image/png');
     await stack.create(attachmentTypeId, { coverFileId: fileId });
 
     await expect(stack.deleteAttachment(fileId)).resolves.toBeUndefined();
@@ -2394,7 +2561,9 @@ describe('deleteAttachment', () => {
     );
     await atomicStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
 
-    const fileId = await atomicStack.putAttachment(new Uint8Array([9]), 'image/png');
+    const {
+      content: { fileId },
+    } = await atomicStack.putAttachment(new Uint8Array([9]), 'image/png');
     await atomicStack.deleteAttachment(fileId);
 
     expect(calls).toEqual(['atomic']);
@@ -2407,7 +2576,9 @@ describe('deleteAttachment', () => {
 
 describe('collectAttachmentGarbage', () => {
   test('collects a file whose only referencing record was hard-deleted', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -2424,7 +2595,9 @@ describe('collectAttachmentGarbage', () => {
   });
 
   test('does not collect a file referenced by a live record', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -2440,7 +2613,9 @@ describe('collectAttachmentGarbage', () => {
   // Soft-deleted records are recoverable via undelete()
   // and must find their attachments intact — so they still count as references.
   test('does not collect a file referenced only by a soft-deleted record', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -2461,7 +2636,9 @@ describe('collectAttachmentGarbage', () => {
     await stack.defineType(photoType, 'Photo note', {
       coverFileId: { kind: 'file-ref', required: true },
     });
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     await stack.create(photoType, { coverFileId: fileId });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
@@ -2480,7 +2657,9 @@ describe('collectAttachmentGarbage', () => {
   });
 
   test('graceMs: 0 collects an unreferenced upload immediately', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -2488,8 +2667,12 @@ describe('collectAttachmentGarbage', () => {
   });
 
   test('reports reclaimedBytes summed across deleted files', async () => {
-    const fileId1 = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
-    const fileId2 = await stack.putAttachment(new Uint8Array([1, 2, 3, 4, 5]), 'image/png');
+    const {
+      content: { fileId: fileId1 },
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const {
+      content: { fileId: fileId2 },
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3, 4, 5]), 'image/png');
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -2498,7 +2681,9 @@ describe('collectAttachmentGarbage', () => {
   });
 
   test('dryRun reports what would be deleted without deleting anything', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0, dryRun: true });
 
@@ -2528,7 +2713,9 @@ describe('collectAttachmentGarbage', () => {
     const noListFilesStack = await Stack.create(
       new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    const fileId = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -2556,8 +2743,12 @@ describe('collectAttachmentGarbage', () => {
   // StackConflictError — the sweep must skip that one file, not abort, and
   // must keep collecting everything else it already found.
   test('a file whose delete call races is skipped, not thrown, and the rest of the sweep still completes', async () => {
-    const racedFileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
-    const okFileId = await stack.putAttachment(new Uint8Array([2, 2]), 'image/png');
+    const {
+      content: { fileId: racedFileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId: okFileId },
+    } = await stack.putAttachment(new Uint8Array([2, 2]), 'image/png');
 
     const realDeleteAttachment = stack.deleteAttachment.bind(stack);
     stack.deleteAttachment = async (fileId: string) => {

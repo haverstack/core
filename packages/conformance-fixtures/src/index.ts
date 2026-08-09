@@ -23,7 +23,8 @@
  * prior state — that's the consumer's test setup.
  */
 
-import type { WireRecord, WireError, WireVersion } from '@haverstack/wire-types';
+import type { WireRecord, WireError, WireVersion, DiscoveryResponse } from '@haverstack/wire-types';
+import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 
 export type WireMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -44,6 +45,55 @@ export type ConformanceFixture<Req = unknown, Res = unknown> = {
   /** Expected JSON response body. Absent for empty (e.g. 204, or a bodyless 401) responses. */
   responseBody?: Res;
 };
+
+// -------------------------------------------------------
+// Discovery
+// -------------------------------------------------------
+
+export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>[] = [
+  {
+    name: 'discovery-declares-protocol-version-and-capabilities',
+    description:
+      'GET /.well-known/stack declares the wire protocol version, the owner DID, and the ' +
+      "capability set a client uses to gate queries. `version` is the protocol's version, not " +
+      "the server's software version, and a client refuses a server whose major differs from " +
+      'its own — see docs/spec/wire-format.md § Version negotiation.',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      timezone: 'America/New_York',
+      capabilities: {
+        fullTextSearch: true,
+        contentFieldQuery: true,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes: 52428800,
+      },
+    },
+  },
+  {
+    name: 'discovery-omits-absent-timezone',
+    description:
+      'A stack with no timezone omits the field rather than defaulting it. An absent timezone ' +
+      'stays undefined end to end — a default would assert knowledge the stack was never ' +
+      'given (docs/spec.md § Stack identity).',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: false,
+        sortableFields: ['createdAt'],
+        maxAttachmentBytes: null,
+      },
+    },
+  },
+];
 
 // -------------------------------------------------------
 // Records: create
@@ -1186,6 +1236,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
  * JSON request/response pair), imported separately.
  */
 export const allConformanceFixtures: ConformanceFixture[] = [
+  ...discoveryFixtures,
   ...createRecordFixtures,
   ...patchContentFixtures,
   ...deleteRecordFixtures,
