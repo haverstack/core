@@ -185,7 +185,8 @@ describe('FTS4 -> FTS5 migration', () => {
     db.exec(`CREATE TABLE records (
       id TEXT PRIMARY KEY, type_id TEXT NOT NULL, created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL, content TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
-      parent_id TEXT, entity_id TEXT, app_id TEXT, deleted_at INTEGER, permissions TEXT
+      parent_id TEXT, entity_id TEXT, app_id TEXT, principal_id TEXT,
+      deleted_at INTEGER, permissions TEXT
     ) STRICT;`);
     db.exec(`CREATE VIRTUAL TABLE records_fts USING fts4(content, content='records');`);
     const now = Date.now();

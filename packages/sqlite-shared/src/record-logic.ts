@@ -135,8 +135,8 @@ export class SharedSqlRecordLogic {
       this.exec.run(
         `INSERT INTO records
           (id, type_id, created_at, updated_at, content, version,
-           parent_id, entity_id, app_id, deleted_at, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           parent_id, entity_id, app_id, principal_id, deleted_at, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           record.id,
           record.typeId,
@@ -147,6 +147,7 @@ export class SharedSqlRecordLogic {
           record.parentId ?? null,
           record.entityId ?? null,
           record.appId ?? null,
+          record.principalId ?? null,
           record.deletedAt ? toMs(record.deletedAt) : null,
           record.permissions ? JSON.stringify(record.permissions) : null,
         ],

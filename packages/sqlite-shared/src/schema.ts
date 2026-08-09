@@ -17,6 +17,7 @@ export const RECORD_SCHEMA_SQL = `
     parent_id   TEXT,
     entity_id   TEXT,
     app_id      TEXT,
+    principal_id TEXT,
     deleted_at  INTEGER,
     permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
   ) STRICT;
@@ -69,6 +70,7 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
   CREATE INDEX IF NOT EXISTS idx_records_entity_id  ON records(entity_id);
   CREATE INDEX IF NOT EXISTS idx_records_app_id     ON records(app_id);
+  CREATE INDEX IF NOT EXISTS idx_records_principal_id ON records(principal_id);
   CREATE INDEX IF NOT EXISTS idx_records_deleted_at ON records(deleted_at);
   CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
   CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at);

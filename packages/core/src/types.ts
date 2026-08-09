@@ -24,6 +24,14 @@ export type TypeId = string;
 export type FileId = string;
 
 /**
+ * Reverse-DNS identifier for the software that wrote a Record, e.g.
+ * "com.example.myapp" — not a RecordId. Self-reported and never a
+ * permission input; `StackRecord.principalId` is the verified counterpart.
+ * See docs/spec/identity.md § App.
+ */
+export type AppId = string;
+
+/**
  * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". A
  * self-certifying identifier that means the same thing in every stack,
  * unlike a RecordId. did:key is the mandatory floor method (see did.ts).
@@ -91,7 +99,15 @@ export type StackRecord = {
   // Optional native fields
   parentId?: RecordId; // Parent record (hierarchy/folders)
   entityId?: EntityId; // Author entity, if different from stack owner
-  appId?: RecordId; // App that created this record
+  appId?: AppId; // App that created this record — self-reported, see AppId
+  /**
+   * The authenticated principal behind the write, when it isn't the author
+   * itself — a delegated app's own DID. Absent means the writer
+   * authenticated as the author, so `appId` is an unverifiable self-report;
+   * present means `appId` can be checked against the `_app` record naming
+   * this DID. See docs/spec/identity.md § App.
+   */
+  principalId?: EntityId;
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[];
   associations?: Association[];
@@ -198,6 +214,13 @@ export type AppContent = {
    * so no handle is needed here.
    */
   version?: string;
+  /**
+   * The DID this app authenticates with, when it holds a key of its own.
+   * Lets an attribution UI resolve a record's `principalId` to this card,
+   * and a server check a self-reported `appId` against the principal that
+   * wrote it. Absent for apps that ride their user's identity.
+   */
+  did?: string;
 };
 
 /** Content for _group records */
@@ -303,8 +326,9 @@ export type RecordFilter = {
    */
   baseId?: string | string[];
   parentId?: RecordId | null; // null = root records only
-  appId?: RecordId | RecordId[];
+  appId?: AppId | AppId[];
   entityId?: EntityId | EntityId[];
+  principalId?: EntityId | EntityId[];
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
@@ -587,6 +611,7 @@ export type StackAdapter = StackRecordAdapter &
       data: Uint8Array,
       mimeType: string,
       filename?: string,
+      appId?: AppId,
     ): Promise<StackRecord>;
   };
 

@@ -99,7 +99,8 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
 - **Default grants** (no `granteeEntityId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
-- **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester. Records with no `entityId` (owner-created) do not satisfy any `-own` check.
+- **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester. Records with no `entityId` (written by an unscoped `Stack`) do not satisfy any `-own` check.
+- **The grantee may be an app**: `granteeEntityId` is a DID, and an app that holds its own key has one — so granting an installed app the types it needs is the existing model applied, not new machinery (see [App](./identity.md#app)). When such an app acts for a person, the `-own`/`-any` distinction on _its_ grant collapses to the bare verb; see [Delegation](#delegation-principal-and-subject).
 
 **The two layers deliberately use different granularities.** Record-level `write` is one coarse bit (above); grants are precise per verb. Type-wide access for a third-party app warrants verb precision in a way per-record sharing among intimates doesn't. `associate()`/`dissociate()` don't get their own grant action — they ride `update-own`/`update-any`, the same as content changes, keeping the grant vocabulary from growing a verb for every mutation kind.
 
@@ -109,7 +110,50 @@ The core library ships a permission-enforcing wrapper so server implementations 
 
 Use `asEntity()` when one `Stack` instance serves requests from multiple, possibly untrusted, entities — e.g. a server adapter.
 
-**`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the requester, so `-own` grants apply to it immediately.
+**`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the subject, so `-own` grants apply to it immediately — a scoped write always names its author, so an absent `entityId` means an unscoped `Stack` wrote the Record.
+
+### Delegation: principal and subject
+
+An app that holds its own key may act _on behalf of_ a person (see [App](./identity.md#app)). `asEntity()` takes that second identity:
+
+```ts
+// The app authenticated; the comment is Bob's.
+const scoped = stack.asEntity(appDid, { onBehalfOf: bobDid });
+```
+
+Two identities are then in play, and one rule separates them:
+
+> **The principal governs authority; the subject governs attribution.**
+
+| Governed by the **principal** (who authenticated) | Governed by the **subject** (who it's for) |
+| ------------------------------------------------- | ------------------------------------------ |
+| Owner bypass                                      | `record.entityId` on writes                |
+| Grant lookup for the app's own reach              | `-own` matching                            |
+| `setPermissions()`'s owner-or-creator check       | Record-level `permissions` resolution      |
+| `_group` admin-or-owner management                | The `getAttachment()` uploader clause      |
+| Hard delete                                       |                                            |
+
+Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
+
+The right-hand column is why delegation is worth having: `-own` keeps meaning "this person's Records, through whichever app they used", so two apps writing the same commons type still interoperate. The left-hand column is why it is safe. Those operations have no grant fence at all — `setPermissions()` checks only owner-or-creator, and `_group` mutation bypasses grants entirely — so resolving them against the subject would let any delegated app reshare its subject's data or seize a group it was never granted. A contained app is refused them outright.
+
+**Effective authority is the intersection of both parties' grants.** An app can do only what both it and its subject may do:
+
+| App's grant | Subject's grant | Effective     |
+| ----------- | --------------- | ------------- |
+| `read-any`  | none            | denied        |
+| none        | `read-any`      | denied        |
+| `read-any`  | `read-own`      | subject's own |
+| `read-own`  | `read-any`      | everything    |
+
+Neither party can lend the other reach it lacks. This matters because the principal/subject binding is asserted when a token is issued, not by the app itself: intersection means a mis-issued delegation cannot escalate anyone, so the binding is a question of correctness rather than a security boundary. A server MAY narrow the principal's side further from what the subject consented to at issuance — OAuth-style scopes — but nothing in core requires it.
+
+On the principal's side of the intersection, **`-own` and `-any` mean the same thing**: the question asked of the app is only whether it may perform this verb on this type at all, since which Records are reachable is settled by the subject. The suffix keeps its ordinary meaning for every undelegated principal.
+
+Two consequences worth stating plainly rather than leaving to be discovered:
+
+- **Per-app isolation on a shared type is not offered.** Two apps both granted `commons/note@1` for the same person see the same notes. Containment is per type — an app reaches only the types the owner granted it — which is what keeps shared commons types interoperable by default.
+- **In a personal stack, a delegated `-own` grant is close to `-any`.** Nearly every Record is owner-authored, so `-own` covers nearly all of them. The precision of `-own` pays off in multi-person stacks, not single-owner ones.
 
 ### Reference-creation gating
 
@@ -122,7 +166,7 @@ A `create` grant on a type authorizes writing Records of that type — it does n
 
 A missing target and an existing-but-inaccessible one **always produce the same `StackPermissionError`**, with no distinguishing detail — otherwise the check itself becomes a confirmation oracle (e.g. for a guessed file hash: content-addressed `fileId`s mean a successful attach-then-read round-trip would otherwise confirm the stack holds those exact bytes). On `update()`, only file-ref fields actually present in the patch are checked — untouched fields carry no new reference.
 
-`appId` and `permissions` are deliberately **not** gated by this: `appId` is self-reported, untrusted metadata everywhere (no verification mechanism exists yet — a foundation for future enforcement, per [App](./identity.md#app)), never a permission input. `permissions` at create time is consistent with `setPermissions()`'s owner-or-creator policy — a contributor authoring a Record in your Stack can already widen its access up to and including `public`; create-time is the same capability exercised earlier, not a new one.
+`appId` and `permissions` are deliberately **not** gated by this: `appId` is self-reported, untrusted metadata everywhere (see [App](./identity.md#app) for what can and cannot be checked after the fact), never a permission input. `permissions` at create time is consistent with `setPermissions()`'s owner-or-creator policy — a contributor authoring a Record in your Stack can already widen its access up to and including `public`; create-time is the same capability exercised earlier, not a new one.
 
 ### Errors and information exposure
 

@@ -557,12 +557,12 @@ describe('ScopedStack.create', () => {
     expect(record.typeId).toBe(COMMENT);
   });
 
-  // Owner-created records carry no entityId — that holds whether the owner
-  // writes through Stack.create() directly or through
-  // ScopedStack.asEntity(ownerEntityId).
-  test('owner writing through asEntity(ownerEntityId) omits entityId, matching Stack.create()', async () => {
+  // A scoped write always names its author, so an absent entityId means
+  // exactly one thing: an unscoped Stack wrote the record.
+  test('owner writing through asEntity(ownerEntityId) stamps entityId', async () => {
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBeUndefined();
+    expect(record.entityId).toBe(OWNER);
+    expect(record.principalId).toBeUndefined();
   });
 
   test('a non-owner entity still gets entityId stamped as the author', async () => {
@@ -969,14 +969,19 @@ describe('ScopedStack.putAttachment', () => {
     expect(typeof fileId).toBe('string');
   });
 
-  // owner uploads carry no entityId, matching create()'s existing
-  // normalization — same author, same shape, whether writing directly or
-  // through asEntity(ownerEntityId).
-  test('owner upload via asEntity(ownerEntityId) produces a record with no entityId', async () => {
+  // Uploads stamp authorship the same way create() does — one rule for
+  // every record a ScopedStack writes.
+  test('owner upload via asEntity(ownerEntityId) stamps entityId', async () => {
     await stack.asEntity(OWNER).putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records).toHaveLength(1);
-    expect(result.records[0].entityId).toBeUndefined();
+    expect(result.records[0].entityId).toBe(OWNER);
+  });
+
+  test('putAttachment records the appId it is given', async () => {
+    await stack.asEntity(OWNER).putAttachment(data, 'image/png', undefined, 'com.example.myapp');
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records[0].appId).toBe('com.example.myapp');
   });
 
   // the maxAttachmentBytes pre-check applies to ScopedStack's own
@@ -1340,13 +1345,11 @@ describe('ScopedStack — group role gating', () => {
     expect(adminAssociations).toHaveLength(1);
   });
 
-  // the owner writing through asEntity(OWNER) carries no entityId
-  // (owner normalization) — confirms Stack.create()'s single stamping site
-  // keys off ownerEntityId in that case rather than stamping twice or not
-  // at all.
+  // Bootstrap stamps the group's creator as its first admin exactly once —
+  // the owner is no exception, and gets no duplicate roster entry.
   test('owner writing through ScopedStack stamps the owner as admin exactly once', async () => {
     const group = await stack.asEntity(OWNER).create('_group@1', { name: 'New Group' });
-    expect(group.entityId).toBeUndefined();
+    expect(group.entityId).toBe(OWNER);
     const adminAssociations = (group.associations ?? []).filter(
       (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === OWNER,
     );
@@ -1902,5 +1905,147 @@ describe('ScopedStack — file-ref content field gating', () => {
   test('the owner is exempt from the file-ref gate', async () => {
     const record = await stack.create(PHOTO_NOTE, { coverFileId: FILE_ID });
     expect(record.content.coverFileId).toBe(FILE_ID);
+  });
+});
+
+// -------------------------------------------------------
+// Delegation: principal vs subject
+// -------------------------------------------------------
+
+// A delegated app's authority is the intersection of its own grants with
+// the subject's, so neither party can lend the other reach it lacks. The
+// four rows below are that table; the rest pin what stays principal-side.
+describe('ScopedStack — delegation', () => {
+  const APP = 'did:key:z6MkApp';
+
+  const grantAll = (who: string | null, typeId = COMMENT) =>
+    stack.grant(who, [
+      { actions: ['create', 'read-own', 'read-any', 'update-any', 'delete-any'], typeId },
+    ]);
+
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
+  });
+
+  test('an anonymous principal cannot act on behalf of an entity', () => {
+    expect(() => stack.asEntity(null, { onBehalfOf: MEMBER })).toThrow(StackPermissionError);
+  });
+
+  test('a delegated create stamps the subject as author and the app as principal', async () => {
+    await grantAll(APP);
+    await grantAll(MEMBER);
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' }, { appId: 'com.example.myapp' });
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.principalId).toBe(APP);
+    expect(record.appId).toBe('com.example.myapp');
+  });
+
+  test('an app with no grant of its own cannot act for a granted subject', async () => {
+    await grantAll(MEMBER);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a granted app cannot act for a subject with no grant', async () => {
+    await grantAll(APP);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+  });
+
+  // The leak intersection closes: a read-any app delegated to a read-own
+  // subject must not hand that subject records it couldn't otherwise see.
+  test('a read-any app delegated to a read-own subject reads only the subject own records', async () => {
+    await stack.grant(APP, [{ actions: ['read-any'], typeId: COMMENT }]);
+    await stack.grant(MEMBER, [{ actions: ['read-own'], typeId: COMMENT }]);
+    const mine = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: MEMBER, content: { text: 'mine' } }),
+    );
+    const theirs = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+    );
+
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    expect((await view.get(mine.id))?.id).toBe(mine.id);
+    await expect(view.get(theirs.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  // -own on the principal side is read as the bare verb: which records are
+  // reachable is settled by the subject, not by the app.
+  test('an app holding only read-own may still serve a subject reading records it did not author', async () => {
+    await stack.grant(APP, [{ actions: ['read-own'], typeId: COMMENT }]);
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const theirs = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+    );
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    expect((await view.get(theirs.id))?.id).toBe(theirs.id);
+  });
+
+  test('a record shared by permission stays unreachable through an app with no grant on its type', async () => {
+    await stack.grant(APP, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const shared = await adapter.createRecord(
+      makeRecord({
+        typeId: NOTE,
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
+    // Undelegated, the same subject reaches it — the mask is what changes.
+    expect((await stack.asEntity(MEMBER).get(shared.id))?.id).toBe(shared.id);
+    await expect(stack.asEntity(APP, { onBehalfOf: MEMBER }).get(shared.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Owner bypass keys on the principal. An app delegated for the owner is
+  // bounded by its grants; it does not inherit the owner's unconditional
+  // access.
+  test('an app delegated for the owner gets no owner bypass', async () => {
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'private' } }));
+    await expect(stack.asEntity(APP, { onBehalfOf: OWNER }).get(record.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('an app delegated for the owner cannot hard delete', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const record = await adapter.createRecord(makeRecord({ typeId: COMMENT, entityId: OWNER }));
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: OWNER }).delete(record.id, { hard: true }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // setPermissions has no grant fence at all, so authorship is deliberately
+  // not enough: a contained app can never reshare its subject's data.
+  test('an app delegated for the owner cannot set permissions on its subject records', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    const record = await view.create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(OWNER);
+    await expect(view.setPermissions(record.id, [{ access: 'public' }])).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('an app delegated for a group admin cannot manage the group', async () => {
+    const group = await stack.create('_group@1', { name: 'Book Club' });
+    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    expect(await stack.asEntity(MEMBER).update(group.id, { name: 'Renamed' })).toBeTruthy();
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('records are queryable by the principal that wrote them', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    await stack.asEntity(APP, { onBehalfOf: OWNER }).create(COMMENT, { text: 'via app' });
+    await stack.asEntity(OWNER).create(COMMENT, { text: 'direct' });
+
+    const viaApp = await stack.query({ filter: { principalId: APP } });
+    expect(viaApp.records.map((r) => r.content.text)).toEqual(['via app']);
   });
 });

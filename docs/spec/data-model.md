@@ -19,7 +19,8 @@ type StackRecord = {
   // --- Optional native fields ---
   parentId?: string; // ID of a parent Record (for hierarchy/folders)
   entityId?: string; // Author Entity. Absent means owner-created — Records written directly by the stack owner carry no entityId.
-  appId?: string; // App that created this Record
+  appId?: string; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
+  principalId?: string; // The authenticated principal, when it isn't the author — a delegated app's own DID. Absent means the writer authenticated as the author (see Identity)
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[]; // Access control (see Access control)
   associations?: Association[]; // Tags, attachments, relationships
@@ -216,6 +217,7 @@ type Filter = {
   parentId?: string | null; // null = root records only
   appId?: string | string[];
   entityId?: string | string[];
+  principalId?: string | string[];
   createdAt?: DateRange;
   updatedAt?: DateRange;
 

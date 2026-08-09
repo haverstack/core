@@ -2158,6 +2158,7 @@ describe('putAttachment — atomic adapter path', () => {
       data,
       'image/png',
       'photo.png',
+      undefined,
     );
     expect(createSpy).not.toHaveBeenCalled();
   });

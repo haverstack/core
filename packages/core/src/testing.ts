@@ -163,6 +163,10 @@ export class MemoryAdapter implements StackAdapter {
       const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
       results = results.filter((r) => r.entityId !== undefined && ids.includes(r.entityId));
     }
+    if (f.principalId !== undefined) {
+      const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
+      results = results.filter((r) => r.principalId !== undefined && ids.includes(r.principalId));
+    }
     if (f.createdAt?.after) results = results.filter((r) => r.createdAt > f.createdAt!.after!);
     if (f.createdAt?.before) results = results.filter((r) => r.createdAt < f.createdAt!.before!);
     if (f.updatedAt?.after) results = results.filter((r) => r.updatedAt > f.updatedAt!.after!);

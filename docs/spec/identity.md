@@ -40,7 +40,7 @@ The Stack has a designated owner, identified by `_config.entityId` (a DID) — n
 
 ## App
 
-Apps that write to a Stack are also modeled as Records, using the built-in system type `_app`. This allows querying all Records created by a specific app, and provides a foundation for future enforcement in the API adapter.
+Apps that write to a Stack are also modeled as Records, using the built-in system type `_app`, so all Records created by a specific app are queryable.
 
 ```ts
 type AppContent = {
@@ -48,8 +48,32 @@ type AppContent = {
   version?: string; // Semver string e.g. "1.0.0". The app's unique machine-readable identity
   // is captured by the _app record's appId (e.g. "com.example.myapp"),
   // so no handle is needed.
+  did?: string; // The DID this app authenticates with, when it holds a key of its own.
+  // Absent for apps that ride their user's identity.
 };
 ```
+
+`appId` is a **reverse-DNS string** (`"com.example.myapp"`), not a `RecordId` — it names software, not a Record, and the same string means the same app in every stack.
+
+### Two ways an app reaches a stack
+
+Nothing here requires an app to have an identity. Which posture applies depends on who chose the software, and only one of them involves the stack owner naming it:
+
+- **The app rides its user's identity.** It authenticates as the person using it and reports `appId` as attribution. This is the default and it is what a visitor's own software does — someone posting to your stack with their own client, the shape IndieAuth and Micropub already use, where clients are never pre-registered by the resource owner. The owner grants **types to people** (often via a default grant), never software they have never heard of. An unknown app is bounded by the person it acts as, who is bounded by the owner's grants.
+- **The app holds its own key.** An app the owner installs mints a `did:key` keypair, authenticates with it, and is granted the types it needs. This is the _containment_ posture, for software the owner chose and can enumerate — a third-party notes app, a blog server, an indexing bot. It is opt-in, never a mandate.
+
+An app that holds a key acts in one of two ways. Alone — an indexer with no person behind it authors its own Records, and `-own` scoping fences it exactly as it fences any entity. Or **on behalf of** a person, which is what a blog server does when a visitor comments through it. That second case splits "who authenticated" from "who authored", and [Access control § Enforcement](./access-control.md#enforcement-stackasentity) defines what each half governs.
+
+### Attribution and what can be trusted
+
+`appId` is **self-reported and never a permission input.** Nothing verifies it at the point of write, in any posture. What differs is whether it can be checked afterwards:
+
+- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` can be resolved against the `_app` Record whose `did` matches, and a mismatch detected.
+- A Record written by an app riding its user's identity carries no `principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
+
+So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. It is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
+
+Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
 
 ## Group
 

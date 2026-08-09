@@ -50,6 +50,7 @@ import type {
   ConfigContent,
   EntityId,
   EntityContent,
+  AppId,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -86,9 +87,25 @@ export type CreateRecordOptions = {
   id?: string;
   parentId?: string;
   entityId?: EntityId;
-  appId?: string;
+  /** Reverse-DNS identifier of the writing software — see AppId. */
+  appId?: AppId;
+  /**
+   * The authenticated principal, when it isn't the author. ScopedStack sets
+   * this from its own principal; callers of plain Stack supply it only when
+   * reconstructing a delegated write. See StackRecord.principalId.
+   */
+  principalId?: EntityId;
   permissions?: Permission[];
   associations?: Association[];
+};
+
+export type ScopedStackOptions = {
+  /**
+   * The entity a delegated app acts for. Omit when the principal acts as
+   * itself — the case for an app riding its user's identity, which needs
+   * no delegation. See docs/spec/identity.md § App.
+   */
+  onBehalfOf?: EntityId;
 };
 
 export type StackOptions = {
@@ -447,6 +464,7 @@ export interface StackClient {
     data: Uint8Array,
     mimeType: string,
     filename?: string,
+    appId?: AppId,
   ): Promise<StackRecord & { content: AttachmentContent }>;
   deleteAttachment(fileId: string): Promise<void>;
   collectAttachmentGarbage(
@@ -610,13 +628,27 @@ export class Stack implements StackClient {
 
   /**
    * Get a permission-scoped view of this Stack, as if requests came from
-   * the given entity (null = anonymous). Plain Stack methods are unscoped;
-   * use asEntity() when one Stack serves multiple, possibly untrusted,
-   * entities. See docs/spec/access-control.md § Enforcement: Stack.asEntity().
+   * the given principal (null = anonymous). Plain Stack methods are
+   * unscoped; use asEntity() when one Stack serves multiple, possibly
+   * untrusted, entities.
+   *
+   * `onBehalfOf` names the subject a delegated app acts for: authority is
+   * then the intersection of both parties' grants, while authorship and
+   * `-own` resolve against the subject. See
+   * docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
-  asEntity(entityId: EntityId | null): ScopedStack {
+  asEntity(entityId: EntityId | null, opts: ScopedStackOptions = {}): ScopedStack {
     this.assertOpen();
-    return new ScopedStack(this, entityId, this.idTimestampSkewMsValue, this.adapter);
+    if (opts.onBehalfOf && !entityId) {
+      throw new StackPermissionError('An anonymous principal cannot act on behalf of an entity');
+    }
+    return new ScopedStack(
+      this,
+      entityId,
+      opts.onBehalfOf ?? entityId,
+      this.idTimestampSkewMsValue,
+      this.adapter,
+    );
   }
 
   // -------------------------------------------------------
@@ -872,6 +904,7 @@ export class Stack implements StackClient {
       ...(opts.parentId && { parentId: opts.parentId }),
       ...(opts.entityId && { entityId: opts.entityId }),
       ...(opts.appId && { appId: opts.appId }),
+      ...(opts.principalId && { principalId: opts.principalId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(associations?.length && { associations }),
     };
@@ -1320,20 +1353,25 @@ export class Stack implements StackClient {
     data: Uint8Array,
     mimeType: string,
     filename?: string,
+    appId?: AppId,
   ): Promise<StackRecord & { content: AttachmentContent }> {
     this.assertOpen();
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
-      const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
+      const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename, appId);
       return record as StackRecord & { content: AttachmentContent };
     }
     const fileId = await this.adapter.putAttachment(data);
-    return this.create<AttachmentContent>(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
-      fileId,
-      mimeType,
-      size: data.byteLength,
-      ...(filename && { filename }),
-    });
+    return this.create<AttachmentContent>(
+      `${SYSTEM_TYPES.ATTACHMENT}@1`,
+      {
+        fileId,
+        mimeType,
+        size: data.byteLength,
+        ...(filename && { filename }),
+      },
+      { appId },
+    );
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
@@ -1663,6 +1701,7 @@ export class Stack implements StackClient {
     await this.defineType(`${SYSTEM_TYPES.APP}@1`, 'App', {
       name: { kind: 'string', required: true },
       version: { kind: 'string' },
+      did: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.GROUP}@1`, 'Group', {
       name: { kind: 'string', required: true },
@@ -1787,16 +1826,25 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
  * via `stack.asEntity(entityId)`. Missing records throw StackNotFoundError
  * (or return null on reads); existing-but-inaccessible ones throw
  * StackPermissionError. See docs/spec/access-control.md.
+ *
+ * Two identities, one rule: **the principal governs authority, the subject
+ * governs attribution.** Owner bypass, grant lookup, and the
+ * privilege-bearing gates that no grant reaches (setPermissions, group
+ * management, hard delete) all key on `requesterEntityId`; authorship,
+ * `-own` matching, and "records I uploaded" lookups key on
+ * `subjectEntityId`. They differ only under delegation, where a mistake in
+ * the first group is an escalation rather than a preference.
  */
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
     private readonly requesterEntityId: EntityId | null,
+    private readonly subjectEntityId: EntityId | null,
     private readonly idTimestampSkewMs: number | null,
     // Bytes-storage primitive for putAttachment(). Held directly because
     // ScopedStack always composes bytes + its own create() — the record
-    // must carry the requester's entityId, which the adapter-level atomic
-    // capability has no parameter for.
+    // must carry the subject's entityId and the principal behind it,
+    // neither of which the adapter-level atomic capability takes.
     private readonly adapter: StackAdapter,
   ) {}
 
@@ -1806,10 +1854,15 @@ export class ScopedStack implements StackClient {
 
   private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
 
+  /** Whether a delegated app is acting for someone other than itself. */
+  private get delegated(): boolean {
+    return this.subjectEntityId !== this.requesterEntityId;
+  }
+
   private checkRead(record: StackRecord): Promise<boolean> {
     return checkAccess(
       record,
-      this.requesterEntityId,
+      this.subjectEntityId,
       this.stack.ownerEntityId,
       'read',
       this.resolveRecord,
@@ -1819,7 +1872,7 @@ export class ScopedStack implements StackClient {
   private checkWrite(record: StackRecord): Promise<boolean> {
     return checkAccess(
       record,
-      this.requesterEntityId,
+      this.subjectEntityId,
       this.stack.ownerEntityId,
       'write',
       this.resolveRecord,
@@ -1827,18 +1880,26 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester holds a _grant covering one of `actions` for the
+   * Whether `grantee` holds a _grant covering one of `actions` for the
    * type's family (grants match by baseId, so a version bump never orphans
-   * one). -own actions additionally require record.entityId === requester.
-   * Anonymous requesters always return false.
+   * one). -own actions additionally require record.entityId === grantee,
+   * unless `matchOwn` is false — on the principal side of a delegated
+   * request the suffix is read as the bare verb, since which records are
+   * reachable is the subject's business. Anonymous grantees always return
+   * false. See docs/spec/access-control.md § Type-level grants.
    */
   private async hasGrant(
     typeId: TypeId,
     actions: GrantAction[],
-    record?: StackRecord,
-    prefetchedGrants?: StackRecord[],
+    opts: {
+      grantee: EntityId | null;
+      record?: StackRecord;
+      prefetchedGrants?: StackRecord[];
+      matchOwn?: boolean;
+    },
   ): Promise<boolean> {
-    if (!this.requesterEntityId) return false;
+    const { grantee, record, prefetchedGrants, matchOwn = true } = opts;
+    if (!grantee) return false;
 
     const familyId = baseIdOf(typeId);
 
@@ -1857,25 +1918,56 @@ export class ScopedStack implements StackClient {
     return grantRecords.some((r) => {
       const c = r.content as GrantContent;
       if (baseIdOf(c.typeId) !== familyId) return false;
-      if (c.granteeEntityId && c.granteeEntityId !== this.requesterEntityId) return false;
+      if (c.granteeEntityId && c.granteeEntityId !== grantee) return false;
       return actions.some((action) => {
         if (!(c.actions as string[]).includes(action)) return false;
-        if (action.endsWith('-own')) return record?.entityId === this.requesterEntityId;
+        if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
         return true;
       });
     });
   }
 
+  /**
+   * The principal half of a delegated request's authority: does the app
+   * hold any grant permitting these verbs on this type at all. Bounds what
+   * the subject's own authority can reach through it, so a powerful app
+   * can never lend its reach to a weaker subject — nor the reverse.
+   * Vacuously true when there's no delegation, where the principal and
+   * subject checks would be the same question asked twice.
+   */
+  private principalAllows(
+    typeId: TypeId,
+    actions: GrantAction[],
+    prefetchedGrants?: StackRecord[],
+  ): Promise<boolean> {
+    if (!this.delegated) return Promise.resolve(true);
+    if (this.requesterEntityId === this.stack.ownerEntityId) return Promise.resolve(true);
+    return this.hasGrant(typeId, actions, {
+      grantee: this.requesterEntityId,
+      prefetchedGrants,
+      matchOwn: false,
+    });
+  }
+
   private async canRead(record: StackRecord, prefetchedGrants?: StackRecord[]): Promise<boolean> {
-    return (
+    const subjectAllows =
       (await this.checkRead(record)) ||
-      (await this.hasGrant(record.typeId, ['read-own', 'read-any'], record, prefetchedGrants))
-    );
+      (await this.hasGrant(record.typeId, ['read-own', 'read-any'], {
+        grantee: this.subjectEntityId,
+        record,
+        prefetchedGrants,
+      }));
+    if (!subjectAllows) return false;
+    return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
   }
 
   private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
-    return this.hasGrant(typeId, ['create']);
+    if (this.requesterEntityId === this.stack.ownerEntityId && !this.delegated) return true;
+    const subjectAllows =
+      this.subjectEntityId === this.stack.ownerEntityId ||
+      (await this.hasGrant(typeId, ['create'], { grantee: this.subjectEntityId }));
+    if (!subjectAllows) return false;
+    return this.principalAllows(typeId, ['create']);
   }
 
   /**
@@ -1898,8 +1990,12 @@ export class ScopedStack implements StackClient {
       return record;
     }
     const allowed =
-      (await this.checkWrite(record)) ||
-      (await this.hasGrant(record.typeId, ['update-own', 'update-any'], record));
+      ((await this.checkWrite(record)) ||
+        (await this.hasGrant(record.typeId, ['update-own', 'update-any'], {
+          grantee: this.subjectEntityId,
+          record,
+        }))) &&
+      (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
     if (!allowed) throw new StackPermissionError();
     return record;
   }
@@ -1913,8 +2009,12 @@ export class ScopedStack implements StackClient {
       return record;
     }
     const allowed =
-      (await this.checkWrite(record)) ||
-      (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], record));
+      ((await this.checkWrite(record)) ||
+        (await this.hasGrant(record.typeId, ['delete-own', 'delete-any'], {
+          grantee: this.subjectEntityId,
+          record,
+        }))) &&
+      (await this.principalAllows(record.typeId, ['delete-own', 'delete-any']));
     if (!allowed) throw new StackPermissionError();
     return record;
   }
@@ -1938,7 +2038,7 @@ export class ScopedStack implements StackClient {
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
-    const prefetchedGrants = this.requesterEntityId
+    const prefetchedGrants = this.subjectEntityId
       ? await queryAllPages((q) => this.stack.query(q), {
           filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
         })
@@ -1963,14 +2063,17 @@ export class ScopedStack implements StackClient {
 
     if (await this.hasReadableReference(fileId)) return true;
 
-    if (!this.requesterEntityId) return false;
+    if (!this.subjectEntityId) return false;
 
+    // The uploader clause is an authorship fact, so it follows the subject:
+    // a delegated app reaches the files its subject uploaded, and nothing
+    // else that isn't already reachable through a readable record.
     return this.stack.features.contentFieldQuery
       ? (
           await this.stack.query({
             filter: {
               typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              entityId: this.requesterEntityId,
+              entityId: this.subjectEntityId,
               content: { fileId },
             },
             limit: 1,
@@ -1978,7 +2081,7 @@ export class ScopedStack implements StackClient {
         ).records.length > 0
       : (
           await queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, entityId: this.requesterEntityId },
+            filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, entityId: this.subjectEntityId },
           })
         ).some((r) => (r.content as AttachmentContent).fileId === fileId);
   }
@@ -2027,9 +2130,10 @@ export class ScopedStack implements StackClient {
 
   /**
    * Create a record on behalf of the requester: create grant required,
-   * anonymous denied, entityId set to the requester (omitted when that's
-   * the owner), client IDs skew-checked, reference-creating options gated,
-   * and non-owner `_attachment@1` creation refused save one carve-out.
+   * anonymous denied, entityId set to the subject, client IDs skew-checked,
+   * reference-creating options gated, and non-owner `_attachment@1`
+   * creation refused save one carve-out. A scoped create always stamps
+   * authorship — an absent entityId means an unscoped `Stack` wrote it.
    * See docs/spec/access-control.md and docs/spec/attachments.md.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -2062,7 +2166,8 @@ export class ScopedStack implements StackClient {
     await this.requireFileRefAccess(typeId, content);
     return this.stack.create(typeId, content, {
       ...opts,
-      entityId: isOwner ? undefined : requester,
+      entityId: this.subjectEntityId ?? undefined,
+      principalId: this.delegated ? requester : undefined,
     });
   }
 
@@ -2227,13 +2332,13 @@ export class ScopedStack implements StackClient {
   /**
    * Store bytes and create an _attachment@1 metadata record (create grant
    * on `_attachment@1` required; anonymous denied), returning that record.
-   * entityId is the requester, omitted when that's the owner — the same
-   * normalization create() applies.
+   * Authorship and principal are stamped exactly as create() does.
    */
   async putAttachment(
     data: Uint8Array,
     mimeType: string,
     filename?: string,
+    appId?: AppId,
   ): Promise<StackRecord & { content: AttachmentContent }> {
     // The one ScopedStack path that reaches the adapter without going
     // through Stack first — without this, a closed stack would still write
@@ -2248,7 +2353,6 @@ export class ScopedStack implements StackClient {
     }
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
-    const isOwner = requester === this.stack.ownerEntityId;
     return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {
@@ -2257,7 +2361,11 @@ export class ScopedStack implements StackClient {
         size: data.byteLength,
         ...(filename && { filename }),
       },
-      { entityId: isOwner ? undefined : requester },
+      {
+        entityId: this.subjectEntityId ?? undefined,
+        principalId: this.delegated ? requester : undefined,
+        appId,
+      },
     );
   }
 

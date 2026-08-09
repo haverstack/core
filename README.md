@@ -23,6 +23,33 @@ The key idea: apps talk to the Haverstack library, not to a storage format direc
 
 Don't point more than one app at the same stack file with `adapter-local`. Nothing enforces permissions at that layer — `appId` is self-reported and grants aren't checked — so direct file access is a full-trust, single-owner arrangement, not a way to share data between apps. See [Concurrency & storage ownership](./docs/spec/adapters.md#concurrency--storage-ownership) in the spec for the full rationale.
 
+### Containing an app you don't fully trust
+
+Through a server, an app you install can be given its own identity instead of running as you. It mints a `did:key` keypair, authenticates with it, and reaches only the types you grant it:
+
+```ts
+// One-time, from the owner's side: name the app, then grant it types.
+await stack.create('_app@1', {
+  name: 'My Notes App',
+  did: notesAppDid, // the keypair the app generated at install
+});
+
+await stack.grant(notesAppDid, [
+  {
+    typeId: 'com.example.myapp/note@1',
+    actions: ['create', 'read-own', 'update-own', 'delete-own'],
+  },
+]);
+```
+
+The app then connects with that DID and, when it acts for a person rather than for itself, names them — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
+
+```ts
+const scoped = stack.asEntity(notesAppDid, { onBehalfOf: bobDid });
+```
+
+**You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; connecting with a DID is [Identity § Authentication](./docs/spec/identity.md#authentication-challengeresponse).
+
 ---
 
 ## Packages
@@ -110,7 +137,7 @@ The fundamental unit of data. Every record has:
 - A **Crockford base-32 ID** — time-sortable, human-readable, URL-safe
 - A **type** — defined by the app that created it
 - **Content** — a JSON object validated against the type's schema
-- Optional: `parentId`, `entityId`, `appId`, `permissions`, `associations`
+- Optional: `parentId`, `entityId`, `appId`, `principalId`, `permissions`, `associations`
 
 ### Identity
 

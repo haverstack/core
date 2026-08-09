@@ -32,6 +32,7 @@ export type WireRecord = {
   parentId?: string;
   entityId?: string;
   appId?: string;
+  principalId?: string;
   deletedAt?: string;
   permissions?: Permission[];
   associations?: Association[];
@@ -70,6 +71,7 @@ export function serializeRecord(r: StackRecord): WireRecord {
   if (r.parentId !== undefined) w.parentId = r.parentId;
   if (r.entityId !== undefined) w.entityId = r.entityId;
   if (r.appId !== undefined) w.appId = r.appId;
+  if (r.principalId !== undefined) w.principalId = r.principalId;
   if (r.deletedAt !== undefined) w.deletedAt = r.deletedAt.toISOString();
   if (r.permissions !== undefined) w.permissions = r.permissions;
   if (r.associations !== undefined) w.associations = r.associations;

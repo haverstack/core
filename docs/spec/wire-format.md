@@ -115,6 +115,7 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 ?parentId=           (use "null" for root records)
 ?appId=
 ?entityId=
+?principalId=
 ?createdBefore=
 ?createdAfter=
 ?updatedBefore=
@@ -238,10 +239,12 @@ File IDs are SHA-256 hashes of the content. Uploading identical bytes twice retu
 
 ### Upload
 
-Send the raw binary as the request body, with `Content-Type` set to the MIME type and, optionally, `Content-Disposition` carrying a filename. The server stores the bytes and creates the `_attachment@1` record in the same request — implemented as `scopedStack.putAttachment(bytes, mimeType, filename)`. `Content-Type` defaults to `application/octet-stream` if omitted.
+Send the raw binary as the request body, with `Content-Type` set to the MIME type and, optionally, `Content-Disposition` carrying a filename. The server stores the bytes and creates the `_attachment@1` record in the same request — implemented as `scopedStack.putAttachment(bytes, mimeType, filename, appId)`. `Content-Type` defaults to `application/octet-stream` if omitted.
+
+An optional `?appId=` query param carries the writing app's reverse-DNS identifier onto the created record, since a binary body has nowhere to put the field that `POST /records` takes inline. Self-reported like every other `appId`.
 
 ```
-POST /attachments
+POST /attachments?appId=com.example.myapp
 Authorization: Bearer <token>
 Content-Type: image/png
 Content-Disposition: attachment; filename*=UTF-8''photo.png

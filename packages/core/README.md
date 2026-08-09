@@ -78,7 +78,7 @@ The fundamental unit of data. Every record has:
 - A **Crockford base-32 ID** — time-sortable, human-readable, URL-safe
 - A **type** — defined by the app that created it
 - **Content** — a JSON object validated against the type's schema
-- Optional: `parentId`, `entityId`, `appId`, `permissions`, `associations`
+- Optional: `parentId`, `entityId`, `appId`, `principalId`, `permissions`, `associations`
 
 ### Identity
 
