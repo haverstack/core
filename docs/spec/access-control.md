@@ -96,8 +96,9 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 **Design decisions:**
 
 - **No wildcard `typeId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
+- **Some system types can't be granted at all**: `grant()` refuses `_grant`, `_config`, and `_app`. Each would hand the grantee the machinery the model rests on — minting their own grants, rewriting stack ownership, or registering an app card claiming a DID that isn't theirs (see [App](./identity.md#app)). Other reserved types (`_attachment`, `_entity`, `_group`) stay grantable.
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
-- **Default grants** (no `granteeEntityId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant.
+- **Default grants** (no `granteeEntityId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant. They also **do not count on the principal's side** of a delegated request (see [Delegation](#delegation-principal-and-subject)): "any authenticated entity" means the people who turn up, not software the owner installed, so a contained app reaches only the types it is named in.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
 - **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester. Records with no `entityId` (written by an unscoped `Stack`) do not satisfy any `-own` check.
 - **The grantee may be an app**: `granteeEntityId` is a DID, and an app that holds its own key has one — so granting an installed app the types it needs is the existing model applied, not new machinery (see [App](./identity.md#app)). When such an app acts for a person, the `-own`/`-any` distinction on _its_ grant collapses to the bare verb; see [Delegation](#delegation-principal-and-subject).
@@ -127,15 +128,21 @@ Two identities are then in play, and one rule separates them:
 
 | Governed by the **principal** (who authenticated) | Governed by the **subject** (who it's for) |
 | ------------------------------------------------- | ------------------------------------------ |
-| Owner bypass                                      | `record.entityId` on writes                |
-| Grant lookup for the app's own reach              | `-own` matching                            |
-| `setPermissions()`'s owner-or-creator check       | Record-level `permissions` resolution      |
+| Grant lookup for the app's own reach              | `record.entityId` on writes                |
+| `setPermissions()`'s owner-or-creator check       | `-own` matching                            |
+| Setting `permissions` at create time              | Record-level `permissions` resolution      |
 | `_group` admin-or-owner management                | The `getAttachment()` uploader clause      |
 | Hard delete                                       |                                            |
 
 Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
 
+**Unconditional owner access follows the same split**, rather than belonging to one identity. It answers two questions: _what data is reachable_, which resolves against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_, which resolves against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
+
 The right-hand column is why delegation is worth having: `-own` keeps meaning "this person's Records, through whichever app they used", so two apps writing the same commons type still interoperate. The left-hand column is why it is safe. Those operations have no grant fence at all — `setPermissions()` checks only owner-or-creator, and `_group` mutation bypasses grants entirely — so resolving them against the subject would let any delegated app reshare its subject's data or seize a group it was never granted. A contained app is refused them outright.
+
+Refusing `setPermissions()` only contains an app if the same reach isn't available a step earlier, so **`permissions` passed to `create()` is dropped under delegation** unless the principal is the owner. The general argument that create-time `permissions` is "the same capability exercised earlier, not a new one" holds for a human contributor, who genuinely does hold `setPermissions()`. It does not transfer to a principal denied that capability by design.
+
+Attachment bytes follow the records that describe them. Reaching a file through a Record the requester can read is already intersected — the check ran against that Record's own type. The uploader clause is not a second grant: it decides _which_ files the subject authored, so the principal still needs a read verb on `_attachment@1` of its own.
 
 **Effective authority is the intersection of both parties' grants.** An app can do only what both it and its subject may do:
 

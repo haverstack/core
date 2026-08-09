@@ -75,6 +75,13 @@ So `appId` is sound for "posted via X" display and for grouping a stack's Record
 
 Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
 
+**The `_app` registry is integrity-bearing, so two rules protect it.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it:
+
+- **`_app` cannot be granted.** It sits alongside `_grant` and `_config` in the types `grant()` refuses (see [Access control § Type-level grants](./access-control.md#type-level-grants)), so only the stack owner writes cards. Otherwise anyone holding `create` on `_app@1` could register a card claiming a DID belonging to a legitimately installed app, and the cross-check would resolve to a name they chose.
+- **`did` is unique within a stack.** A second card claiming a DID already in use is refused with `StackConflictError`, on create and on update alike. Without it, "the `_app` Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
+
+Note the contrast with `_entity`, where duplicate `handle`s are explicitly fine. A handle is a display label nothing resolves by; `did` here is a lookup key that a trust decision reads.
+
 ## Group
 
 A Group is a set of Entities, modeled as a Record of the built-in system type `_group`. Groups serve two distinct purposes, distinguished by a single optional field:

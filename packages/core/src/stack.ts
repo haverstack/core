@@ -51,6 +51,8 @@ import type {
   EntityId,
   EntityContent,
   AppId,
+  AppContent,
+  RecordId,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -68,13 +70,16 @@ const EMPTY_FAMILY = Symbol('empty-family');
 const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
 /**
- * System type families grant() refuses to target: a grant on either would
- * let the grantee mint their own grants or touch stack config. See
+ * System type families grant() refuses to target: a grant on any of them
+ * would let the grantee mint their own grants, touch stack config, or
+ * register an app card claiming a DID that isn't theirs — the last of
+ * which is what verified app attribution rests on. See
  * docs/spec/access-control.md § Type-level grants.
  */
 const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.GRANT,
   SYSTEM_TYPES.CONFIG,
+  SYSTEM_TYPES.APP,
 ]);
 
 export type CreateRecordOptions = {
@@ -886,6 +891,10 @@ export class Stack implements StackClient {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
     }
 
+    if (baseIdOf(typeId) === SYSTEM_TYPES.APP) {
+      await this.checkAppDidUnique((content as Record<string, unknown>).did);
+    }
+
     if (opts.id !== undefined) validateRecordId(opts.id);
 
     const associations =
@@ -997,6 +1006,10 @@ export class Stack implements StackClient {
         existing.content as AttachmentContent,
         merged as AttachmentContent,
       );
+    }
+
+    if (baseIdOf(existing.typeId) === SYSTEM_TYPES.APP && 'did' in content) {
+      await this.checkAppDidUnique((merged as AppContent).did, id);
     }
 
     if (id === SYSTEM_TYPES.CONFIG) {
@@ -1249,6 +1262,29 @@ export class Stack implements StackClient {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
     });
+  }
+
+  /**
+   * An app's `did` is what resolves a record's principalId to a name, so
+   * two cards claiming the same DID would make that lookup ambiguous — and
+   * ambiguity is all an impersonating card needs. Enforced here rather than
+   * by schema, since uniqueness is a property of the set, not the value.
+   * See docs/spec/identity.md § App.
+   */
+  private async checkAppDidUnique(did: unknown, excludeId?: RecordId): Promise<void> {
+    if (typeof did !== 'string' || did === '') return;
+
+    const results = await queryAllPages((q) => this.query(q), {
+      filter: {
+        typeId: `${SYSTEM_TYPES.APP}@1`,
+        includeDeleted: true,
+        ...(this.features.contentFieldQuery && { content: { did } }),
+      },
+    });
+    const clash = results.some((r) => r.id !== excludeId && (r.content as AppContent).did === did);
+    if (clash) {
+      throw new StackConflictError(`Another _app record already claims the DID "${did}"`);
+    }
   }
 
   // -------------------------------------------------------
@@ -1828,12 +1864,18 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
  * StackPermissionError. See docs/spec/access-control.md.
  *
  * Two identities, one rule: **the principal governs authority, the subject
- * governs attribution.** Owner bypass, grant lookup, and the
- * privilege-bearing gates that no grant reaches (setPermissions, group
- * management, hard delete) all key on `requesterEntityId`; authorship,
- * `-own` matching, and "records I uploaded" lookups key on
- * `subjectEntityId`. They differ only under delegation, where a mistake in
- * the first group is an escalation rather than a preference.
+ * governs attribution.** Grant lookup and the privilege-bearing gates that
+ * no grant reaches (setPermissions, group management, hard delete, widening
+ * access at create time) key on `requesterEntityId`; authorship, `-own`
+ * matching, record-level permission resolution, and "files I uploaded"
+ * lookups key on `subjectEntityId`.
+ *
+ * Unconditional owner access follows that same split rather than one
+ * identity: it answers *what data is reachable* for the subject (an owner
+ * subject resolves past every permission check) and *who may exercise a
+ * privileged verb* for the principal (an owner app is not bounded by
+ * grants). Under delegation both halves apply, and a mistake on the
+ * authority side is an escalation rather than a preference.
  */
 export class ScopedStack implements StackClient {
   constructor(
@@ -1885,8 +1927,9 @@ export class ScopedStack implements StackClient {
    * one). -own actions additionally require record.entityId === grantee,
    * unless `matchOwn` is false — on the principal side of a delegated
    * request the suffix is read as the bare verb, since which records are
-   * reachable is the subject's business. Anonymous grantees always return
-   * false. See docs/spec/access-control.md § Type-level grants.
+   * reachable is the subject's business. `allowDefault` decides whether a
+   * grant naming nobody counts. Anonymous grantees always return false.
+   * See docs/spec/access-control.md § Type-level grants.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -1896,9 +1939,10 @@ export class ScopedStack implements StackClient {
       record?: StackRecord;
       prefetchedGrants?: StackRecord[];
       matchOwn?: boolean;
+      allowDefault?: boolean;
     },
   ): Promise<boolean> {
-    const { grantee, record, prefetchedGrants, matchOwn = true } = opts;
+    const { grantee, record, prefetchedGrants, matchOwn = true, allowDefault = true } = opts;
     if (!grantee) return false;
 
     const familyId = baseIdOf(typeId);
@@ -1918,6 +1962,7 @@ export class ScopedStack implements StackClient {
     return grantRecords.some((r) => {
       const c = r.content as GrantContent;
       if (baseIdOf(c.typeId) !== familyId) return false;
+      if (!c.granteeEntityId && !allowDefault) return false;
       if (c.granteeEntityId && c.granteeEntityId !== grantee) return false;
       return actions.some((action) => {
         if (!(c.actions as string[]).includes(action)) return false;
@@ -1934,6 +1979,11 @@ export class ScopedStack implements StackClient {
    * can never lend its reach to a weaker subject — nor the reverse.
    * Vacuously true when there's no delegation, where the principal and
    * subject checks would be the same question asked twice.
+   *
+   * Default grants don't count here. "Any authenticated entity" is about
+   * people who turn up, not software the owner installed — an app reaches
+   * only the types named to it, which is the whole of what containment
+   * promises.
    */
   private principalAllows(
     typeId: TypeId,
@@ -1946,6 +1996,7 @@ export class ScopedStack implements StackClient {
       grantee: this.requesterEntityId,
       prefetchedGrants,
       matchOwn: false,
+      allowDefault: false,
     });
   }
 
@@ -2059,15 +2110,24 @@ export class ScopedStack implements StackClient {
    * hashes. See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canAccessFile(fileId: string): Promise<boolean> {
-    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
+    if (!this.delegated && this.requesterEntityId === this.stack.ownerEntityId) return true;
 
+    // Reaching a file through a record the requester can read is already
+    // fully intersected — canRead() applied the principal's mask against
+    // that record's own type, which is the type the reference lives on.
     if (await this.hasReadableReference(fileId)) return true;
 
     if (!this.subjectEntityId) return false;
 
-    // The uploader clause is an authorship fact, so it follows the subject:
-    // a delegated app reaches the files its subject uploaded, and nothing
-    // else that isn't already reachable through a readable record.
+    // The remaining paths are authorship facts about the subject, so they
+    // decide *which* files match — they are not themselves a grant, and the
+    // principal still needs one of its own on the attachment type.
+    if (!(await this.principalAllows(`${SYSTEM_TYPES.ATTACHMENT}@1`, ['read-own', 'read-any']))) {
+      return false;
+    }
+
+    if (this.subjectEntityId === this.stack.ownerEntityId) return true;
+
     return this.stack.features.contentFieldQuery
       ? (
           await this.stack.query({
@@ -2166,9 +2226,21 @@ export class ScopedStack implements StackClient {
     await this.requireFileRefAccess(typeId, content);
     return this.stack.create(typeId, content, {
       ...opts,
+      permissions: this.mayGrantAccess() ? opts.permissions : undefined,
       entityId: this.subjectEntityId ?? undefined,
       principalId: this.delegated ? requester : undefined,
     });
+  }
+
+  /**
+   * Whether this requester may decide who else reaches a record — the rule
+   * setPermissions() enforces, asked at create time too so the reach it
+   * withholds can't be taken one step earlier while authoring. A delegated
+   * app is denied it: widening access is the one thing containment most
+   * needs to hold. See docs/spec/access-control.md § Delegation.
+   */
+  private mayGrantAccess(): boolean {
+    return !this.delegated || this.requesterEntityId === this.stack.ownerEntityId;
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
@@ -2251,6 +2323,10 @@ export class ScopedStack implements StackClient {
       // or write the group record. Same gate as update/associate/delete.
       if (!this.isGroupManager(record)) throw new StackPermissionError();
     } else {
+      // The creator clause asks an authorship question of the authority
+      // identity, deliberately: under delegation the principal never equals
+      // an authorship field, so no app inherits the reach of the subject it
+      // writes for. create() withholds the same reach via mayGrantAccess().
       const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
       const isCreator = this.requesterEntityId === record.entityId;
       if (!isOwner && !isCreator) throw new StackPermissionError();

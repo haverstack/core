@@ -2042,7 +2042,8 @@ describe('ScopedStack — delegation', () => {
       { text: 'meant to stay private' },
       { permissions: [{ access: 'public' }] },
     );
-    expect(await stack.asEntity(null).get(record.id)).toBeNull();
+    expect(record.permissions).toBeUndefined();
+    await expect(stack.asEntity(null).get(record.id)).rejects.toThrow(StackPermissionError);
   });
 
   // Bytes follow the same intersection as the records describing them.
@@ -2069,6 +2070,19 @@ describe('ScopedStack — delegation', () => {
     await expect(
       stack.asEntity(APP, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
     ).rejects.toThrow(StackPermissionError);
+  });
+
+  // Default grants say "any authenticated entity" — people who turn up,
+  // not software the owner installed. An app reaches only what it is named
+  // in, which is the whole of what containment promises.
+  test('a default grant does not satisfy the principal side of the intersection', async () => {
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+
+    // The same default grant is all an undelegated requester needs.
+    const direct = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' });
+    expect(direct.entityId).toBe(MEMBER);
   });
 
   test('records are queryable by the principal that wrote them', async () => {

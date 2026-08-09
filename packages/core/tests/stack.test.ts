@@ -1778,7 +1778,7 @@ describe('grant', () => {
     expect(records).toHaveLength(1);
   });
 
-  // grants on _grant/_config are refused outright; other reserved
+  // grants on _grant/_config/_app are refused outright; other reserved
   // types (_attachment, _entity, _group) stay grantable.
   test('rejects a grant targeting _grant@1', async () => {
     await expect(
@@ -1789,6 +1789,14 @@ describe('grant', () => {
   test('rejects a grant targeting _config@1', async () => {
     await expect(
       stack.grant('entity-abc', [{ actions: ['update-any'], typeId: '_config@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // The _app registry is what resolves a principalId to a name, so only
+  // the owner writes cards to it.
+  test('rejects a grant targeting _app@1', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['create'], typeId: '_app@1' }]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -2833,5 +2841,41 @@ describe('error taxonomy', () => {
     await expect(stack.create(NOTE_V1, { text: 42 })).rejects.toBeInstanceOf(StackError);
     await expect(stack.get('1hk153x0a00b')).resolves.toBeNull();
     await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(StackError);
+  });
+});
+
+// -------------------------------------------------------
+// _app registry integrity
+// -------------------------------------------------------
+
+// An app's did is what resolves a record's principalId to a name, so two
+// cards claiming one DID would make that lookup ambiguous — and ambiguity
+// is all an impersonating card needs.
+describe('_app.did uniqueness', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('rejects a second _app record claiming a DID already in use', async () => {
+    await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    await expect(stack.create('_app@1', { name: 'Impostor', did: APP_DID })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('rejects an update that moves a card onto a DID already in use', async () => {
+    await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    const other = await stack.create('_app@1', { name: 'Other App' });
+    await expect(stack.update(other.id, { did: APP_DID })).rejects.toThrow(StackConflictError);
+  });
+
+  test('a card may keep its own DID across an unrelated update', async () => {
+    const app = await stack.create('_app@1', { name: 'My Notes App', did: APP_DID });
+    const updated = await stack.update(app.id, { version: '2.0.0' });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('cards without a DID do not collide with each other', async () => {
+    await stack.create('_app@1', { name: 'One' });
+    const two = await stack.create('_app@1', { name: 'Two' });
+    expect(two.id).toBeTruthy();
   });
 });
