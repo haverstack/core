@@ -1979,7 +1979,7 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Grant lookup and the privilege-bearing gates that
  * no grant reaches (setPermissions, group management, hard delete, widening
- * access at create time) key on `requesterEntityId`; authorship, `-own`
+ * access at create time) key on `principalEntityId`; authorship, `-own`
  * matching, record-level permission resolution, and "files I uploaded"
  * lookups key on `subjectEntityId`.
  *
@@ -1993,7 +1993,7 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
-    private readonly requesterEntityId: EntityId | null,
+    private readonly principalEntityId: EntityId | null,
     private readonly subjectEntityId: EntityId | null,
     private readonly idTimestampSkewMs: number | null,
     // Bytes-storage primitive for putAttachment(). Held directly because
@@ -2011,7 +2011,7 @@ export class ScopedStack implements StackClient {
 
   /** Whether a delegated app is acting for someone other than itself. */
   private get delegated(): boolean {
-    return this.subjectEntityId !== this.requesterEntityId;
+    return this.subjectEntityId !== this.principalEntityId;
   }
 
   private checkRead(record: StackRecord): Promise<boolean> {
@@ -2113,9 +2113,9 @@ export class ScopedStack implements StackClient {
     prefetchedGrants?: StackRecord[],
   ): Promise<boolean> {
     if (!this.delegated) return Promise.resolve(true);
-    if (this.requesterEntityId === this.stack.ownerEntityId) return Promise.resolve(true);
+    if (this.principalEntityId === this.stack.ownerEntityId) return Promise.resolve(true);
     return this.hasGrant(typeId, actions, {
-      grantee: this.requesterEntityId,
+      grantee: this.principalEntityId,
       prefetchedGrants,
       matchOwn: false,
       allowDefault: false,
@@ -2155,7 +2155,7 @@ export class ScopedStack implements StackClient {
   }
 
   private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.requesterEntityId === this.stack.ownerEntityId && !this.delegated) return true;
+    if (this.principalEntityId === this.stack.ownerEntityId && !this.delegated) return true;
     const reachable =
       this.subjectEntityId === this.stack.ownerEntityId ||
       (await this.subjectAllows(typeId, ['create']));
@@ -2169,9 +2169,9 @@ export class ScopedStack implements StackClient {
    * grants don't apply. See docs/spec/identity.md § Group.
    */
   private isGroupManager(record: StackRecord): boolean {
-    if (this.requesterEntityId === this.stack.ownerEntityId) return true;
-    if (!this.requesterEntityId) return false;
-    return groupRoleFromAssociations(record.associations, this.requesterEntityId) === 'admin';
+    if (this.principalEntityId === this.stack.ownerEntityId) return true;
+    if (!this.principalEntityId) return false;
+    return groupRoleFromAssociations(record.associations, this.principalEntityId) === 'admin';
   }
 
   /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
@@ -2246,7 +2246,7 @@ export class ScopedStack implements StackClient {
    * hashes. See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canAccessFile(fileId: string): Promise<boolean> {
-    if (!this.delegated && this.requesterEntityId === this.stack.ownerEntityId) return true;
+    if (!this.delegated && this.principalEntityId === this.stack.ownerEntityId) return true;
 
     // Reaching a file through a record the requester can read is already
     // fully intersected — canRead() applied the principal's mask against
@@ -2337,12 +2337,12 @@ export class ScopedStack implements StackClient {
     content: T,
     opts: CreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
-    const requester = this.requesterEntityId;
-    if (!requester) throw new StackPermissionError('Anonymous requesters cannot create records');
+    const principal = this.principalEntityId;
+    if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
     if (!(await this.checkCreateGrant(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
-    const isOwner = requester === this.stack.ownerEntityId;
+    const isOwner = principal === this.stack.ownerEntityId;
     if (!isOwner && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
       const fileId = (content as Record<string, unknown>).fileId;
       if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
@@ -2368,7 +2368,7 @@ export class ScopedStack implements StackClient {
     return this.stack.create(typeId, content, {
       ...opts,
       entityId: this.subjectEntityId ?? undefined,
-      principalId: this.delegated ? requester : undefined,
+      principalId: this.delegated ? principal : undefined,
     });
   }
 
@@ -2382,7 +2382,7 @@ export class ScopedStack implements StackClient {
    * docs/spec/access-control.md § Delegation.
    */
   private mayGrantAccess(): boolean {
-    return !this.delegated || this.requesterEntityId === this.stack.ownerEntityId;
+    return !this.delegated || this.principalEntityId === this.stack.ownerEntityId;
   }
 
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
@@ -2404,7 +2404,7 @@ export class ScopedStack implements StackClient {
     const maxFetched = limit * 10;
     let totalFetched = 0;
 
-    const prefetchedGrants = this.requesterEntityId
+    const prefetchedGrants = this.principalEntityId
       ? await queryAllPages((q) => this.stack.query(q), {
           filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
         })
@@ -2454,7 +2454,7 @@ export class ScopedStack implements StackClient {
   ): void {
     if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
     if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
-    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+    if (this.principalEntityId !== this.stack.ownerEntityId) {
       throw new StackPermissionError('Only the stack owner may set an _app record’s did or appId');
     }
   }
@@ -2498,8 +2498,8 @@ export class ScopedStack implements StackClient {
       // subject's records. Records it authored alone it does still match —
       // resharing its own is a reach it holds undelegated anyway.
       // create() withholds the subject-facing half via mayGrantAccess().
-      const isOwner = this.requesterEntityId === this.stack.ownerEntityId;
-      const isCreator = this.requesterEntityId === record.entityId;
+      const isOwner = this.principalEntityId === this.stack.ownerEntityId;
+      const isCreator = this.principalEntityId === record.entityId;
       if (!isOwner && !isCreator) throw new StackPermissionError();
     }
 
@@ -2513,7 +2513,7 @@ export class ScopedStack implements StackClient {
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
     await this.requireDeletable(id);
-    if (opts.hard && this.requesterEntityId !== this.stack.ownerEntityId) {
+    if (opts.hard && this.principalEntityId !== this.stack.ownerEntityId) {
       throw new StackPermissionError('Hard delete is owner-only');
     }
     return this.stack.delete(id, opts);
@@ -2537,7 +2537,7 @@ export class ScopedStack implements StackClient {
   async getVersions(id: string): Promise<RecordVersion[]> {
     await this.requireUpdatable(id);
     const versions = await this.stack.getVersions(id);
-    return this.requesterEntityId === this.stack.ownerEntityId
+    return this.principalEntityId === this.stack.ownerEntityId
       ? versions
       : versions.map(stripVersionPermissions);
   }
@@ -2547,7 +2547,7 @@ export class ScopedStack implements StackClient {
     await this.requireUpdatable(id);
     const target = await this.stack.getVersion(id, version);
     if (!target) return null;
-    return this.requesterEntityId === this.stack.ownerEntityId
+    return this.principalEntityId === this.stack.ownerEntityId
       ? target
       : stripVersionPermissions(target);
   }
@@ -2564,7 +2564,7 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
-    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+    if (this.principalEntityId !== this.stack.ownerEntityId) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
         // A rollback that would move a card's binding is the same trust
@@ -2599,8 +2599,8 @@ export class ScopedStack implements StackClient {
     // through Stack first — without this, a closed stack would still write
     // bytes before the delegated create() refused.
     this.stack.assertOpen();
-    const requester = this.requesterEntityId;
-    if (!requester) {
+    const principal = this.principalEntityId;
+    if (!principal) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
     }
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
@@ -2618,7 +2618,7 @@ export class ScopedStack implements StackClient {
       },
       {
         entityId: this.subjectEntityId ?? undefined,
-        principalId: this.delegated ? requester : undefined,
+        principalId: this.delegated ? principal : undefined,
         appId,
       },
     );
@@ -2639,7 +2639,7 @@ export class ScopedStack implements StackClient {
    * Delegates to Stack.deleteAttachment(), which enforces the "not referenced" check.
    */
   async deleteAttachment(fileId: string): Promise<void> {
-    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+    if (this.principalEntityId !== this.stack.ownerEntityId) {
       throw new StackPermissionError('Only the stack owner can delete attachments');
     }
     return this.stack.deleteAttachment(fileId);
@@ -2652,7 +2652,7 @@ export class ScopedStack implements StackClient {
   async collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult> {
-    if (this.requesterEntityId !== this.stack.ownerEntityId) {
+    if (this.principalEntityId !== this.stack.ownerEntityId) {
       throw new StackPermissionError('Only the stack owner can collect attachment garbage');
     }
     return this.stack.collectAttachmentGarbage(opts);

@@ -25,16 +25,21 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
  * permissions = owner only; public = anyone reads; entity = direct match;
  * group = walk the _group Record's roster associations. See
  * docs/spec/access-control.md § Record-level permissions.
+ *
+ * The entity here is the **subject** — record-level permissions are written
+ * about who data is for, never about the software that carried the request.
+ * A delegated app's own authority is a separate question, asked of the
+ * principal. See docs/spec/access-control.md § Delegation.
  */
 export async function checkAccess(
   record: StackRecord,
-  requesterEntityId: EntityId | null,
+  subjectEntityId: EntityId | null,
   ownerEntityId: EntityId | null,
   mode: AccessMode,
   resolveRecord: RecordResolver,
 ): Promise<boolean> {
   // Owner always has full access.
-  if (requesterEntityId && requesterEntityId === ownerEntityId) return true;
+  if (subjectEntityId && subjectEntityId === ownerEntityId) return true;
 
   const perms = record.permissions;
 
@@ -44,13 +49,13 @@ export async function checkAccess(
   for (const p of perms) {
     if (p.access === 'public' && mode === 'read') return true;
 
-    if (p.access === 'entity' && p.entityId === requesterEntityId) {
+    if (p.access === 'entity' && p.entityId === subjectEntityId) {
       if (mode === 'read' && p.read) return true;
       if (mode === 'write' && p.write) return true;
     }
 
-    if (p.access === 'group' && requesterEntityId) {
-      const role = await resolveGroupRole(p.groupId, requesterEntityId, resolveRecord);
+    if (p.access === 'group' && subjectEntityId) {
+      const role = await resolveGroupRole(p.groupId, subjectEntityId, resolveRecord);
       const satisfiesRole = p.role === 'admin' ? role === 'admin' : role !== null;
       if (satisfiesRole) {
         if (mode === 'read' && p.read) return true;
