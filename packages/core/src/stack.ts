@@ -613,13 +613,16 @@ export class Stack implements StackClient {
    * Idempotent bootstrap for StackOptions.ownerProfile. Filters by typeId
    * only (contentFieldQuery is capability-gated) and matches `content.did`
    * in memory, cursor-walking so an owner card past page one isn't missed
-   * and duplicated.
+   * and duplicated. Soft-deleted cards count as present: a deleted card
+   * still reserves its `did`, so a probe blind to one would mint a card the
+   * binding rules then refuse, leaving the stack unopenable with
+   * `ownerProfile`. See docs/spec/identity.md § DID bindings.
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
     const existing = await findFirstMatch(
       (q) => this.adapter.queryRecords(q),
-      { filter: { typeId: entityTypeId } },
+      { filter: { typeId: entityTypeId, includeDeleted: true } },
       (r) => (r.content as EntityContent).did === this.ownerEntityId,
     );
     if (existing) return;

@@ -36,7 +36,7 @@ type EntityContent = {
 
 An app that wants handle lookup anyway builds it on `query({ filter: { content: { handle } } })` and must handle duplicates itself. Note that filtering on `content` requires the `contentFieldQuery` capability, which a server behind `adapter-api` may decline (see [Adapters](./adapters.md#adapter-capabilities)) — another reason not to design a lookup around it.
 
-The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
+The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. A soft-deleted card counts as existing: it still reserves the owner's `did` under the [binding rules](#did-bindings), so a bootstrap that created a second one would be refused. Restoring a deleted owner card is `undelete()`'s job, not reopening's. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
 
 ## App
 

@@ -122,6 +122,24 @@ describe('Stack.create', () => {
       expect(records[0].content).toMatchObject({ name: 'Original Name' });
     });
 
+    // A soft-deleted card still reserves the owner's did, so the bootstrap
+    // treats it as present rather than minting a second card the binding
+    // rules would refuse — reopening stays possible either way.
+    test('treats a soft-deleted owner record as existing', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      await s.delete(records[0].id);
+
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+
+      const all = await reopened.query({
+        filter: { typeId: '_entity@1', includeDeleted: true },
+      });
+      expect(all.records).toHaveLength(1);
+      expect(all.records[0].deletedAt).toBeDefined();
+    });
+
     test('leaves the created record unauthored (no entityId), matching owner-attributed convention', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
