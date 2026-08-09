@@ -443,7 +443,11 @@ export interface StackClient {
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
-  putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>;
+  putAttachment(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<StackRecord & { content: AttachmentContent }>;
   deleteAttachment(fileId: string): Promise<void>;
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
@@ -1306,26 +1310,30 @@ export class Stack implements StackClient {
 
   /**
    * Store bytes and create an _attachment@1 metadata record (owner-
-   * attributed, no entityId). Delegates to the adapter's atomic
-   * putAttachmentWithMetadata() when implemented, trusting the returned
-   * record as backend-authoritative; otherwise falls back to
+   * attributed, no entityId), returning that record — `content.fileId`
+   * addresses the bytes, `id` addresses the metadata. Delegates to the
+   * adapter's atomic putAttachmentWithMetadata() when implemented, trusting
+   * the returned record as backend-authoritative; otherwise falls back to
    * bytes-then-create(). See docs/spec/wire-format.md § Attachments.
    */
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+  async putAttachment(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<StackRecord & { content: AttachmentContent }> {
     this.assertOpen();
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename);
-      return (record.content as AttachmentContent).fileId;
+      return record as StackRecord & { content: AttachmentContent };
     }
     const fileId = await this.adapter.putAttachment(data);
-    await this.create(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
+    return this.create<AttachmentContent>(`${SYSTEM_TYPES.ATTACHMENT}@1`, {
       fileId,
       mimeType,
       size: data.byteLength,
       ...(filename && { filename }),
-    } satisfies AttachmentContent);
-    return fileId;
+    });
   }
 
   async getAttachment(fileId: string): Promise<Uint8Array> {
@@ -2218,11 +2226,15 @@ export class ScopedStack implements StackClient {
 
   /**
    * Store bytes and create an _attachment@1 metadata record (create grant
-   * on `_attachment@1` required; anonymous denied). entityId is the
-   * requester, omitted when that's the owner — the same normalization
-   * create() applies.
+   * on `_attachment@1` required; anonymous denied), returning that record.
+   * entityId is the requester, omitted when that's the owner — the same
+   * normalization create() applies.
    */
-  async putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string> {
+  async putAttachment(
+    data: Uint8Array,
+    mimeType: string,
+    filename?: string,
+  ): Promise<StackRecord & { content: AttachmentContent }> {
     // The one ScopedStack path that reaches the adapter without going
     // through Stack first — without this, a closed stack would still write
     // bytes before the delegated create() refused.
@@ -2237,17 +2249,16 @@ export class ScopedStack implements StackClient {
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
     const isOwner = requester === this.stack.ownerEntityId;
-    await this.stack.create(
+    return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {
         fileId,
         mimeType,
         size: data.byteLength,
         ...(filename && { filename }),
-      } satisfies AttachmentContent,
+      },
       { entityId: isOwner ? undefined : requester },
     );
-    return fileId;
   }
 
   /**

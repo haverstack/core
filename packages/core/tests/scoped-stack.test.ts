@@ -418,7 +418,9 @@ describe('ScopedStack — versions', () => {
 
     test('allows restoring an attachment association to a file the requester can currently access', async () => {
       await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-      const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+      const {
+        content: { fileId },
+      } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
       const record = await adapter.createRecord(
         makeRecord({
           version: 2,
@@ -903,7 +905,9 @@ describe('ScopedStack.putAttachment', () => {
   const data = new Uint8Array([1, 2, 3]);
 
   test('owner can always upload without a grant', async () => {
-    const fileId = await stack.asEntity(OWNER).putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(OWNER).putAttachment(data, 'image/png');
     expect(typeof fileId).toBe('string');
   });
 
@@ -921,7 +925,9 @@ describe('ScopedStack.putAttachment', () => {
 
   test('entity with create grant on _attachment@1 can upload', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
     expect(typeof fileId).toBe('string');
   });
 
@@ -937,6 +943,17 @@ describe('ScopedStack.putAttachment', () => {
     expect(content.filename).toBe('photo.png');
   });
 
+  test('returns the attributed record, so the uploader needs no follow-up query', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+
+    const record = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
+
+    expect(record.typeId).toBe('_attachment@1');
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.content.filename).toBe('photo.png');
+    expect(await stack.get(record.id)).toMatchObject({ id: record.id, entityId: MEMBER });
+  });
+
   test('upload without filename omits filename from record content', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
     await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
@@ -946,7 +963,9 @@ describe('ScopedStack.putAttachment', () => {
 
   test('default grant allows any authenticated entity to upload', async () => {
     await stack.grant(null, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(STRANGER).putAttachment(data, 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(STRANGER).putAttachment(data, 'image/png');
     expect(typeof fileId).toBe('string');
   });
 
@@ -1165,7 +1184,9 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
 
 describe('ScopedStack.collectAttachmentGarbage', () => {
   test('owner can run the sweep', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
 
     const result = await stack.asEntity(OWNER).collectAttachmentGarbage({ graceMs: 0 });
 
@@ -1409,7 +1430,9 @@ describe('ScopedStack.create — attachment association gating', () => {
 
   test('attachment association referencing a file the requester uploaded is allowed', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
     const record = await stack.asEntity(MEMBER).create(
       COMMENT,
       { text: 'hi' },
@@ -1425,7 +1448,9 @@ describe('ScopedStack.create — attachment association gating', () => {
   });
 
   test('attachment association referencing a file readable via another record is allowed', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     const owned = await stack.create(NOTE, { text: 'owner note' });
     await stack.associate(owned.id, {
       kind: 'attachment',
@@ -1449,7 +1474,9 @@ describe('ScopedStack.create — attachment association gating', () => {
   });
 
   test('nonexistent and existing-but-forbidden fileIds produce indistinguishable errors', async () => {
-    const forbiddenFileId = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    const {
+      content: { fileId: forbiddenFileId },
+    } = await stack.putAttachment(new Uint8Array([9]), 'image/png');
     let nonexistentError: Error | undefined;
     let forbiddenError: Error | undefined;
     try {
@@ -1564,7 +1591,9 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
 
   test('non-owner putAttachment(bytes, mime, filename) still works end-to-end', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
 
     // The upload is now accessible to them...
     const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
@@ -1592,7 +1621,9 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
   // without re-uploading bytes — this conveys no access they didn't already
   // have via the readable record.
   test('carve-out: a non-owner with a readable referencing record can add a second metadata record', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'owner.png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'owner.png');
     const owned = await stack.create(NOTE, { text: 'owner note' });
     await stack.associate(owned.id, {
       kind: 'attachment',
@@ -1633,7 +1664,9 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
   });
 
   test('a non-owner without a readable referencing record is refused even for a real, existing fileId', async () => {
-    const fileId = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([9]), 'image/png');
     // fileId is real and exists, but MEMBER has no readable record referencing it.
     await expect(
       stack.asEntity(MEMBER).create('_attachment@1', {
@@ -1775,7 +1808,9 @@ describe('ScopedStack.associate — reference-creation gating', () => {
 
   test('associate() allows an attachment association to a file the requester uploaded', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
     await stack
       .asEntity(MEMBER)
       .associate(ownedRecord.id, { kind: 'attachment', label: 'x', fileId });
@@ -1826,14 +1861,18 @@ describe('ScopedStack — file-ref content field gating', () => {
 
   test('create() allows a file-ref field pointing at a file the requester uploaded', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
     const record = await stack.asEntity(MEMBER).create(PHOTO_NOTE, { coverFileId: fileId });
     expect(record.content.coverFileId).toBe(fileId);
   });
 
   test('update() rejects changing a file-ref field to an inaccessible file', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-    const fileId = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
     const record = await stack.asEntity(MEMBER).create(PHOTO_NOTE, { coverFileId: fileId });
 
     await expect(
@@ -1844,7 +1883,9 @@ describe('ScopedStack — file-ref content field gating', () => {
   test('update() leaving the file-ref field untouched is unaffected by its accessibility', async () => {
     // Owner-created record with a file-ref the MEMBER updater can't independently access;
     // a patch that never mentions coverFileId carries no new reference and isn't gated.
-    const fileId = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
     const record = await stack.create(
       PHOTO_NOTE,
       { coverFileId: fileId },

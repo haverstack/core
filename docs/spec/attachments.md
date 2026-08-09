@@ -3,11 +3,13 @@
 Binary files are stored and retrieved through the library using **content-addressed storage**. A file's ID is the SHA-256 hash of its bytes, so uploading identical bytes twice returns the same `fileId` without writing a second binary copy. Each upload creates a new `_attachment@1` metadata record regardless of deduplication, so metadata (mimeType, size, filename) is tracked per upload.
 
 ```ts
-// Upload a file — returns a stable SHA-256 hex ID and creates an _attachment@1 record
-const fileId = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string): Promise<string>
+// Upload a file — stores the bytes and creates the _attachment@1 record,
+// returning that record. content.fileId is a stable SHA-256 hex ID.
+const record = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string)
+  : Promise<StackRecord & { content: AttachmentContent }>
 
 // Fetch the binary
-const data: Uint8Array = await stack.getAttachment(fileId)
+const data: Uint8Array = await stack.getAttachment(record.content.fileId)
 
 // Delete the binary and its _attachment@1 metadata record(s)
 // Throws StackConflictError if any record still references the file
@@ -29,7 +31,9 @@ type AttachmentContent = {
 
 An `_attachment@1` record is created on every `putAttachment()` call — even if the same bytes were previously uploaded. Multiple `_attachment@1` records may therefore exist for the same `fileId`, each with its own `filename`; the binary is stored only once.
 
-To read metadata for a given `fileId`, query `_attachment@1` records:
+**`putAttachment()` returns the record it created**, matching what `POST /attachments` returns on the wire — the uploader's own metadata record is never something they have to go looking for. The `id` is the part that matters: `filename` is the only mutable field on an `_attachment@1` record, and setting it later needs an id. Without this, every caller wanting one would have to query by `fileId` and disambiguate among the several records a shared `fileId` can have.
+
+To read metadata for a `fileId` uploaded by _someone else_, query `_attachment@1` records — note that a `fileId` may have several, one per upload:
 
 ```ts
 const results = await stack.query({
