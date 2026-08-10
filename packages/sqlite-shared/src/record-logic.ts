@@ -475,7 +475,7 @@ export class SharedSqlRecordLogic {
    * A (record_id, version) collision is rejected loudly via the UNIQUE
    * constraint, mapped to StackConflictError — never a silently discarded
    * snapshot leaving a hole in rollback history. See
-   * docs/spec/versioning.md § Optimistic concurrency.
+   * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
    */
   private insertVersionRow(id: string, version: RecordVersion): void {
     try {

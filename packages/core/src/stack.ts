@@ -171,7 +171,7 @@ export type GetRecordOptions = {
  * Opt-in optimistic-concurrency precondition, accepted by every mutation
  * that bumps a record's version. On mismatch the mutation throws
  * StackVersionConflictError and changes nothing; omit to keep
- * last-writer-wins. See docs/spec/versioning.md § Optimistic concurrency.
+ * last-writer-wins. See docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
  */
 export type IfVersionOptions = {
   ifVersion?: number;
@@ -277,7 +277,7 @@ export class StackConflictError extends StackError {
  * Thrown when an `ifVersion` precondition doesn't match a record's current
  * version. Deliberately not a StackConflictError subtype — the two have
  * different recovery stories and HTTP statuses (409 vs. 412). See
- * docs/spec/versioning.md § Optimistic concurrency.
+ * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
  */
 export class StackVersionConflictError extends StackError {
   static readonly code = 'version_conflict' as const;

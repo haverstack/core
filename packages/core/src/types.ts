@@ -439,7 +439,7 @@ export type StackFeatures = AdapterCapabilities;
  * that bumps a record's version. On mismatch the adapter throws
  * StackVersionConflictError without applying anything. The check is atomic
  * inside the adapter's write, never a read-then-write. See
- * docs/spec/versioning.md § Optimistic concurrency.
+ * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
  */
 export type ExpectedVersionOptions = {
   expectedVersion?: number;
