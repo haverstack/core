@@ -51,6 +51,7 @@ import type {
   EntityId,
   EntityContent,
   AppId,
+  AppContent,
   RecordId,
 } from './types.js';
 
@@ -2196,10 +2197,14 @@ export class ScopedStack implements StackClient {
     return groupRoleFromAssociations(record.associations, entityId) === 'admin';
   }
 
-  /** Fetch a record the requester can update (via permissions or an update grant), or throw. */
+  /**
+   * Fetch a record the subject can reach and the principal holds `update` on
+   * (via permissions or an update grant), or throw.
+   */
   private async requireUpdatable(id: string): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    this.requireOwnerForGrantRecord(record.typeId);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       if (!this.isGroupManager(record)) throw new StackPermissionError();
       return record;
@@ -2212,10 +2217,14 @@ export class ScopedStack implements StackClient {
     return record;
   }
 
-  /** Fetch a record the requester can delete (via permissions or a delete grant), or throw. */
+  /**
+   * Fetch a record the subject can reach and the principal holds `delete` on
+   * (via permissions or a delete grant), or throw.
+   */
   private async requireDeletable(id: string): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    this.requireOwnerForGrantRecord(record.typeId);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       if (!this.isGroupManager(record)) throw new StackPermissionError();
       return record;
@@ -2379,6 +2388,8 @@ export class ScopedStack implements StackClient {
         'A delegated principal cannot set permissions, at create time or after',
       );
     }
+    this.requireOwnerForOwnerDid(typeId, (content as Record<string, unknown>).did);
+    await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
       validateIdTimestampSkew(opts.id, this.idTimestampSkewMs);
@@ -2466,6 +2477,7 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
     this.requireOwnerForAppIdentity(record.typeId, (field) => field in content);
+    if ('did' in content) this.requireOwnerForOwnerDid(record.typeId, content.did);
     await this.requireFileRefAccess(record.typeId, content);
     return this.stack.update(id, content, opts);
   }
@@ -2501,6 +2513,68 @@ export class ScopedStack implements StackClient {
     }
   }
 
+  /**
+   * A self-reported `appId` must agree with the `_app` card naming the
+   * principal's DID, where the owner registered one. `principalId` is
+   * verified, so letting the pair disagree would leave a verified principal
+   * claiming a name the owner gave different software — the cross-check the
+   * registry exists for, refused at the write instead of left to each reader.
+   * A principal with no card keeps `appId` as the bare self-report it is for
+   * every undelegated writer.
+   * See docs/spec/identity.md § Attribution and what can be trusted.
+   */
+  private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
+    if (appId === undefined || !this.delegated) return;
+    const card = await findFirstMatch(
+      (q) => this.stack.query(q),
+      {
+        filter: {
+          baseId: SYSTEM_TYPES.APP,
+          includeDeleted: true,
+          ...(this.stack.features.contentFieldQuery && {
+            content: { did: this.principalEntityId },
+          }),
+        },
+      },
+      (r) => (r.content as AppContent).did === this.principalEntityId,
+    );
+    if (card && (card.content as AppContent).appId !== appId) {
+      throw new StackPermissionError(
+        `appId "${appId}" is not the appId registered for this principal`,
+      );
+    }
+  }
+
+  /**
+   * The owner's own DID is the one `_entity` binding a grantee may not claim.
+   * `ownerProfile` adopts whichever card holds it, so a card minted by
+   * someone else becomes the stack's own profile, and uniqueness then makes
+   * that permanent. Every other DID stays open to a contacts app, which is
+   * the reach `_entity` is grantable for.
+   * See docs/spec/identity.md § DID bindings.
+   */
+  private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
+    if (baseIdOf(typeId) !== SYSTEM_TYPES.ENTITY) return;
+    if (did !== this.stack.ownerEntityId) return;
+    if (!this.ownerActingAlone) {
+      throw new StackPermissionError('Only the stack owner may claim the owner’s own did');
+    }
+  }
+
+  /**
+   * A `_grant` Record *is* authority, so rewriting one is the escalation
+   * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
+   * existing grant rather than minting a fresh one. `grant()` and `revoke()`
+   * live on `Stack`, never `StackClient`, so no scoped write is lost.
+   * See docs/spec/access-control.md § Type-level grants.
+   */
+  private requireOwnerForGrantRecord(typeId: TypeId): void {
+    if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return;
+    if (!this.ownerActingAlone) {
+      throw new StackPermissionError('Only the stack owner may write a _grant record');
+    }
+  }
+
   async associate(
     id: string,
     association: Association,
@@ -2527,6 +2601,7 @@ export class ScopedStack implements StackClient {
   ): Promise<void> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    this.requireOwnerForGrantRecord(record.typeId);
 
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       // Group management, not authorship: a creator later demoted from the
@@ -2648,6 +2723,7 @@ export class ScopedStack implements StackClient {
     if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
+    await this.requireAppIdMatchesPrincipal(appId);
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
     return this.stack.create<AttachmentContent>(

@@ -68,12 +68,15 @@ An app that holds a key acts in one of two ways. Alone — an indexer with no pe
 
 ### Attribution and what can be trusted
 
-`appId` is **self-reported and never a permission input.** Nothing verifies it at the point of write, in any posture. What differs is whether it can be checked afterwards:
+`appId` **grants nothing** — it is never an input to an access decision, in any posture. Whether it can be _trusted_ depends on whether there is a verified principal to check it against:
 
-- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` can be checked: find the `_app` Record whose `content.did` equals `record.principalId`, and compare that card's `content.appId` to `record.appId`. A mismatch means the write claimed software the authenticating key is not registered as.
+- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` is checked at the write: find the `_app` Record whose `content.did` equals the principal, and compare that card's `content.appId` to the `appId` being stamped. A mismatch is refused with `StackPermissionError`. The check runs where the fact is known rather than being left to each reader, so a stored `appId` on a Record carrying `principalId` is one the registry agreed to.
+- A delegated app the owner never registered has no card to check against, so its `appId` stays a bare self-report. Registering the app is what turns it into a checked claim — which is the same act that makes `principalId` resolvable at all.
 - A Record written by an app riding its user's identity carries no `principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
 
-So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. It is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
+So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. On a Record with no `principalId` it is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
+
+The check costs a lookup over the `_app` family per delegated write that carries an `appId`, narrowed to `content.did` where the adapter advertises [`contentFieldQuery`](./adapters.md#adapter-capabilities) and cursor-walked where it doesn't — the same shape, and the same cost, as the binding-uniqueness check described below.
 
 **Both fields describe the write that created the Record, and are never restamped.** `update()` is a content patch: it leaves `appId` and `principalId` naming whoever authored the Record, so a Record edited later by different software still reports its creator — as `entityId` does, and for the same reason. The cross-check above therefore answers "which app _wrote_ this", not "which app touched it last".
 
@@ -109,7 +112,9 @@ A binding is not a value a card happens to hold; it is what makes the card _abou
 
 Note the contrast with `handle`, where duplicates are explicitly fine on both `_entity` and `_group`. A handle is a display label nothing resolves by; the fields above are lookup keys a trust decision reads.
 
-**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for a DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. `_app` has no equivalent gap, being ungrantable.
+**One DID is reserved: the owner's own.** A card claiming `ownerEntityId` is refused to everyone but the owner acting alone, on create and on adoption, with `StackPermissionError`. The reservation exists because this is the one binding that feeds back into the stack's own identity: `ownerProfile` adopts whichever card holds the owner's DID rather than minting a second one, so a card written by someone else would _become_ the owner's profile, and uniqueness would then make that permanent. Every other DID stays open, which is the reach `_entity` is grantable for.
+
+**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for any other DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. The card is attributed to whoever wrote it — `entityId` names the grantee, not the owner — so a petname's provenance is always checkable. `_app` has no equivalent gap, being ungrantable.
 
 The uniqueness check reads before it writes, so two creates racing on one value can both pass. Closing that properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
