@@ -2200,12 +2200,17 @@ export class ScopedStack implements StackClient {
 
   /**
    * Fetch a record the subject can reach and the principal holds `update` on
-   * (via permissions or an update grant), or throw.
+   * (via permissions or an update grant), or throw. `mutating: false` marks
+   * the history readers, which borrow this gate without changing anything —
+   * the one way through it a `_grant` Record stays open to.
    */
-  private async requireUpdatable(id: string): Promise<StackRecord> {
+  private async requireUpdatable(
+    id: string,
+    opts: { mutating?: boolean } = {},
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.requireOwnerForGrantRecord(record.typeId);
+    if (opts.mutating ?? true) this.requireOwnerForGrantRecord(record.typeId);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       if (!this.isGroupManager(record)) throw new StackPermissionError();
       return record;
@@ -2567,7 +2572,8 @@ export class ScopedStack implements StackClient {
    * A `_grant` Record *is* authority, so rewriting one is the escalation
    * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
    * existing grant rather than minting a fresh one. `grant()` and `revoke()`
-   * live on `Stack`, never `StackClient`, so no scoped write is lost.
+   * live on `Stack`, never `StackClient`, so no scoped write is lost. Writes
+   * only: reading a grant Record and its history stays on the ordinary gate.
    * See docs/spec/access-control.md § Type-level grants.
    */
   private requireOwnerForGrantRecord(typeId: TypeId): void {
@@ -2653,18 +2659,22 @@ export class ScopedStack implements StackClient {
    * History is the mutation/recovery surface, not a read surface — gated
    * like update(), with snapshot `permissions` stripped for everyone but
    * the owner acting alone — a snapshot's permissions are the stack's
-   * sharing graph, which delegation is not a route to.
+   * sharing graph, which delegation is not a route to. Reading history
+   * changes nothing, so it is the one path the `_grant` write fence leaves
+   * alone: seeing how a Record you can already read got that way is not
+   * the escalation that fence exists to stop, and losing it would leave a
+   * write-holder unable to audit the Record they hold.
    * See docs/spec/versioning.md § History access.
    */
   async getVersions(id: string): Promise<RecordVersion[]> {
-    await this.requireUpdatable(id);
+    await this.requireUpdatable(id, { mutating: false });
     const versions = await this.stack.getVersions(id);
     return this.ownerActingAlone ? versions : versions.map(stripVersionPermissions);
   }
 
   /** See getVersions() — same mutate-surface gate, same permissions stripping. */
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    await this.requireUpdatable(id);
+    await this.requireUpdatable(id, { mutating: false });
     const target = await this.stack.getVersion(id, version);
     if (!target) return null;
     return this.ownerActingAlone ? target : stripVersionPermissions(target);

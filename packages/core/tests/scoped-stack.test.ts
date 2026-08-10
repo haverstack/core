@@ -2502,6 +2502,43 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
     ).rejects.toThrow(StackPermissionError);
   });
 
+  // The fence is on writes. Reading how a Record you already hold got that
+  // way is not the escalation it exists to stop, and a write-holder who
+  // could not audit the grant they hold would be worse off than before.
+  test('a write-holder still reads a grant record and its history', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+    const scoped = stack.asEntity(MEMBER);
+
+    expect(await scoped.get(grantRecord.id)).not.toBeNull();
+
+    const versions = await scoped.getVersions(grantRecord.id);
+    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect((versions[0].content as { actions: string[] }).actions).toEqual(['read-own']);
+
+    const v1 = await scoped.getVersion(grantRecord.id, 1);
+    expect(v1).not.toBeNull();
+  });
+
+  test('a write-holder reading grant history still gets snapshot permissions stripped', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+
+    const versions = await stack.asEntity(MEMBER).getVersions(grantRecord.id);
+    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
+  });
+
+  // Restoring is a write, so it stays fenced even though reading the
+  // snapshot it would restore does not.
+  test('a write-holder cannot restore a grant record to an earlier version', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+
+    await expect(stack.asEntity(MEMBER).restoreVersion(grantRecord.id, 1)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
   test('the owner acting alone still maintains grant records', async () => {
     const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
 
