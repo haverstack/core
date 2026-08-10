@@ -2344,6 +2344,32 @@ describe('ScopedStack — _app bindings', () => {
     const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
     expect((updated.content as { did?: string }).did).toBe(APP_DID);
   });
+
+  // The fence reads values, not keys. Read-modify-write is the ordinary
+  // client shape, and a card sent back with its bindings untouched is
+  // exercising the display-field reach the test above pins — a presence
+  // check would make that reach unreachable for any client that round-trips
+  // the whole content object.
+  test('a write-holder may round-trip unchanged bindings in a full-content update', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const scoped = stack.asEntity(MEMBER);
+    const current = await scoped.get(shared.id);
+    const updated = await scoped.update(shared.id, { ...current!.content, name: 'Renamed' });
+
+    expect(updated.content).toMatchObject({
+      appId: 'com.example.notes',
+      name: 'Renamed',
+      did: APP_DID,
+    });
+  });
 });
 
 // The owner-only rule covers both halves of the attribution lookup: a
@@ -2442,6 +2468,21 @@ describe('ScopedStack — _entity bindings hold under a grant', () => {
         .asEntity(APP, { onBehalfOf: OWNER })
         .create('_entity@1', { did: OWNER, name: 'Owner, per the app' }),
     ).rejects.toThrow(StackPermissionError);
+  });
+
+  // The reservation is on *claiming* the DID. Re-sending the value a card
+  // already holds claims nothing, and immutability refuses changing it — so
+  // refusing the round-trip would only stop a grantee relabelling the card,
+  // which is the reach a grant on _entity exists to give.
+  test('a grantee may relabel the owner card while round-tripping its DID', async () => {
+    const ownerCard = await stack.asEntity(OWNER).create('_entity@1', { did: OWNER, name: 'Me' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['read-any', 'update-any'] }]);
+
+    const scoped = stack.asEntity(MEMBER);
+    const current = await scoped.get(ownerCard.id);
+    const updated = await scoped.update(ownerCard.id, { ...current!.content, name: 'The Owner' });
+
+    expect(updated.content).toMatchObject({ did: OWNER, name: 'The Owner' });
   });
 });
 

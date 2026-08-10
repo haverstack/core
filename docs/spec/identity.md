@@ -91,22 +91,28 @@ Linking the two is the owner's job, not the library's: an `_app` Record with a `
 
 That second rule is what makes "only the owner writes cards" true, rather than nearly true. Type-level grants are refused, but record-level `write` on an individual card is shareable like on any other Record, so a write-holder is a real writer of that card — free to correct its `name` or `version`, and refused the two fields a trust decision reads.
 
-Both fields are also **bindings** in the sense defined next, which is where uniqueness and immutability come from.
+**The rule reads values, not keys.** A write that carries `did` or `appId` unchanged is not setting it, so it is not refused: a client that reads a card, edits its `name` and sends the whole content object back is exercising exactly the reach the previous paragraph describes, and `update()` being a merge is a calling convention rather than a permission boundary. Only a write that would introduce or alter one of the two fields needs the owner. The same reading applies to the [reserved owner DID](#did-bindings) below — the refusal is on _claiming_ it — and `restoreVersion()` compares the snapshot against the Record's present content for the same reason.
+
+Both fields are also **bindings** in the sense defined next, which is where immutability — and, for `did`, uniqueness — comes from.
 
 ## DID bindings
 
 Two system types carry fields that are **lookup keys rather than display values**: something resolves _through_ them to reach a name the owner chose.
 
-| Field         | What resolves through it                        |
-| ------------- | ----------------------------------------------- |
-| `_entity.did` | a Record's `entityId` → who authored it         |
-| `_app.did`    | a Record's `principalId` → which app wrote it   |
-| `_app.appId`  | a verified principal → the `appId` it may claim |
+| Field         | What resolves through it                        | Unique |
+| ------------- | ----------------------------------------------- | ------ |
+| `_entity.did` | a Record's `entityId` → who authored it         | yes    |
+| `_app.did`    | a Record's `principalId` → which app wrote it   | yes    |
+| `_app.appId`  | a verified principal → the `appId` it may claim | no     |
 
-A binding is not a value a card happens to hold; it is what makes the card _about_ something. Two rules follow, and they apply to every field in that table:
+A binding is not a value a card happens to hold; it is what makes the card _about_ something. Two rules follow:
 
-- **Unique within a stack.** A second card claiming a value already in use is refused with `StackConflictError`, on create and on update. A soft-deleted card keeps its claim: a deleted card is `undelete()`-able, so releasing the value on delete would let a new card take it and the old one come back beside it. Without uniqueness, "the Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
-- **Immutable once set.** Uniqueness stops a second card claiming a value; only immutability stops an existing card being _moved_ onto one, which reaches the same impersonation by another route. `update()` and `restoreVersion()` both refuse to change or clear a binding with `StackValidationError`. Adopting a value is a one-way step a card carrying none can still take. A subject whose key changes gets a new card, matching this document's deferral of [key rotation](#deferred-key-rotation) — a new key is a new identity, not the same one relabelled.
+- **Immutable once set** — every field in the table. Adopting a value is a one-way step a card carrying none can still take, but a card that holds one never moves off it: `update()` and `restoreVersion()` both refuse to change or clear a binding with `StackValidationError`. This is the rule that stops an existing card being _moved_ onto a value — repointed at another key, or relabelled to claim another app's `appId` — which is impersonation by a quieter route than minting a card.
+- **Unique within a stack** — the two `did` fields, the ones a lookup resolves _by_. A second card claiming a value already in use is refused with `StackConflictError`, on create and on update. A soft-deleted card keeps its claim: a deleted card is `undelete()`-able, so releasing the value on delete would let a new card take it and the old one come back beside it. Without uniqueness, "the Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
+
+**`_app.appId` is immutable but not unique**, and the asymmetry is load-bearing. Nothing resolves a card _by_ `appId`: the cross-check finds the card by `content.did` and only compares `appId` to what the principal claimed, so `_app.did` being unique already gives that lookup its single answer. Uniqueness on `appId` would add no disambiguation and would forbid a state the stack has to be able to reach — two cards naming the same software under different keys. `appId` is required, so a card for an app's new key necessarily repeats it, and without the exemption the replacement card that [key rotation](#deferred-key-rotation) calls for could not be written at all, nor the same app registered on a second device. Both cards are the owner's own to write, `_app` being ungrantable; what stays refused is moving an _existing_ card onto an `appId` it did not have.
+
+A subject whose key changes therefore gets a new card, matching this document's deferral of [key rotation](#deferred-key-rotation) — a new key is a new identity, not the same one relabelled. Records written under the old key keep pointing at the old card, which is what makes their attribution still resolvable.
 
 **`_entity` stays grantable; `_app` does not.** Naming people is ordinary app work — a contacts app creates and relabels cards — so `_entity` cards are reachable by grant and only the two binding rules fence them. Naming software is a trust decision about who may speak as what, so `_app` adds the owner-only rule above. The asymmetry is deliberate: both registries resolve a name, but only one of them is deciding whether to believe a claim.
 
@@ -175,4 +181,4 @@ Token issuance (see [Wire format § Authentication](./wire-format.md#authenticat
 
 ## Deferred: key rotation
 
-With pure `did:key`, identity _is_ the key: lose it and you're a new identity. For individuals and small groups who know each other, that's a recoverable social event ("new key, it's me" over a trusted channel; contacts update their `_entity` cards), not a protocol failure. Rotation — a signed chain of "key A hands off to key B" records, hosted by the stack itself — is a native fit for a future RFC, but nothing here blocks it: a rotated identity is either a new DID _documented by_ that log, or a method upgrade (`did:key` → stack-hosted method) for those who opt in. Multi-device works without rotation in the meantime: the identity key bootstraps a session per device via challenge–response; devices hold revocable tokens, never the key.
+With pure `did:key`, identity _is_ the key: lose it and you're a new identity. For individuals and small groups who know each other, that's a recoverable social event ("new key, it's me" over a trusted channel; contacts card the new key), not a protocol failure. Carding it is a new `_entity` record rather than an edit to the old one — [`did` is immutable once set](#did-bindings), which is the same rule that lets an app's replacement card carry the `appId` its predecessor already claimed. Rotation — a signed chain of "key A hands off to key B" records, hosted by the stack itself — is a native fit for a future RFC, but nothing here blocks it: a rotated identity is either a new DID _documented by_ that log, or a method upgrade (`did:key` → stack-hosted method) for those who opt in. Multi-device works without rotation in the meantime: the identity key bootstraps a session per device via challenge–response; devices hold revocable tokens, never the key.

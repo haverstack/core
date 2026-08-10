@@ -2994,10 +2994,31 @@ describe('_app.did bindings', () => {
 describe('_app.appId bindings', () => {
   const APP_DID = 'did:key:z6MkNotesApp';
 
-  test('rejects a second card claiming an appId already in use', async () => {
-    await stack.create('_app@1', { appId: 'com.example.notes', name: 'My Notes App' });
+  // appId is immutable but not unique: nothing resolves a card by it, and
+  // requiring it while forbidding a second card holding it would make the
+  // replacement card key rotation calls for unwritable.
+  test('a second card may claim the same appId under a different did', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    const rotated = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: 'did:key:z6MkNotesAppRotated',
+    });
+    expect((rotated.content as { appId: string }).appId).toBe('com.example.notes');
+  });
+
+  test('the did on those cards is still unique', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
     await expect(
-      stack.create('_app@1', { appId: 'com.example.notes', name: 'Impostor' }),
+      stack.create('_app@1', { appId: 'com.example.other', name: 'Impostor', did: APP_DID }),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -3067,6 +3088,23 @@ describe('_entity.did bindings', () => {
     // v1 holds the same did, so this rollback is a relabel and is allowed.
     const restored = await stack.restoreVersion(alice.id, 1);
     expect((restored.content as { did: string }).did).toBe(ALICE);
+  });
+
+  // Without contentFieldQuery the check cursor-walks the family and stops at
+  // the first clash, so a colliding card past page one must still be found —
+  // short-circuiting is what keeps the walk bounded, not a narrower scan.
+  test('finds a clash past page one on an adapter without contentFieldQuery', async () => {
+    const incapable = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    for (let i = 0; i < 60; i++) {
+      await incapable.create('_entity@1', { did: `did:key:filler${i}`, name: `Filler ${i}` });
+    }
+    await incapable.create('_entity@1', { did: ALICE, name: 'Alice' });
+
+    await expect(
+      incapable.create('_entity@1', { did: ALICE, name: 'Alice (impostor)' }),
+    ).rejects.toThrow(StackConflictError);
   });
 });
 

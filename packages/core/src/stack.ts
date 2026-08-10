@@ -84,16 +84,39 @@ const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * Content fields that are lookup keys rather than display values: a card
- * claims one, and something later resolves through it. Each is unique per
- * stack and immutable once set. See docs/spec/identity.md § DID bindings.
+ * claims one, and something later resolves through it. Every one of them is
+ * immutable once set. See docs/spec/identity.md § DID bindings.
  */
 const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
 ]);
 
+/**
+ * The subset that is additionally unique per stack: the fields something
+ * resolves *by*. A Record's `principalId` finds its card by `_app.did` and
+ * its `entityId` by `_entity.did`, so a second card claiming either leaves
+ * that lookup without a single answer — and ambiguity is all an
+ * impersonating card needs.
+ *
+ * `_app.appId` is deliberately absent. Nothing resolves a card by it — the
+ * cross-check reaches the card by `did` and only compares `appId` — so
+ * uniqueness would buy no disambiguation, while forbidding the second card
+ * key rotation is supposed to produce: `appId` is required, so a
+ * replacement card for the same software necessarily repeats it. Moving one
+ * card onto another's `appId` is what immutability already refuses.
+ * See docs/spec/identity.md § DID bindings.
+ */
+const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
+  [SYSTEM_TYPES.APP, ['did'] as const],
+  [SYSTEM_TYPES.ENTITY, ['did'] as const],
+]);
+
 const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
   BINDING_FIELDS.get(family) ?? [];
+
+const uniqueBindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
+  UNIQUE_BINDING_FIELDS.get(family) ?? [];
 
 export type CreateRecordOptions = {
   /**
@@ -1297,21 +1320,22 @@ export class Stack implements StackClient {
     });
   }
 
-  /** Uniqueness for every binding field a newly created card claims. */
+  /** Uniqueness for every unique binding field a newly created card claims. */
   private async checkBindingsOnCreate(
     typeId: TypeId,
     content: Record<string, unknown>,
   ): Promise<void> {
     const family = baseIdOf(typeId);
-    for (const field of bindingFieldsOf(family)) {
+    for (const field of uniqueBindingFieldsOf(family)) {
       await this.checkBindingUnique(family, field, content[field]);
     }
   }
 
   /**
-   * Immutability then uniqueness for every binding field a patch touches.
-   * Fields absent from the patch carry no new claim — update() is a merge,
-   * so an untouched binding is the one the card already holds.
+   * Immutability for every binding field a patch touches, then uniqueness
+   * for the subset that carries it. Fields absent from the patch carry no
+   * new claim — update() is a merge, so an untouched binding is the one the
+   * card already holds.
    */
   private async checkBindingsOnUpdate(
     typeId: TypeId,
@@ -1321,21 +1345,27 @@ export class Stack implements StackClient {
     merged: Record<string, unknown>,
   ): Promise<void> {
     const family = baseIdOf(typeId);
+    const unique = uniqueBindingFieldsOf(family);
     for (const field of bindingFieldsOf(family)) {
       if (!(field in patch)) continue;
       this.checkBindingImmutable(family, field, existing[field], merged[field]);
-      await this.checkBindingUnique(family, field, merged[field], id);
+      if (unique.includes(field)) {
+        await this.checkBindingUnique(family, field, merged[field], id);
+      }
     }
   }
 
   /**
-   * A card's binding field is what a lookup resolves through — a record's
-   * `principalId` through `_app.did`, its `entityId` through `_entity.did`,
-   * a claimed `appId` through `_app.appId`. Two cards claiming one value
-   * would make that lookup ambiguous, and ambiguity is all an impersonating
-   * card needs. Enforced here rather than by schema, since uniqueness is a
-   * property of the set, not of the value. Called by the paths that can
-   * introduce a binding: create and update.
+   * A unique binding field is what a lookup resolves *by* — a record's
+   * `principalId` by `_app.did`, its `entityId` by `_entity.did`. Two cards
+   * claiming one value would leave that lookup without a single answer, and
+   * ambiguity is all an impersonating card needs. Enforced here rather than
+   * by schema, since uniqueness is a property of the set, not of the value.
+   * Called by the paths that can introduce a binding: create and update.
+   *
+   * Short-circuits on the first clash rather than materialising the family,
+   * so a stack whose `_entity` family is larger than a single scan settles
+   * the common case — the value is already taken — without walking the rest.
    *
    * Read-then-write, so two creates racing on one value can both pass.
    * Closing that properly means a unique index over a JSON field, which
@@ -1351,14 +1381,15 @@ export class Stack implements StackClient {
   ): Promise<void> {
     if (typeof value !== 'string' || value === '') return;
 
-    const results = await queryAllPages((q) => this.query(q), {
-      filter: {
-        baseId: family,
-        includeDeleted: true,
-        ...(this.features.contentFieldQuery && { content: { [field]: value } }),
+    const clash = await findFirstMatch(
+      (q) => this.query(q),
+      {
+        filter: {
+          baseId: family,
+          includeDeleted: true,
+          ...(this.features.contentFieldQuery && { content: { [field]: value } }),
+        },
       },
-    });
-    const clash = results.some(
       (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
     );
     if (clash) {
@@ -2483,8 +2514,20 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
-    this.requireOwnerForAppIdentity(record.typeId, (field) => field in content);
-    if ('did' in content) this.requireOwnerForOwnerDid(record.typeId, content.did);
+    // Value-wise, not presence-wise: a client that reads a card, edits its
+    // `name` and sends the whole content object back is not setting the
+    // binding it round-trips, and `name` is writable by record-level
+    // permission. Same predicate restoreVersion() applies to a snapshot.
+    this.requireOwnerForAppIdentity(
+      record.typeId,
+      (field) =>
+        field in content && content[field] !== (record.content as Record<string, unknown>)[field],
+    );
+    // Likewise value-wise: re-sending the DID a card already holds claims
+    // nothing, and immutability refuses changing it regardless.
+    if ('did' in content && content.did !== (record.content as Record<string, unknown>).did) {
+      this.requireOwnerForOwnerDid(record.typeId, content.did);
+    }
     await this.requireFileRefAccess(record.typeId, content);
     return this.stack.update(id, content, opts);
   }
