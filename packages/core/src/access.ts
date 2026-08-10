@@ -29,7 +29,8 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
  * The entity here is the **subject** — record-level permissions are written
  * about who data is for, never about the software that carried the request.
  * A delegated app's own authority is a separate question, asked of the
- * principal. See docs/spec/access-control.md § Delegation.
+ * principal. See docs/spec/access-control.md § Delegation: principal and
+ * subject.
  */
 export async function checkAccess(
   record: StackRecord,

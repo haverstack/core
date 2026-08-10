@@ -1976,7 +1976,8 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 }
 
 /**
- * A permission-enforcing view of a Stack for a single requester, obtained
+ * A permission-enforcing view of a Stack for a single (principal, subject)
+ * pair, obtained
  * via `stack.asEntity(entityId)`. Missing records throw StackNotFoundError
  * (or return null on reads); existing-but-inaccessible ones throw
  * StackPermissionError. See docs/spec/access-control.md.
@@ -2238,7 +2239,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester may reference `recordId` (as a parentId or
+   * Whether this request may reference `recordId` (as a parentId or
    * relationship target). Missing and unreadable both return false —
    * indistinguishable, so this can't probe for a record's existence.
    */
@@ -2249,7 +2250,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester can read some record referencing `fileId` —
+   * Whether this request can read some record referencing `fileId` —
    * shared by canAccessFile() and the non-owner _attachment@1 create()
    * carve-out, which deliberately excludes the uploader clause. Walks
    * every referencing record, short-circuiting on the first readable one.
@@ -2271,7 +2272,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether the requester may reference or download `fileId` — the dual of
+   * Whether this request may reference or download `fileId` — the dual of
    * getAttachment()'s access rule. Nonexistent and inaccessible are
    * indistinguishable (both false), so no confirmation oracle for guessed
    * hashes. See docs/spec/access-control.md § Reference-creation gating.
@@ -2279,7 +2280,7 @@ export class ScopedStack implements StackClient {
   private async canAccessFile(fileId: string): Promise<boolean> {
     if (this.ownerActingAlone) return true;
 
-    // Reaching a file through a record the requester can read is already
+    // Reaching a file through a record this request can read is already
     // fully intersected — canRead() applied the principal's mask against
     // that record's own type, which is the type the reference lives on.
     if (await this.hasReadableReference(fileId)) return true;
@@ -2356,7 +2357,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Create a record on behalf of the requester: create grant required,
+   * Create a record on behalf of the subject: create grant required,
    * anonymous denied, entityId set to the subject, client IDs skew-checked,
    * reference-creating options gated, and non-owner `_attachment@1`
    * creation refused save one carve-out. A scoped create always stamps
@@ -2409,14 +2410,15 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether this requester may decide who else reaches a record — the rule
+   * Whether this request may decide who else reaches a record — the rule
    * setPermissions() enforces, asked at create time too so the reach it
    * withholds can't be taken one step earlier while authoring. A delegated
    * app is denied it: widening access is the one thing containment most
    * needs to hold. Refused rather than silently ignored, so an app never
    * believes it published something it didn't. Not `ownerActingAlone`:
    * the record is the subject's own, so an owner principal grants it no
-   * reach the subject lacks. See docs/spec/access-control.md § Delegation.
+   * reach the subject lacks.
+   * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   private mayGrantAccess(): boolean {
     return !this.delegated || this.principalEntityId === this.stack.ownerEntityId;
@@ -2441,7 +2443,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Query records, filtered to those the requester can read. Pages are
+   * Query records, filtered to those this request can read. Pages are
    * filtered then refilled, so a page may slightly overshoot `limit` but
    * never skips a record. `total` is always null (see QueryResult.total).
    * Grants are prefetched once, cursor-walked to exhaustion.
@@ -2670,7 +2672,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * Re-runs the reference-creation checks against the snapshot, so a
-   * restore can't re-convey access to a file or record the requester can no
+   * restore can't re-convey access to a file or record the subject can no
    * longer reach today. Only the owner acting alone is exempt: under
    * delegation the checks resolve against the subject, which is whose reach
    * the restore would widen. See docs/spec/versioning.md § Restore semantics.
