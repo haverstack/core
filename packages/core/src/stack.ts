@@ -610,19 +610,20 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Idempotent bootstrap for StackOptions.ownerProfile. Filters by typeId
+   * Idempotent bootstrap for StackOptions.ownerProfile. Filters by family
    * only (contentFieldQuery is capability-gated) and matches `content.did`
    * in memory, cursor-walking so an owner card past page one isn't missed
-   * and duplicated. Soft-deleted cards count as present: a deleted card
-   * still reserves its `did`, so a probe blind to one would mint a card the
-   * binding rules then refuse, leaving the stack unopenable with
-   * `ownerProfile`. See docs/spec/identity.md § DID bindings.
+   * and duplicated. The probe must be blind to nothing the binding rules
+   * see, or it mints a card they then refuse and the stack won't open with
+   * `ownerProfile`: soft-deleted cards still reserve their `did`, and a card
+   * migrated to a later version still holds one.
+   * See docs/spec/identity.md § DID bindings.
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
     const existing = await findFirstMatch(
-      (q) => this.adapter.queryRecords(q),
-      { filter: { typeId: entityTypeId, includeDeleted: true } },
+      (q) => this.query(q),
+      { filter: { baseId: SYSTEM_TYPES.ENTITY, includeDeleted: true } },
       (r) => (r.content as EntityContent).did === this.ownerEntityId,
     );
     if (existing) return;

@@ -140,6 +140,29 @@ describe('Stack.create', () => {
       expect(all.records[0].deletedAt).toBeDefined();
     });
 
+    // The bootstrap probe and the binding rules must agree about what
+    // "already exists" means on every axis, version included: uniqueness is
+    // checked across the whole `_entity` family, so a probe that looked only
+    // at `_entity@1` would mint a card the rules then refuse.
+    test('treats an owner record migrated to a later type version as existing', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      await s.defineType('_entity@2', 'Entity', {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+        pronouns: { kind: 'string' },
+      });
+      s.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
+      await s.migrateAll('_entity');
+
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+
+      const { records } = await reopened.query({ filter: { baseId: '_entity' } });
+      expect(records).toHaveLength(1);
+      expect(records[0].typeId).toBe('_entity@2');
+    });
+
     test('leaves the created record unauthored (no entityId), matching owner-attributed convention', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
