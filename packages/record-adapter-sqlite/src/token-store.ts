@@ -13,7 +13,7 @@
  * interface.
  */
 
-import type { StackTokenStore, TokenInfo } from '@haverstack/core';
+import type { StackTokenStore, TokenInfo, TokenSession } from '@haverstack/core';
 import {
   TOKENS_SCHEMA_SQL,
   PRAGMA_JOURNAL_MODE_WAL,
@@ -52,13 +52,13 @@ export class NativeTokenStore implements StackTokenStore {
   }
 
   createToken(
-    entityId: string,
-    opts?: { label?: string; expiresAt?: Date },
+    principalId: string,
+    opts?: { onBehalfOf?: string; label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
-    return this.tokens.createToken(entityId, opts);
+    return this.tokens.createToken(principalId, opts);
   }
 
-  lookupToken(token: string): Promise<{ entityId: string } | null> {
+  lookupToken(token: string): Promise<TokenSession | null> {
     return this.tokens.lookupToken(token);
   }
 

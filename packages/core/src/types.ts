@@ -626,9 +626,24 @@ export type StackAdapter = StackRecordAdapter &
     ): Promise<StackRecord>;
   };
 
-export type TokenInfo = {
+/**
+ * The two identities a token establishes. Both are always populated: on an
+ * undelegated token they are the same DID, and spelling that out is what
+ * keeps the mapping onto asEntity() mechanical.
+ *
+ *     stack.asEntity(session.principalId, { onBehalfOf: session.subjectId })
+ *
+ * See docs/spec/access-control.md § Delegation: principal and subject.
+ */
+export type TokenSession = {
+  /** Who authenticated — the DID that proved key possession. Governs authority. */
+  principalId: EntityId;
+  /** Who the principal acts for. Governs attribution. Equal to principalId unless delegated. */
+  subjectId: EntityId;
+};
+
+export type TokenInfo = TokenSession & {
   id: string;
-  entityId: EntityId;
   label?: string;
   createdAt: Date;
   expiresAt?: Date;
@@ -640,16 +655,21 @@ export type TokenInfo = {
  * its caller: DID verification happens first, via the challenge-response
  * handshake. Tokens SHOULD be stored outside the portable stack file.
  * See docs/spec/wire-format.md § Authentication.
+ *
+ * `onBehalfOf` is the delegation binding, and no handshake can establish
+ * it — proving key possession proves the principal and nothing about whom
+ * it may act for. It is asserted by the owner out of band, which is safe
+ * because effective authority is the intersection of both parties' grants.
  */
 export interface StackTokenStore {
   createToken(
-    entityId: EntityId,
-    opts?: { label?: string; expiresAt?: Date },
+    principalId: EntityId,
+    opts?: { onBehalfOf?: EntityId; label?: string; expiresAt?: Date },
   ): Promise<{
     id: string;
     token: string;
   }>;
-  lookupToken(token: string): Promise<{ entityId: EntityId } | null>;
+  lookupToken(token: string): Promise<TokenSession | null>;
   listTokens(): Promise<TokenInfo[]>;
   revokeToken(id: string): Promise<void>;
 }

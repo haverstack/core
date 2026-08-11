@@ -24,6 +24,14 @@ import {
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
+  authChallengeFixtures,
+  authTokenFixtures,
+  AUTH_FIXTURE_ORIGIN,
+  AUTH_FIXTURE_DID,
+  AUTH_FIXTURE_NONCE,
+  AUTH_FIXTURE_PAYLOAD,
+  AUTH_FIXTURE_SIGNATURE,
+  AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
 import type { Association, StackType } from '@haverstack/core';
 import {
@@ -35,6 +43,11 @@ import {
   StackVersionConflictError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  buildAuthChallengePayload,
+  verifyAuthChallenge,
+  base64urlDecode,
+  generateDidKeypair,
+  didCredentialFromKeypair,
 } from '@haverstack/core';
 
 const BASE_URL = 'https://stack.example.com';
@@ -89,6 +102,93 @@ describe('discovery fixtures', () => {
       expect(adapter.capabilities).toEqual(fixture.responseBody!.capabilities);
     });
   }
+});
+
+// The handshake fixtures carry a real DID, nonce and signature, so they
+// pin the payload construction itself rather than only the JSON envelope
+// around it — a server can verify one instead of trusting its own
+// derivation. These assert the fixture data and core's implementation
+// agree, in both directions.
+describe('auth handshake fixtures', () => {
+  const fixtureChallenge = {
+    origin: AUTH_FIXTURE_ORIGIN,
+    did: AUTH_FIXTURE_DID,
+    nonce: AUTH_FIXTURE_NONCE,
+  };
+
+  test('the payload core builds is the one the fixtures document', () => {
+    expect(new TextDecoder().decode(buildAuthChallengePayload(fixtureChallenge))).toBe(
+      AUTH_FIXTURE_PAYLOAD,
+    );
+  });
+
+  test('the fixture signature verifies against that payload', async () => {
+    expect(
+      await verifyAuthChallenge(fixtureChallenge, base64urlDecode(AUTH_FIXTURE_SIGNATURE)),
+    ).toBe(true);
+  });
+
+  test('the foreign-signature fixture is well-formed and verifies for nobody', async () => {
+    // Decodes as a signature — the fixture pins a rejected credential, not
+    // a malformed request, so it has to be a real signature by another key.
+    expect(base64urlDecode(AUTH_FIXTURE_FOREIGN_SIGNATURE).length).toBe(64);
+    expect(
+      await verifyAuthChallenge(fixtureChallenge, base64urlDecode(AUTH_FIXTURE_FOREIGN_SIGNATURE)),
+    ).toBe(false);
+  });
+
+  test('the fixture signature does not verify for another origin', async () => {
+    expect(
+      await verifyAuthChallenge(
+        { ...fixtureChallenge, origin: 'https://impostor.example.net' },
+        base64urlDecode(AUTH_FIXTURE_SIGNATURE),
+      ),
+    ).toBe(false);
+  });
+
+  const challengeFixture = authChallengeFixtures.find(
+    (f) => f.name === 'auth-challenge-issues-nonce',
+  )!;
+  const tokenFixture = authTokenFixtures.find((f) => f.name === 'auth-token-issues-bearer-token')!;
+
+  test('APIAdapter performs the documented handshake and uses the token it earns', async () => {
+    const credential = didCredentialFromKeypair(await generateDidKeypair());
+
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+    );
+    mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+    mockFetch.mockResolvedValueOnce(jsonResponse(tokenFixture.responseBody));
+
+    const adapter = await APIAdapter.open({ url: BASE_URL, credential });
+
+    const [challengeUrl, challengeInit] = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(challengeUrl).toBe(`${BASE_URL}${challengeFixture.path}`);
+    expect(challengeInit.method).toBe(challengeFixture.method);
+    expect(JSON.parse(challengeInit.body as string)).toEqual({ did: credential.did });
+
+    const [tokenUrl, tokenInit] = mockFetch.mock.calls[2] as [string, RequestInit];
+    expect(tokenUrl).toBe(`${BASE_URL}${tokenFixture.path}`);
+    expect(tokenInit.method).toBe(tokenFixture.method);
+    const sent = JSON.parse(tokenInit.body as string) as Record<string, string>;
+    expect(sent.did).toBe(credential.did);
+    expect(sent.nonce).toBe(AUTH_FIXTURE_NONCE);
+    // The adapter signs with its own key, so what is pinned is that the
+    // signature it sends verifies for the challenge it was answering.
+    expect(
+      await verifyAuthChallenge(
+        { origin: BASE_URL, did: credential.did, nonce: AUTH_FIXTURE_NONCE },
+        base64urlDecode(sent.signature),
+      ),
+    ).toBe(true);
+
+    mockFetch.mockResolvedValueOnce(jsonResponse([]));
+    await adapter.listTypes();
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['Authorization']).toBe(
+      `Bearer ${(tokenFixture.responseBody as { token: string }).token}`,
+    );
+  });
 });
 
 describe('createRecord fixtures', () => {

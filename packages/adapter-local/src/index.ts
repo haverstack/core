@@ -29,6 +29,7 @@ import type {
   FileId,
   BlobFileInfo,
   TokenInfo,
+  TokenSession,
 } from '@haverstack/core';
 import {
   NativeSQLiteRecordAdapter,
@@ -48,7 +49,7 @@ export type {
   NativeRecordOpenOptions,
   NativeTokenStoreOptions,
 } from '@haverstack/record-adapter-sqlite';
-export type { TokenInfo } from '@haverstack/core';
+export type { TokenInfo, TokenSession } from '@haverstack/core';
 export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 
 // -------------------------------------------------------
@@ -282,14 +283,14 @@ export class LocalAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async createToken(
-    entityId: string,
-    opts?: { label?: string; expiresAt?: Date },
+    principalId: string,
+    opts?: { onBehalfOf?: string; label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
     const store = await this.getTokenStore();
-    return store.createToken(entityId, opts);
+    return store.createToken(principalId, opts);
   }
 
-  async lookupToken(token: string): Promise<{ entityId: string } | null> {
+  async lookupToken(token: string): Promise<TokenSession | null> {
     const store = await this.getTokenStore();
     return store.lookupToken(token);
   }

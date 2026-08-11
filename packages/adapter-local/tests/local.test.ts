@@ -151,7 +151,7 @@ describe('tokens', () => {
     const adapter = await initAdapter();
     const { token } = await adapter.createToken('entity-abc');
     const result = await adapter.lookupToken(token);
-    expect(result?.entityId).toBe('entity-abc');
+    expect(result).toEqual({ principalId: 'entity-abc', subjectId: 'entity-abc' });
   });
 
   test('lookupToken returns null for invalid token', async () => {

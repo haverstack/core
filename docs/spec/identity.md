@@ -171,13 +171,19 @@ This gives roles for free via association labels, and membership is queryable an
 
 ## Authentication: challenge–response
 
-Token issuance (see [Wire format § Authentication](./wire-format.md#authentication)) is not an out-of-band secret handoff. Sketch of the handshake a server implements — not a normative wire contract, since the concrete HTTP endpoint lives in server implementations (`@haverstack/core` verifies signatures; it doesn't run a server):
+Token issuance is not an out-of-band secret handoff, and the handshake that replaces one is a **normative wire contract** — [Wire format § Authentication](./wire-format.md#authentication) pins the endpoints, the signed payload, and the error vocabulary. It has to be normative to be worth anything: a client that must be handed a token by some server-specific means is back to an out-of-band handoff, for every server. In outline:
 
 1. Client requests a nonce for its DID: `POST /auth/challenge { did }` → server responds `{ nonce, expiresAt }`.
-2. Client signs the nonce with the private key behind its DID (`signWithDid()`) and sends it back: `POST /auth/token { did, nonce, signature }`.
-3. Server verifies (`verifyDidSignature()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken(did)` and returns the bearer token.
+2. Client signs a domain-separated payload binding the server's origin, its DID and the nonce — `buildAuthChallengePayload()` builds it, `signAuthChallenge()` signs it — and sends the signature back: `POST /auth/token { did, nonce, signature }`.
+3. Server verifies against the payload it builds itself (`verifyAuthChallenge()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken(did)` and returns the bearer token.
+
+`@haverstack/core` supplies both halves of steps 2 and 3 and runs no server; a server implementation brings the endpoints, nonce storage and single-use enforcement.
 
 "Access granted to the holder of key X" is verifiable with no provider, no email loop, no OAuth.
+
+**What the handshake does not establish is delegation.** Proving key possession proves the principal — it says nothing about whom that key may act for, and an app that could name its own subject would be choosing its own authority. So `/auth/token` never delegates; the owner asserts a (principal, subject) binding out of band, which is safe unproven because [effective authority is the intersection](./access-control.md#delegation-principal-and-subject) of both parties' grants. A consent flow in which the subject authorizes an app directly is a reserved extension point, not something core builds today.
+
+**The handshake authenticates the client to the server, and not the reverse.** A server proves nothing about itself here beyond holding the URL you dialed — it cannot, holding none of the owner's keys — which is why the signed payload binds the server's origin: see [Wire format § Identity is trusted on transport](./wire-format.md#identity-is-trusted-on-transport) for what that buys and what stays open.
 
 **Verified-but-ungranted is distinguishable from anonymous.** Verification establishes "this requester controls the key behind this identifier, and will be the same someone next time" — exactly the line `Permission`/`Grant`'s "any authenticated entity" depends on. Concretely: anonymous → **401**; verified-but-ungranted → **403** (see [Wire format § Error responses](./wire-format.md#error-responses)). Verified ≠ trusted, or even human — DIDs are free to mint, so this is about stability and accountability of the identifier, not vetting of the person. Default grants remain appropriate only for low-stakes actions; anything of consequence should be granted to specific known DIDs. Servers SHOULD log the requester DID on denied-but-verified requests — actionable signal that plain anonymous noise isn't.
 
