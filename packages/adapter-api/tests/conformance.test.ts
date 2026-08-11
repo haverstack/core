@@ -7,7 +7,7 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { APIAdapter, APIAdapterAuthError } from '../src/index.js';
+import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
 import {
   createRecordFixtures,
   patchContentFixtures,
@@ -26,6 +26,7 @@ import {
   attachmentUploadFixtures,
   authChallengeFixtures,
   authTokenFixtures,
+  authSequenceFixtures,
   AUTH_FIXTURE_ORIGIN,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
@@ -34,6 +35,7 @@ import {
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
 import type { Association, StackType } from '@haverstack/core';
+import type { WireAuthError } from '@haverstack/wire-types';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -116,6 +118,11 @@ describe('auth handshake fixtures', () => {
     nonce: AUTH_FIXTURE_NONCE,
   };
 
+  const challengeFixture = authChallengeFixtures.find(
+    (f) => f.name === 'auth-challenge-issues-nonce',
+  )!;
+  const tokenFixture = authTokenFixtures.find((f) => f.name === 'auth-token-issues-bearer-token')!;
+
   test('the payload core builds is the one the fixtures document', () => {
     expect(new TextDecoder().decode(buildAuthChallengePayload(fixtureChallenge))).toBe(
       AUTH_FIXTURE_PAYLOAD,
@@ -146,10 +153,57 @@ describe('auth handshake fixtures', () => {
     ).toBe(false);
   });
 
-  const challengeFixture = authChallengeFixtures.find(
-    (f) => f.name === 'auth-challenge-issues-nonce',
-  )!;
-  const tokenFixture = authTokenFixtures.find((f) => f.name === 'auth-token-issues-bearer-token')!;
+  // A replay fixture is only a replay if the second request is
+  // indistinguishable from the first — otherwise it pins a differently
+  // shaped request and a server could pass it without spending nonces.
+  test('the single-use sequence replays a byte-identical request', () => {
+    const [first, second] = authSequenceFixtures.find(
+      (f) => f.name === 'auth-nonce-is-single-use',
+    )!.steps;
+    expect(second.method).toBe(first.method);
+    expect(second.path).toBe(first.path);
+    expect(second.requestBody).toEqual(first.requestBody);
+    expect(first.responseStatus).toBe(200);
+    expect(second.responseStatus).toBe(401);
+  });
+
+  // Internally consistent and still refused: the signature verifies, but
+  // the nonce was issued to somebody else.
+  test('the wrong-DID fixture carries a signature that genuinely verifies for its DID', async () => {
+    const fixture = authTokenFixtures.find(
+      (f) => f.name === 'auth-token-rejects-nonce-issued-to-another-did',
+    )!;
+    const body = fixture.requestBody!;
+    expect(body.did).not.toBe(AUTH_FIXTURE_DID);
+    expect(
+      await verifyAuthChallenge(
+        { origin: AUTH_FIXTURE_ORIGIN, did: body.did, nonce: body.nonce },
+        base64urlDecode(body.signature),
+      ),
+    ).toBe(true);
+  });
+
+  // Ties the fixture vocabulary to what a client does with it: the codes
+  // drive whether the adapter retries, so reconstructing them is the point.
+  for (const fixture of authTokenFixtures.filter((f) => f.responseStatus !== 200)) {
+    test(`${fixture.name} — reconstructed as a typed handshake error`, async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+      );
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      // A retryable code buys one more handshake before it gives up.
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const credential = didCredentialFromKeypair(await generateDidKeypair());
+      const err = await APIAdapter.open({ url: BASE_URL, credential }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(APIAdapterHandshakeError);
+      expect((err as APIAdapterHandshakeError).code).toBe(
+        (fixture.responseBody as WireAuthError).error.code,
+      );
+    });
+  }
 
   test('APIAdapter performs the documented handshake and uses the token it earns', async () => {
     const credential = didCredentialFromKeypair(await generateDidKeypair());

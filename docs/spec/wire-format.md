@@ -125,6 +125,19 @@ The retryable column is the reason these carry codes at all, rather than being b
 
 **A server MUST NOT distinguish never-issued from already-spent** in the code it returns. The two differ only in what an attacker learns.
 
+### Server implementation checklist
+
+Core runs no server, so every control below lives in the implementer's code — and the fixtures cannot check any of them. A fixture pins the shape of a request and its response; each of these is a property of state or configuration, so **a server can pass every fixture in this spec and still be unsafe.** They are collected here rather than left scattered through the prose above because that is exactly the reading order that misses one.
+
+- **Derive the signing origin from your own configured public origin, never from a request header.** `Host` and `X-Forwarded-Host` are set by the client. A server that builds the payload from one lets the client choose which origin it signs for, which silently restores the relay this binding exists to prevent — an impostor replays a harvested signature with the matching `Host` and it verifies. The failure has no symptom: every fixture passes, since none varies the header. Behind a TLS terminator, the configured value is the **public** origin clients dial, not the internal one the proxy forwards to.
+- **Spend a nonce when it is redeemed** — do not merely check that it exists and has not expired. This is pinned by `authSequenceFixtures`, the one fixture group whose point is ordering; a single request/response pair cannot express "and not a second time".
+- **Record which DID each nonce was issued to, and check it on redemption.** A redemption can be internally consistent — a valid signature by the DID it names — and still be a nonce that belongs to someone else.
+- **Never let a client name its own subject.** Delegation is asserted by the owner through an admin surface of your own; an endpoint where an app requests a token for a user is an app choosing its own authority (see [below](#the-session-a-token-names)).
+- **Generate nonces in the base64url alphabet** (`A-Za-z0-9_-`) — `base64` output containing `+`, `/` or `=` is refused by conforming clients before they sign, so the error surfaces at the client rather than the server that caused it.
+- **Return 401 and 403 for different things.** Anonymous or invalid token is 401; verified-but-ungranted is 403 (see [Error responses](#error-responses)). Collapsing them discards the distinction the whole identity model rests on.
+
+Two more sit in code this spec doesn't reach but a server does: `entityId` and `principalId` [must be ignored on input](#records), and a session's two identities must reach `ScopedStack` in the right order — `Stack.forSession()` takes the pair whole for that reason.
+
 ### The session a token names
 
 A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **always reports them equal**: proving key possession proves the principal and says nothing whatever about whom that key may act for. There is no field a client could add to change that — an app that could name its own subject would be choosing its own authority, and containment would evaporate.
@@ -133,7 +146,7 @@ The pair is reported anyway rather than collapsed to one field, because delegate
 
 **Scoped consent is the extension point this shape reserves.** A flow where the _subject_ authorizes an app directly — OAuth/IndieAuth-shaped — issues a token of exactly this shape through a different route, advertises itself as another entry in `auth.methods`, and needs nothing here to change. Nothing in core builds it today.
 
-(`@haverstack/core` defines the `StackTokenStore` contract — `createToken(principalId, { onBehalfOf })` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. `lookupToken()` returns both identities always populated, which maps onto `stack.asEntity(principalId, { onBehalfOf: subjectId })` without a caller having to know which field stands in for the other when there is no delegation. Its values are DIDs, same as everywhere else — see [Identity](./identity.md).)
+(`@haverstack/core` defines the `StackTokenStore` contract — `createToken(principalId, { onBehalfOf })` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. `lookupToken()` returns both identities always populated, so no caller has to know which field stands in for the other when there is no delegation, and `Stack.forSession()` takes that pair whole — see [Access control § Enforcement](./access-control.md#enforcement-stackasentity). Its values are DIDs, same as everywhere else — see [Identity](./identity.md).)
 
 ## Error responses
 

@@ -63,8 +63,8 @@ const adapter = await APIAdapter.open({
 Server-side, a token resolves to two identities, and when an app acts for a person rather than for itself the server names them both — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
 
 ```ts
-const session = await tokens.lookupToken(bearer);
-const scoped = stack.asEntity(session.principalId, { onBehalfOf: session.subjectId });
+const session = await tokens.lookupToken(bearer); // { principalId, subjectId }
+const scoped = stack.forSession(session);
 ```
 
 The delegation itself — "this app acts for Bob" — is asserted by you when the token is issued, not by the app: proving key possession proves who the app _is_ and nothing about whom it may speak for. An app that could name its own subject would be choosing its own authority.

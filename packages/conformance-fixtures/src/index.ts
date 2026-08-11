@@ -56,6 +56,30 @@ export type ConformanceFixture<Req = unknown, Res = unknown> = {
   responseBody?: Res;
 };
 
+/**
+ * Two or more requests whose *order* is the thing being pinned — where the
+ * obligation is that a server changed state, not that it produced a shape.
+ *
+ * A single request/response pair cannot express "and not a second time",
+ * so a server can satisfy every fixture above while being replayable. That
+ * is the gap this exists for, and it is a narrow one: reach for a plain
+ * ConformanceFixture unless a step's expected response depends on an
+ * earlier step having happened.
+ *
+ * Steps are ordinary fixtures applied in order against one server, each
+ * seeing the state the previous left. Nothing is templated between them —
+ * a step that repeats an earlier one repeats it byte for byte, which is
+ * what makes a replay fixture a replay rather than a differently-shaped
+ * request.
+ */
+export type ConformanceSequenceFixture = {
+  /** Unique, stable name — usable as a test-case id. */
+  name: string;
+  /** What this sequence pins down, why order matters, and any assumed prior state. */
+  description: string;
+  steps: ConformanceFixture[];
+};
+
 // -------------------------------------------------------
 // Discovery
 // -------------------------------------------------------
@@ -1153,6 +1177,13 @@ export const AUTH_FIXTURE_SIGNATURE =
 export const AUTH_FIXTURE_FOREIGN_SIGNATURE =
   'qFvrpIE8dSPBO8-4QgFbS8jgs8dIz5XcqmqHX1GzFKrg6EnwNnc9vu2y8K1UHXKIUDo_NJgTj5B4xSGXUotiBg';
 
+/** A second DID, holding its own key — for pinning that a nonce belongs to the DID it was issued for. */
+export const AUTH_FIXTURE_OTHER_DID = 'did:key:z6Mktp5FtRqj2M7JxnPz9JWGMCUTE5o3XGt1br11TczKGp7B';
+
+/** AUTH_FIXTURE_OTHER_DID's own valid signature over the same origin and nonce. */
+export const AUTH_FIXTURE_OTHER_DID_SIGNATURE =
+  'HV-vmd5p9cj6V4HjTUWLt1ySnFpp-hT4P_Lh_JXueTV8D992L4V-oEyL6koGY-kbkMB3ulJTLf7SYfnuXkXZDQ';
+
 export const authChallengeFixtures: ConformanceFixture<
   AuthChallengeRequest,
   AuthChallengeResponse | WireAuthError
@@ -1250,6 +1281,25 @@ export const authTokenFixtures: ConformanceFixture<
     responseBody: { error: { code: 'expired_nonce', message: 'Challenge has expired' } },
   },
   {
+    name: 'auth-token-rejects-nonce-issued-to-another-did',
+    description:
+      'A nonce belongs to the DID it was issued for. This redemption is internally consistent — ' +
+      'AUTH_FIXTURE_OTHER_DID signed this exact origin and nonce with its own key, so the ' +
+      'signature verifies — and must still be refused with 401 / code "unknown_nonce", because ' +
+      'the nonce was issued to AUTH_FIXTURE_DID. A server that stores nonces without recording ' +
+      'who each was issued to passes every other fixture here and fails this one. Assumes the ' +
+      'server has issued AUTH_FIXTURE_NONCE to AUTH_FIXTURE_DID and not yet spent it.',
+    method: 'POST',
+    path: '/auth/token',
+    requestBody: {
+      did: AUTH_FIXTURE_OTHER_DID,
+      nonce: AUTH_FIXTURE_NONCE,
+      signature: AUTH_FIXTURE_OTHER_DID_SIGNATURE,
+    },
+    responseStatus: 401,
+    responseBody: { error: { code: 'unknown_nonce', message: 'Unknown or already-used nonce' } },
+  },
+  {
     name: 'auth-token-rejects-unknown-nonce',
     description:
       'A nonce the server never issued — or already spent, single use being what keeps a ' +
@@ -1265,6 +1315,63 @@ export const authTokenFixtures: ConformanceFixture<
     },
     responseStatus: 401,
     responseBody: { error: { code: 'unknown_nonce', message: 'Unknown or already-used nonce' } },
+  },
+];
+
+/**
+ * Single-use is the one handshake obligation no single request/response
+ * pair can express, and it is the one whose absence is invisible: a server
+ * that issues nonces, verifies signatures, and never spends them satisfies
+ * every fixture above while letting one captured signature be redeemed for
+ * as long as the nonce lives.
+ */
+export const authSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'auth-nonce-is-single-use',
+    description:
+      'The same valid redemption sent twice: the first earns a token, the second is refused ' +
+      'with 401 / code "unknown_nonce". The two requests are byte-identical — that is what makes ' +
+      'this a replay rather than a differently-shaped request — so nothing about the second one ' +
+      'distinguishes it except that the first already happened. A server must therefore spend ' +
+      'the nonce when it redeems it, not merely check that it exists and has not expired. ' +
+      'Assumes the server has issued AUTH_FIXTURE_NONCE to AUTH_FIXTURE_DID and not yet spent ' +
+      'it. Note the refusal does not say "already used": never-issued and already-spent are ' +
+      'deliberately indistinguishable, since they differ only in what an attacker learns.',
+    steps: [
+      {
+        name: 'auth-nonce-is-single-use-first-redemption',
+        description: 'The first redemption of a freshly issued nonce succeeds.',
+        method: 'POST',
+        path: '/auth/token',
+        requestBody: {
+          did: AUTH_FIXTURE_DID,
+          nonce: AUTH_FIXTURE_NONCE,
+          signature: AUTH_FIXTURE_SIGNATURE,
+        },
+        responseStatus: 200,
+        responseBody: {
+          token: 'a3f1c8e29b7d4056ab12cd34ef567890a3f1c8e29b7d4056ab12cd34ef567890',
+          expiresAt: '2024-06-22T12:00:00.000Z',
+          principalId: AUTH_FIXTURE_DID,
+          subjectId: AUTH_FIXTURE_DID,
+        },
+      },
+      {
+        name: 'auth-nonce-is-single-use-replay-refused',
+        description: 'The identical request again, after the nonce has been spent.',
+        method: 'POST',
+        path: '/auth/token',
+        requestBody: {
+          did: AUTH_FIXTURE_DID,
+          nonce: AUTH_FIXTURE_NONCE,
+          signature: AUTH_FIXTURE_SIGNATURE,
+        },
+        responseStatus: 401,
+        responseBody: {
+          error: { code: 'unknown_nonce', message: 'Unknown or already-used nonce' },
+        },
+      },
+    ],
   },
 ];
 
@@ -1515,9 +1622,10 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
 
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
- * uniformly. Excludes attachmentDownloadFixtures and attachmentUploadFixtures
- * — both a different shape (binary body and/or header-focused, not a plain
- * JSON request/response pair), imported separately.
+ * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures
+ * and authSequenceFixtures — each a different shape (binary body,
+ * header-focused, or an ordered series rather than a plain JSON
+ * request/response pair), imported separately.
  *
  * The auth fixtures are the one group here sent with no bearer token, since
  * they are how a token is earned.
