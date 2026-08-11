@@ -87,6 +87,8 @@ Both are unauthenticated — they are how a token is obtained. `signature` is ba
 
 **The nonce.** Opaque to the client, but restricted to unreserved base64url characters (`A-Za-z0-9_-`), because it lands in a newline-delimited signing payload where an unconstrained value could span fields. Its lifetime is the server's to choose and it is returned rather than assumed, so no client has to guess; **it MUST be single-use and bound to the DID it was issued for.** A nonce redeemable twice is a replayable signature, and one redeemable by a different DID proves nothing about either.
 
+**The token's `expiresAt` is advisory.** A client MAY renew ahead of it and MUST NOT depend on it being present — it is optional, so 401-driven renewal is the floor a client needs regardless, and `APIAdapter` uses only that today. A server should therefore read an aggressive expiry as costing a wasted round-trip per lifetime rather than as something clients will schedule around.
+
 **What gets signed is not the nonce.** It is a domain-separated payload, built identically on both sides by `buildAuthChallengePayload()` in `@haverstack/core` — exported for exactly this reason, so a server and a client cannot each derive "the same string" and diverge on the first ambiguity:
 
 ```
