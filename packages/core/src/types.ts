@@ -24,6 +24,14 @@ export type TypeId = string;
 export type FileId = string;
 
 /**
+ * Reverse-DNS identifier for the software that wrote a Record, e.g.
+ * "com.example.myapp" — not a RecordId. Self-reported and never a
+ * permission input; `StackRecord.principalId` is the verified counterpart.
+ * See docs/spec/identity.md § App.
+ */
+export type AppId = string;
+
+/**
  * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". A
  * self-certifying identifier that means the same thing in every stack,
  * unlike a RecordId. did:key is the mandatory floor method (see did.ts).
@@ -91,7 +99,15 @@ export type StackRecord = {
   // Optional native fields
   parentId?: RecordId; // Parent record (hierarchy/folders)
   entityId?: EntityId; // Author entity, if different from stack owner
-  appId?: RecordId; // App that created this record
+  appId?: AppId; // App that created this record — self-reported, see AppId
+  /**
+   * The authenticated principal behind the write, when it isn't the author
+   * itself — a delegated app's own DID. Absent means the writer
+   * authenticated as the author, so `appId` is an unverifiable self-report;
+   * present means `appId` can be checked against the `_app` record naming
+   * this DID. See docs/spec/identity.md § App.
+   */
+  principalId?: EntityId;
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[];
   associations?: Association[];
@@ -176,7 +192,12 @@ export type StackType = {
  * names for the same DID is correct. See docs/spec/identity.md § Entity.
  */
 export type EntityContent = {
-  /** The identity this profile is about. e.g. "did:key:z6Mk..." */
+  /**
+   * The identity this profile is about. e.g. "did:key:z6Mk...". A binding,
+   * not a value — a Record's `entityId` resolves through it to the name
+   * this card carries, so it is unique per stack and immutable once set.
+   * See docs/spec/identity.md § DID bindings.
+   */
   did: string;
   /** Display name — human-friendly, not necessarily unique. May contain spaces and punctuation. e.g. "Jane Smith" */
   name: string;
@@ -190,14 +211,27 @@ export type EntityContent = {
 
 /** Content for _app records */
 export type AppContent = {
+  /**
+   * The software this card is about, in reverse-DNS form — the value a
+   * Record's `appId` is checked against. Distinct from the card Record's
+   * own `appId`, which names whatever wrote the card (an admin console
+   * registering a third-party app is the ordinary case, and the two differ
+   * there). See docs/spec/identity.md § App.
+   */
+  appId: AppId;
   /** Display name of the app e.g. "My Notes App" */
   name: string;
-  /**
-   * Semver string e.g. "1.0.0". The app's unique machine-readable identity
-   * is already captured by the _app record's appId (e.g. "com.example.myapp"),
-   * so no handle is needed here.
-   */
+  /** Semver string e.g. "1.0.0". `appId` is the machine-readable identity, so no handle is needed here. */
   version?: string;
+  /**
+   * The DID this app authenticates with, when it holds a key of its own.
+   * Lets an attribution UI resolve a record's `principalId` to this card,
+   * and a server check a self-reported `appId` against the principal that
+   * wrote it. Absent for apps that ride their user's identity. Unique per
+   * stack and immutable once set, like `appId` above — see
+   * docs/spec/identity.md § DID bindings.
+   */
+  did?: string;
 };
 
 /** Content for _group records */
@@ -303,8 +337,9 @@ export type RecordFilter = {
    */
   baseId?: string | string[];
   parentId?: RecordId | null; // null = root records only
-  appId?: RecordId | RecordId[];
+  appId?: AppId | AppId[];
   entityId?: EntityId | EntityId[];
+  principalId?: EntityId | EntityId[];
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
@@ -404,7 +439,7 @@ export type StackFeatures = AdapterCapabilities;
  * that bumps a record's version. On mismatch the adapter throws
  * StackVersionConflictError without applying anything. The check is atomic
  * inside the adapter's write, never a read-then-write. See
- * docs/spec/versioning.md § Optimistic concurrency.
+ * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
  */
 export type ExpectedVersionOptions = {
   expectedVersion?: number;
@@ -587,6 +622,7 @@ export type StackAdapter = StackRecordAdapter &
       data: Uint8Array,
       mimeType: string,
       filename?: string,
+      appId?: AppId,
     ): Promise<StackRecord>;
   };
 

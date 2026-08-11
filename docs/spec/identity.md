@@ -36,20 +36,93 @@ type EntityContent = {
 
 An app that wants handle lookup anyway builds it on `query({ filter: { content: { handle } } })` and must handle duplicates itself. Note that filtering on `content` requires the `contentFieldQuery` capability, which a server behind `adapter-api` may decline (see [Adapters](./adapters.md#adapter-capabilities)) — another reason not to design a lookup around it.
 
-The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
+The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.create(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. Anything the [binding rules](#did-bindings) count as holding the owner's `did` counts as existing here too, or the bootstrap would mint a card those rules then refuse and reopening with `ownerProfile` would fail: a soft-deleted card still reserves the `did`, and so does one migrated to a later `_entity` version, since uniqueness spans the whole type family. Restoring a deleted owner card is `undelete()`'s job, not reopening's. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.create()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
 
 ## App
 
-Apps that write to a Stack are also modeled as Records, using the built-in system type `_app`. This allows querying all Records created by a specific app, and provides a foundation for future enforcement in the API adapter.
+Apps that write to a Stack are also modeled as Records, using the built-in system type `_app`, so all Records created by a specific app are queryable.
 
 ```ts
 type AppContent = {
+  appId: string; // The software this card is about, reverse-DNS. e.g. "com.example.myapp"
   name: string; // Display name of the app e.g. "My Notes App"
-  version?: string; // Semver string e.g. "1.0.0". The app's unique machine-readable identity
-  // is captured by the _app record's appId (e.g. "com.example.myapp"),
-  // so no handle is needed.
+  version?: string; // Semver string e.g. "1.0.0". appId is the machine-readable
+  // identity, so no handle is needed.
+  did?: string; // The DID this app authenticates with, when it holds a key of its own.
+  // Absent for apps that ride their user's identity.
 };
 ```
+
+`appId` is a **reverse-DNS string** (`"com.example.myapp"`), not a `RecordId` — it names software, not a Record, and the same string means the same app in every stack.
+
+**A card carries two `appId`s, and they answer different questions.** `content.appId` names the software the card is _about_; the card Record's own `appId` names whatever _wrote_ the card, exactly as it does on every other Record. Registering a third-party app through an admin console is the ordinary case where the two differ, so the cross-check below reads `content.appId` — the Record-level field would report the console.
+
+### Two ways an app reaches a stack
+
+Nothing here requires an app to have an identity. Which posture applies depends on who chose the software, and only one of them involves the stack owner naming it:
+
+- **The app rides its user's identity.** It authenticates as the person using it and reports `appId` as attribution. This is the default and it is what a visitor's own software does — someone posting to your stack with their own client, the shape IndieAuth and Micropub already use, where clients are never pre-registered by the resource owner. The owner grants **types to people** (often via a default grant), never software they have never heard of. An unknown app is bounded by the person it acts as, who is bounded by the owner's grants.
+- **The app holds its own key.** An app the owner installs mints a `did:key` keypair, authenticates with it, and is granted the types it needs. This is the _containment_ posture, for software the owner chose and can enumerate — a third-party notes app, a blog server, an indexing bot. It is opt-in, never a mandate.
+
+An app that holds a key acts in one of two ways. Alone — an indexer with no person behind it authors its own Records, and `-own` scoping fences it exactly as it fences any entity. Or **on behalf of** a person, which is what a blog server does when a visitor comments through it. That second case splits "who authenticated" from "who authored", and [Access control § Enforcement](./access-control.md#enforcement-stackasentity) defines what each half governs.
+
+### Attribution and what can be trusted
+
+`appId` **grants nothing** — it is never an input to an access decision, in any posture. Whether it can be _trusted_ depends on whether there is a verified principal to check it against:
+
+- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` is checked at the write: find the `_app` Record whose `content.did` equals the principal, and compare that card's `content.appId` to the `appId` being stamped. A mismatch is refused with `StackPermissionError`. The check runs where the fact is known rather than being left to each reader, so a stored `appId` on a Record carrying `principalId` is one the registry agreed to.
+- A delegated app the owner never registered has no card to check against, so its `appId` stays a bare self-report. Registering the app is what turns it into a checked claim — which is the same act that makes `principalId` resolvable at all.
+- A Record written by an app riding its user's identity carries no `principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
+
+So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. On a Record with no `principalId` it is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
+
+The check costs a lookup over the `_app` family per delegated write that carries an `appId`, narrowed to `content.did` where the adapter advertises [`contentFieldQuery`](./adapters.md#adapter-capabilities) and cursor-walked where it doesn't — the same shape, and the same cost, as the binding-uniqueness check described below.
+
+**Both fields describe the write that created the Record, and are never restamped.** `update()` is a content patch: it leaves `appId` and `principalId` naming whoever authored the Record, so a Record edited later by different software still reports its creator — as `entityId` does, and for the same reason. The cross-check above therefore answers "which app _wrote_ this", not "which app touched it last".
+
+**Per-edit app attribution does not exist**, and version history is not a way around that: a [snapshot](./versioning.md#version-history) carries `content`, `associations`, `permissions` and the author's `entityId`, never `appId` or `principalId`. So a Record whose creator is a verified delegated app says nothing about the software behind any later edit, and nothing records it. An app that needs edits attributable individually should model them as Records of its own rather than reading attribution off the edited one.
+
+Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
+
+**The `_app` registry is integrity-bearing.** It is the only thing standing between "this DID authenticated" and "this is My Notes App", and a lookup is worth no more than the registry behind it. Two protections apply, and they close different routes to the same end — a card bearing a name the owner trusts, pointing at a key someone else holds:
+
+- **`_app` cannot be granted.** It sits alongside `_grant` and `_config` in the types `grant()` refuses (see [Access control § Type-level grants](./access-control.md#type-level-grants)), so no type-level grant ever authorises writing a card. Otherwise anyone holding `create` on `_app@1` could register a card claiming a DID belonging to a legitimately installed app, and the cross-check would resolve to a name they chose.
+- **`did` and `appId` are owner-only to set.** Both are halves of the lookup — one finds the card, the other is what the claim is checked against — so a write-holder who could set either would reach the same impersonation: repoint a card at their own key, or relabel a card they control to claim another app's `appId`. `ScopedStack` refuses both with `StackPermissionError`, and asks it of the owner [acting alone](./access-control.md#delegation-principal-and-subject) — an owner principal acting for a write-holder would otherwise reach the same impersonation from the other side.
+
+That second rule is what makes "only the owner writes cards" true, rather than nearly true. Type-level grants are refused, but record-level `write` on an individual card is shareable like on any other Record, so a write-holder is a real writer of that card — free to correct its `name` or `version`, and refused the two fields a trust decision reads.
+
+**The rule reads values, not keys.** A write that carries `did` or `appId` unchanged is not setting it, so it is not refused: a client that reads a card, edits its `name` and sends the whole content object back is exercising exactly the reach the previous paragraph describes, and `update()` being a merge is a calling convention rather than a permission boundary. Only a write that would introduce or alter one of the two fields needs the owner. The same reading applies to the [reserved owner DID](#did-bindings) below — the refusal is on _claiming_ it — and `restoreVersion()` compares the snapshot against the Record's present content for the same reason.
+
+Both fields are also **bindings** in the sense defined next, which is where immutability — and, for `did`, uniqueness — comes from.
+
+## DID bindings
+
+Two system types carry fields that are **lookup keys rather than display values**: something resolves _through_ them to reach a name the owner chose.
+
+| Field         | What resolves through it                        | Unique |
+| ------------- | ----------------------------------------------- | ------ |
+| `_entity.did` | a Record's `entityId` → who authored it         | yes    |
+| `_app.did`    | a Record's `principalId` → which app wrote it   | yes    |
+| `_app.appId`  | a verified principal → the `appId` it may claim | no     |
+
+A binding is not a value a card happens to hold; it is what makes the card _about_ something. Two rules follow:
+
+- **Immutable once set** — every field in the table. Adopting a value is a one-way step a card carrying none can still take, but a card that holds one never moves off it: `update()` and `restoreVersion()` both refuse to change or clear a binding with `StackValidationError`. This is the rule that stops an existing card being _moved_ onto a value — repointed at another key, or relabelled to claim another app's `appId` — which is impersonation by a quieter route than minting a card.
+- **Unique within a stack** — the two `did` fields, the ones a lookup resolves _by_. A second card claiming a value already in use is refused with `StackConflictError`, on create and on update. A soft-deleted card keeps its claim: a deleted card is `undelete()`-able, so releasing the value on delete would let a new card take it and the old one come back beside it. Without uniqueness, "the Record whose `did` matches" has no single answer — and ambiguity is all an impersonating card needs.
+
+**`_app.appId` is immutable but not unique**, and the asymmetry is load-bearing. Nothing resolves a card _by_ `appId`: the cross-check finds the card by `content.did` and only compares `appId` to what the principal claimed, so `_app.did` being unique already gives that lookup its single answer. Uniqueness on `appId` would add no disambiguation and would forbid a state the stack has to be able to reach — two cards naming the same software under different keys. `appId` is required, so a card for an app's new key necessarily repeats it, and without the exemption the replacement card that [key rotation](#deferred-key-rotation) calls for could not be written at all, nor the same app registered on a second device. Both cards are the owner's own to write, `_app` being ungrantable; what stays refused is moving an _existing_ card onto an `appId` it did not have.
+
+A subject whose key changes therefore gets a new card, matching this document's deferral of [key rotation](#deferred-key-rotation) — a new key is a new identity, not the same one relabelled. Records written under the old key keep pointing at the old card, which is what makes their attribution still resolvable.
+
+**`_entity` stays grantable; `_app` does not.** Naming people is ordinary app work — a contacts app creates and relabels cards — so `_entity` cards are reachable by grant and only the two binding rules fence them. Naming software is a trust decision about who may speak as what, so `_app` adds the owner-only rule above. The asymmetry is deliberate: both registries resolve a name, but only one of them is deciding whether to believe a claim.
+
+Note the contrast with `handle`, where duplicates are explicitly fine on both `_entity` and `_group`. A handle is a display label nothing resolves by; the fields above are lookup keys a trust decision reads.
+
+**One DID is reserved: the owner's own.** A card claiming `ownerEntityId` is refused to everyone but the owner acting alone, on create and on adoption, with `StackPermissionError`. The reservation exists because this is the one binding that feeds back into the stack's own identity: `ownerProfile` adopts whichever card holds the owner's DID rather than minting a second one, so a card written by someone else would _become_ the owner's profile, and uniqueness would then make that permanent. Every other DID stays open, which is the reach `_entity` is grantable for.
+
+**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for any other DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. The card is attributed to whoever wrote it — `entityId` names the grantee, not the owner — so a petname's provenance is always checkable. `_app` has no equivalent gap, being ungrantable.
+
+The uniqueness check reads before it writes, so two creates racing on one value can both pass. Closing that properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
 ## Group
 
@@ -86,7 +159,7 @@ This gives roles for free via association labels, and membership is queryable an
 - **`member`** — counted by group ACLs (`{ access: 'group', groupId, ... }` permission entries, unless the entry names `role: 'admin'`).
 - **`admin`** — everything `member` gets, plus may manage the Group Record itself: update its content, add or remove roster (`member`/`admin`) associations, and delete it. An `admin` association implies `member` for every purpose.
 
-**Role-gated group management.** Mutating a `_group` Record — `update`, `associate`/`dissociate` of roster associations, `setPermissions`, `delete`, `undelete` — requires the requester to be an `admin` of that Group, or the stack owner. This replaces the ordinary write-bit/grant check for `_group` Records specifically: membership rosters live on the very Record that write access would otherwise let a write-holder rewrite, so "can write this record" is deliberately not sufficient to add or remove members. `ScopedStack` enforces this.
+**Role-gated group management.** Mutating a `_group` Record — `update`, `associate`/`dissociate` of roster associations, `setPermissions`, `delete`, `undelete` — requires the requester to be an `admin` of that Group, or the stack owner. This replaces the ordinary write-bit/grant check for `_group` Records specifically: membership rosters live on the very Record that write access would otherwise let a write-holder rewrite, so "can write this record" is deliberately not sufficient to add or remove members. `ScopedStack` enforces this. Under [delegation](./access-control.md#delegation-principal-and-subject) the rule is asked of both identities: the principal and the subject must each be an `admin` or the owner, so neither a contained app nor the owner's own software seizes a Group on the other's behalf.
 
 **Bootstrap.** The creator of a `_group` Record is automatically stamped as its first `admin` (a `relationship` association added at create time) — no Group is ever management-orphaned. The stack owner can always manage any Group regardless of roster, per the owner's unconditional-access rule.
 
@@ -108,4 +181,4 @@ Token issuance (see [Wire format § Authentication](./wire-format.md#authenticat
 
 ## Deferred: key rotation
 
-With pure `did:key`, identity _is_ the key: lose it and you're a new identity. For individuals and small groups who know each other, that's a recoverable social event ("new key, it's me" over a trusted channel; contacts update their `_entity` cards), not a protocol failure. Rotation — a signed chain of "key A hands off to key B" records, hosted by the stack itself — is a native fit for a future RFC, but nothing here blocks it: a rotated identity is either a new DID _documented by_ that log, or a method upgrade (`did:key` → stack-hosted method) for those who opt in. Multi-device works without rotation in the meantime: the identity key bootstraps a session per device via challenge–response; devices hold revocable tokens, never the key.
+With pure `did:key`, identity _is_ the key: lose it and you're a new identity. For individuals and small groups who know each other, that's a recoverable social event ("new key, it's me" over a trusted channel; contacts card the new key), not a protocol failure. Carding it is a new `_entity` record rather than an edit to the old one — [`did` is immutable once set](#did-bindings), which is the same rule that lets an app's replacement card carry the `appId` its predecessor already claimed. Rotation — a signed chain of "key A hands off to key B" records, hosted by the stack itself — is a native fit for a future RFC, but nothing here blocks it: a rotated identity is either a new DID _documented by_ that log, or a method upgrade (`did:key` → stack-hosted method) for those who opt in. Multi-device works without rotation in the meantime: the identity key bootstraps a session per device via challenge–response; devices hold revocable tokens, never the key.

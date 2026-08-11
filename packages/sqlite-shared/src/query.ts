@@ -54,6 +54,12 @@ export const buildWhereClause = (
     params.push(...ids);
   }
 
+  if (f.principalId !== undefined) {
+    const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
+    conditions.push(`r.principal_id IN (${ids.map(() => '?').join(',')})`);
+    params.push(...ids);
+  }
+
   if (f.createdAt?.after) {
     conditions.push('r.created_at > ?');
     params.push(f.createdAt.after.getTime());

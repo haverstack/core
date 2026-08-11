@@ -476,6 +476,28 @@ describe('ScopedStack — versions', () => {
         fileId: 'anything-at-all',
       });
     });
+
+    // The exemption is the owner's own, not something an owner principal
+    // lends its subject: the gate resolves against the subject, whose
+    // reach is what a restore would widen.
+    test('the exemption does not extend to an owner principal acting for someone else', async () => {
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        associations: [{ kind: 'attachment', label: 'x', fileId: 'unreachable-file' }],
+      });
+      await expect(
+        stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
+      ).rejects.toThrow(StackPermissionError);
+    });
   });
 });
 
@@ -557,12 +579,12 @@ describe('ScopedStack.create', () => {
     expect(record.typeId).toBe(COMMENT);
   });
 
-  // Owner-created records carry no entityId — that holds whether the owner
-  // writes through Stack.create() directly or through
-  // ScopedStack.asEntity(ownerEntityId).
-  test('owner writing through asEntity(ownerEntityId) omits entityId, matching Stack.create()', async () => {
+  // A scoped write always names its author, so an absent entityId means
+  // exactly one thing: an unscoped Stack wrote the record.
+  test('owner writing through asEntity(ownerEntityId) stamps entityId', async () => {
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBeUndefined();
+    expect(record.entityId).toBe(OWNER);
+    expect(record.principalId).toBeUndefined();
   });
 
   test('a non-owner entity still gets entityId stamped as the author', async () => {
@@ -969,14 +991,19 @@ describe('ScopedStack.putAttachment', () => {
     expect(typeof fileId).toBe('string');
   });
 
-  // owner uploads carry no entityId, matching create()'s existing
-  // normalization — same author, same shape, whether writing directly or
-  // through asEntity(ownerEntityId).
-  test('owner upload via asEntity(ownerEntityId) produces a record with no entityId', async () => {
+  // Uploads stamp authorship the same way create() does — one rule for
+  // every record a ScopedStack writes.
+  test('owner upload via asEntity(ownerEntityId) stamps entityId', async () => {
     await stack.asEntity(OWNER).putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records).toHaveLength(1);
-    expect(result.records[0].entityId).toBeUndefined();
+    expect(result.records[0].entityId).toBe(OWNER);
+  });
+
+  test('putAttachment records the appId it is given', async () => {
+    await stack.asEntity(OWNER).putAttachment(data, 'image/png', undefined, 'com.example.myapp');
+    const result = await stack.query({ filter: { typeId: '_attachment@1' } });
+    expect(result.records[0].appId).toBe('com.example.myapp');
   });
 
   // the maxAttachmentBytes pre-check applies to ScopedStack's own
@@ -1340,13 +1367,11 @@ describe('ScopedStack — group role gating', () => {
     expect(adminAssociations).toHaveLength(1);
   });
 
-  // the owner writing through asEntity(OWNER) carries no entityId
-  // (owner normalization) — confirms Stack.create()'s single stamping site
-  // keys off ownerEntityId in that case rather than stamping twice or not
-  // at all.
+  // Bootstrap stamps the group's creator as its first admin exactly once —
+  // the owner is no exception, and gets no duplicate roster entry.
   test('owner writing through ScopedStack stamps the owner as admin exactly once', async () => {
     const group = await stack.asEntity(OWNER).create('_group@1', { name: 'New Group' });
-    expect(group.entityId).toBeUndefined();
+    expect(group.entityId).toBe(OWNER);
     const adminAssociations = (group.associations ?? []).filter(
       (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === OWNER,
     );
@@ -1902,5 +1927,731 @@ describe('ScopedStack — file-ref content field gating', () => {
   test('the owner is exempt from the file-ref gate', async () => {
     const record = await stack.create(PHOTO_NOTE, { coverFileId: FILE_ID });
     expect(record.content.coverFileId).toBe(FILE_ID);
+  });
+});
+
+// -------------------------------------------------------
+// Delegation: principal vs subject
+// -------------------------------------------------------
+
+// A delegated app's authority is the intersection of its own grants with
+// the subject's, so neither party can lend the other reach it lacks. The
+// four rows below are that table; the rest pin what stays principal-side.
+describe('ScopedStack — delegation', () => {
+  const APP = 'did:key:z6MkApp';
+
+  const grantAll = (who: string | null, typeId = COMMENT) =>
+    stack.grant(who, [
+      { actions: ['create', 'read-own', 'read-any', 'update-any', 'delete-any'], typeId },
+    ]);
+
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
+  });
+
+  test('an anonymous principal cannot act on behalf of an entity', () => {
+    expect(() => stack.asEntity(null, { onBehalfOf: MEMBER })).toThrow(StackPermissionError);
+  });
+
+  test('a delegated create stamps the subject as author and the app as principal', async () => {
+    await grantAll(APP);
+    await grantAll(MEMBER);
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' }, { appId: 'com.example.myapp' });
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.principalId).toBe(APP);
+    expect(record.appId).toBe('com.example.myapp');
+  });
+
+  test('an app with no grant of its own cannot act for a granted subject', async () => {
+    await grantAll(MEMBER);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a granted app cannot act for a subject with no grant', async () => {
+    await grantAll(APP);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+  });
+
+  // The leak intersection closes: a read-any app delegated to a read-own
+  // subject must not hand that subject records it couldn't otherwise see.
+  test('a read-any app delegated to a read-own subject reads only the subject own records', async () => {
+    await stack.grant(APP, [{ actions: ['read-any'], typeId: COMMENT }]);
+    await stack.grant(MEMBER, [{ actions: ['read-own'], typeId: COMMENT }]);
+    const mine = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: MEMBER, content: { text: 'mine' } }),
+    );
+    const theirs = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+    );
+
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    expect((await view.get(mine.id))?.id).toBe(mine.id);
+    await expect(view.get(theirs.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  // -own on the principal side is read as the bare verb: which records are
+  // reachable is settled by the subject, not by the app.
+  test('an app holding only read-own may still serve a subject reading records it did not author', async () => {
+    await stack.grant(APP, [{ actions: ['read-own'], typeId: COMMENT }]);
+    await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const theirs = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+    );
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    expect((await view.get(theirs.id))?.id).toBe(theirs.id);
+  });
+
+  test('a record shared by permission stays unreachable through an app with no grant on its type', async () => {
+    await stack.grant(APP, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const shared = await adapter.createRecord(
+      makeRecord({
+        typeId: NOTE,
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
+    // Undelegated, the same subject reaches it — the mask is what changes.
+    expect((await stack.asEntity(MEMBER).get(shared.id))?.id).toBe(shared.id);
+    await expect(stack.asEntity(APP, { onBehalfOf: MEMBER }).get(shared.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Owner bypass keys on the principal. An app delegated for the owner is
+  // bounded by its grants; it does not inherit the owner's unconditional
+  // access.
+  test('an app delegated for the owner gets no owner bypass', async () => {
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'private' } }));
+    await expect(stack.asEntity(APP, { onBehalfOf: OWNER }).get(record.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('an app delegated for the owner cannot hard delete', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const record = await adapter.createRecord(makeRecord({ typeId: COMMENT, entityId: OWNER }));
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: OWNER }).delete(record.id, { hard: true }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // setPermissions has no grant fence at all, so authorship is deliberately
+  // not enough: a contained app can never reshare its subject's data.
+  test('an app delegated for the owner cannot set permissions on its subject records', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    const record = await view.create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(OWNER);
+    await expect(view.setPermissions(record.id, [{ access: 'public' }])).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // The owner-or-creator rule is asked of both identities. An owner
+  // principal holds the verb, so only the subject half stands between a
+  // delegated subject and every record in the stack.
+  test('an owner principal cannot reshare a record its subject did not author', async () => {
+    const record = await stack.create(COMMENT, { text: 'owner private' });
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.setPermissions(record.id, [{ access: 'public' }])).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect((await stack.get(record.id))?.permissions).toBeUndefined();
+  });
+
+  // The subject half is authorship, not reachability in general: a subject
+  // may still reshare what it wrote, which is the reach it holds undelegated.
+  test('an owner principal may reshare a record its subject authored', async () => {
+    await grantAll(MEMBER);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
+
+    await stack
+      .asEntity(OWNER, { onBehalfOf: MEMBER })
+      .setPermissions(record.id, [{ access: 'public' }]);
+
+    expect((await stack.get(record.id))?.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  // Closes the route from the gate above to the _app registry: a card the
+  // owner wrote is not the subject's to reshare, so record-level write on
+  // it never becomes available to point its did at the subject's own key.
+  test('an owner principal cannot reach an _app card through its subject', async () => {
+    const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(
+      view.setPermissions(card.id, [
+        { access: 'entity', entityId: MEMBER, read: true, write: true },
+      ]),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.update(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // The gate above rests on the subject being unable to reach the card at
+  // all. Record-level write is shareable, so where the subject can reach
+  // it, the owner-alone rule on the binding fields is the whole fence.
+  test('an owner principal cannot set a card binding for a subject holding write on it', async () => {
+    const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
+    await stack.setPermissions(card.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.update(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.update(card.id, { appId: 'com.example.bank' })).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const after = await stack.get(card.id);
+    expect(after?.content).toMatchObject({ appId: 'com.trusted' });
+    expect((after?.content as { did?: string }).did).toBeUndefined();
+  });
+
+  // The uploader clause matches on the subject a scoped create stamps, so
+  // the owner's exemption from the _attachment@1 refusal has to be the
+  // owner's own — otherwise naming a fileId is enough to reach its bytes.
+  test('an owner principal cannot mint an attachment card for a file its subject cannot reach', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([9, 9, 9]), 'image/png', 'secret.png');
+
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    await expect(
+      view.create('_attachment@1', { fileId, mimeType: 'image/png', size: 3 }),
+    ).rejects.toThrow(StackPermissionError);
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // The create-time counterpart of the setPermissions gate above. Denying
+  // the app setPermissions() only contains it if the same reach isn't
+  // available one step earlier, while it is authoring the record.
+  test('an app delegated for the owner cannot publish its subject records at create time', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    await expect(
+      view.create(
+        COMMENT,
+        { text: 'meant to stay private' },
+        { permissions: [{ access: 'public' }] },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+
+    // Refused before the write, so there is no record to have leaked.
+    const all = await stack.query({ filter: { typeId: COMMENT } });
+    expect(all.records).toHaveLength(0);
+  });
+
+  test('a delegated app may still create records it does not try to share', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: OWNER })
+      .create(COMMENT, { text: 'hi' }, { permissions: [] });
+    expect(record.permissions).toBeUndefined();
+  });
+
+  test('an undelegated requester may still set permissions at create time', async () => {
+    await grantAll(MEMBER);
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { permissions: [{ access: 'public' }] });
+    expect(record.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  // Bytes follow the same intersection as the records describing them.
+  // The uploader clause decides *which* files the subject authored; it is
+  // not itself a grant, so the app still needs one of its own.
+  test('an app with no grant of its own cannot download files its subject uploaded', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const attachment = await stack
+      .asEntity(MEMBER)
+      .putAttachment(new Uint8Array([1, 2, 3]), 'text/plain', 'secret.txt');
+    const { fileId } = attachment.content;
+
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    // The record describing the bytes is already refused ...
+    await expect(view.get(attachment.id)).rejects.toThrow(StackPermissionError);
+    // ... so the bytes themselves must be too.
+    await expect(view.getAttachment(fileId)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an app delegated for a group admin cannot manage the group', async () => {
+    const group = await stack.create('_group@1', { name: 'Book Club' });
+    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    expect(await stack.asEntity(MEMBER).update(group.id, { name: 'Renamed' })).toBeTruthy();
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // Default grants say "any authenticated entity" — people who turn up,
+  // not software the owner installed. An app reaches only what it is named
+  // in, which is the whole of what containment promises.
+  test('a default grant does not satisfy the principal side of the intersection', async () => {
+    await grantAll(null);
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
+
+    // The same default grant is all an undelegated requester needs.
+    const direct = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' });
+    expect(direct.entityId).toBe(MEMBER);
+  });
+
+  // Unconditional owner authority belongs to the owner acting as itself.
+  // The verbs resting on it are irreversible or disclose the sharing
+  // graph, so delegation carries none of them, whichever side the owner
+  // is on. The group rule below is two-sided instead, like setPermissions.
+  test('an owner principal cannot hard delete for its subject', async () => {
+    await grantAll(MEMBER);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
+
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id, { hard: true }),
+    ).rejects.toThrow(StackPermissionError);
+
+    // Soft delete is still reachable, so the refusal is about the verb.
+    await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id);
+    expect((await stack.get(record.id))?.deletedAt).toBeDefined();
+  });
+
+  test('an owner principal does not disclose snapshot permissions to its subject', async () => {
+    const record = await stack.create(COMMENT, { text: 'v1' });
+    await stack.setPermissions(record.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.update(record.id, { text: 'v2' });
+
+    const versions = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getVersions(record.id);
+    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
+
+    // The owner acting alone still sees them.
+    const direct = await stack.asEntity(OWNER).getVersions(record.id);
+    expect(direct.some((v) => v.permissions !== undefined)).toBe(true);
+  });
+
+  test('an owner principal cannot delete attachments for its subject', async () => {
+    const attachment = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'text/plain');
+    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+
+    await expect(view.deleteAttachment(attachment.content.fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.collectAttachmentGarbage()).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an owner principal cannot manage a group its subject does not administer', async () => {
+    const group = await stack.create('_group@1', { name: 'Book Club' });
+
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
+    ).rejects.toThrow(StackPermissionError);
+
+    // An admin subject reaches it, since both identities then manage it.
+    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    expect(
+      await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(group.id, { name: 'Renamed' }),
+    ).toBeTruthy();
+  });
+
+  test('records are queryable by the principal that wrote them', async () => {
+    await grantAll(APP);
+    await grantAll(null);
+    await stack.asEntity(APP, { onBehalfOf: OWNER }).create(COMMENT, { text: 'via app' });
+    await stack.asEntity(OWNER).create(COMMENT, { text: 'direct' });
+
+    const viaApp = await stack.query({ filter: { principalId: APP } });
+    expect(viaApp.records.map((r) => r.content.text)).toEqual(['via app']);
+  });
+});
+
+// -------------------------------------------------------
+// _app registry integrity, through a scoped view
+// -------------------------------------------------------
+
+// _app is ungrantable, so only the owner registers a card. Record-level
+// write on one is still shareable, and that is enough to reach restore.
+describe('ScopedStack — _app bindings', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('a non-owner cannot create an _app card', async () => {
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .create('_app@1', { appId: 'com.example.impostor', name: 'Impostor', did: APP_DID }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner with write on a card cannot give it a DID', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    await expect(stack.asEntity(MEMBER).update(shared.id, { did: MEMBER })).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const after = await stack.get(shared.id);
+    expect((after?.content as { did?: string }).did).toBeUndefined();
+  });
+
+  test('a non-owner with write on a card cannot roll it back off its DID', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+    });
+    await stack.update(shared.id, { did: APP_DID });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    await expect(stack.asEntity(MEMBER).restoreVersion(shared.id, 1)).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const after = await stack.get(shared.id);
+    expect((after?.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('a non-owner with write on a card may still update its other fields', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  // The fence reads values, not keys. Read-modify-write is the ordinary
+  // client shape, and a card sent back with its bindings untouched is
+  // exercising the display-field reach the test above pins — a presence
+  // check would make that reach unreachable for any client that round-trips
+  // the whole content object.
+  test('a write-holder may round-trip unchanged bindings in a full-content update', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const scoped = stack.asEntity(MEMBER);
+    const current = await scoped.get(shared.id);
+    const updated = await scoped.update(shared.id, { ...current!.content, name: 'Renamed' });
+
+    expect(updated.content).toMatchObject({
+      appId: 'com.example.notes',
+      name: 'Renamed',
+      did: APP_DID,
+    });
+  });
+});
+
+// The owner-only rule covers both halves of the attribution lookup: a
+// write-holder who could relabel a card's appId would make their own key
+// verify as another app, reaching the same end as repointing its did.
+describe('ScopedStack — _app.appId is owner-only', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('a non-owner with write on a card cannot change its appId', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    await expect(
+      stack.asEntity(MEMBER).update(shared.id, { appId: 'com.example.bank' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner with write on a card may still update its display fields', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    const updated = await stack.asEntity(MEMBER).update(shared.id, { version: '2.0.0' });
+    expect(updated.content).toMatchObject({ appId: 'com.example.notes', version: '2.0.0' });
+  });
+});
+
+// _entity stays grantable — naming people is what a contacts app does — so
+// its cards are reachable by grant, and only the binding rules fence them.
+describe('ScopedStack — _entity bindings hold under a grant', () => {
+  const ALICE = 'did:key:z6MkAlice';
+
+  test('a grantee may write a petname card but not repoint an existing one', async () => {
+    const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['create', 'update-any'] }]);
+    const scoped = stack.asEntity(MEMBER);
+
+    // Relabelling is the contacts-app case and stays allowed.
+    await expect(scoped.update(alice.id, { name: 'Alice Smith' })).resolves.toBeDefined();
+
+    // Repointing is the impersonation and is refused.
+    await expect(scoped.update(alice.id, { did: MEMBER })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a grantee cannot mint a second card for a DID already carded', async () => {
+    await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['create'] }]);
+
+    await expect(
+      stack.asEntity(MEMBER).create('_entity@1', { did: ALICE, name: 'Alice (verified)' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // Every other DID stays open to a contacts app, but the owner's own is
+  // reserved: `ownerProfile` adopts whichever card holds it, and uniqueness
+  // makes the first claim permanent.
+  test('a grantee cannot mint a card for the owner own DID', async () => {
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['create', 'update-any'] }]);
+
+    await expect(
+      stack.asEntity(MEMBER).create('_entity@1', { did: OWNER, name: 'Totally The Owner' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a grantee cannot adopt the owner own DID onto a card carrying none', async () => {
+    const blank = await stack.create('_entity@1', { did: '', name: 'Unclaimed' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['update-any'] }]);
+
+    await expect(stack.asEntity(MEMBER).update(blank.id, { did: OWNER })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('the owner acting alone may card their own DID', async () => {
+    const card = await stack.asEntity(OWNER).create('_entity@1', { did: OWNER, name: 'Me' });
+    expect((card.content as { did: string }).did).toBe(OWNER);
+  });
+
+  test('an app delegated for the owner cannot card the owner own DID', async () => {
+    const APP = 'did:key:z6MkApp';
+    await stack.grant(APP, [{ typeId: '_entity@1', actions: ['create'] }]);
+
+    await expect(
+      stack
+        .asEntity(APP, { onBehalfOf: OWNER })
+        .create('_entity@1', { did: OWNER, name: 'Owner, per the app' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // The reservation is on *claiming* the DID. Re-sending the value a card
+  // already holds claims nothing, and immutability refuses changing it — so
+  // refusing the round-trip would only stop a grantee relabelling the card,
+  // which is the reach a grant on _entity exists to give.
+  test('a grantee may relabel the owner card while round-tripping its DID', async () => {
+    const ownerCard = await stack.asEntity(OWNER).create('_entity@1', { did: OWNER, name: 'Me' });
+    await stack.grant(MEMBER, [{ typeId: '_entity@1', actions: ['read-any', 'update-any'] }]);
+
+    const scoped = stack.asEntity(MEMBER);
+    const current = await scoped.get(ownerCard.id);
+    const updated = await scoped.update(ownerCard.id, { ...current!.content, name: 'The Owner' });
+
+    expect(updated.content).toMatchObject({ did: OWNER, name: 'The Owner' });
+  });
+});
+
+describe('ScopedStack — _grant records are owner-write-only', () => {
+  // A _grant Record is authority itself, so record-level `write` on one must
+  // not be a route to editing what it confers — the same escalation
+  // ungrantable families are refused at evaluation, reached by rewriting an
+  // existing grant instead of minting a fresh one.
+  const shareGrantRecord = async () => {
+    const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
+    await stack.setPermissions(grantRecord.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    return grantRecord;
+  };
+
+  test('a write-holder cannot widen the actions on their own grant', async () => {
+    const grantRecord = await shareGrantRecord();
+
+    await expect(
+      stack.asEntity(MEMBER).update(grantRecord.id, { actions: ['read-any'] }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot retarget a grant at another type', async () => {
+    const grantRecord = await shareGrantRecord();
+
+    await expect(
+      stack.asEntity(MEMBER).update(grantRecord.id, { typeId: COMMENT }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot reassign a grant to another grantee', async () => {
+    const grantRecord = await shareGrantRecord();
+
+    await expect(
+      stack.asEntity(MEMBER).update(grantRecord.id, { granteeEntityId: STRANGER }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot delete or reshare a grant record', async () => {
+    const grantRecord = await shareGrantRecord();
+    const scoped = stack.asEntity(MEMBER);
+
+    await expect(scoped.delete(grantRecord.id)).rejects.toThrow(StackPermissionError);
+    await expect(scoped.setPermissions(grantRecord.id, [{ access: 'public' }])).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('an owner principal acting for someone else cannot write a grant record', async () => {
+    const grantRecord = await shareGrantRecord();
+
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(grantRecord.id, {
+        actions: ['read-any'],
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // The fence is on writes. Reading how a Record you already hold got that
+  // way is not the escalation it exists to stop, and a write-holder who
+  // could not audit the grant they hold would be worse off than before.
+  test('a write-holder still reads a grant record and its history', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+    const scoped = stack.asEntity(MEMBER);
+
+    expect(await scoped.get(grantRecord.id)).not.toBeNull();
+
+    const versions = await scoped.getVersions(grantRecord.id);
+    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect((versions[0].content as { actions: string[] }).actions).toEqual(['read-own']);
+
+    const v1 = await scoped.getVersion(grantRecord.id, 1);
+    expect(v1).not.toBeNull();
+  });
+
+  test('a write-holder reading grant history still gets snapshot permissions stripped', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+
+    const versions = await stack.asEntity(MEMBER).getVersions(grantRecord.id);
+    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
+  });
+
+  // Restoring is a write, so it stays fenced even though reading the
+  // snapshot it would restore does not.
+  test('a write-holder cannot restore a grant record to an earlier version', async () => {
+    const grantRecord = await shareGrantRecord();
+    await stack.update(grantRecord.id, { actions: ['read-any'] });
+
+    await expect(stack.asEntity(MEMBER).restoreVersion(grantRecord.id, 1)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('the owner acting alone still maintains grant records', async () => {
+    const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
+
+    await expect(
+      stack.asEntity(OWNER).update(grantRecord.id, { actions: ['read-any'] }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('ScopedStack — a delegated appId must match the registered _app card', () => {
+  const APP = 'did:key:z6MkApp';
+
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
+    await stack.grant(APP, [{ typeId: COMMENT, actions: ['create'] }]);
+    await stack.grant(MEMBER, [{ typeId: COMMENT, actions: ['create'] }]);
+    await stack.grant(APP, [{ typeId: '_attachment@1', actions: ['create'] }]);
+    await stack.grant(MEMBER, [{ typeId: '_attachment@1', actions: ['create'] }]);
+  });
+
+  const register = (appId: string) => stack.create('_app@1', { appId, name: 'Notes', did: APP });
+
+  test('a verified principal cannot claim an appId the owner gave other software', async () => {
+    await register('com.example.notes');
+
+    await expect(
+      stack
+        .asEntity(APP, { onBehalfOf: MEMBER })
+        .create(COMMENT, { text: 'hi' }, { appId: 'com.example.trustedbank' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('the appId its card names is accepted', async () => {
+    await register('com.example.notes');
+
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' }, { appId: 'com.example.notes' });
+    expect(record.appId).toBe('com.example.notes');
+  });
+
+  test('a principal the owner never registered keeps appId as a self-report', async () => {
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' }, { appId: 'com.example.anything' });
+    expect(record.appId).toBe('com.example.anything');
+  });
+
+  test('an undelegated writer is unaffected, having no verified principal', async () => {
+    await register('com.example.notes');
+
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { appId: 'com.example.somethingelse' });
+    expect(record.appId).toBe('com.example.somethingelse');
+    expect(record.principalId).toBeUndefined();
+  });
+
+  test('putAttachment stamps appId under the same rule', async () => {
+    await register('com.example.notes');
+    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+
+    await expect(
+      view.putAttachment(new Uint8Array([1, 2, 3]), 'text/plain', 'a.txt', 'com.example.evil'),
+    ).rejects.toThrow(StackPermissionError);
+
+    const ok = await view.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'text/plain',
+      'a.txt',
+      'com.example.notes',
+    );
+    expect(ok.appId).toBe('com.example.notes');
   });
 });

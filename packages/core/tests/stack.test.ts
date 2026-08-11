@@ -122,6 +122,47 @@ describe('Stack.create', () => {
       expect(records[0].content).toMatchObject({ name: 'Original Name' });
     });
 
+    // A soft-deleted card still reserves the owner's did, so the bootstrap
+    // treats it as present rather than minting a second card the binding
+    // rules would refuse — reopening stays possible either way.
+    test('treats a soft-deleted owner record as existing', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const { records } = await s.query({ filter: { typeId: '_entity@1' } });
+      await s.delete(records[0].id);
+
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+
+      const all = await reopened.query({
+        filter: { typeId: '_entity@1', includeDeleted: true },
+      });
+      expect(all.records).toHaveLength(1);
+      expect(all.records[0].deletedAt).toBeDefined();
+    });
+
+    // The bootstrap probe and the binding rules must agree about what
+    // "already exists" means on every axis, version included: uniqueness is
+    // checked across the whole `_entity` family, so a probe that looked only
+    // at `_entity@1` would mint a card the rules then refuse.
+    test('treats an owner record migrated to a later type version as existing', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      await s.defineType('_entity@2', 'Entity', {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+        pronouns: { kind: 'string' },
+      });
+      s.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
+      await s.migrateAll('_entity');
+
+      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+
+      const { records } = await reopened.query({ filter: { baseId: '_entity' } });
+      expect(records).toHaveLength(1);
+      expect(records[0].typeId).toBe('_entity@2');
+    });
+
     test('leaves the created record unauthored (no entityId), matching owner-attributed convention', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
@@ -1778,7 +1819,7 @@ describe('grant', () => {
     expect(records).toHaveLength(1);
   });
 
-  // grants on _grant/_config are refused outright; other reserved
+  // grants on _grant/_config/_app are refused outright; other reserved
   // types (_attachment, _entity, _group) stay grantable.
   test('rejects a grant targeting _grant@1', async () => {
     await expect(
@@ -1789,6 +1830,14 @@ describe('grant', () => {
   test('rejects a grant targeting _config@1', async () => {
     await expect(
       stack.grant('entity-abc', [{ actions: ['update-any'], typeId: '_config@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // The _app registry is what resolves a principalId to a name, so only
+  // the owner writes cards to it.
+  test('rejects a grant targeting _app@1', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['create'], typeId: '_app@1' }]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -2158,6 +2207,7 @@ describe('putAttachment — atomic adapter path', () => {
       data,
       'image/png',
       'photo.png',
+      undefined,
     );
     expect(createSpy).not.toHaveBeenCalled();
   });
@@ -2832,5 +2882,251 @@ describe('error taxonomy', () => {
     await expect(stack.create(NOTE_V1, { text: 42 })).rejects.toBeInstanceOf(StackError);
     await expect(stack.get('1hk153x0a00b')).resolves.toBeNull();
     await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(StackError);
+  });
+});
+
+// -------------------------------------------------------
+// _app registry integrity
+// -------------------------------------------------------
+
+// A card's did is what resolves a record's principalId to a name, so two
+// cards claiming one DID would make that lookup ambiguous — and ambiguity
+// is all an impersonating card needs.
+describe('_app.did bindings', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  test('rejects a second _app record claiming a DID already in use', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await expect(
+      stack.create('_app@1', { appId: 'com.example.impostor', name: 'Impostor', did: APP_DID }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('rejects an update that moves a card onto a DID already in use', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    const other = await stack.create('_app@1', { appId: 'com.example.other', name: 'Other App' });
+    await expect(stack.update(other.id, { did: APP_DID })).rejects.toThrow(StackConflictError);
+  });
+
+  test('a card may keep its own DID across an unrelated update', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    const updated = await stack.update(app.id, { version: '2.0.0' });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('cards without a DID do not collide with each other', async () => {
+    await stack.create('_app@1', { appId: 'com.example.one', name: 'One' });
+    const two = await stack.create('_app@1', { appId: 'com.example.two', name: 'Two' });
+    expect(two.id).toBeTruthy();
+  });
+
+  test('rejects an update that moves a card off the DID it holds', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await expect(stack.update(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects an update that clears the DID a card holds', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await expect(stack.update(app.id, { did: null })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a card carrying no DID may adopt one', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.later',
+      name: 'Key Comes Later',
+    });
+    const updated = await stack.update(app.id, { did: APP_DID });
+    expect((updated.content as { did?: string }).did).toBe(APP_DID);
+  });
+
+  test('a card that adopted a DID cannot be rolled back off it', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.later',
+      name: 'Key Comes Later',
+    });
+    await stack.update(app.id, { did: APP_DID });
+
+    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackValidationError);
+  });
+
+  test('a card may be restored onto the DID it already holds', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.update(app.id, { version: '2.0.0' });
+
+    const restored = await stack.restoreVersion(app.id, 1);
+    expect((restored.content as { did?: string }).did).toBe(APP_DID);
+  });
+});
+
+// -------------------------------------------------------
+// Binding fields beyond _app.did
+// -------------------------------------------------------
+
+// appId is the other half of the attribution lookup: principalId resolves
+// to a card by did, and that card's appId is what a record's own appId is
+// checked against. Both halves bind, so both are unique and permanent.
+describe('_app.appId bindings', () => {
+  const APP_DID = 'did:key:z6MkNotesApp';
+
+  // appId is immutable but not unique: nothing resolves a card by it, and
+  // requiring it while forbidding a second card holding it would make the
+  // replacement card key rotation calls for unwritable.
+  test('a second card may claim the same appId under a different did', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    const rotated = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: 'did:key:z6MkNotesAppRotated',
+    });
+    expect((rotated.content as { appId: string }).appId).toBe('com.example.notes');
+  });
+
+  test('the did on those cards is still unique', async () => {
+    await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await expect(
+      stack.create('_app@1', { appId: 'com.example.other', name: 'Impostor', did: APP_DID }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('rejects an update that moves a card off the appId it holds', async () => {
+    const app = await stack.create('_app@1', { appId: 'com.example.notes', name: 'My Notes App' });
+    await expect(stack.update(app.id, { appId: 'com.example.bank' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('display fields stay writable while the bindings hold', async () => {
+    const app = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    const updated = await stack.update(app.id, { name: 'Renamed', version: '2.0.0' });
+    expect(updated.content).toMatchObject({
+      appId: 'com.example.notes',
+      name: 'Renamed',
+      did: APP_DID,
+    });
+  });
+
+  test('the card names the software it describes, not the software that wrote it', async () => {
+    // An admin console registering a third-party app is the ordinary case:
+    // record.appId names the console, content.appId names what is registered.
+    const card = await stack.create(
+      '_app@1',
+      { appId: 'com.example.notes', name: 'My Notes App', did: APP_DID },
+      { appId: 'com.example.console' },
+    );
+    expect(card.appId).toBe('com.example.console');
+    expect((card.content as { appId: string }).appId).toBe('com.example.notes');
+  });
+});
+
+// entityId resolves through _entity.did exactly as principalId resolves
+// through _app.did, so the binding rules are the same ones — a petname card
+// that could be repointed would carry the owner's chosen name onto a key
+// someone else holds.
+describe('_entity.did bindings', () => {
+  const ALICE = 'did:key:z6MkAlice';
+  const MALLORY = 'did:key:z6MkMallory';
+
+  test('rejects a second card claiming a DID already in use', async () => {
+    await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await expect(
+      stack.create('_entity@1', { did: ALICE, name: 'Alice (verified)' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('rejects an update that repoints a card at another key', async () => {
+    const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await expect(stack.update(alice.id, { did: MALLORY })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a card may be relabelled without touching its binding', async () => {
+    const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    const updated = await stack.update(alice.id, { name: 'Alice Smith', handle: 'alice' });
+    expect(updated.content).toMatchObject({ did: ALICE, name: 'Alice Smith', handle: 'alice' });
+  });
+
+  test('a rollback that would move the binding is refused', async () => {
+    const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
+    await stack.update(alice.id, { name: 'Alice Smith' });
+    // v1 holds the same did, so this rollback is a relabel and is allowed.
+    const restored = await stack.restoreVersion(alice.id, 1);
+    expect((restored.content as { did: string }).did).toBe(ALICE);
+  });
+
+  // Without contentFieldQuery the check cursor-walks the family and stops at
+  // the first clash, so a colliding card past page one must still be found —
+  // short-circuiting is what keeps the walk bounded, not a narrower scan.
+  test('finds a clash past page one on an adapter without contentFieldQuery', async () => {
+    const incapable = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    for (let i = 0; i < 60; i++) {
+      await incapable.create('_entity@1', { did: `did:key:filler${i}`, name: `Filler ${i}` });
+    }
+    await incapable.create('_entity@1', { did: ALICE, name: 'Alice' });
+
+    await expect(
+      incapable.create('_entity@1', { did: ALICE, name: 'Alice (impostor)' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+});
+
+// grant() refuses these families, but a _grant record is an ordinary Record
+// and an unscoped Stack can mint one regardless. The rule holds at the point
+// of use, so provenance cannot launder it.
+describe('ungrantable families are refused at evaluation', () => {
+  const MALLORY = 'did:key:z6MkMallory';
+
+  test('a hand-minted grant on _app confers nothing', async () => {
+    await stack.create('_grant@1', { typeId: '_app@1', actions: ['create', 'read-any'] });
+
+    await expect(
+      stack.asEntity(MALLORY).create('_app@1', { appId: 'com.example.evil', name: 'Evil' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a hand-minted grant on _grant confers nothing', async () => {
+    await stack.create('_grant@1', { typeId: '_grant@1', actions: ['create'] });
+
+    await expect(
+      stack.asEntity(MALLORY).create('_grant@1', { typeId: NOTE_V1, actions: ['read-any'] }),
+    ).rejects.toThrow(StackPermissionError);
   });
 });

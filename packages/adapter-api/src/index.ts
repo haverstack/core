@@ -128,6 +128,7 @@ const parseRecord = (raw: WireRecord): StackRecord => {
   if (raw.parentId != null) record.parentId = raw.parentId;
   if (raw.entityId != null) record.entityId = raw.entityId;
   if (raw.appId != null) record.appId = raw.appId;
+  if (raw.principalId != null) record.principalId = raw.principalId;
   if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
   if (raw.permissions != null) record.permissions = raw.permissions;
   if (raw.associations != null) record.associations = raw.associations;
@@ -181,6 +182,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.entityId !== undefined) {
     const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
     for (const id of ids) p.append('entityId', id);
+  }
+  if (f.principalId !== undefined) {
+    const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
+    for (const id of ids) p.append('principalId', id);
   }
   if (f.createdAt?.before) p.set('createdBefore', f.createdAt.before.toISOString());
   if (f.createdAt?.after) p.set('createdAfter', f.createdAt.after.toISOString());
@@ -351,8 +356,9 @@ export class APIAdapter implements StackAdapter {
     data: Uint8Array,
     mimeType: string,
     filename?: string,
+    appId?: string,
   ): Promise<WireRecord> {
-    const url = `${this.baseUrl}${path}`;
+    const url = `${this.baseUrl}${path}${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`;
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
     if (filename)
@@ -607,8 +613,9 @@ export class APIAdapter implements StackAdapter {
     data: Uint8Array,
     mimeType: string,
     filename?: string,
+    appId?: string,
   ): Promise<StackRecord> {
-    return parseRecord(await this.uploadBinary('/attachments', data, mimeType, filename));
+    return parseRecord(await this.uploadBinary('/attachments', data, mimeType, filename, appId));
   }
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {

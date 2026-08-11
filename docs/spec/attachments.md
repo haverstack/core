@@ -5,7 +5,7 @@ Binary files are stored and retrieved through the library using **content-addres
 ```ts
 // Upload a file — stores the bytes and creates the _attachment@1 record,
 // returning that record. content.fileId is a stable SHA-256 hex ID.
-const record = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string)
+const record = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string, appId?: AppId)
   : Promise<StackRecord & { content: AttachmentContent }>
 
 // Fetch the binary
@@ -31,6 +31,8 @@ type AttachmentContent = {
 
 An `_attachment@1` record is created on every `putAttachment()` call — even if the same bytes were previously uploaded. Multiple `_attachment@1` records may therefore exist for the same `fileId`, each with its own `filename`; the binary is stored only once.
 
+The optional `appId` is stamped onto that record, so an upload is attributable to the software that made it like any other write — the alternative would leave attachments the one record kind that cannot carry attribution, even though `create()` has always taken it. Self-reported and never a permission input, as everywhere else (see [Identity § App](./identity.md#app)). On the wire it travels as a query param, since a binary request body has nowhere to put it (see [Wire format § Upload](./wire-format.md#upload)).
+
 **`putAttachment()` returns the record it created**, matching what `POST /attachments` returns on the wire — the uploader's own metadata record is never something they have to go looking for. The `id` is the part that matters: `filename` is the only mutable field on an `_attachment@1` record, and setting it later needs an id. Without this, every caller wanting one would have to query by `fileId` and disambiguate among the several records a shared `fileId` can have.
 
 To read metadata for a `fileId` uploaded by _someone else_, query `_attachment@1` records — note that a `fileId` may have several, one per upload:
@@ -52,8 +54,8 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 ## `Stack` vs `ScopedStack` methods
 
-- `Stack.putAttachment(data, mimeType, filename?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
-- `ScopedStack.putAttachment(data, mimeType, filename?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is set to the uploading entity.
+- `Stack.putAttachment(data, mimeType, filename?, appId?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
+- `ScopedStack.putAttachment(data, mimeType, filename?, appId?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is the subject, and `principalId` the authenticated principal when the two differ — stamped exactly as `ScopedStack.create()` does (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)).
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
 - `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file (including soft-deleted ones). See [Deleting attachments](#deleting-attachments).
@@ -71,7 +73,7 @@ const meta = results.records[0]?.content as AttachmentContent | undefined;
 
 One carve-out: a non-owner who can already read some record referencing `fileId` may create an additional `_attachment@1` record for it (e.g. to record their own `filename`) without re-uploading bytes — this conveys no access they didn't already have. The carve-out is satisfied only by a readable referencing record, never by the requester's own prior `_attachment@1` record for the same `fileId` — allowing that would let one successful guess unlock unlimited further metadata records for the same guessed `fileId`.
 
-The owner and unscoped `Stack` are unaffected — this applies to `ScopedStack.create()` only. `ScopedStack.putAttachment()` is unaffected too: having already derived `fileId` from bytes it hashed itself, it creates its record directly, bypassing this gate rather than satisfying it.
+The owner and unscoped `Stack` are unaffected — this applies to `ScopedStack.create()` only. The owner's exemption requires the owner [acting alone](./access-control.md#delegation-principal-and-subject): under delegation the refusal applies whichever side the owner is on, since the uploader clause that turns a guess into a read matches the subject a scoped create stamps, not the principal claiming the exemption. `ScopedStack.putAttachment()` is unaffected too: having already derived `fileId` from bytes it hashed itself, it creates its record directly, bypassing this gate rather than satisfying it.
 
 **Anti-oracle.** The `mimeType`-conflict error (above) never names the established `mimeType` — doing so would confirm an existing `fileId`'s content type to a caller who only guessed the `fileId`, exactly the confirmation oracle the create refusal is designed to close.
 

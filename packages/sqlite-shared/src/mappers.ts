@@ -24,6 +24,7 @@ export const rowToRecord = (
   if (row.parent_id) record.parentId = row.parent_id as string;
   if (row.entity_id) record.entityId = row.entity_id as string;
   if (row.app_id) record.appId = row.app_id as string;
+  if (row.principal_id) record.principalId = row.principal_id as string;
   if (row.deleted_at) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.permissions) record.permissions = JSON.parse(row.permissions as string);
   if (associations.length) record.associations = associations;
