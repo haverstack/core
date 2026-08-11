@@ -29,6 +29,7 @@ import type {
   AdapterCapabilities,
   RecordId,
   FileId,
+  EntityId,
 } from '@haverstack/core';
 import type { WireRecord, WireType, WireVersion, DiscoveryResponse } from '@haverstack/wire-types';
 import {
@@ -48,6 +49,12 @@ export type APIAdapterOpenOptions = {
   url: string;
   /** Bearer token issued by the stack server. Omit for unauthenticated access. */
   token?: string;
+  /**
+   * The DID this client expects to own the stack at `url`. When set, open()
+   * refuses a server whose discovery reports anything else. Omit when the URL
+   * is the only expectation you have.
+   */
+  expectedOwner?: EntityId;
 };
 
 // -------------------------------------------------------
@@ -109,6 +116,24 @@ export class APIAdapterVersionError extends APIAdapterError {
   ) {
     super(message);
     this.name = 'APIAdapterVersionError';
+  }
+}
+
+/**
+ * Thrown by open() when `expectedOwner` was supplied and discovery reports a
+ * different owner — or none at all. Discovery identity is unsigned and the
+ * server cannot prove it, so stating the DID you expect is the only check
+ * available to a client. See docs/spec/wire-format.md § Identity is trusted
+ * on transport.
+ */
+export class APIAdapterOwnerMismatchError extends APIAdapterError {
+  constructor(
+    public readonly expectedOwner: EntityId,
+    public readonly actualOwner: EntityId | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'APIAdapterOwnerMismatchError';
   }
 }
 
@@ -235,6 +260,8 @@ export class APIAdapter implements StackAdapter {
    *
    * Throws APIAdapterAuthError on 401.
    * Throws APIAdapterConnectionError if the server is unreachable.
+   * Throws APIAdapterOwnerMismatchError when `expectedOwner` disagrees with
+   * the owner discovery reports.
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
     const baseUrl = opts.url.replace(/\/$/, '');
@@ -264,6 +291,20 @@ export class APIAdapter implements StackAdapter {
               `speaks "${WIRE_PROTOCOL_VERSION}".`
           : `Server at "${baseUrl}" reported no wire protocol version in discovery; ` +
               `"${WIRE_PROTOCOL_VERSION}" is required.`,
+      );
+    }
+
+    // After version negotiation: a differing major means fields may not mean
+    // what this client reads them as, so `entityId` isn't worth comparing yet.
+    if (opts.expectedOwner !== undefined && discovery.entityId !== opts.expectedOwner) {
+      throw new APIAdapterOwnerMismatchError(
+        opts.expectedOwner,
+        discovery.entityId,
+        discovery.entityId
+          ? `Server at "${baseUrl}" reports owner "${discovery.entityId}"; expected ` +
+              `"${opts.expectedOwner}".`
+          : `Server at "${baseUrl}" reported no owner in discovery; expected ` +
+              `"${opts.expectedOwner}".`,
       );
     }
 

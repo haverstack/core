@@ -6,6 +6,7 @@ import {
   APIAdapterError,
   APIAdapterCapabilityError,
   APIAdapterVersionError,
+  APIAdapterOwnerMismatchError,
 } from '../src/index.js';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
@@ -223,6 +224,87 @@ describe('open — version negotiation', () => {
       APIAdapterVersionError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// -------------------------------------------------------
+// open() — expectedOwner
+// -------------------------------------------------------
+
+// Discovery identity is unsigned and the server can't prove it, so stating
+// the DID you expect is the only check a client has. See
+// docs/spec/wire-format.md § Identity is trusted on transport.
+describe('open — expectedOwner', () => {
+  const OWNER_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const OTHER_DID = 'did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG';
+  const ownedDiscovery = { ...DISCOVERY, entityId: OWNER_DID };
+
+  test('opens when discovery reports the expected owner', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(ownedDiscovery));
+    const adapter = await APIAdapter.open({
+      url: BASE_URL,
+      token: TOKEN,
+      expectedOwner: OWNER_DID,
+    });
+    expect(adapter.ownerEntityId).toBe(OWNER_DID);
+  });
+
+  test('refuses a server reporting a different owner', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID }),
+    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+  });
+
+  test('carries both DIDs for a caller that wants to report them', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
+    const err = await APIAdapter.open({
+      url: BASE_URL,
+      token: TOKEN,
+      expectedOwner: OWNER_DID,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterOwnerMismatchError);
+    expect((err as APIAdapterOwnerMismatchError).expectedOwner).toBe(OWNER_DID);
+    expect((err as APIAdapterOwnerMismatchError).actualOwner).toBe(OTHER_DID);
+  });
+
+  test('refuses discovery carrying no owner at all — absence is not a match', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: undefined }));
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID }),
+    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+  });
+
+  test('compares exactly — a DID differing only in case is a mismatch', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OWNER_DID }));
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID.toLowerCase() }),
+    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+  });
+
+  test('an omitted expectedOwner opens against whatever owner is reported', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
+    const adapter = await APIAdapter.open({ url: BASE_URL, token: TOKEN });
+    expect(adapter.ownerEntityId).toBe(OTHER_DID);
+  });
+
+  test('refuses before sending any other request', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID }),
+    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  // A differing major means discovery's fields may not mean what this client
+  // reads them as, so entityId isn't worth comparing yet.
+  test('an incompatible protocol major is refused ahead of the owner check', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ ...DISCOVERY, version: '2.0', entityId: OTHER_DID }),
+    );
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID }),
+    ).rejects.toThrow(APIAdapterVersionError);
   });
 });
 
