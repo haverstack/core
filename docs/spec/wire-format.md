@@ -36,6 +36,16 @@ A response with no `version`, or one that isn't `MAJOR.MINOR`, is refused the sa
 
 `@haverstack/wire-types` exports the current `WIRE_PROTOCOL_VERSION` along with `parseProtocolVersion()` and `isProtocolCompatible()`, so a server implementation applies the same rule as `adapter-api` rather than reimplementing it.
 
+### Identity is trusted on transport
+
+`entityId` in the response above is an **unsigned JSON field**, and nothing here challenges the server to prove it holds any binding to that DID. Structurally it cannot: the server deliberately never holds the owner's key (see [Identity](./identity.md)). So a client's belief about _whose stack it is talking to_ rests on TLS and the URL it was given — not on a signature, unlike every other claim in this system. A hostile or misdirected server can present itself as anyone's stack, and a client that writes private data to it has no cryptographic recourse.
+
+This is inherent to the hosted topology rather than an omission, and it is stated here because the rest of the spec is otherwise scrupulous about naming exactly this kind of asymmetry. Proving a server↔owner binding is deferred alongside [key rotation](./identity.md#deferred-key-rotation): both need an identity that outlives a single key, and neither is foreclosed by anything above.
+
+**A client that already knows which DID it expects can say so.** One following a Group's `stackUrl`, or reconnecting to a stack it has used before, holds that expectation and today has no way to state it. `APIAdapter`'s `expectedOwner` option compares it against discovery's `entityId` and fails `open()` with `APIAdapterOwnerMismatchError` on any difference — including a discovery response carrying no `entityId` at all, which is not a match. The comparison is exact string equality; no DID method is normalized, since core resolves none of them.
+
+Two limits, so the option is not read as more than it is. It narrows misdirection to a server that already knows which DID it should be claiming — it does not make discovery identity a proof, and no client-side check can. And it runs on a response that has already been fetched, so a static `token`, if one was configured, reached that server before the check could refuse it: `expectedOwner` guards what a client goes on to _write_, not what it already sent to a URL it chose to contact.
+
 ## Authentication
 
 Bearer token in the `Authorization` header. Token issuance itself is out of scope for this spec — that is the server's concern — but _how a token is earned_ has a shape worth stating: see [Authentication: challenge–response](./identity.md#authentication-challengeresponse) for the nonce/signature handshake a server implements before calling `createToken()`. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).
