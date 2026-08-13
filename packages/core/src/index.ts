@@ -142,6 +142,7 @@ export {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
+  firstRecordedAttachment,
   FORCED_CONTENT_TYPE,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,

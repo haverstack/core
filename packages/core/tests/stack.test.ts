@@ -16,6 +16,7 @@ import {
 import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
+import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type { AttachmentContent, BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -2356,6 +2357,41 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.delete(metaRecord.id);
 
     await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+  });
+
+  // The check is check-then-create with no storage-level uniqueness behind
+  // it, so on a concurrent server two conflicting first uploads can both
+  // land — written here straight through the adapter, which is what that
+  // race leaves behind. What must survive it is agreement: core's conflict
+  // check and a server resolving Content-Type both read the established
+  // type off the same record.
+  test('when two conflicting records coexist, first-recorded still names one winner', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await adapter.putAttachment(data);
+    const sameInstant = new Date('2024-01-01T00:00:00.000Z');
+    const racer = (id: string, mimeType: string): StackRecord => ({
+      id,
+      typeId: '_attachment@1',
+      createdAt: sameInstant,
+      updatedAt: sameInstant,
+      content: { fileId, mimeType, size: 3 },
+      version: 1,
+    });
+    // Created out of id order, so a scan-order-dependent pick would
+    // disagree with the tiebreak.
+    await adapter.createRecord(racer('1hk153x00002', 'text/html'));
+    await adapter.createRecord(racer('1hk153x00001', 'image/png'));
+
+    const established = firstRecordedAttachment(
+      (await stack.query({ filter: { typeId: '_attachment@1' } })).records,
+    );
+    expect(established?.id).toBe('1hk153x00001');
+    expect((established?.content as AttachmentContent).mimeType).toBe('image/png');
+
+    // Core's write-time check reads the same winner: a third upload
+    // matching it is accepted, one matching the loser is not.
+    await expect(stack.putAttachment(data, 'text/html')).rejects.toThrow(StackValidationError);
+    await expect(stack.putAttachment(data, 'image/png')).resolves.toBeDefined();
   });
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {

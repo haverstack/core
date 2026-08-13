@@ -27,6 +27,7 @@ import type { SchemaDriftViolation } from './schema.js';
 import { validateContent } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
+import { firstRecordedAttachment } from './attachment-download.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -1452,6 +1453,13 @@ export class Stack implements StackClient {
    * later upload is rejected. Cursor-walked so earlier records past page
    * one are seen. See docs/spec/attachments.md § The `_attachment` record
    * type.
+   *
+   * Best-effort by construction — check-then-create with no storage-level
+   * uniqueness behind it, so two racing first uploads can both land on a
+   * concurrent server. What survives that race is the *resolution*: which
+   * record establishes the type is firstRecordedAttachment()'s total
+   * order, the same one a server serving Content-Type applies, so both
+   * sides name the same winner however many records exist.
    */
   private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
     const { fileId, mimeType } = content;
@@ -1470,7 +1478,7 @@ export class Stack implements StackClient {
       : results.filter((r) => (r.content as AttachmentContent).fileId === fileId);
     if (existing.length === 0) return;
 
-    const first = existing.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+    const first = firstRecordedAttachment(existing)!;
     const establishedMimeType = (first.content as AttachmentContent).mimeType;
     if (mimeType !== establishedMimeType) {
       // Deliberately does not name the established mimeType — that would

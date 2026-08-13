@@ -391,7 +391,7 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 
 1. `?contentType`, if given.
 2. Extension inference from `?filename`, if given and the extension is recognized.
-3. The **first-recorded** `mimeType` on an `_attachment@1` record for the file — deterministic regardless of how many records exist for the `fileId` or which requester is asking, since conflicting `mimeType`s are rejected at write time and can never coexist (see [Attachments](./attachments.md#the-_attachment-record-type)).
+3. The **first-recorded** `mimeType` on an `_attachment@1` record for the file — the record with the earliest `createdAt`, ties broken by the lower record `id`. That total order is what makes the served type deterministic regardless of how many records exist for the `fileId` or which requester is asking; a conflicting `mimeType` is rejected when a write detects it, but under concurrency two conflicting first-writes can both land, and this rule still names one winner (see [Attachments](./attachments.md#the-_attachment-record-type)).
 4. `application/octet-stream`, if none of the above apply.
 
 **Dangerous-type forcing applies to the result of that resolution, not to whichever source produced it** — a server that forces only the `?contentType` case and leaves the other sources unguarded has a spec-conformance gap, not a defensible partial implementation. Compute the candidate first, _then_ apply the policy below to whatever came out:

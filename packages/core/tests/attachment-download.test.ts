@@ -3,6 +3,7 @@ import {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
+  firstRecordedAttachment,
   FORCED_CONTENT_TYPE,
 } from '../src/attachment-download.js';
 
@@ -147,5 +148,52 @@ describe('resolveAttachmentDownloadContentType — forcing applies to the result
     expect(resolveAttachmentDownloadContentType({ storedMimeType: 'image/png' }).forced).toBe(
       false,
     );
+  });
+});
+
+// -------------------------------------------------------
+// firstRecordedAttachment — which record establishes the mimeType
+// -------------------------------------------------------
+
+describe('firstRecordedAttachment', () => {
+  const rec = (id: string, createdAt: string) => ({ id, createdAt: new Date(createdAt) });
+
+  test('the earliest createdAt wins', () => {
+    const first = rec('b', '2024-01-01T00:00:00.000Z');
+    const later = rec('a', '2024-06-01T00:00:00.000Z');
+
+    expect(firstRecordedAttachment([later, first])?.id).toBe('b');
+  });
+
+  // The case the write-time conflict check can't prevent: two uploads of
+  // the same bytes racing on a concurrent server both find nothing and
+  // both land, possibly within the same millisecond. Determinism can't
+  // depend on that never happening, so it depends on the tiebreak instead.
+  test('a createdAt tie is broken by the lower id', () => {
+    const sameInstant = '2024-01-01T00:00:00.000Z';
+    const records = [rec('1hk153x00002', sameInstant), rec('1hk153x00001', sameInstant)];
+
+    expect(firstRecordedAttachment(records)?.id).toBe('1hk153x00001');
+    expect(firstRecordedAttachment([...records].reverse())?.id).toBe('1hk153x00001');
+  });
+
+  test('the answer does not depend on the order records arrive in', () => {
+    const records = [
+      rec('c', '2024-01-01T00:00:00.000Z'),
+      rec('a', '2024-01-01T00:00:00.000Z'),
+      rec('b', '2023-12-31T23:59:59.999Z'),
+    ];
+
+    for (const permutation of [
+      records,
+      [...records].reverse(),
+      [records[1], records[2], records[0]],
+    ]) {
+      expect(firstRecordedAttachment(permutation)?.id).toBe('b');
+    }
+  });
+
+  test('no records means nothing is established yet', () => {
+    expect(firstRecordedAttachment([])).toBeUndefined();
   });
 });
