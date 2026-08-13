@@ -23,9 +23,12 @@
  *   exactly one column and callers have no business targeting columns
  *   explicitly, colons are stripped outright rather than validated.
  *
- * A query timeout is not implementable here: SQLite runs in-process and
- * synchronously, and interrupt() would need a worker thread to be usable
- * as one. Bounding search cost is a server concern, above this layer.
+ * What this bounds is the grammar, not the cost: a syntactically modest
+ * search over a large index can still be expensive, and node:sqlite blocks
+ * the calling thread, so there is no timeout to set from inside the call.
+ * Bounding execution time belongs to whoever drives the engine under load
+ * — see docs/spec/wire-format.md § Bounding query cost for the server-side
+ * expectation and the `timeout` wire error that goes with it.
  */
 
 import type { SqlExecutor } from './executor.js';

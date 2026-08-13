@@ -79,6 +79,7 @@ type AdapterCapabilities = {
   contentFieldQuery: boolean;
   sortableFields: string[];
   maxAttachmentBytes: number | null; // upload size ceiling, or null = unbounded
+  maxContentBytes: number | null; // record content/patch size ceiling, or null = unbounded
 };
 ```
 
@@ -95,6 +96,8 @@ type AdapterCapabilities = {
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false`
 
 Local, embedded adapters (JSON, native SQLite) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
+
+**`maxContentBytes` is the same field for the JSON side of a write** — the serialized size of a Record's `content` on create, or of a merge patch on update. Local adapters declare `null` for the same reason: a caller with in-process access to the database can spend its own memory however it likes, and nothing at the storage layer objects. A server declares its request-size limit here, and `Stack.create()`/`Stack.update()` pre-check against it and throw `StackPayloadTooLargeError` before sending — the same client-side courtesy `putAttachment()` extends for attachments, with the server's own limit still authoritative (see [Wire format § Request size limits](./wire-format.md#request-size-limits)).
 
 ## Concurrency & storage ownership
 

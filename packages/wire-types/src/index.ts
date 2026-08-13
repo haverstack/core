@@ -20,6 +20,7 @@ import {
   StackQueryError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
 } from '@haverstack/core';
 
 export type WireRecord = {
@@ -36,6 +37,25 @@ export type WireRecord = {
   deletedAt?: string;
   permissions?: Permission[];
   associations?: Association[];
+};
+
+/**
+ * The response envelope of `GET /records` and `POST /records/query`.
+ *
+ * `cursor` is the only end-of-results signal: `records` may be empty while
+ * `cursor` is non-null, since a server filters a bounded window of stored
+ * Records per request against the requester's permissions.
+ *
+ * `total` is typed `null` rather than `number | null` because every wire
+ * response has passed a permission boundary, and an unfiltered count would
+ * report how many Records exist beyond what the requester may read. A
+ * server MUST NOT populate it; `APIAdapter` discards a number if one
+ * arrives anyway. See docs/spec/wire-format.md § Response envelope.
+ */
+export type WireQueryResponse = {
+  records: WireRecord[];
+  cursor: string | null;
+  total: null;
 };
 
 export type WireType = {
@@ -179,6 +199,14 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
   // bodyless response (e.g. a reverse proxy's own request-entity-too-large
   // page, not the server's JSON error body).
   payload_too_large: 413,
+  /**
+   * 503, not 408 or 504: the request arrived fine (408 says it didn't) and
+   * the server is not a gateway (504 says it is) — it declined to keep
+   * spending its own time on this one. Retryable, which is the part a
+   * client acts on, and the reason a query timeout must not reuse
+   * `bad_request`: that code means "malformed, retrying won't help."
+   */
+  timeout: 503,
 };
 
 /**
@@ -196,6 +224,11 @@ export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
   412: 'version_conflict',
   422: 'validation',
   413: 'payload_too_large',
+  // 503 is deliberately excluded, for the same reason as 500: a bodyless
+  // 503 is a load balancer or a restarting process saying "not right now",
+  // and reporting that as StackTimeoutError would tell an app its query
+  // was too expensive when the server never saw it. The typed body is
+  // what distinguishes the two, so `timeout` only reconstructs from one.
 };
 
 const KNOWN_CODES = new Set<string>(Object.keys(WIRE_ERROR_STATUS));
@@ -263,6 +296,8 @@ export function deserializeError(body: WireError): Error {
       return new StackSchemaDriftError(schemaDrift?.typeId ?? '', schemaDrift?.violations ?? []);
     case 'payload_too_large':
       return new StackPayloadTooLargeError(message);
+    case 'timeout':
+      return new StackTimeoutError(message);
   }
 }
 

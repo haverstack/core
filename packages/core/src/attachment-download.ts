@@ -91,6 +91,33 @@ export function inferContentTypeFromFilename(filename: string): string | undefin
   return match ? EXTENSION_MIME_TYPES[match[1].toLowerCase()] : undefined;
 }
 
+/**
+ * Which `_attachment@1` record establishes a fileId's mimeType — the
+ * "first-recorded" rule of docs/spec/attachments.md, as a total order:
+ * earliest `createdAt`, ties broken by the lower `id`.
+ *
+ * The tiebreak is what makes it a rule rather than a coincidence of scan
+ * order. Rejecting a conflicting mimeType at write time is check-then-act
+ * with no storage-level uniqueness behind it, so two racing first uploads
+ * of the same bytes can both land on a concurrent server. Determinism
+ * doesn't depend on that never happening — it depends on every reader
+ * ordering the records the same way, which is why core's write-time
+ * conflict check and a server's serving choice both come through here.
+ *
+ * Generic over the record shape so a server can pass its own row type.
+ * Records for other fileIds must be filtered out by the caller.
+ */
+export function firstRecordedAttachment<T extends { id: string; createdAt: Date }>(
+  records: readonly T[],
+): T | undefined {
+  return records.reduce<T | undefined>((first, record) => {
+    if (!first) return record;
+    const delta = record.createdAt.getTime() - first.createdAt.getTime();
+    if (delta !== 0) return delta < 0 ? record : first;
+    return record.id < first.id ? record : first;
+  }, undefined);
+}
+
 export type AttachmentDownloadContentType = {
   /** The Content-Type header value to serve. */
   contentType: string;

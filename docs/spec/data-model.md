@@ -203,6 +203,14 @@ The boundary between "accept in place" and "bump the version" is exactly what `d
 
 > **Not yet implemented:** validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
 
+### Reserved content keys
+
+Undeclared content fields are permitted by design (above), with three exceptions: **`__proto__`, `constructor`, and `prototype` are rejected as top-level content keys** — on `create()` and in an `update()` patch alike — with `StackValidationError` (422).
+
+They name JavaScript's object machinery rather than a field, and the two write paths disagree about them: a merge patch to `__proto__` reaches the prototype setter instead of setting a field, so the write silently does nothing, while the same key through `create()` stores as an ordinary property. Refusing all three makes the two paths agree, and says so out loud instead of accepting a write that will quietly vanish.
+
+This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter.
+
 ## Queries
 
 Queries are expressed as a `Query` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.
@@ -266,6 +274,12 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 **`query()` always paginates.** An absent `limit` means one adapter-default page (50), never "every matching Record." Any caller — app code or library-internal — that needs the complete result set MUST follow `cursor` to exhaustion; treating a single `query()` call as exhaustive is a caller bug, not a pagination bug, however the pages are sized.
 
+**`cursor: null` is the only end-of-results signal. A page may be empty while `cursor` is non-null** — possibly several in a row — and a caller that stops on an empty page is the same truncation bug as one that stops after the first page. The case is reachable, not theoretical: a [permission-scoped](./access-control.md) query reads a bounded window of stored Records per call and returns only the ones the requester may read, so a low-visibility requester scanning a large Stack legitimately gets `{ records: [], cursor: "..." }` until the window reaches something they can see. The same holds for any filter an adapter applies after paging. Loop on `cursor`, never on `records.length`.
+
+**A permission-scoped query reports `total: null`.** The count of matching Records, unfiltered, would reveal how many Records exist that the requester cannot read — the cardinality of what the permission check just hid. `ScopedStack.query()` therefore always reports `null` rather than a number, and so does every response on the wire (see [Wire format § Response envelope](./wire-format.md#response-envelope)). A `total` is only ever a number on a direct, unscoped `Stack.query()` in-process, where there is no permission boundary to leak across.
+
 ### Capability-gated filters
 
 `content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically. A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
+
+**Sanitization bounds a search's grammar, not its cost.** The FTS sanitizers strip the operators that make a query pathological to parse, but a syntactically ordinary search over a large index can still be expensive to execute, and both SQLite engines run synchronously in-process — there is no way to interrupt one from inside the call. Full-text search is therefore best-effort on cost: fine on a personal Stack, where the only session a slow query blocks is the caller's own, and a server-side concern the moment one process serves many requesters. See [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost) for what a server owes here and the `timeout` error it may answer with.

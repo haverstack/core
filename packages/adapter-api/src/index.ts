@@ -41,6 +41,7 @@ import type {
 } from '@haverstack/core';
 import type {
   WireRecord,
+  WireQueryResponse,
   WireType,
   WireVersion,
   DiscoveryResponse,
@@ -485,7 +486,14 @@ export class APIAdapter implements StackAdapter {
       // Passthrough metadata only — no 'UTC' default, which would claim
       // knowledge the discovery response didn't actually provide.
       discovery.timezone,
-      discovery.capabilities,
+      {
+        ...discovery.capabilities,
+        // A server predating this field, or one declining to publish its
+        // limit, means "you can't pre-check" — not "unbounded" and not
+        // undefined leaking into a numeric comparison. Its own
+        // request-size limit is authoritative either way.
+        maxContentBytes: discovery.capabilities?.maxContentBytes ?? null,
+      },
     );
   }
 
@@ -687,12 +695,6 @@ export class APIAdapter implements StackAdapter {
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
-    type Envelope = {
-      records: WireRecord[];
-      cursor: string | null;
-      total: number | null;
-    };
-
     // Delegates the fail-loud decision to core's shared
     // assertQueryCapabilities so the wire and local paths enforce one rule
     // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
@@ -707,21 +709,27 @@ export class APIAdapter implements StackAdapter {
       throw new APIAdapterCapabilityError(capability, err.message);
     }
 
-    let raw: Envelope;
+    let raw: WireQueryResponse;
     if (this.capabilities.contentFieldQuery) {
       // POST /records/query supports the full query shape including content field filters
-      raw = await this.request<Envelope>('POST', '/records/query', query);
+      raw = await this.request<WireQueryResponse>('POST', '/records/query', query);
     } else {
       // Servers without contentFieldQuery support only expose GET /records
       const params = buildQueryParams(query);
       const qs = params.toString();
-      raw = await this.request<Envelope>('GET', qs ? `/records?${qs}` : '/records');
+      raw = await this.request<WireQueryResponse>('GET', qs ? `/records?${qs}` : '/records');
     }
 
     return {
       records: raw.records.map(parseRecord),
       cursor: raw.cursor,
-      total: raw.total,
+      // Always null, whatever the server sent. Every wire response has
+      // passed a permission boundary, so a count that ignores pagination
+      // reports records the requester can't read — a server MUST NOT
+      // populate this, and an app that reads `total` must behave the same
+      // here as it does under ScopedStack, which also always reports null.
+      // See docs/spec/wire-format.md § Response envelope.
+      total: null,
     };
   }
 

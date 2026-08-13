@@ -10,6 +10,7 @@ import {
   StackQueryError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
 } from '@haverstack/core';
 import {
   serializeError,
@@ -30,6 +31,7 @@ const everyStackError = [
   new StackQueryError('Undecodable pagination cursor.'),
   new StackSchemaDriftError('note@1', [{ path: 'title', message: 'type changed' }]),
   new StackPayloadTooLargeError('Attachment exceeds the 50000000-byte limit.'),
+  new StackTimeoutError('Query exceeded the server time limit'),
 ];
 
 describe('serializeError', () => {
@@ -129,5 +131,16 @@ describe('errorForStatus', () => {
 
   it('refuses to infer a migration error from a bare 500', () => {
     expect(errorForStatus(500, 'nope')).toBeNull();
+  });
+
+  // Same reasoning as the 500 case: a bodyless 503 is usually a load
+  // balancer or a restarting process, so reading it as StackTimeoutError
+  // would tell an app its query was too expensive when the server never
+  // ran it. The typed body is what distinguishes the two.
+  it('refuses to infer a timeout from a bare 503', () => {
+    expect(errorForStatus(503, 'nope')).toBeNull();
+    expect(deserializeError({ error: { code: 'timeout', message: 'too slow' } })).toBeInstanceOf(
+      StackTimeoutError,
+    );
   });
 });

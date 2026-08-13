@@ -164,6 +164,38 @@ export const validateContent = (
 };
 
 /**
+ * Content keys that name JavaScript's object machinery rather than a
+ * field. Undeclared content fields are allowed by design, so without this
+ * they reach `merged[key] = value` in applyMergePatch — where `__proto__`
+ * invokes the prototype setter instead of setting a field.
+ *
+ * That is not a prototype-pollution gadget today: JSON.stringify writes
+ * only own-enumerable properties, so a reassigned prototype never reaches
+ * storage, and JSON.parse recreates `__proto__` as an own property rather
+ * than invoking the setter, so a stored one round-trips inertly. The
+ * defect is that the two write paths disagree — a merge patch to
+ * `__proto__` silently vanishes, while the same key through create()
+ * stores as an ordinary field — and that a future refactor deepening the
+ * shallow merge would turn a quiet inconsistency into a real one.
+ *
+ * Rejecting is more honest than skipping: a caller who sends one of these
+ * finds out, rather than watching a write appear to succeed and do
+ * nothing. See docs/spec/data-model.md § Reserved content keys.
+ */
+export const RESERVED_CONTENT_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];
+
+/**
+ * Top-level only. Nested occurrences survive the JSON round trip as inert
+ * own properties (see above), and walking undeclared subtrees to find them
+ * would cost a traversal the schema walk doesn't otherwise do.
+ */
+export const validateReservedKeys = (content: Record<string, unknown>): ValidationError[] =>
+  RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(content, key)).map((key) => ({
+    path: key,
+    message: `"${key}" is a reserved content key and cannot be used as a field name`,
+  }));
+
+/**
  * Returns true if the content is valid against the schema.
  * Use validateContent() directly to get error details.
  */

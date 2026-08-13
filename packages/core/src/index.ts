@@ -22,6 +22,7 @@ export {
   StackQueryError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
   StackClosedError,
   assertQueryCapabilities,
 } from './stack.js';
@@ -109,7 +110,12 @@ export {
   baseIdOf,
 } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
-export { validateContent, isValid } from './validate.js';
+export {
+  validateContent,
+  validateReservedKeys,
+  isValid,
+  RESERVED_CONTENT_KEYS,
+} from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
 export {
@@ -142,6 +148,7 @@ export {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
+  firstRecordedAttachment,
   FORCED_CONTENT_TYPE,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,
