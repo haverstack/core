@@ -25,6 +25,7 @@
 
 import type {
   WireRecord,
+  WireQueryResponse,
   WireError,
   WireVersion,
   DiscoveryResponse,
@@ -329,6 +330,113 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
         filename: 'mine.png',
       },
       version: 1,
+    },
+  },
+];
+
+// -------------------------------------------------------
+// Records: query — POST /records/query, GET /records
+// -------------------------------------------------------
+//
+// What these pin is the *envelope*, not the filtering: `total` is never a
+// number, and `cursor` — not `records.length` — is what says whether the
+// result set is exhausted. Both are rules a server can satisfy by
+// accident on a small test Stack and violate the moment a requester with
+// partial visibility pages through a large one.
+
+export const queryRecordsFixtures: ConformanceFixture<
+  Record<string, unknown>,
+  WireQueryResponse
+>[] = [
+  {
+    name: 'query-reports-null-total',
+    description:
+      'The query envelope reports total: null. Every request a server serves is authenticated ' +
+      'as some requester, so a count that ignores pagination would report how many Records ' +
+      'exist beyond what that requester may read — the cardinality the permission check just ' +
+      'hid. A server MUST NOT populate this field on any response, and APIAdapter discards a ' +
+      'number if one arrives anyway. See docs/spec/wire-format.md § Response envelope.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00010',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Readable' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-empty-page-with-live-cursor',
+    description:
+      'An empty records array with a non-null cursor is a valid response and does NOT mean the ' +
+      'result set is exhausted — the server filtered a bounded window of stored Records against ' +
+      "the requester's permissions and none of them were readable. A requester with little " +
+      'visibility into a large Stack can receive several of these in a row before results ' +
+      'appear. cursor: null is the only end-of-results signal; a client that stops paging on an ' +
+      'empty page silently truncates its own results. See docs/spec/data-model.md § Sorting and ' +
+      'pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [],
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+      total: null,
+    },
+  },
+  {
+    name: 'query-final-page-closes-the-cursor',
+    description:
+      'The page that exhausts the result set reports cursor: null, whether or not it carried ' +
+      'any records. This is the fixture above resumed: the same query, now with the cursor that ' +
+      'page handed back, reaching the end of the scan.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      filter: { typeId: 'com.example/note@1' },
+      limit: 2,
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+    },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00021',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-02T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { title: 'Finally visible' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-get-records-uses-the-same-envelope',
+    description:
+      'GET /records — the native-field query endpoint a server without contentFieldQuery ' +
+      'exposes — returns the identical envelope, including the same total and cursor rules. ' +
+      'The two endpoints differ in what they can filter by, not in what they return.',
+    method: 'GET',
+    path: '/records?typeId=com.example%2Fnote%401&limit=2',
+    responseStatus: 200,
+    responseBody: {
+      records: [],
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+      total: null,
     },
   },
 ];
@@ -1635,6 +1743,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...authChallengeFixtures,
   ...authTokenFixtures,
   ...createRecordFixtures,
+  ...queryRecordsFixtures,
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,

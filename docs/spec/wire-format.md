@@ -262,9 +262,13 @@ When present, the server applies the mutation only if the record's current versi
 {
   "records": [...],
   "cursor": "opaque-string-or-null",
-  "total": 142
+  "total": null
 }
 ```
+
+**`total` is always `null` over the wire.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary — and a count of matching Records ignoring pagination would report how many Records exist beyond what that requester may read. The field stays in the envelope (it is part of core's `QueryResult`, and an in-process unscoped `Stack.query()` does report a number) but a server MUST NOT populate it, and a client MUST NOT rely on it. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
+
+**An empty `records` array with a non-null `cursor` is a valid response, and does not mean the result set is exhausted.** A server filters a bounded window of stored Records per request against the requester's permissions, so a requester with little visibility into a large Stack can receive several empty pages before results appear. `cursor: null` is the only end-of-results signal; a client that stops paging on an empty page silently truncates its own results.
 
 ## Permissions
 
