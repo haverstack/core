@@ -10,6 +10,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
 import {
   createRecordFixtures,
+  queryRecordsFixtures,
   patchContentFixtures,
   deleteRecordFixtures,
   undeleteRecordFixtures,
@@ -45,6 +46,7 @@ import {
   StackVersionConflictError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
   buildAuthChallengePayload,
   verifyAuthChallenge,
   base64urlDecode,
@@ -267,6 +269,67 @@ describe('createRecord fixtures', () => {
   }
 });
 
+describe('queryRecords fixtures', () => {
+  const NATIVE_ONLY_DISCOVERY = {
+    ...DISCOVERY,
+    capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+  };
+
+  for (const fixture of queryRecordsFixtures.filter((f) => f.method === 'POST')) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.queryRecords(fixture.requestBody as never);
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.records.map((r) => r.id)).toEqual(
+        fixture.responseBody!.records.map((r) => r.id),
+      );
+      // The cursor survives even when the page is empty — it is the only
+      // end-of-results signal, and dropping it would truncate the walk.
+      expect(result.cursor).toBe(fixture.responseBody!.cursor);
+      expect(result.total).toBeNull();
+    });
+  }
+
+  test('query-get-records-uses-the-same-envelope', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-get-records-uses-the-same-envelope',
+    )!;
+    mockFetch.mockResolvedValueOnce(jsonResponse(NATIVE_ONLY_DISCOVERY));
+    const adapter = await APIAdapter.open({ url: BASE_URL });
+    mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+    const result = await adapter.queryRecords({
+      filter: { typeId: 'com.example/note@1' },
+      limit: 2,
+    });
+
+    const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}${fixture.path}`);
+    expect(init.method).toBe('GET');
+    expect(result.records).toEqual([]);
+    expect(result.cursor).toBe(fixture.responseBody!.cursor);
+    expect(result.total).toBeNull();
+  });
+
+  test('discards a total a non-conforming server populates anyway', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ records: [], cursor: null, total: 142 }, 200));
+
+    const result = await adapter.queryRecords({});
+
+    // 142 counts records this requester may never have been allowed to
+    // see. An app reading `total` must get the same answer here as it does
+    // from ScopedStack, which always reports null.
+    expect(result.total).toBeNull();
+  });
+});
+
 describe('patchContent fixtures', () => {
   for (const fixture of patchContentFixtures) {
     test(fixture.name, async () => {
@@ -473,6 +536,7 @@ const ERROR_CLASS_FOR_CODE = {
   version_conflict: StackVersionConflictError,
   schema_drift: StackSchemaDriftError,
   payload_too_large: StackPayloadTooLargeError,
+  timeout: StackTimeoutError,
 } as const;
 
 describe('error response fixtures', () => {

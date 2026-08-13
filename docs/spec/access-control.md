@@ -115,6 +115,8 @@ The core library ships a permission-enforcing wrapper so server implementations 
 
 Use `asEntity()` when one `Stack` instance serves requests from multiple, possibly untrusted, entities — e.g. a server adapter.
 
+**Resolution may be cached for the lifetime of a single request.** A scoped query cursor-walks the `_grant@1` family and resolves Group rosters per candidate Record — correct, and cheap at the scale a personal Stack has, but repeated work when one request examines many Records. A server MAY resolve the requester's grants and Group memberships once and reuse that snapshot for every check within the same request without deviating from this spec; `ScopedStack.query()` already does exactly this with its prefetched grants. Caching **across** requests is out of scope here: a grant revoked between two requests must take effect on the second, so any longer-lived cache needs an invalidation story this spec does not define.
+
 **`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the subject, so `-own` grants apply to it immediately — a scoped write always names its author, so an absent `entityId` means an unscoped `Stack` wrote the Record.
 
 ### Delegation: principal and subject

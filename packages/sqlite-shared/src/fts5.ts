@@ -21,6 +21,11 @@
  *   removed: wildcards (*), NEAR(...) (terms kept, wrapper dropped), column-filter
  *            colons, bare NOT (no left operand)
  *   capped:  parenthesis nesting depth (default: 2)
+ *
+ * Bounds the grammar, not the cost — same as the FTS4 sanitizer, and for
+ * the same reason (node:sqlite blocks the calling thread, so there is no
+ * timeout to set from inside the call). See docs/spec/wire-format.md
+ * § Bounding query cost.
  */
 
 import type { FtsStrategy } from './fts-strategy.js';

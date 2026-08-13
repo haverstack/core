@@ -25,6 +25,7 @@
 
 import type {
   WireRecord,
+  WireQueryResponse,
   WireError,
   WireVersion,
   DiscoveryResponse,
@@ -104,6 +105,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
+        maxContentBytes: 1048576,
       },
     },
   },
@@ -124,6 +126,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
+        maxContentBytes: null,
       },
     },
   },
@@ -147,6 +150,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
+        maxContentBytes: 1048576,
       },
       auth: { methods: ['did-challenge'] },
     },
@@ -329,6 +333,113 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
         filename: 'mine.png',
       },
       version: 1,
+    },
+  },
+];
+
+// -------------------------------------------------------
+// Records: query — POST /records/query, GET /records
+// -------------------------------------------------------
+//
+// What these pin is the *envelope*, not the filtering: `total` is never a
+// number, and `cursor` — not `records.length` — is what says whether the
+// result set is exhausted. Both are rules a server can satisfy by
+// accident on a small test Stack and violate the moment a requester with
+// partial visibility pages through a large one.
+
+export const queryRecordsFixtures: ConformanceFixture<
+  Record<string, unknown>,
+  WireQueryResponse
+>[] = [
+  {
+    name: 'query-reports-null-total',
+    description:
+      'The query envelope reports total: null. Every request a server serves is authenticated ' +
+      'as some requester, so a count that ignores pagination would report how many Records ' +
+      'exist beyond what that requester may read — the cardinality the permission check just ' +
+      'hid. A server MUST NOT populate this field on any response, and APIAdapter discards a ' +
+      'number if one arrives anyway. See docs/spec/wire-format.md § Response envelope.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00010',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Readable' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-empty-page-with-live-cursor',
+    description:
+      'An empty records array with a non-null cursor is a valid response and does NOT mean the ' +
+      'result set is exhausted — the server filtered a bounded window of stored Records against ' +
+      "the requester's permissions and none of them were readable. A requester with little " +
+      'visibility into a large Stack can receive several of these in a row before results ' +
+      'appear. cursor: null is the only end-of-results signal; a client that stops paging on an ' +
+      'empty page silently truncates its own results. See docs/spec/data-model.md § Sorting and ' +
+      'pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [],
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+      total: null,
+    },
+  },
+  {
+    name: 'query-final-page-closes-the-cursor',
+    description:
+      'The page that exhausts the result set reports cursor: null, whether or not it carried ' +
+      'any records. This is the fixture above resumed: the same query, now with the cursor that ' +
+      'page handed back, reaching the end of the scan.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      filter: { typeId: 'com.example/note@1' },
+      limit: 2,
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+    },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00021',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-02T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { title: 'Finally visible' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-get-records-uses-the-same-envelope',
+    description:
+      'GET /records — the native-field query endpoint a server without contentFieldQuery ' +
+      'exposes — returns the identical envelope, including the same total and cursor rules. ' +
+      'The two endpoints differ in what they can filter by, not in what they return.',
+    method: 'GET',
+    path: '/records?typeId=com.example%2Fnote%401&limit=2',
+    responseStatus: 200,
+    responseBody: {
+      records: [],
+      cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+      total: null,
     },
   },
 ];
@@ -941,6 +1052,85 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       error: {
         code: 'bad_request',
         message: 'Invalid cursor: unknown sort field "badfield"',
+      },
+    },
+  },
+
+  {
+    name: 'error-payload-too-large-record-body',
+    description:
+      "A record body exceeding the server's request-size limit returns 413 with code " +
+      '"payload_too_large" — the same code and class as an oversized attachment upload, since a ' +
+      'client acts on both identically. maxAttachmentBytes bounds attachment bytes only: a ' +
+      "record body and a PATCH body have no ceiling in core, so this one is the server's to " +
+      'set and to state (as maxContentBytes in discovery, letting Stack.create()/update() ' +
+      'pre-check rather than burn the round trip). The body below stands in for one that ' +
+      'exceeds the limit; the fixture pins the error shape, not a specific size. See ' +
+      'docs/spec/wire-format.md § Request size limits.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x02010',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { body: 'a very large document…' },
+      version: 1,
+    },
+    responseStatus: 413,
+    responseBody: {
+      error: { code: 'payload_too_large', message: 'Request body exceeds the server size limit' },
+    },
+  },
+
+  {
+    name: 'error-reserved-content-key',
+    description:
+      'A content key of __proto__, constructor or prototype is refused with 422 and code ' +
+      '"validation" on POST /records and PATCH /records/:id alike. Undeclared content fields are ' +
+      'permitted by design, but these three name JavaScript object machinery rather than fields, ' +
+      'and the write paths disagree about them: a merge patch to __proto__ reaches the prototype ' +
+      'setter and vanishes, while the same key through create() stores as an ordinary property. ' +
+      'A server built on core inherits the refusal through ordinary record validation; one ' +
+      'mapping request bodies onto storage directly applies it itself. See ' +
+      'docs/spec/data-model.md § Reserved content keys.',
+    method: 'PATCH',
+    path: '/records/1hk153x02011',
+    requestBody: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: '__proto__',
+            message: '"__proto__" is a reserved content key and cannot be used as a field name',
+          },
+        ],
+      },
+    },
+  },
+
+  {
+    name: 'error-timeout-search-exceeds-server-bound',
+    description:
+      'A full-text search the server abandoned for taking too long returns 503 with code ' +
+      '"timeout" — reconstructed as StackTimeoutError. The sanitizers bound a search\'s ' +
+      'grammar, not its execution cost, and both SQLite engines run synchronously in-process, ' +
+      'so a server under load bounds query time at the boundary where it drives the engine ' +
+      '(see docs/spec/wire-format.md § Bounding query cost). The code has to be distinct from ' +
+      'bad_request: nothing was applied and the same search may succeed if narrowed or retried, ' +
+      'where bad_request tells a client the opposite. A server that bounds nothing never emits ' +
+      'this — it is the typed answer for one that does, not an obligation to produce.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { search: 'the OR a OR of OR and' } },
+    responseStatus: 503,
+    responseBody: {
+      error: {
+        code: 'timeout',
+        message: 'Query exceeded the server time limit',
       },
     },
   },
@@ -1635,6 +1825,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...authChallengeFixtures,
   ...authTokenFixtures,
   ...createRecordFixtures,
+  ...queryRecordsFixtures,
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { validateContent, isValid } from '../src/validate.js';
+import { validateContent, validateReservedKeys, isValid } from '../src/validate.js';
 import type { TypeSchema } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -288,5 +288,39 @@ describe('isValid', () => {
 
   test('returns true for empty schema', () => {
     expect(isValid({ anything: 'goes' }, {})).toBe(true);
+  });
+});
+
+// -------------------------------------------------------
+// validateReservedKeys
+// -------------------------------------------------------
+
+describe('validateReservedKeys', () => {
+  test.each(['__proto__', 'constructor', 'prototype'])('%s is rejected', (key) => {
+    const content = JSON.parse(`{"${key}": "value"}`) as Record<string, unknown>;
+
+    const errors = validateReservedKeys(content);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].path).toBe(key);
+  });
+
+  test('ordinary undeclared fields are untouched — they are allowed by design', () => {
+    expect(validateReservedKeys({ anything: 'goes', nested: { deep: true } })).toEqual([]);
+  });
+
+  // A literal `{ __proto__: ... }` reassigns the prototype rather than
+  // creating a key, so there is no own property to reject and nothing to
+  // store either. Only the own-property forms (JSON, computed keys) matter.
+  test('a prototype set through the literal setter is not an own key', () => {
+    const viaSetter = { __proto__: { polluted: true } };
+
+    expect(validateReservedKeys(viaSetter as Record<string, unknown>)).toEqual([]);
+  });
+
+  test('reports every reserved key present, not just the first', () => {
+    const content = JSON.parse('{"__proto__": 1, "prototype": 2}') as Record<string, unknown>;
+
+    expect(validateReservedKeys(content).map((e) => e.path)).toEqual(['__proto__', 'prototype']);
   });
 });

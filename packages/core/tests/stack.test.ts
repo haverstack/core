@@ -16,6 +16,7 @@ import {
 import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
+import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type { AttachmentContent, BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -2129,6 +2130,103 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
+// Reserved content keys: __proto__/constructor/prototype name object
+// machinery, not fields. Rejected on both write paths so the two agree —
+// a merge patch to one of them would otherwise vanish silently while the
+// same key through create() stored as an ordinary property.
+// -------------------------------------------------------
+
+describe('reserved content keys', () => {
+  const withKey = (key: string, value: unknown): Record<string, unknown> =>
+    JSON.parse(`{"text": "hi", "${key}": ${JSON.stringify(value)}}`) as Record<string, unknown>;
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'create() rejects a top-level %s content key',
+    async (key) => {
+      await expect(stack.create(NOTE_V1, withKey(key, 'x'))).rejects.toThrow(StackValidationError);
+    },
+  );
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'update() rejects a %s patch key',
+    async (key) => {
+      const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+      await expect(stack.update(record.id, withKey(key, 'x'))).rejects.toThrow(
+        StackValidationError,
+      );
+      // Rejected outright, so the rest of the patch doesn't land either.
+      expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
+    },
+  );
+
+  test('ordinary undeclared fields still pass — permitted by design', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+
+    expect(record.content).toEqual({ text: 'hi', extra: 'kept' });
+  });
+
+  test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
+    const content = JSON.parse('{"text": "hi", "meta": {"__proto__": {"x": 1}}}') as Record<
+      string,
+      unknown
+    >;
+
+    await expect(stack.create(NOTE_V1, content)).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
+// maxContentBytes pre-check: the content half of the attachment
+// ceiling below. Local adapters declare null; a server declares its
+// request-size limit so apps can fail before the round trip.
+// -------------------------------------------------------
+
+describe('maxContentBytes pre-check', () => {
+  const withContentCeiling = (maxContentBytes: number): StackAdapter =>
+    Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: true,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes: null,
+        maxContentBytes,
+      },
+    });
+
+  const openLimited = async (maxContentBytes: number): Promise<Stack> => {
+    const limited = await Stack.create(withContentCeiling(maxContentBytes));
+    await limited.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    return limited;
+  };
+
+  test('create() throws StackPayloadTooLargeError before writing', async () => {
+    const limitedStack = await openLimited(64);
+
+    await expect(limitedStack.create(NOTE_V1, { text: 'x'.repeat(200) })).rejects.toThrow(
+      StackPayloadTooLargeError,
+    );
+    expect((await limitedStack.query({ filter: { typeId: NOTE_V1 } })).records).toHaveLength(0);
+  });
+
+  test('update() measures the patch, not the merged record', async () => {
+    const limitedStack = await openLimited(64);
+    const record = await limitedStack.create(NOTE_V1, { text: 'small' });
+
+    // A small patch against a record near the ceiling is not oversized —
+    // the patch is what travels.
+    await expect(limitedStack.update(record.id, { text: 'also small' })).resolves.toBeDefined();
+    await expect(limitedStack.update(record.id, { text: 'x'.repeat(200) })).rejects.toThrow(
+      StackPayloadTooLargeError,
+    );
+  });
+
+  test('null maxContentBytes never throws, regardless of size', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x'.repeat(100000) })).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
 // putAttachment — maxAttachmentBytes pre-check: fails fast before any
 // bytes reach the adapter. Local adapters declare null, so these tests
 // fake a finite ceiling via Object.assign over a MemoryAdapter instance.
@@ -2142,6 +2240,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
         contentFieldQuery: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,
+        maxContentBytes: null,
       },
     });
 
@@ -2356,6 +2455,41 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.delete(metaRecord.id);
 
     await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+  });
+
+  // The check is check-then-create with no storage-level uniqueness behind
+  // it, so on a concurrent server two conflicting first uploads can both
+  // land — written here straight through the adapter, which is what that
+  // race leaves behind. What must survive it is agreement: core's conflict
+  // check and a server resolving Content-Type both read the established
+  // type off the same record.
+  test('when two conflicting records coexist, first-recorded still names one winner', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await adapter.putAttachment(data);
+    const sameInstant = new Date('2024-01-01T00:00:00.000Z');
+    const racer = (id: string, mimeType: string): StackRecord => ({
+      id,
+      typeId: '_attachment@1',
+      createdAt: sameInstant,
+      updatedAt: sameInstant,
+      content: { fileId, mimeType, size: 3 },
+      version: 1,
+    });
+    // Created out of id order, so a scan-order-dependent pick would
+    // disagree with the tiebreak.
+    await adapter.createRecord(racer('1hk153x00002', 'text/html'));
+    await adapter.createRecord(racer('1hk153x00001', 'image/png'));
+
+    const established = firstRecordedAttachment(
+      (await stack.query({ filter: { typeId: '_attachment@1' } })).records,
+    );
+    expect(established?.id).toBe('1hk153x00001');
+    expect((established?.content as AttachmentContent).mimeType).toBe('image/png');
+
+    // Core's write-time check reads the same winner: a third upload
+    // matching it is accepted, one matching the loser is not.
+    await expect(stack.putAttachment(data, 'text/html')).rejects.toThrow(StackValidationError);
+    await expect(stack.putAttachment(data, 'image/png')).resolves.toBeDefined();
   });
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {

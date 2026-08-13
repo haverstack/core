@@ -24,9 +24,10 @@ import {
   isWellFormedTypeId,
 } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
-import { validateContent } from './validate.js';
+import { validateContent, validateReservedKeys } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
+import { firstRecordedAttachment } from './attachment-download.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -225,7 +226,8 @@ export type StackErrorCode =
   | 'validation'
   | 'migration'
   | 'schema_drift'
-  | 'payload_too_large';
+  | 'payload_too_large'
+  | 'timeout';
 
 /**
  * Root of the Stack error taxonomy. A single `instanceof StackError` answers
@@ -370,11 +372,55 @@ export class StackPayloadTooLargeError extends StackError {
   }
 }
 
+/**
+ * Thrown when a server abandons an operation for taking too long — in
+ * practice a full-text search, the one query whose cost the sanitizers
+ * bound the *grammar* of but not the execution of (see
+ * docs/spec/data-model.md § Capability-gated filters).
+ *
+ * Never produced in-process: both SQLite engines run synchronously, so
+ * there is nothing to interrupt from inside the call. It exists so a
+ * server that bounds query time has a class to serialize, and so the app
+ * catching it can tell "too expensive, narrow it and retry" from
+ * StackQueryError's "malformed, don't bother retrying" — the distinction
+ * that would be lost if a timeout reused `bad_request`.
+ */
+export class StackTimeoutError extends StackError {
+  static readonly code = 'timeout' as const;
+  override readonly code = StackTimeoutError.code;
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackTimeoutError';
+  }
+}
+
 /** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
 function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | null): void {
   if (maxAttachmentBytes !== null && byteLength > maxAttachmentBytes) {
     throw new StackPayloadTooLargeError(
       `Attachment (${byteLength} bytes) exceeds the ${maxAttachmentBytes}-byte limit.`,
+    );
+  }
+}
+
+/**
+ * The content half of the same pre-check, on Stack.create() and
+ * Stack.update(). Local adapters declare `maxContentBytes: null` and skip
+ * the serialization entirely; only a server declares a ceiling, and its
+ * own request-size limit stays authoritative — this just spares an app the
+ * round trip and gives it a typed failure instead of a 413 it has to
+ * interpret. See docs/spec/wire-format.md § Request size limits.
+ */
+function assertContentSize(
+  content: Record<string, unknown>,
+  maxContentBytes: number | null,
+  what: 'Content' | 'Patch',
+): void {
+  if (maxContentBytes === null) return;
+  const byteLength = new TextEncoder().encode(JSON.stringify(content)).length;
+  if (byteLength > maxContentBytes) {
+    throw new StackPayloadTooLargeError(
+      `${what} (${byteLength} bytes) exceeds the ${maxContentBytes}-byte limit.`,
     );
   }
 }
@@ -940,10 +986,12 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
-    const errors = validateContent(content, type.schema);
+    const errors = [...validateReservedKeys(content), ...validateContent(content, type.schema)];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
+
+    assertContentSize(content, this.features.maxContentBytes, 'Content');
 
     if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
@@ -1047,6 +1095,18 @@ export class Stack implements StackClient {
     if (!type) {
       throw new Error(`Unknown type: "${existing.typeId}"`);
     }
+
+    // Checked on the raw patch, before the merge: a reserved key in a
+    // patch is lost by applyMergePatch rather than stored, so a check on
+    // the merged result would never see it. See validateReservedKeys().
+    const patchErrors = validateReservedKeys(content);
+    if (patchErrors.length > 0) {
+      throw new StackValidationError(patchErrors);
+    }
+
+    // The patch is what travels, so the patch is what's measured — a small
+    // patch against a large record is not an oversized request.
+    assertContentSize(content, this.features.maxContentBytes, 'Patch');
 
     // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
     const merged = applyMergePatch(existing.content, content);
@@ -1452,6 +1512,13 @@ export class Stack implements StackClient {
    * later upload is rejected. Cursor-walked so earlier records past page
    * one are seen. See docs/spec/attachments.md § The `_attachment` record
    * type.
+   *
+   * Best-effort by construction — check-then-create with no storage-level
+   * uniqueness behind it, so two racing first uploads can both land on a
+   * concurrent server. What survives that race is the *resolution*: which
+   * record establishes the type is firstRecordedAttachment()'s total
+   * order, the same one a server serving Content-Type applies, so both
+   * sides name the same winner however many records exist.
    */
   private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
     const { fileId, mimeType } = content;
@@ -1470,7 +1537,7 @@ export class Stack implements StackClient {
       : results.filter((r) => (r.content as AttachmentContent).fileId === fileId);
     if (existing.length === 0) return;
 
-    const first = existing.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+    const first = firstRecordedAttachment(existing)!;
     const establishedMimeType = (first.content as AttachmentContent).mimeType;
     if (mimeType !== establishedMimeType) {
       // Deliberately does not name the established mimeType — that would

@@ -425,6 +425,20 @@ export type AdapterCapabilities = {
    * apps pre-check and surface limits before burning an upload on a 413.
    */
   maxAttachmentBytes: number | null;
+  /**
+   * Maximum serialized size in bytes of a Record's content — a create body
+   * or a merge patch — or `null` if unbounded. The counterpart to
+   * maxAttachmentBytes for the JSON side of a write, which had no stated
+   * ceiling anywhere despite the spec bounding every other resource
+   * (validation depth, queryAllPages, GC grace).
+   *
+   * Local adapters declare `null`: nothing at the storage layer imposes
+   * one, and a caller with in-process access to the database can spend its
+   * own memory however it likes. A server declares its request-size limit
+   * here so apps can pre-check rather than discover it as a 413.
+   * See docs/spec/adapters.md § Adapter capabilities.
+   */
+  maxContentBytes: number | null;
 };
 
 /** What a Stack can do, as seen by app and plugin code. */
