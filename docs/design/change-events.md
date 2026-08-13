@@ -263,6 +263,11 @@ type SubscribeOptions = {
   /** Ask the emitter to include `record`. Honored when it can; never assume it. */
   includeRecords?: boolean;
   onError?: (err: unknown) => void;
+  /**
+   * A gap opened that resumption could not close: reconcile by query.
+   * Never fires on a local stack, and never on first connect.
+   */
+  onReset?: () => void;
 };
 
 interface StackClient {
@@ -296,6 +301,178 @@ Notes on the shape:
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event
   outside its filter; a consumer that filters again is doing redundant work, not defensive
   work.
+- **`onReset` is the one control signal an app must handle**, and it is what keeps
+  notify-then-reconcile honest. Reconnects that resume cleanly are the adapter's business
+  and the app never hears about them; a [`reset` frame](#the-endpoint) means the adapter
+  could not close the gap, and swallowing it would leave the app quietly serving state that
+  is missing changes. It is deliberately the same work as startup — see the
+  [worked example](#worked-example-a-reactive-note-list).
+
+## Worked example: a reactive note list
+
+An app that keeps a live list of notes from a hosted stack. Everything outside the
+`subscribe()` call is already-shipped API.
+
+### Connecting
+
+```ts
+import { Stack, didCredentialFromKeypair } from '@haverstack/core';
+import { APIAdapter } from '@haverstack/adapter-api';
+
+// The keypair was generated once and persisted by the app — the stack never
+// stores it. didCredentialFromKeypair() hands the adapter a *signing callback*,
+// not the key, so a keychain- or hardware-backed signer drops in unchanged.
+const credential = didCredentialFromKeypair(await loadKeypair());
+
+const adapter = await APIAdapter.open({
+  url: 'https://stack.example.com',
+  credential,
+  // We have connected to this stack before and know whose it is. Discovery
+  // identity is only trusted on transport, so stating the expectation is the
+  // one check available — and with a DID credential nothing secret has been
+  // sent when it runs.
+  expectedOwner: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+});
+
+const stack = await Stack.create(adapter);
+```
+
+`open()` performs the handshake, and re-runs it when the token expires. The app never sees
+a token, and never writes a refresh path — including for the feed, whose reconnects go
+through that same path.
+
+### The store
+
+The part worth getting right. Two rules do all the work:
+
+```ts
+const notes = new Map<string, StackRecord>();
+const seen = new Map<string, number>(); // highest version applied, per record
+const purged = new Set<string>(); // hard deletes are terminal
+
+/** Apply a record, unless we already hold something at least as new. */
+function upsert(record: StackRecord) {
+  if (purged.has(record.id)) return;
+  if ((seen.get(record.id) ?? 0) >= record.version) return;
+  seen.set(record.id, record.version);
+  notes.set(record.id, record);
+  render();
+}
+
+function forget(id: string, version: number, terminal: boolean) {
+  if (terminal) purged.add(id);
+  seen.set(id, Math.max(seen.get(id) ?? 0, version));
+  notes.delete(id);
+  render();
+}
+```
+
+`seen` is what makes at-least-once delivery a non-issue: a duplicate event, or an echo of
+the app's own write, loses the version comparison and is ignored. It also protects against
+the subtler race — a `query()` in flight while events arrive can return a record _older_
+than one already applied, and without the comparison it would silently roll the UI back.
+
+`purged` exists because a hard delete has no version to out-rank it: a query that started
+before the purge can still return the record afterwards, and equal-version tie-breaking
+would have to go the deletion's way. A terminal set says that directly.
+
+### Reconciling, then subscribing
+
+```ts
+const FILTER = { typeId: 'com.example.notes/note@1' };
+
+async function reconcile() {
+  let cursor: string | undefined;
+  do {
+    const page = await stack.query({ filter: FILTER, cursor });
+    for (const record of page.records) upsert(record);
+    cursor = page.cursor ?? undefined;
+  } while (cursor);
+}
+
+const unsubscribe = await stack.subscribe(
+  (change) => {
+    switch (change.kind) {
+      case 'created':
+      case 'changed':
+        // `record` is present because we asked and the server offers it.
+        // The fallback is a fetch — never an assumption.
+        if (change.record) upsert(change.record);
+        else void stack.get(change.recordId).then((r) => r && upsert(r));
+        break;
+      case 'deleted':
+        forget(change.recordId, change.version, false);
+        break;
+      case 'purged':
+        forget(change.recordId, change.version, true);
+        break;
+    }
+  },
+  {
+    filter: FILTER,
+    includeRecords: true,
+    // The gap signal, and startup is the repair. Nothing else to write.
+    onReset: () => void reconcile(),
+    onError: (err) => console.error('note feed', err),
+  },
+);
+
+// Subscribe first, reconcile second: subscribe() resolves once the feed is
+// live, so any change from here on is either in the query result or in an
+// event, and `seen` sorts out the overlap. Reversing these two lines opens a
+// window where a change is in neither.
+await reconcile();
+```
+
+Four `kind` cases and the app is complete. Note what is absent: no polling interval, no
+token refresh, no reconnect loop, no "is this event newer than what I have" beyond one
+comparison, and no handling for `associate`/`migrate`/`restore`/`undelete` — they arrive as
+`changed` and re-read correctly by construction.
+
+### Teardown
+
+```ts
+unsubscribe();
+await stack.close();
+```
+
+### The same app, local-first
+
+```ts
+const adapter = await LocalAdapter.open({ path: './notes.db' });
+const stack = await Stack.create(adapter);
+```
+
+Every other line above is unchanged, and it behaves identically — `onReset` simply never
+fires, because [a local stack has exactly one writing
+process](../spec/adapters.md#concurrency--storage-ownership) and so has no gap to open. An
+app can be written against a local stack and moved to a hosted one without touching its
+reactivity, which is the whole point of designing the event model once.
+
+### A second consumer: audit log
+
+Where `op` and the attribution fields earn their place — `kind` alone cannot tell a
+reshare from an edit, and that distinction is the entire content of an audit trail:
+
+```ts
+await stack.subscribe(
+  (change) => {
+    log.append({
+      at: change.updatedAt,
+      what: change.op, // 'permissions' reads very differently from 'update'
+      record: `${change.recordId}@${change.version}`,
+      by: change.entityId, // who it is attributed to
+      via: change.principalId, // the app that authenticated, when delegated
+      app: change.appId, // self-reported, never a trust input
+    });
+  },
+  { onError: (err) => log.failed(err) },
+);
+```
+
+No filter, so this sees everything the session may read. Under a `ScopedStack` that is
+already the right set; the audit log of a scoped session is the audit log of what that
+session could see, which is the only one it could honestly keep.
 
 ## Wire contract — normative
 
@@ -393,7 +570,7 @@ streaming body, which `APIAdapter` is already built on.
 Long-poll (`GET /changes?since=&wait=`) is the reserved fallback for servers that cannot
 hold open connections. The frame vocabulary is transport-independent by construction, so it
 adds a `transports` entry and no new semantics. It is **not** specified in v1 — see
-[the open question](#open-question-long-poll-as-a-second-transport).
+[Deferred: long-poll](#deferred-long-poll-as-a-second-transport).
 
 ## Permission scoping
 
@@ -514,6 +691,8 @@ server builds against.
 - [ ] Emitter in `Stack`, one emission per version bump, at the points D4 fixes
 - [ ] `ScopedStack.subscribe()` — `canRead` per event, grants prefetched per subscription
 - [ ] `subscribe()` on `StackClient`; optional `subscribeChanges?()` on `StackRecordAdapter`
+- [ ] `onReset` plumbed from the adapter to the subscriber — a swallowed gap signal is the
+      one bug that makes notify-then-reconcile silently wrong
 - [ ] `docs/spec/events.md` + the wire sections above folded into `docs/spec/wire-format.md`
 
 **`@haverstack/wire-types`**
@@ -532,11 +711,10 @@ server builds against.
 - [ ] `subscribeChanges()` over `fetch` streaming; discovery gate; backoff with jitter;
       reconnect through the existing 401 re-auth path
 
-## Open question: long-poll as a second transport
+## Deferred: long-poll as a second transport
 
-The only one left, and it does not block the server starting. Recommendation is to **defer
-it**, with the reasoning recorded here so the decision can be revisited on a fact rather
-than re-argued.
+**Decided: SSE only in v1.** The reasoning is recorded here so the decision can be
+revisited on a fact rather than re-argued — the trigger is named at the bottom.
 
 **What it would be:** `GET /changes?since=<seq>&wait=<seconds>` with
 `Accept: application/json`, returning `{ frames: [...], seq, reset? }` — the same frames,
@@ -584,7 +762,7 @@ delivery mechanism, not a second design.
   document exists — the transport can be added later without breaking a client that
   already works.
 
-**The deciding fact is what `haverstack/server` runs on.** If it targets a long-lived
+**The trigger to revisit is what `haverstack/server` runs on.** If it targets a long-lived
 process (a container, a VM, a self-hosted box — the deployment a personal stack most often
 gets), SSE alone is right and long-poll is a later, additive answer to a real user who
 turns up with a constrained platform. If it targets a function runtime that cannot hold a
