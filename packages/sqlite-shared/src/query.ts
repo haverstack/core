@@ -1,24 +1,18 @@
 /**
  * WHERE/ORDER clause building for StackQuery. Engine-independent SQL —
  * shared verbatim between SQLite-backed record adapters. The one caveat is
- * full-text search: `f.search` here assumes an `records_fts` virtual table
- * with a MATCH-able `content` column and a sanitizer that accepts the raw
- * query string, which both FTS4 and FTS5 setups can satisfy even though
- * their grammars differ (see fts.ts).
+ * full-text search: `f.search` here assumes a `records_fts` virtual table
+ * with a MATCH-able `content` column (see fts5.ts).
  */
 
 import { StackQueryError, type StackQuery } from '@haverstack/core';
 import { decodeCursor, getSortColumn, getSortField, type SortField } from './cursor.js';
+import { sanitizeFts5Query } from './fts5.js';
 
 export { getSortField, getSortColumn };
 export type { SortField };
 
-export type SanitizeSearch = (query: string) => string;
-
-export const buildWhereClause = (
-  query: StackQuery,
-  sanitizeSearch: SanitizeSearch,
-): { sql: string; params: unknown[] } => {
+export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
@@ -133,7 +127,7 @@ export const buildWhereClause = (
   }
 
   if (f.search) {
-    const sanitized = sanitizeSearch(f.search);
+    const sanitized = sanitizeFts5Query(f.search);
     if (sanitized) {
       conditions.push(`r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)`);
       params.push(sanitized);

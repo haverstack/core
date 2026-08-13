@@ -1,9 +1,9 @@
 /**
  * Schema DDL shared by SQLite-backed record adapters. TOKENS_SCHEMA_SQL
  * is split out from RECORD_SCHEMA_SQL because token storage lives in its
- * own file, never a browser adapter's, and never bundled with records —
- * see NativeTokenStore in record-adapter-sqlite and the StackTokenStore
- * portability rationale (docs/spec/wire-format.md § Authentication).
+ * own file, never bundled with records — see NativeTokenStore in
+ * record-adapter-sqlite and the StackTokenStore portability rationale
+ * (docs/spec/wire-format.md § Authentication).
  */
 
 export const RECORD_SCHEMA_SQL = `
@@ -100,15 +100,7 @@ export const TOKENS_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
 `;
 
-/** FTS4 — compatible with sql.js's WASM SQLite build. */
-export const FTS4_SCHEMA_SQL = `
-  CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts4(
-    content,
-    content='records'
-  );
-`;
-
-/** FTS5 — used by the native (node:sqlite) adapter. */
+/** The full-text index behind `StackQuery.filter.search` (see fts5.ts). */
 export const FTS5_SCHEMA_SQL = `
   CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     content,
@@ -128,7 +120,6 @@ export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
 /**
  * WAL journaling: page-level writes, crash-safe without our own
  * temp-file-and-rename dance, and real SQLite file locking. Only
- * meaningful for a real file (a :memory: or sql.js in-memory database
- * silently ignores it).
+ * meaningful for a real file (a :memory: database silently ignores it).
  */
 export const PRAGMA_JOURNAL_MODE_WAL = `PRAGMA journal_mode = WAL;`;

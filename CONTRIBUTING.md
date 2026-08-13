@@ -152,9 +152,8 @@ docs/
   commons/                # Schema Commons — shared, app-neutral record types
 packages/
   core/                   # Stack, ScopedStack, types, schema, validation, MemoryAdapter
-  sqlite-shared/          # Internal: shared SQL logic for both SQLite adapters
+  sqlite-shared/          # Internal: shared SQL logic for SQLite-backed adapters
   record-adapter-sqlite/  # Node native SQLite (node:sqlite), FTS5, WAL
-  record-adapter-sqljs/   # Browser sql.js, FTS4, pluggable persistence
   blob-adapter-disk/      # Content-addressed blobs on disk
   adapter-local/          # Convenience: SQLite records + disk blobs
   adapter-api/            # HTTP client for stack servers

@@ -8,9 +8,8 @@
  * (`{ adapter, tokens }`), the same philosophy as combineAdapters().
  *
  * The actual createToken/lookupToken/listTokens/revokeToken logic lives
- * once in @haverstack/sqlite-shared's SharedTokenLogic, shared with
- * record-adapter-sqljs's inline token methods via the SqlExecutor
- * interface.
+ * in @haverstack/sqlite-shared's SharedTokenLogic, reached through the
+ * SqlExecutor interface.
  */
 
 import type { StackTokenStore, TokenInfo, TokenSession } from '@haverstack/core';

@@ -36,14 +36,13 @@ Packages follow a naming convention that makes the adapter type discoverable:
 
 ## Adapter backends
 
-| Package                 | Type   | Use case                                                 |
-| ----------------------- | ------ | -------------------------------------------------------- |
-| `adapter-local`         | full   | Local app storage — native SQLite + disk blobs           |
-| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL    |
-| `record-adapter-sqljs`  | record | Browser-only sql.js records, FTS4, pluggable persistence |
-| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk                          |
-| `adapter-api`           | full   | Hosted/shared stacks via HTTP                            |
-| `adapter-json`          | full   | Portable JSON files _(planned)_                          |
+| Package                 | Type   | Use case                                              |
+| ----------------------- | ------ | ----------------------------------------------------- |
+| `adapter-local`         | full   | Local app storage — native SQLite + disk blobs        |
+| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL |
+| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk                       |
+| `adapter-api`           | full   | Hosted/shared stacks via HTTP                         |
+| `adapter-json`          | full   | Portable JSON files _(planned)_                       |
 
 `adapter-local` is the batteries-included package for the common local case. It wraps `NativeSQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file. Bearer tokens, when used, live in a separate sibling file (`<path>.tokens`, via `NativeTokenStore`) — never inside the portable stack database.
 
@@ -62,11 +61,13 @@ const stack = await Stack.create(adapter);
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
-**`@haverstack/sqlite-shared`** is an internal, non-public package holding everything identical across the two SQLite-backed record adapters — schema DDL, `WHERE`/`ORDER` building, the cursor codec, row mappers, both FTS sanitizers, the storage-ownership lock, and (via a small `SqlExecutor` interface normalizing sql.js's and `node:sqlite`'s different call conventions) the actual CRUD/query/version/type/association/token logic itself. Each adapter implements only what's genuinely engine-specific: WASM init vs. `DatabaseSync` construction, pragma/WAL setup, and lifecycle. Keeping this in one place is what keeps a cursor minted by one SQLite-backed adapter decodable by another, and what keeps the two engines from silently drifting in behavior.
+**`@haverstack/sqlite-shared`** is an internal, non-public package holding everything a SQLite-backed record adapter needs that isn't specific to one binding — schema DDL, `WHERE`/`ORDER` building, the cursor codec, row mappers, the FTS5 sanitizer and indexing strategy, the storage-ownership lock, and (via a small `SqlExecutor` interface normalizing a binding's call convention) the actual CRUD/query/version/type/association/token logic itself. An adapter implements only what's genuinely engine-specific: database construction, pragma/WAL setup, and lifecycle. `record-adapter-sqlite` is its only consumer today; the split exists so a second SQLite engine inherits the behavior rather than reimplementing it, and so a cursor minted by one is decodable by another.
 
-Both SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+`SqlExecutor` is synchronous. Every SQLite binding in scope executes queries in-process without yielding, and the shared logic's explicit `BEGIN`/`COMMIT` sequences depend on that — an engine reached over a network (D1, libsql over HTTP) does not fit this interface without making it async throughout.
 
-**File compatibility:** both adapters produce standard SQLite files, so `record-adapter-sqlite` can open a stack created by `record-adapter-sqljs` — `open()` detects an FTS4 `records_fts` table (sqljs's dialect) and transparently rebuilds it as FTS5, once.
+SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+
+**File compatibility:** the adapter produces a standard SQLite file with an FTS5 `records_fts` index. Any adapter reading it needs FTS5, not merely SQLite.
 
 ## Adapter capabilities
 
@@ -83,7 +84,7 @@ type AdapterCapabilities = {
 
 `AdapterCapabilities` is the adapter-implementer-facing name. On the `StackClient` interface it is exposed as `features: StackFeatures` (a type alias for `AdapterCapabilities`). App and plugin code should read `stack.features` rather than going through the adapter directly.
 
-**`contentFieldQuery` is required-`true` for local adapters, optional and discovery-driven for wire adapters.** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, `record-adapter-sqljs`, any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is just a linear scan over resident data — there's no architectural reason a local adapter can't support it, so declaring `false` is never legitimate there. A remote server reached through `adapter-api` is the one legitimate `false` case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it. `fullTextSearch` has no such local-required rule — a local adapter may legitimately decline it (see the JSON adapter note below).
+**`contentFieldQuery` is required-`true` for local adapters, optional and discovery-driven for wire adapters.** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is just a linear scan over resident data — there's no architectural reason a local adapter can't support it, so declaring `false` is never legitimate there. A remote server reached through `adapter-api` is the one legitimate `false` case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it. `fullTextSearch` has no such local-required rule — a local adapter may legitimately decline it (see the JSON adapter note below).
 
 `Stack.query()` enforces this before dispatching — see [Capability-gated filters](./data-model.md#capability-gated-filters). That check is a backstop for the rule above, not a substitute for it: a local adapter that (incorrectly) declared `false` would otherwise return an unfiltered superset for every `content` query.
 
@@ -91,10 +92,9 @@ type AdapterCapabilities = {
 
 - **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1 (local adapters may decline `fullTextSearch`; only `contentFieldQuery` is required-`true`)
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
-- **sql.js adapter** (`record-adapter-sqljs`, browser-only) — same query support as the native adapter, but full-text search via FTS4 (the sql.js WASM build's dialect)
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false`
 
-Local, embedded adapters (JSON, native SQLite, sql.js) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
+Local, embedded adapters (JSON, native SQLite) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
 
 ## Concurrency & storage ownership
 
@@ -103,7 +103,6 @@ A stack's backing storage (a SQLite file, a JSON directory) has exactly one owni
 How each adapter honors the single-writer rule differs by what it actually is:
 
 - **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`/`initialize()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
-- **`record-adapter-sqljs`** (browser, no filesystem of its own) is a purely in-memory engine — no file, no PID, no lock to speak of. Durability and multi-tab/multi-process coordination are the embedding host's concern entirely: the adapter calls an optional `persist(bytes) => Promise<void>` callback after every write, and the host wires that to OPFS, IndexedDB, or a download, with whatever locking that storage layer provides.
 - **The planned whole-file `adapter-json`** reads its entire store into memory on open and rewrites it whole on every persist, so it must supply both guarantees itself: a PID lock file (to fail loudly on double-open) and an atomic temp-file-and-`rename()` persist (so a crash mid-write can't leave a torn, unreadable file). `record-adapter-sqlite` gets both from WAL and real file locking instead.
 
 ## Lifecycle

@@ -3,16 +3,10 @@
  * -------------------------------------------------------
  * Implements StackRecordAdapter using node:sqlite (Node's built-in
  * SQLite binding, Node >= 22.5). No native compilation, no node-gyp,
- * no prebuilt binaries — same "just works" property that motivated
- * sql.js, without sql.js's costs on the Node path: writes go straight
- * to the file via normal SQLite journaling (WAL mode), so there's no
- * whole-database export/rewrite on every write, no in-memory copy of
- * the whole store, and real OS-level file locking.
- *
- * Uses FTS5 for full-text search. A database created by
- * record-adapter-sqljs (FTS4) opens here transparently — open()
- * detects an FTS4 records_fts table and rebuilds it as FTS5 once,
- * automatically.
+ * no prebuilt binaries, and writes go straight to the file via normal
+ * SQLite journaling (WAL mode) — no whole-database rewrite per write,
+ * no in-memory copy of the whole store, real OS-level file locking.
+ * Full-text search uses FTS5.
  *
  * A stack file is owned by exactly one process at a time (see
  * docs/spec/adapters.md § Concurrency & storage ownership). open()/initialize()
@@ -24,10 +18,9 @@
  * its own file rather than this adapter's records database.
  *
  * This class itself is a thin node:sqlite binding: schema setup,
- * pragmas, the storage-ownership lock, and the FTS4->FTS5 migration are
- * genuinely engine-specific and live here. The actual
- * StackRecordAdapter logic lives once in @haverstack/sqlite-shared's
- * SharedSqlRecordLogic, shared with record-adapter-sqljs via the
+ * pragmas, and the storage-ownership lock are genuinely engine-specific
+ * and live here. The actual StackRecordAdapter logic lives in
+ * @haverstack/sqlite-shared's SharedSqlRecordLogic, reached through the
  * SqlExecutor interface (NativeSqliteExecutor here normalizes
  * node:sqlite's spread-args run/get/all calls to it).
  */
@@ -55,8 +48,6 @@ import {
   FTS5_SCHEMA_SQL,
   PRAGMA_FOREIGN_KEYS_ON,
   PRAGMA_JOURNAL_MODE_WAL,
-  sanitizeFts5Query,
-  fts5Strategy,
   acquireLock,
   releaseLock,
   insertConfigRecord,
@@ -93,31 +84,6 @@ export type NativeRecordOpenOptions = {
 };
 
 // -------------------------------------------------------
-// FTS4 -> FTS5 migration
-// -------------------------------------------------------
-
-/**
- * A database created by record-adapter-sqljs has an FTS4 records_fts
- * table. Detect it via sqlite_master (which stores the verbatim CREATE
- * statement for virtual tables) and rebuild as FTS5 — one-time, cheap,
- * transparent. No-op if the table is already FTS5 (or absent, in which
- * case FTS5_SCHEMA_SQL's IF NOT EXISTS creates it fresh).
- */
-const migrateFtsIfNeeded = (db: DatabaseSync): void => {
-  const existing = db
-    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'records_fts'`)
-    .get() as { sql: string } | undefined;
-
-  if (existing && /\busing\s+fts4\b/i.test(existing.sql)) {
-    db.exec('DROP TABLE records_fts');
-    db.exec(FTS5_SCHEMA_SQL);
-    db.exec(`INSERT INTO records_fts(rowid, content) SELECT rowid, content FROM records`);
-    return;
-  }
-  db.exec(FTS5_SCHEMA_SQL);
-};
-
-// -------------------------------------------------------
 // NativeSQLiteRecordAdapter
 // -------------------------------------------------------
 
@@ -139,11 +105,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
 
   private wire(): void {
     const exec = new NativeSqliteExecutor(this.db);
-    this.record = new SharedSqlRecordLogic({
-      exec,
-      fts: fts5Strategy,
-      sanitizeSearch: sanitizeFts5Query,
-    });
+    this.record = new SharedSqlRecordLogic({ exec });
   }
 
   /**
@@ -173,8 +135,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
 
   /**
    * Open an existing stack database. Fails if the file does not exist —
-   * use initialize() for new databases. Transparently migrates an FTS4
-   * records_fts table (from record-adapter-sqljs) to FTS5.
+   * use initialize() for new databases.
    */
   static async open(opts: NativeRecordOpenOptions): Promise<NativeSQLiteRecordAdapter> {
     if (!existsSync(opts.path)) {
@@ -189,7 +150,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     adapter.db.exec(PRAGMA_FOREIGN_KEYS_ON);
     adapter.db.exec(PRAGMA_JOURNAL_MODE_WAL);
     adapter.db.exec(RECORD_SCHEMA_SQL);
-    migrateFtsIfNeeded(adapter.db);
+    adapter.db.exec(FTS5_SCHEMA_SQL);
     adapter.wire();
     const config = readStackConfig(new NativeSqliteExecutor(adapter.db));
     adapter.ownerEntityId = config.entityId;
