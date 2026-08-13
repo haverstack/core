@@ -131,6 +131,13 @@ Permission-wise, stub and body are equivalent: **if a subscriber may not read th
 it does not receive the event at all**, so there is no case where the envelope is
 deliverable but the body is not. The body is a bandwidth decision, not an access one.
 
+**`?include=record` and its `records` discovery flag are in v1**, not deferred. A server
+holds the record at emission, so serving it costs nothing it has to go and fetch, and the
+first reactive consumer that would otherwise answer every event with a `get()` is the
+common case rather than an exotic one. What stays deferred is any promise that it is
+_always_ present: the fallback above is the contract, and a server declaring
+`records: false` is conformant.
+
 ### D3. No `previous` — and the reason is a permission boundary, not cost
 
 The issue sketched `(record, previous)`. **Rejected.** Prior state is already a
@@ -386,7 +393,7 @@ streaming body, which `APIAdapter` is already built on.
 Long-poll (`GET /changes?since=&wait=`) is the reserved fallback for servers that cannot
 hold open connections. The frame vocabulary is transport-independent by construction, so it
 adds a `transports` entry and no new semantics. It is **not** specified in v1 — see
-[Open questions](#open-questions).
+[the open question](#open-question-long-poll-as-a-second-transport).
 
 ## Permission scoping
 
@@ -525,15 +532,66 @@ server builds against.
 - [ ] `subscribeChanges()` over `fetch` streaming; discovery gate; backoff with jitter;
       reconnect through the existing 401 re-auth path
 
-## Open questions
+## Open question: long-poll as a second transport
 
-Neither blocks the server starting; both should be answered before fixtures freeze.
+The only one left, and it does not block the server starting. Recommendation is to **defer
+it**, with the reasoning recorded here so the decision can be revisited on a fact rather
+than re-argued.
 
-- **Long-poll as a second normative transport.** A serverless deployment cannot hold a
-  stream. The `since`/`reset` semantics carry over unchanged, so the cost is a second
-  conformance surface, not a second design. Worth deciding by whether `haverstack/server`
-  targets a long-lived process.
-- **Whether `?include=record` is worth v1 at all.** Notify-then-reconcile (the position
-  this document takes) makes the body an optimization the first consumers may not need,
-  and dropping it removes a `records` discovery flag and a fixture axis. Keeping it is
-  cheap for a server that already has the record in hand at emission.
+**What it would be:** `GET /changes?since=<seq>&wait=<seconds>` with
+`Accept: application/json`, returning `{ frames: [...], seq, reset? }` — the same frames,
+the same cursor, the same `reset` semantics, held open until an event arrives or `wait`
+elapses. The frame vocabulary is transport-independent by construction, so this is a
+delivery mechanism, not a second design.
+
+**For:**
+
+- **Some runtimes cannot stream a response at all.** This is the whole case. A stack server
+  on a platform with a fixed response-duration cap and no streaming primitive can serve
+  long-poll and cannot serve SSE.
+- **Hostile intermediaries.** Buffering proxies and CDNs break SSE in ways that are hard to
+  diagnose from the client. A poll is an ordinary request that eventually returns.
+- **It closes the stream-outlives-its-authority hazard for free.** Each poll is a fresh
+  authenticated request, so an expired or revoked token stops delivery at the next poll
+  without the server needing the lifetime bound in the
+  [checklist](#server-implementation-checklist). SSE needs that control; long-poll gets it
+  from the transport.
+
+**Against:**
+
+- **It does not lower the implementation floor, which is the thing it looks like it does.**
+  A server cannot serve this feed by polling its own storage: `op` and `kind` are only
+  knowable at mutation time, `purged` leaves nothing behind to find, and `updatedAt`
+  ordering cannot separate an `associate` from an `update`. So the server still captures
+  events at mutation time and still buffers them per cursor — identical work. Long-poll
+  changes only how the buffer is drained. A server that reaches for it expecting "just a
+  query with a cursor" will ship a feed that silently loses hard deletes.
+- **It obliges `APIAdapter` to implement both.** A transport only a server speaks is a
+  transport no first-party client can reach, which reproduces exactly the failure #138
+  identified for auth: "the same client works against `localhost` or a remote provider"
+  becomes false at connect. So it is a doubling on both sides, not one optional extra on
+  the server's.
+- **Second conformance surface.** Every frame fixture needs a second encoding, plus the
+  empty-timeout response and `reset` in both forms. Per the repo's own rule, the wire
+  contract, fixtures, and both implementations move together from then on.
+- **It invites a latency lottery.** If both transports are normative and one is easier,
+  some servers ship only the easier one, and clients get seconds-scale latency from a
+  design that had none. Mitigating that means making SSE a MUST — which excludes the
+  non-streaming runtime that motivated long-poll in the first place.
+- **Deferring costs nothing structurally.** `transports` is already an array, and adding an
+  entry is additive under [version negotiation](../spec/wire-format.md#version-negotiation).
+  Unlike the event vocabulary — which genuinely gates the server, and which is why this
+  document exists — the transport can be added later without breaking a client that
+  already works.
+
+**The deciding fact is what `haverstack/server` runs on.** If it targets a long-lived
+process (a container, a VM, a self-hosted box — the deployment a personal stack most often
+gets), SSE alone is right and long-poll is a later, additive answer to a real user who
+turns up with a constrained platform. If it targets a function runtime that cannot hold a
+response open, long-poll is not a nice-to-have and belongs in v1 alongside SSE, because
+otherwise the reference server cannot implement its own spec.
+
+Worth noting either way: even the degenerate `wait=0` case is strictly better than the
+polling #3 exists to eliminate. Polling `/changes?since=` is a cursor read that reports
+hard deletes and mutation verbs; polling `query()` is a permission-filtered paginated scan
+that reports neither.
