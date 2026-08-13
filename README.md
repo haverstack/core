@@ -45,13 +45,31 @@ await stack.grant(notesAppDid, [
 
 The containment is the **type list**, not the `-own` suffix. When a delegated app acts for someone, `-own` is read as the bare verb and the subject decides which records are in reach — so in a personal stack, where nearly everything is owner-authored, `read-own` is close to `read-any`. Grant an app the types it needs and no more.
 
-The app then connects with that DID and, when it acts for a person rather than for itself, names them — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
+On the app's side, connecting is the keypair plus a URL. `APIAdapter` performs the challenge–response handshake on open and re-runs it whenever the token expires, so there is no token to obtain, store, or refresh by hand:
 
 ```ts
-const scoped = stack.asEntity(notesAppDid, { onBehalfOf: bobDid });
+import { APIAdapter } from '@haverstack/adapter-api';
+import { didCredentialFromKeypair } from '@haverstack/core';
+
+const adapter = await APIAdapter.open({
+  url: 'https://stack.example.com',
+  credential: didCredentialFromKeypair(appKeypair), // or your own { did, sign }
+  expectedOwner: ownerDid, // refuse a server claiming to be someone else's stack
+});
 ```
 
-**You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; connecting with a DID is [Identity § Authentication](./docs/spec/identity.md#authentication-challengeresponse).
+`credential` is a **signing callback, not a private key** — key custody stays with the app, so it can be backed by a hardware key or a keychain prompt just as easily as by a keypair in memory.
+
+Server-side, a token resolves to two identities, and when an app acts for a person rather than for itself the server names them both — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
+
+```ts
+const session = await tokens.lookupToken(bearer); // { principalId, subjectId }
+const scoped = stack.forSession(session);
+```
+
+The delegation itself — "this app acts for Bob" — is asserted by you when the token is issued, not by the app: proving key possession proves who the app _is_ and nothing about whom it may speak for. An app that could name its own subject would be choosing its own authority.
+
+**You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; the handshake itself is [Wire format § Authentication](./docs/spec/wire-format.md#authentication).
 
 ---
 

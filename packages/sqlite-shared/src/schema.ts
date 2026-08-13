@@ -88,12 +88,13 @@ export const RECORD_SCHEMA_SQL = `
  */
 export const TOKENS_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS tokens (
-    id          TEXT PRIMARY KEY,
-    token_hash  TEXT NOT NULL UNIQUE,
-    entity_id   TEXT NOT NULL,
-    label       TEXT,
-    created_at  INTEGER NOT NULL,
-    expires_at  INTEGER
+    id           TEXT PRIMARY KEY,
+    token_hash   TEXT NOT NULL UNIQUE,
+    principal_id TEXT NOT NULL,
+    subject_id   TEXT NOT NULL,
+    label        TEXT,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER
   ) STRICT;
 
   CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);

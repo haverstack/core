@@ -53,6 +53,7 @@ import type {
   AppId,
   AppContent,
   RecordId,
+  TokenSession,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -694,6 +695,23 @@ export class Stack implements StackClient {
       this.idTimestampSkewMsValue,
       this.adapter,
     );
+  }
+
+  /**
+   * Scope to an authenticated session — what StackTokenStore.lookupToken()
+   * returns. Equivalent to asEntity(principalId, { onBehalfOf: subjectId }),
+   * and what a server should reach for at its request boundary.
+   *
+   * Both identities are DIDs, so passing them positionally leaves nothing
+   * to catch a swap, and a swapped pair is undetectable in the undelegated
+   * case where they are equal — it would surface only once delegation is in
+   * use, as authority no longer fenced by the app's grants and every write
+   * attributed to the app rather than the person. Taking the pair whole
+   * removes the order to get wrong. See
+   * docs/spec/access-control.md § Delegation: principal and subject.
+   */
+  forSession(session: TokenSession): ScopedStack {
+    return this.asEntity(session.principalId, { onBehalfOf: session.subjectId });
   }
 
   // -------------------------------------------------------

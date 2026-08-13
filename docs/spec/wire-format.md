@@ -20,9 +20,12 @@ GET /.well-known/stack
     "contentFieldQuery": true,
     "sortableFields": ["createdAt", "updatedAt", "version"],
     "maxAttachmentBytes": 52428800
-  }
+  },
+  "auth": { "methods": ["did-challenge"] }
 }
 ```
+
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it).
 
 ### Version negotiation
 
@@ -46,15 +49,104 @@ This is inherent to the hosted topology rather than an omission, and it is state
 
 Two limits, so the option is not read as more than it is. It narrows misdirection to a server that already knows which DID it should be claiming — it does not make discovery identity a proof, and no client-side check can. And it runs on a response that has already been fetched, so a static `token`, if one was configured, reached that server before the check could refuse it: `expectedOwner` guards what a client goes on to _write_, not what it already sent to a URL it chose to contact.
 
+That second limit is specific to a static token. A client authenticating with a [DID credential](#authentication) sends nothing secret during discovery — it holds no token yet — and the handshake runs only after this check passes, so a server that fails it never sees a signature either.
+
 ## Authentication
 
-Bearer token in the `Authorization` header. Token issuance itself is out of scope for this spec — that is the server's concern — but _how a token is earned_ has a shape worth stating: see [Authentication: challenge–response](./identity.md#authentication-challengeresponse) for the nonce/signature handshake a server implements before calling `createToken()`. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).
+Bearer token in the `Authorization` header. The adapter sends the token if configured; the server returns `401` if missing or invalid, `403` if the requester verified but lacks a grant (see [Error responses](#error-responses)).
 
 ```
 Authorization: Bearer <token>
 ```
 
-(As a non-normative example, `@haverstack/core` defines a `StackTokenStore` contract — `createToken` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. Its `entityId` values are DIDs, same as everywhere else — see [Identity](./identity.md).)
+**How a token is earned is normative, not a sketch.** A client that cannot obtain a token programmatically has to be handed one out of band, which makes "the same client works against `localhost` or a remote provider" false at step zero — connecting. So the two endpoints below are part of this wire format, on the same terms as every other endpoint here, and are pinned by the same conformance fixtures (`@haverstack/conformance-fixtures`) — whose handshake fixtures carry a real DID, nonce and signature, so a server can verify one rather than trusting its own construction of the payload.
+
+A server MAY additionally issue tokens by any scheme of its own; the handshake is the one a client can rely on finding.
+
+### Advertising it
+
+The handshake is optional to implement, so a server that implements it says so in [discovery](#discovery):
+
+```json
+"auth": { "methods": ["did-challenge"] }
+```
+
+Absent `auth` means only whatever issuance scheme was arranged out of band. A client holding a DID credential then learns at `open()` that there is nothing to perform, rather than discovering it as a 404 partway through a handshake. It is an object rather than a boolean because issuance is the surface most likely to grow another entry — a consent flow (below) arrives here.
+
+### The handshake
+
+```
+POST /auth/challenge   { "did": "did:key:z6Mk..." }
+                     → { "nonce": "k7Qm2Zx...", "expiresAt": "2024-06-15T12:05:00.000Z" }
+
+POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "k7Qm2Zx...", "signature": "CIvHvqS..." }
+                     → { "token": "...", "expiresAt": "...", "principalId": "did:key:z6Mk...", "subjectId": "did:key:z6Mk..." }
+```
+
+Both are unauthenticated — they are how a token is obtained. `signature` is base64url.
+
+**The nonce.** Opaque to the client, but restricted to unreserved base64url characters (`A-Za-z0-9_-`), because it lands in a newline-delimited signing payload where an unconstrained value could span fields. Its lifetime is the server's to choose and it is returned rather than assumed, so no client has to guess; **it MUST be single-use and bound to the DID it was issued for.** A nonce redeemable twice is a replayable signature, and one redeemable by a different DID proves nothing about either.
+
+**The token's `expiresAt` is advisory.** A client MAY renew ahead of it and MUST NOT depend on it being present — it is optional, so 401-driven renewal is the floor a client needs regardless, and `APIAdapter` uses only that today. A server should therefore read an aggressive expiry as costing a wasted round-trip per lifetime rather than as something clients will schedule around.
+
+**What gets signed is not the nonce.** It is a domain-separated payload, built identically on both sides by `buildAuthChallengePayload()` in `@haverstack/core` — exported for exactly this reason, so a server and a client cannot each derive "the same string" and diverge on the first ambiguity:
+
+```
+haverstack-auth-v1\n<origin>\n<did>\n<nonce>
+```
+
+`haverstack-auth-v1` is the domain-separation tag: any future signing primitive takes its own, so no signature made for one purpose ever verifies as another.
+
+**`<origin>` is what makes the handshake safe to perform against a server you have not verified**, and it is the reason the payload isn't just the nonce. Discovery identity is only [trusted on transport](#identity-is-trusted-on-transport), so a client can be talking to a server that is not the one it meant. Without the origin, that server can fetch a challenge from the client's _real_ stack, pass the nonce along as its own, and redeem the returned signature there — a relay that costs it nothing and hands it a token as the client. Signing the origin the client believes it is talking to makes such a signature verify nowhere else.
+
+Two rules follow, and a server that skips either has a conformance gap rather than a lenient implementation:
+
+- **A server MUST build the payload from its own configured public origin**, never from a request header. `Host` and `X-Forwarded-Host` are client-controlled, so deriving the origin from one lets a client choose which origin it signs for, which is the whole property being bought.
+- **A server MUST verify against the payload it builds itself.** Nothing signed or claimed by the client contributes to it beyond the `did` and `nonce` fields named above.
+
+`@haverstack/core` provides both halves — `signAuthChallenge()` / `verifyAuthChallenge()` — and `didCredentialFromKeypair()` builds the `{ did, sign }` credential `APIAdapter` takes. The credential is a **signing callback, never a private key**: key custody stays with the app (see [Identity](./identity.md)), so a caller is free to back it with a hardware key or a keychain prompt.
+
+### Auth errors
+
+Handshake failures carry their own vocabulary, deliberately outside [`WireErrorCode`](#wire-error-body): no Stack operation has begun, so none of them is a `StackError` and none has a class to reconstruct — the same reason `InvalidDidError` stays outside that hierarchy.
+
+| Code                | Status | Meaning                                                           | Retryable |
+| ------------------- | ------ | ----------------------------------------------------------------- | --------- |
+| `invalid_did`       | 400    | `did` is not a well-formed DID, or not one this server can verify | No        |
+| `unknown_nonce`     | 401    | Never issued, or already spent                                    | Yes       |
+| `expired_nonce`     | 401    | Past `expiresAt`                                                  | Yes       |
+| `invalid_signature` | 401    | Does not verify against the payload                               | No        |
+
+```json
+{ "error": { "code": "expired_nonce", "message": "Challenge has expired" } }
+```
+
+The retryable column is the reason these carry codes at all, rather than being bodyless 401s like every other endpoint. A stale nonce is not a credential failure — the window between issuing and signing is small but real — so a client re-runs the handshake once and proceeds. A rejected signature will be rejected identically forever, so a client that retried it would loop. Collapsing the two means choosing one of those failure modes for every caller.
+
+**A server MUST NOT distinguish never-issued from already-spent** in the code it returns. The two differ only in what an attacker learns.
+
+### Server implementation checklist
+
+Core runs no server, so every control below lives in the implementer's code — and the fixtures cannot check any of them. A fixture pins the shape of a request and its response; each of these is a property of state or configuration, so **a server can pass every fixture in this spec and still be unsafe.** They are collected here rather than left scattered through the prose above because that is exactly the reading order that misses one.
+
+- **Derive the signing origin from your own configured public origin, never from a request header.** `Host` and `X-Forwarded-Host` are set by the client. A server that builds the payload from one lets the client choose which origin it signs for, which silently restores the relay this binding exists to prevent — an impostor replays a harvested signature with the matching `Host` and it verifies. The failure has no symptom: every fixture passes, since none varies the header. Behind a TLS terminator, the configured value is the **public** origin clients dial, not the internal one the proxy forwards to.
+- **Spend a nonce when it is redeemed** — do not merely check that it exists and has not expired. This is pinned by `authSequenceFixtures`, the one fixture group whose point is ordering; a single request/response pair cannot express "and not a second time".
+- **Record which DID each nonce was issued to, and check it on redemption.** A redemption can be internally consistent — a valid signature by the DID it names — and still be a nonce that belongs to someone else.
+- **Never let a client name its own subject.** Delegation is asserted by the owner through an admin surface of your own; an endpoint where an app requests a token for a user is an app choosing its own authority (see [below](#the-session-a-token-names)).
+- **Generate nonces in the base64url alphabet** (`A-Za-z0-9_-`) — `base64` output containing `+`, `/` or `=` is refused by conforming clients before they sign, so the error surfaces at the client rather than the server that caused it.
+- **Return 401 and 403 for different things.** Anonymous or invalid token is 401; verified-but-ungranted is 403 (see [Error responses](#error-responses)). Collapsing them discards the distinction the whole identity model rests on.
+
+Two more sit in code this spec doesn't reach but a server does: `entityId` and `principalId` [must be ignored on input](#records), and a session's two identities must reach `ScopedStack` in the right order — `Stack.forSession()` takes the pair whole for that reason.
+
+### The session a token names
+
+A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **always reports them equal**: proving key possession proves the principal and says nothing whatever about whom that key may act for. There is no field a client could add to change that — an app that could name its own subject would be choosing its own authority, and containment would evaporate.
+
+The pair is reported anyway rather than collapsed to one field, because delegated tokens exist and are issued elsewhere: **the owner asserts the binding out of band**, through an admin surface of the server's own. That is safe without the subject's involvement because effective authority is the intersection of both parties' grants, so a mis-issued delegation cannot escalate anyone — the binding is a question of correctness and consent, not a security boundary.
+
+**Scoped consent is the extension point this shape reserves.** A flow where the _subject_ authorizes an app directly — OAuth/IndieAuth-shaped — issues a token of exactly this shape through a different route, advertises itself as another entry in `auth.methods`, and needs nothing here to change. Nothing in core builds it today.
+
+(`@haverstack/core` defines the `StackTokenStore` contract — `createToken(principalId, { onBehalfOf })` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. `lookupToken()` returns both identities always populated, so no caller has to know which field stands in for the other when there is no delegation, and `Stack.forSession()` takes that pair whole — see [Access control § Enforcement](./access-control.md#enforcement-stackasentity). Its values are DIDs, same as everywhere else — see [Identity](./identity.md).)
 
 ## Error responses
 

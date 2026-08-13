@@ -1953,6 +1953,45 @@ describe('ScopedStack — delegation', () => {
     expect(() => stack.asEntity(null, { onBehalfOf: MEMBER })).toThrow(StackPermissionError);
   });
 
+  // Taking the session whole is what a server should reach for: both
+  // identities are DIDs, so a positional pair leaves nothing to catch a
+  // swap, and a swap is invisible undelegated where the two are equal.
+  test('forSession() scopes to the principal and subject a token names', async () => {
+    await grantAll(APP);
+    await grantAll(MEMBER);
+    const record = await stack
+      .forSession({ principalId: APP, subjectId: MEMBER })
+      .create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.principalId).toBe(APP);
+  });
+
+  test('forSession() with one identity is the undelegated case', async () => {
+    await grantAll(MEMBER);
+    const record = await stack
+      .forSession({ principalId: MEMBER, subjectId: MEMBER })
+      .create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.principalId).toBeUndefined();
+  });
+
+  // What a swapped pair costs, and why no error catches it: both orders
+  // are permitted here, and they differ only in who the write is
+  // attributed to — so `-own` afterwards resolves against the software
+  // rather than the person it acted for.
+  test('a swapped pair attributes the write to the app instead of the person', async () => {
+    await grantAll(APP);
+    await grantAll(MEMBER);
+    const correct = await stack
+      .forSession({ principalId: APP, subjectId: MEMBER })
+      .create(COMMENT, { text: 'hi' });
+    const swapped = await stack
+      .forSession({ principalId: MEMBER, subjectId: APP })
+      .create(COMMENT, { text: 'hi' });
+    expect(correct.entityId).toBe(MEMBER);
+    expect(swapped.entityId).toBe(APP);
+  });
+
   test('a delegated create stamps the subject as author and the app as principal', async () => {
     await grantAll(APP);
     await grantAll(MEMBER);

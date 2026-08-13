@@ -7,7 +7,11 @@ import {
   APIAdapterCapabilityError,
   APIAdapterVersionError,
   APIAdapterOwnerMismatchError,
+  APIAdapterAuthUnsupportedError,
+  APIAdapterHandshakeError,
+  APIAdapterReauthError,
 } from '../src/index.js';
+import { buildAuthChallengePayload } from '@haverstack/core';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
 import {
@@ -305,6 +309,261 @@ describe('open — expectedOwner', () => {
     await expect(
       APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwner: OWNER_DID }),
     ).rejects.toThrow(APIAdapterVersionError);
+  });
+});
+
+// -------------------------------------------------------
+// open() — DID credential handshake
+// -------------------------------------------------------
+
+const AUTH_DISCOVERY = { ...DISCOVERY, auth: { methods: ['did-challenge'] } };
+const NONCE = 'k7Qm2ZxRt9vLbNc4Hy8Wf3';
+const EARNED_TOKEN = 'earned-token-1';
+
+const challengeResponse = (nonce = NONCE): Response =>
+  jsonResponse({ nonce, expiresAt: '2024-06-15T12:05:00.000Z' });
+
+const tokenResponse = (token = EARNED_TOKEN, did = 'did:key:zStub'): Response =>
+  jsonResponse({ token, principalId: did, subjectId: did });
+
+const authError = (code: string, status = 401): Response =>
+  jsonResponse({ error: { code, message: code } }, status);
+
+/** A credential whose signatures are inspectable without real crypto. */
+const stubCredential = (did = 'did:key:zStub') => ({
+  did,
+  sign: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+});
+
+describe('open — DID credential handshake', () => {
+  test('earns a token and sends it on subsequent requests', async () => {
+    const credential = stubCredential();
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(tokenResponse());
+
+    const adapter = await APIAdapter.open({ url: BASE_URL, credential });
+    mockFetch.mockResolvedValueOnce(jsonResponse([]));
+    await adapter.listTypes();
+
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['Authorization']).toBe(
+      `Bearer ${EARNED_TOKEN}`,
+    );
+  });
+
+  test('signs the payload built for the server it dialed, not the bare nonce', async () => {
+    const credential = stubCredential();
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(tokenResponse());
+
+    await APIAdapter.open({ url: BASE_URL, credential });
+
+    expect(credential.sign).toHaveBeenCalledWith(
+      buildAuthChallengePayload({ origin: BASE_URL, did: credential.did, nonce: NONCE }),
+    );
+  });
+
+  test('refuses a server that does not advertise the handshake', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
+    await expect(APIAdapter.open({ url: BASE_URL, credential: stubCredential() })).rejects.toThrow(
+      APIAdapterAuthUnsupportedError,
+    );
+  });
+
+  test('refuses before signing anything when the handshake is unadvertised', async () => {
+    const credential = stubCredential();
+    mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
+    await APIAdapter.open({ url: BASE_URL, credential }).catch(() => undefined);
+    expect(credential.sign).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  // A signature keeps its value after the connection is abandoned, so it is
+  // never spent on a server this client has already decided to refuse.
+  test('does not handshake against a server failing the expectedOwner check', async () => {
+    const credential = stubCredential();
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    await APIAdapter.open({
+      url: BASE_URL,
+      credential,
+      expectedOwner: 'did:key:zSomeoneElse',
+    }).catch(() => undefined);
+    expect(credential.sign).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('refuses a token and a credential together', async () => {
+    await expect(
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, credential: stubCredential() }),
+    ).rejects.toThrow(APIAdapterError);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  test('surfaces a rejected signature as a fatal handshake error', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(authError('invalid_signature'));
+
+    const err = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(APIAdapterHandshakeError);
+    expect((err as APIAdapterHandshakeError).code).toBe('invalid_signature');
+  });
+
+  // The window between issuing a nonce and signing it is small but real,
+  // and losing that race is not a credential failure.
+  test('retries once from a fresh nonce when the first is already stale', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(authError('expired_nonce'));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse());
+
+    const adapter = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() });
+    expect(adapter.ownerEntityId).toBe('entity-owner-123');
+  });
+
+  test('gives up after one stale-nonce retry rather than looping', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(authError('expired_nonce'));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(authError('expired_nonce'));
+
+    await expect(APIAdapter.open({ url: BASE_URL, credential: stubCredential() })).rejects.toThrow(
+      APIAdapterHandshakeError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+  });
+
+  test('a rejected signature is not retried', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(authError('invalid_signature'));
+
+    await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(() => undefined);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+// -------------------------------------------------------
+// Session renewal on 401
+// -------------------------------------------------------
+
+describe('re-authentication', () => {
+  /** Open with a credential, consuming discovery + handshake. */
+  const openWithCredential = async (credential = stubCredential()): Promise<APIAdapter> => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(challengeResponse());
+    mockFetch.mockResolvedValueOnce(tokenResponse());
+    return APIAdapter.open({ url: BASE_URL, credential });
+  };
+
+  const authHeader = (call: number): string | undefined => {
+    const [, init] = mockFetch.mock.calls[call] as [string, RequestInit];
+    return (init.headers as Record<string, string>)['Authorization'];
+  };
+
+  test('renews the session on 401 and repeats the request with the new token', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+
+    const record = await adapter.getRecord('rec-abc123');
+    expect(record?.id).toBe('rec-abc123');
+    expect(authHeader(3)).toBe(`Bearer ${EARNED_TOKEN}`);
+    expect(authHeader(6)).toBe('Bearer renewed-token');
+  });
+
+  test('renews on 401 from a binary download too', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(new Response(new Uint8Array([7, 8, 9])));
+
+    expect(await adapter.getAttachment('file-1')).toEqual(new Uint8Array([7, 8, 9]));
+    expect(authHeader(6)).toBe('Bearer renewed-token');
+  });
+
+  test('renews on 401 from an upload too', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+
+    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'text/plain');
+    expect(authHeader(6)).toBe('Bearer renewed-token');
+  });
+
+  test('a 401 that survives renewal is an APIAdapterReauthError, not a bare auth error', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterReauthError);
+  });
+
+  test('retries once, never looping', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    await adapter.getRecord('rec-abc123').catch(() => undefined);
+    // discovery + handshake (2) + request + handshake (2) + retry
+    expect(mockFetch).toHaveBeenCalledTimes(7);
+  });
+
+  test('a failed renewal surfaces as APIAdapterReauthError carrying its cause', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(authError('invalid_signature'));
+
+    const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterReauthError);
+    expect((err as APIAdapterReauthError).cause).toBeInstanceOf(APIAdapterHandshakeError);
+  });
+
+  // Concurrent requests finding the same token stale share one handshake:
+  // the alternative spends a signature per in-flight request and leaves the
+  // last one to win.
+  test('coalesces concurrent renewals into a single handshake', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+
+    await Promise.all([adapter.getRecord('rec-abc123'), adapter.getRecord('rec-abc123')]);
+
+    const challenges = mockFetch.mock.calls.filter(
+      ([url]) => (url as string) === `${BASE_URL}/auth/challenge`,
+    );
+    expect(challenges.length).toBe(2); // one at open(), one shared by both 401s
+  });
+
+  test('without a credential a 401 stays an APIAdapterAuthError', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterAuthError);
+    expect(err).not.toBeInstanceOf(APIAdapterReauthError);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
 

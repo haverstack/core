@@ -141,6 +141,15 @@ Two rules sit across both columns rather than in either. **`setPermissions()` an
 
 Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has: the second check asks the same question of the same identity. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
 
+**A server at its request boundary should use `forSession()` instead**, which takes the pair a token names whole:
+
+```ts
+const session = await tokens.lookupToken(bearer); // { principalId, subjectId }
+const scoped = stack.forSession(session);
+```
+
+Both identities are DIDs, so passing them positionally to `asEntity()` leaves nothing to catch a swap — and a swapped pair is undetectable in the undelegated case, where the two are equal. It would surface only once delegation is in use, as authority no longer fenced by the app's grants and every write attributed to the app rather than the person it acted for. `forSession()` removes the order to get wrong; `asEntity()` remains the direct form for callers that genuinely have one identity in hand.
+
 **Unconditional owner access splits across both identities**, rather than belonging to one. It answers _what data is reachable_ against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_ against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
 
 Read in the other direction, an **owner principal** acting for someone else — what the owner's own server does when it serves a visitor — would otherwise hand that visitor the owner's own powers. Being the owner is therefore never on its own enough under delegation. Where a privileged verb has a rule to apply, it is applied to both identities; where it rests on nothing but ownership, it is refused outright:

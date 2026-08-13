@@ -77,6 +77,7 @@ export type {
   BlobFileInfo,
   StackAdapter,
   StackTokenStore,
+  TokenSession,
   TokenInfo,
   EntityContent,
   AppContent,
@@ -125,6 +126,18 @@ export {
   importDidPrivateKeyJwk,
 } from './did.js';
 export type { DidKeypair } from './did.js';
+export {
+  InvalidAuthChallengeError,
+  AUTH_PAYLOAD_LABEL,
+  authOriginFromUrl,
+  buildAuthChallengePayload,
+  signAuthChallenge,
+  verifyAuthChallenge,
+  didCredentialFromKeypair,
+  base64urlEncode,
+  base64urlDecode,
+} from './auth.js';
+export type { AuthChallenge, DidCredential } from './auth.js';
 export {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,

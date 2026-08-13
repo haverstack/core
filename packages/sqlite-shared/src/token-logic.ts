@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { TokenInfo } from '@haverstack/core';
+import type { TokenInfo, TokenSession } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { toMs, fromMs } from './mappers.js';
 
@@ -28,18 +28,21 @@ export class SharedTokenLogic {
   }
 
   async createToken(
-    entityId: string,
-    opts: { label?: string; expiresAt?: Date } = {},
+    principalId: string,
+    opts: { onBehalfOf?: string; label?: string; expiresAt?: Date } = {},
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');
     const token = randomBytes(32).toString('hex');
     const tokenHash = createHash('sha256').update(token).digest('hex');
     this.exec.run(
-      'INSERT INTO tokens (id, token_hash, entity_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tokens (id, token_hash, principal_id, subject_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         tokenHash,
-        entityId,
+        principalId,
+        // Stored rather than left null for an undelegated token, so a
+        // reader never has to know which column stands in for the other.
+        opts.onBehalfOf ?? principalId,
         opts.label ?? null,
         toMs(new Date()),
         opts.expiresAt ? toMs(opts.expiresAt) : null,
@@ -49,28 +52,33 @@ export class SharedTokenLogic {
     return { id, token };
   }
 
-  async lookupToken(token: string): Promise<{ entityId: string } | null> {
+  async lookupToken(token: string): Promise<TokenSession | null> {
     const hash = createHash('sha256').update(token).digest('hex');
-    const row = this.exec.get<{ entity_id: string; expires_at: number | null }>(
-      'SELECT entity_id, expires_at FROM tokens WHERE token_hash = ?',
-      [hash],
-    );
+    const row = this.exec.get<{
+      principal_id: string;
+      subject_id: string;
+      expires_at: number | null;
+    }>('SELECT principal_id, subject_id, expires_at FROM tokens WHERE token_hash = ?', [hash]);
     if (!row) return null;
     if (row.expires_at !== null && Date.now() > row.expires_at) return null;
-    return { entityId: row.entity_id };
+    return { principalId: row.principal_id, subjectId: row.subject_id };
   }
 
   async listTokens(): Promise<TokenInfo[]> {
     const rows = this.exec.all<{
       id: string;
-      entity_id: string;
+      principal_id: string;
+      subject_id: string;
       label: string | null;
       created_at: number;
       expires_at: number | null;
-    }>('SELECT id, entity_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC');
+    }>(
+      'SELECT id, principal_id, subject_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC',
+    );
     return rows.map((row) => ({
       id: row.id,
-      entityId: row.entity_id,
+      principalId: row.principal_id,
+      subjectId: row.subject_id,
       ...(row.label && { label: row.label }),
       createdAt: fromMs(row.created_at),
       ...(row.expires_at !== null && { expiresAt: fromMs(row.expires_at) }),

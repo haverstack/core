@@ -47,11 +47,34 @@ describe('NativeTokenStore', () => {
     expect(token.length).toBeGreaterThan(0);
   });
 
-  test('lookupToken returns entityId for a valid token', async () => {
+  test('an undelegated token resolves both identities to the authenticated DID', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
     const { token } = await store.createToken('entity-abc');
     const result = await store.lookupToken(token);
-    expect(result?.entityId).toBe('entity-abc');
+    expect(result).toEqual({ principalId: 'entity-abc', subjectId: 'entity-abc' });
+  });
+
+  // The binding no handshake can establish: proving key possession proves
+  // the principal and nothing about whom it may act for, so the owner
+  // asserts it at issuance. See docs/spec/wire-format.md § Authentication.
+  test('a delegated token keeps the two identities distinct', async () => {
+    const store = await NativeTokenStore.open({ path: tokenPath });
+    const { token } = await store.createToken('did:key:zApp', { onBehalfOf: 'did:key:zBob' });
+    expect(await store.lookupToken(token)).toEqual({
+      principalId: 'did:key:zApp',
+      subjectId: 'did:key:zBob',
+    });
+  });
+
+  test('listTokens reports the delegation a token carries', async () => {
+    const store = await NativeTokenStore.open({ path: tokenPath });
+    await store.createToken('did:key:zApp', { onBehalfOf: 'did:key:zBob', label: 'Blog' });
+    const [info] = await store.listTokens();
+    expect(info).toMatchObject({
+      principalId: 'did:key:zApp',
+      subjectId: 'did:key:zBob',
+      label: 'Blog',
+    });
   });
 
   test('lookupToken returns null for an invalid token', async () => {
@@ -67,12 +90,12 @@ describe('NativeTokenStore', () => {
     expect(await store.lookupToken(token)).toBeNull();
   });
 
-  test('lookupToken returns entityId for a non-expired token', async () => {
+  test('lookupToken resolves a non-expired token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
     const { token } = await store.createToken('entity-abc', {
       expiresAt: new Date(Date.now() + 60_000),
     });
-    expect((await store.lookupToken(token))?.entityId).toBe('entity-abc');
+    expect((await store.lookupToken(token))?.principalId).toBe('entity-abc');
   });
 
   test('listTokens returns all created tokens without plaintext values', async () => {
@@ -100,7 +123,7 @@ describe('NativeTokenStore', () => {
     await store1.close();
 
     const store2 = await NativeTokenStore.open({ path: tokenPath });
-    expect((await store2.lookupToken(token))?.entityId).toBe('entity-abc');
+    expect((await store2.lookupToken(token))?.principalId).toBe('entity-abc');
   });
 
   test('close() releases the storage lock', async () => {
