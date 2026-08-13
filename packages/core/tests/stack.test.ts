@@ -2130,6 +2130,103 @@ describe('putAttachment', () => {
 });
 
 // -------------------------------------------------------
+// Reserved content keys: __proto__/constructor/prototype name object
+// machinery, not fields. Rejected on both write paths so the two agree —
+// a merge patch to one of them would otherwise vanish silently while the
+// same key through create() stored as an ordinary property.
+// -------------------------------------------------------
+
+describe('reserved content keys', () => {
+  const withKey = (key: string, value: unknown): Record<string, unknown> =>
+    JSON.parse(`{"text": "hi", "${key}": ${JSON.stringify(value)}}`) as Record<string, unknown>;
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'create() rejects a top-level %s content key',
+    async (key) => {
+      await expect(stack.create(NOTE_V1, withKey(key, 'x'))).rejects.toThrow(StackValidationError);
+    },
+  );
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'update() rejects a %s patch key',
+    async (key) => {
+      const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+      await expect(stack.update(record.id, withKey(key, 'x'))).rejects.toThrow(
+        StackValidationError,
+      );
+      // Rejected outright, so the rest of the patch doesn't land either.
+      expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
+    },
+  );
+
+  test('ordinary undeclared fields still pass — permitted by design', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+
+    expect(record.content).toEqual({ text: 'hi', extra: 'kept' });
+  });
+
+  test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
+    const content = JSON.parse('{"text": "hi", "meta": {"__proto__": {"x": 1}}}') as Record<
+      string,
+      unknown
+    >;
+
+    await expect(stack.create(NOTE_V1, content)).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
+// maxContentBytes pre-check: the content half of the attachment
+// ceiling below. Local adapters declare null; a server declares its
+// request-size limit so apps can fail before the round trip.
+// -------------------------------------------------------
+
+describe('maxContentBytes pre-check', () => {
+  const withContentCeiling = (maxContentBytes: number): StackAdapter =>
+    Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: true,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes: null,
+        maxContentBytes,
+      },
+    });
+
+  const openLimited = async (maxContentBytes: number): Promise<Stack> => {
+    const limited = await Stack.create(withContentCeiling(maxContentBytes));
+    await limited.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    return limited;
+  };
+
+  test('create() throws StackPayloadTooLargeError before writing', async () => {
+    const limitedStack = await openLimited(64);
+
+    await expect(limitedStack.create(NOTE_V1, { text: 'x'.repeat(200) })).rejects.toThrow(
+      StackPayloadTooLargeError,
+    );
+    expect((await limitedStack.query({ filter: { typeId: NOTE_V1 } })).records).toHaveLength(0);
+  });
+
+  test('update() measures the patch, not the merged record', async () => {
+    const limitedStack = await openLimited(64);
+    const record = await limitedStack.create(NOTE_V1, { text: 'small' });
+
+    // A small patch against a record near the ceiling is not oversized —
+    // the patch is what travels.
+    await expect(limitedStack.update(record.id, { text: 'also small' })).resolves.toBeDefined();
+    await expect(limitedStack.update(record.id, { text: 'x'.repeat(200) })).rejects.toThrow(
+      StackPayloadTooLargeError,
+    );
+  });
+
+  test('null maxContentBytes never throws, regardless of size', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x'.repeat(100000) })).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
 // putAttachment — maxAttachmentBytes pre-check: fails fast before any
 // bytes reach the adapter. Local adapters declare null, so these tests
 // fake a finite ceiling via Object.assign over a MemoryAdapter instance.
@@ -2143,6 +2240,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
         contentFieldQuery: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,
+        maxContentBytes: null,
       },
     });
 

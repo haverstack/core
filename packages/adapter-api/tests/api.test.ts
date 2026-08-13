@@ -130,6 +130,22 @@ describe('open', () => {
     expect(adapter.capabilities.maxAttachmentBytes).toBe(52428800);
   });
 
+  test('populates maxContentBytes from discovery response', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, maxContentBytes: 1048576 },
+    });
+    expect(adapter.capabilities.maxContentBytes).toBe(1048576);
+  });
+
+  // "Can't pre-check" — not "unbounded", and not undefined leaking into
+  // the numeric comparison Stack.create() makes against it. The server's
+  // own request-size limit is authoritative regardless.
+  test('reports maxContentBytes as null when a server does not declare one', async () => {
+    const adapter = await openAdapter();
+    expect(adapter.capabilities.maxContentBytes).toBeNull();
+  });
+
   test('populates ownerEntityId from discovery response', async () => {
     const adapter = await openAdapter();
     expect(adapter.ownerEntityId).toBe('entity-owner-123');

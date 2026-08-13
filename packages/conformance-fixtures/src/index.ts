@@ -105,6 +105,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
+        maxContentBytes: 1048576,
       },
     },
   },
@@ -125,6 +126,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
+        maxContentBytes: null,
       },
     },
   },
@@ -148,6 +150,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         contentFieldQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
+        maxContentBytes: 1048576,
       },
       auth: { methods: ['did-challenge'] },
     },
@@ -1049,6 +1052,62 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       error: {
         code: 'bad_request',
         message: 'Invalid cursor: unknown sort field "badfield"',
+      },
+    },
+  },
+
+  {
+    name: 'error-payload-too-large-record-body',
+    description:
+      "A record body exceeding the server's request-size limit returns 413 with code " +
+      '"payload_too_large" — the same code and class as an oversized attachment upload, since a ' +
+      'client acts on both identically. maxAttachmentBytes bounds attachment bytes only: a ' +
+      "record body and a PATCH body have no ceiling in core, so this one is the server's to " +
+      'set and to state (as maxContentBytes in discovery, letting Stack.create()/update() ' +
+      'pre-check rather than burn the round trip). The body below stands in for one that ' +
+      'exceeds the limit; the fixture pins the error shape, not a specific size. See ' +
+      'docs/spec/wire-format.md § Request size limits.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x02010',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { body: 'a very large document…' },
+      version: 1,
+    },
+    responseStatus: 413,
+    responseBody: {
+      error: { code: 'payload_too_large', message: 'Request body exceeds the server size limit' },
+    },
+  },
+
+  {
+    name: 'error-reserved-content-key',
+    description:
+      'A content key of __proto__, constructor or prototype is refused with 422 and code ' +
+      '"validation" on POST /records and PATCH /records/:id alike. Undeclared content fields are ' +
+      'permitted by design, but these three name JavaScript object machinery rather than fields, ' +
+      'and the write paths disagree about them: a merge patch to __proto__ reaches the prototype ' +
+      'setter and vanishes, while the same key through create() stores as an ordinary property. ' +
+      'A server built on core inherits the refusal through ordinary record validation; one ' +
+      'mapping request bodies onto storage directly applies it itself. See ' +
+      'docs/spec/data-model.md § Reserved content keys.',
+    method: 'PATCH',
+    path: '/records/1hk153x02011',
+    requestBody: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: '__proto__',
+            message: '"__proto__" is a reserved content key and cannot be used as a field name',
+          },
+        ],
       },
     },
   },

@@ -24,7 +24,7 @@ import {
   isWellFormedTypeId,
 } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
-import { validateContent } from './validate.js';
+import { validateContent, validateReservedKeys } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
 import { firstRecordedAttachment } from './attachment-download.js';
@@ -399,6 +399,28 @@ function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | n
   if (maxAttachmentBytes !== null && byteLength > maxAttachmentBytes) {
     throw new StackPayloadTooLargeError(
       `Attachment (${byteLength} bytes) exceeds the ${maxAttachmentBytes}-byte limit.`,
+    );
+  }
+}
+
+/**
+ * The content half of the same pre-check, on Stack.create() and
+ * Stack.update(). Local adapters declare `maxContentBytes: null` and skip
+ * the serialization entirely; only a server declares a ceiling, and its
+ * own request-size limit stays authoritative — this just spares an app the
+ * round trip and gives it a typed failure instead of a 413 it has to
+ * interpret. See docs/spec/wire-format.md § Request size limits.
+ */
+function assertContentSize(
+  content: Record<string, unknown>,
+  maxContentBytes: number | null,
+  what: 'Content' | 'Patch',
+): void {
+  if (maxContentBytes === null) return;
+  const byteLength = new TextEncoder().encode(JSON.stringify(content)).length;
+  if (byteLength > maxContentBytes) {
+    throw new StackPayloadTooLargeError(
+      `${what} (${byteLength} bytes) exceeds the ${maxContentBytes}-byte limit.`,
     );
   }
 }
@@ -964,10 +986,12 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
-    const errors = validateContent(content, type.schema);
+    const errors = [...validateReservedKeys(content), ...validateContent(content, type.schema)];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
+
+    assertContentSize(content, this.features.maxContentBytes, 'Content');
 
     if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
@@ -1071,6 +1095,18 @@ export class Stack implements StackClient {
     if (!type) {
       throw new Error(`Unknown type: "${existing.typeId}"`);
     }
+
+    // Checked on the raw patch, before the merge: a reserved key in a
+    // patch is lost by applyMergePatch rather than stored, so a check on
+    // the merged result would never see it. See validateReservedKeys().
+    const patchErrors = validateReservedKeys(content);
+    if (patchErrors.length > 0) {
+      throw new StackValidationError(patchErrors);
+    }
+
+    // The patch is what travels, so the patch is what's measured — a small
+    // patch against a large record is not an oversized request.
+    assertContentSize(content, this.features.maxContentBytes, 'Patch');
 
     // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
     const merged = applyMergePatch(existing.content, content);

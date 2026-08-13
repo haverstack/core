@@ -19,6 +19,7 @@ const capabilities: AdapterCapabilities = {
   contentFieldQuery: false,
   sortableFields: ['createdAt', 'updatedAt', 'version'],
   maxAttachmentBytes: null,
+  maxContentBytes: null,
 };
 
 /** Bare-minimum StackRecordAdapter — only what combineAdapters() touches. */

@@ -134,6 +134,7 @@ export class SQLiteRecordAdapter implements StackRecordAdapter {
     contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
+    maxContentBytes: null,
   };
 
   ownerEntityId!: string;

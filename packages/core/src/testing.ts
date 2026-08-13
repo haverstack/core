@@ -28,6 +28,7 @@ export class MemoryAdapter implements StackAdapter {
     contentFieldQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
+    maxContentBytes: null,
   };
 
   readonly ownerEntityId: string;
@@ -412,6 +413,7 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     contentFieldQuery: false,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
+    maxContentBytes: null,
   };
 }
 

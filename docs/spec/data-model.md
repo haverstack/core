@@ -203,6 +203,14 @@ The boundary between "accept in place" and "bump the version" is exactly what `d
 
 > **Not yet implemented:** validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
 
+### Reserved content keys
+
+Undeclared content fields are permitted by design (above), with three exceptions: **`__proto__`, `constructor`, and `prototype` are rejected as top-level content keys** — on `create()` and in an `update()` patch alike — with `StackValidationError` (422).
+
+They name JavaScript's object machinery rather than a field, and the two write paths disagree about them: a merge patch to `__proto__` reaches the prototype setter instead of setting a field, so the write silently does nothing, while the same key through `create()` stores as an ordinary property. Refusing all three makes the two paths agree, and says so out loud instead of accepting a write that will quietly vanish.
+
+This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter.
+
 ## Queries
 
 Queries are expressed as a `Query` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.

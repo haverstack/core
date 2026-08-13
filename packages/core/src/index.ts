@@ -110,7 +110,12 @@ export {
   baseIdOf,
 } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
-export { validateContent, isValid } from './validate.js';
+export {
+  validateContent,
+  validateReservedKeys,
+  isValid,
+  RESERVED_CONTENT_KEYS,
+} from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
 export {

@@ -486,7 +486,14 @@ export class APIAdapter implements StackAdapter {
       // Passthrough metadata only — no 'UTC' default, which would claim
       // knowledge the discovery response didn't actually provide.
       discovery.timezone,
-      discovery.capabilities,
+      {
+        ...discovery.capabilities,
+        // A server predating this field, or one declining to publish its
+        // limit, means "you can't pre-check" — not "unbounded" and not
+        // undefined leaking into a numeric comparison. Its own
+        // request-size limit is authoritative either way.
+        maxContentBytes: discovery.capabilities?.maxContentBytes ?? null,
+      },
     );
   }
 
