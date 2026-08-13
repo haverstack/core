@@ -8,10 +8,14 @@
  *   removed: wildcards (*), NEAR/N, bare NOT (no left operand)
  *   capped:  parenthesis nesting depth (default: 2)
  *
- * A query timeout is not implementable for a synchronous, in-process SQLite
- * engine (sql.js runs as WASM that blocks the JS event loop; native SQLite's
- * interrupt() would need a worker thread to be usable as a timeout) — out of
- * scope here.
+ * What this bounds is the query's *grammar*, not its cost: a syntactically
+ * modest search over a large index can still be expensive, and a timeout is
+ * not implementable for a synchronous, in-process SQLite engine (sql.js runs
+ * as WASM that blocks the JS event loop; native SQLite's interrupt() would
+ * need a worker thread to be usable as a timeout). Bounding execution time
+ * belongs to whoever drives the engine under load — see
+ * docs/spec/wire-format.md § Bounding query cost for the server-side
+ * expectation and the `timeout` wire error that goes with it.
  *
  * FTS5 (used by the native adapter) has different grammar and needs its own
  * sanitizer reviewed against FTS5's rules rather than assuming this one

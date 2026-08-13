@@ -226,7 +226,8 @@ export type StackErrorCode =
   | 'validation'
   | 'migration'
   | 'schema_drift'
-  | 'payload_too_large';
+  | 'payload_too_large'
+  | 'timeout';
 
 /**
  * Root of the Stack error taxonomy. A single `instanceof StackError` answers
@@ -368,6 +369,28 @@ export class StackPayloadTooLargeError extends StackError {
   constructor(message: string) {
     super(message);
     this.name = 'StackPayloadTooLargeError';
+  }
+}
+
+/**
+ * Thrown when a server abandons an operation for taking too long — in
+ * practice a full-text search, the one query whose cost the sanitizers
+ * bound the *grammar* of but not the execution of (see
+ * docs/spec/data-model.md § Capability-gated filters).
+ *
+ * Never produced in-process: both SQLite engines run synchronously, so
+ * there is nothing to interrupt from inside the call. It exists so a
+ * server that bounds query time has a class to serialize, and so the app
+ * catching it can tell "too expensive, narrow it and retry" from
+ * StackQueryError's "malformed, don't bother retrying" — the distinction
+ * that would be lost if a timeout reused `bad_request`.
+ */
+export class StackTimeoutError extends StackError {
+  static readonly code = 'timeout' as const;
+  override readonly code = StackTimeoutError.code;
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackTimeoutError';
   }
 }
 

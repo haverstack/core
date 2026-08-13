@@ -22,6 +22,7 @@ export {
   StackQueryError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
   StackClosedError,
   assertQueryCapabilities,
 } from './stack.js';

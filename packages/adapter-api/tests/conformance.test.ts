@@ -46,6 +46,7 @@ import {
   StackVersionConflictError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
+  StackTimeoutError,
   buildAuthChallengePayload,
   verifyAuthChallenge,
   base64urlDecode,
@@ -535,6 +536,7 @@ const ERROR_CLASS_FOR_CODE = {
   version_conflict: StackVersionConflictError,
   schema_drift: StackSchemaDriftError,
   payload_too_large: StackPayloadTooLargeError,
+  timeout: StackTimeoutError,
 } as const;
 
 describe('error response fixtures', () => {

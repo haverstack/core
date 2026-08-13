@@ -1054,6 +1054,29 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   },
 
   {
+    name: 'error-timeout-search-exceeds-server-bound',
+    description:
+      'A full-text search the server abandoned for taking too long returns 503 with code ' +
+      '"timeout" — reconstructed as StackTimeoutError. The sanitizers bound a search\'s ' +
+      'grammar, not its execution cost, and both SQLite engines run synchronously in-process, ' +
+      'so a server under load bounds query time at the boundary where it drives the engine ' +
+      '(see docs/spec/wire-format.md § Bounding query cost). The code has to be distinct from ' +
+      'bad_request: nothing was applied and the same search may succeed if narrowed or retried, ' +
+      'where bad_request tells a client the opposite. A server that bounds nothing never emits ' +
+      'this — it is the typed answer for one that does, not an obligation to produce.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { search: 'the OR a OR of OR and' } },
+    responseStatus: 503,
+    responseBody: {
+      error: {
+        code: 'timeout',
+        message: 'Query exceeded the server time limit',
+      },
+    },
+  },
+
+  {
     name: 'error-version-conflict-if-match-mismatch',
     description:
       'PATCH /records/:id with an If-Match header whose value does not match the ' +
