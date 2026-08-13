@@ -258,7 +258,9 @@ When present, the server applies the mutation only if the record's current versi
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass.
 
-**Response envelope for queries:**
+### Response envelope
+
+Both query endpoints return:
 
 ```json
 {
