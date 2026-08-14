@@ -173,6 +173,23 @@ from a resumable cursor and idempotent application. A blocking hook buys, instea
 where every subscriber is a latency and failure dependency of every write, and a slow
 plugin makes the stack look broken.
 
+**An `async` handler is permitted; it is simply not awaited.** The declared handler type is
+`(change: RecordChange) => void`, and a `void` return type means the return value is
+ignored, not that the function must be synchronous. Passing an `async` function is the
+normal way to do deferred work: it runs up to its first `await`, yields, and the emitter
+moves on without it. What it does not buy is ordering or completion — two handlers'
+deferred halves may interleave, and neither is finished when `update()` settles.
+
+**What "never delays a write" does and does not promise.** It is a guarantee about the
+emitter: no handler's returned promise is awaited, so a subscriber cannot extend a write by
+deferring work. It is not a guarantee against a handler's _synchronous_ body. Handlers run
+inline on the caller's thread, and a record adapter backed by `node:sqlite` has just run its
+write synchronously on that same thread ([Adapters § Adapter
+backends](../spec/adapters.md#adapter-backends)), so a handler that does heavy synchronous
+work extends that occupied window and defers the mutating method's promise until it
+returns. Handlers should return promptly and defer anything substantial — which is what
+passing an `async` function does for free.
+
 A pre-commit _validation_ hook is a different feature (middleware, with permission-bypass
 hazards of its own) and is explicitly out of scope here, so that #3 does not drift into it.
 
