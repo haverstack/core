@@ -227,12 +227,11 @@ shape** — notes are kept, messages are sent, articles are published.
 **Statuses.** _Draft_: settled enough to build against (still subject to in-place
 change until there's an install base). _Staged_: design recorded, registration blocked
 on a named implementation dependency, so a required field is schema-enforced rather
-than convention-only from day one — no type currently holds this status; `photo` held
-it until the `file-ref` field kind it depended on existed (see its changelog).
-_Proposed_: design recorded to fix intent, but per the governance rule it stays parked
-until a concrete intended writer exists — the group cluster graduates when a
-group-tools app or demo is real. The grant/group primitives it builds on (`_group`,
-type-level grants) already exist, so a concrete writer is the only remaining gate.
+than convention-only from day one. No type currently holds this status. _Proposed_:
+design recorded to fix intent, but per the governance rule it stays parked until a
+concrete intended writer exists — the group cluster graduates when a group-tools app
+or demo is real, building on the grant/group primitives (`_group`, type-level grants)
+documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: `post` (public social shapes are reconciled
 with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
@@ -247,10 +246,9 @@ until a real writer needs it, a record plus attachment covers it), and `checkin`
 
 [`@haverstack/commons`](../../packages/commons) exports the canonical schemas for
 every Draft-status type as constants and a `defineCommonsTypes(stack, [...])` helper,
-so "register the type exactly as written" is a one-liner and hand-copying a schema out
-of markdown — the drift the governance process exists to prevent — is no longer
-necessary. Apps should depend on the package rather than transcribing a fenced code
-block from this directory. These files remain the design record: rationale,
-conventions, and read-compat cores live here, and the package's constants are kept in
-lockstep with them. Proposed types (not yet Draft) are docs-only and stay out of the
-package until they graduate.
+so registering a type exactly as written is a one-liner and the transcription drift
+the governance process exists to prevent is structurally impossible. Apps should
+depend on the package rather than transcribing a fenced code block from this
+directory. These files are the design record: rationale, conventions, and read-compat
+cores live here, and the package's constants are kept in lockstep with them. Proposed
+types (not yet Draft) are docs-only and stay out of the package until they graduate.
