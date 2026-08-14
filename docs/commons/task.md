@@ -57,8 +57,9 @@ await stack.defineType('org.haverstack/task@1', 'Task', {
   it in a sidecar and projects it to `done`.
 - Recurrence — recurrence rules are the hardest part of iCalendar for a reason; they go
   with the future `event` proposal, not here.
-- `assignee` — `entityId` is the author; assignment semantics inside a shared stack
-  should be designed alongside the group/grant reshape (#57/#58), not guessed at now.
+- `assignee` — `entityId` is the author; assignment semantics inside a shared stack are
+  a future proposal building on the existing grant/group model (`_group`, type-level
+  grants), not guessed at now.
 
 ## Changelog
 

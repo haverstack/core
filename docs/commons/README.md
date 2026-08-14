@@ -231,8 +231,8 @@ than convention-only from day one — no type currently holds this status; `phot
 it until the `file-ref` field kind it depended on existed (see its changelog).
 _Proposed_: design recorded to fix intent, but per the governance rule it stays parked
 until a concrete intended writer exists — the group cluster graduates when a
-group-tools app or demo is real. The group cluster additionally depends on the
-grant/group reshape (#57/#58) landing as decided.
+group-tools app or demo is real. The grant/group primitives it builds on (`_group`,
+type-level grants) already exist, so a concrete writer is the only remaining gate.
 
 Deliberately absent from the initial set: `post` (public social shapes are reconciled
 with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
