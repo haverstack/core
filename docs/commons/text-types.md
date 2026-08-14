@@ -126,15 +126,15 @@ four mechanical reasons, not just taxonomy:
    boundary keeps the commons honest about which text lives under which physics.
 4. **Different authorship requirements.** In-stack, `entityId` means author because
    the stack is a trust domain. A broadcast utterance travels _without_ its stack, so
-   authorship must be self-certifying — the DID identity model already used for
-   `entityId`, surfaced in #15's revised `externalIds` on `EntityContent`. `message`
+   authorship must be self-certifying — the DID identity model used for `entityId`
+   generally, surfaced in #15's revised `externalIds` on `EntityContent`. `message`
    needs none of it; `post` can't exist without it.
 
 The dependency chain is therefore: **#16** (cross-stack/cross-protocol reference
 fabric, plus its `relatedTo`/capability follow-up so external references are
 queryable) → **#15 as revised** (protocol-neutral core hooks, building on the
-already self-certifying DID identity model; ATProto-specific machinery in
-`adapter-atproto`) → a `post@1` proposal here, as the _protocol-neutral_ broadcast
+self-certifying DID identity model; ATProto-specific machinery in `adapter-atproto`) →
+a `post@1` proposal here, as the _protocol-neutral_ broadcast
 utterance: the canonical copy lives in your stack; bridges syndicate it
 (`adapter-atproto` maps it to `app.bsky.feed.post`, an ActivityPub bridge to a `Note`)
 and replies come home as external-target relationships. That is the IndieWeb's POSSE
