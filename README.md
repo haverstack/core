@@ -96,23 +96,26 @@ Planned:
 ## Quick start
 
 ```ts
-import { Stack, generateDidKeypair } from '@haverstack/core';
+import { Stack, generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core';
 import { LocalAdapter } from '@haverstack/adapter-local';
+import { writeFile } from 'node:fs/promises';
 
-// First run — generate an identity keypair. `did` is a "did:key:z6Mk..."
-// string derived from the public key — that's your entityId. Persist
-// `privateKey` yourself somewhere safe (OS keychain, encrypted file, ...);
-// the stack never stores it, only the public identity.
-const { did, privateKey } = await generateDidKeypair();
+const dbPath = './my-stack.db';
+const keyPath = './my-stack.key.json'; // see "Key custody" below for where this really belongs
 
-const adapter = await LocalAdapter.initialize({
-  path: './my-stack.db',
-  entityId: did,
+// First run: neither file exists yet, so this generates an identity
+// keypair and persists the private key before initializing. Every run
+// after that: the db exists, so this just opens it — the entityId
+// function below is never called, so no throwaway keypair is minted.
+const adapter = await LocalAdapter.openOrInitialize({
+  path: dbPath,
   timezone: 'America/New_York',
+  entityId: async () => {
+    const { did, privateKey } = await generateDidKeypair();
+    await writeFile(keyPath, JSON.stringify(await exportDidPrivateKeyJwk(privateKey)));
+    return did;
+  },
 });
-
-// Subsequent runs — open the existing stack
-// const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
 // ownerProfile creates your own _entity profile record on first run —
 // safe to keep passing on every open, it's a no-op once the record exists.
@@ -166,6 +169,18 @@ The fundamental unit of data. Every record has:
 The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.create(adapter, { ownerProfile })` creates the owner's own card on first run.
 
 See [Identity](./docs/spec/identity.md) in the spec for the full model, including authentication (challenge–response, not a shared secret) and what's deliberately deferred (key rotation).
+
+#### Key custody
+
+`generateDidKeypair()` returns a `privateKey`; nothing in `@haverstack/core` or any adapter stores it — only the public `did` travels with stack data. Where the key lives, and how it survives a reinstall, is entirely on you. Some starting points:
+
+- **Node / server** — write the JWK (`exportDidPrivateKeyJwk()`) to a file outside version control, ideally encrypted at rest (e.g. via your OS keychain, or a secrets manager if the process runs on infrastructure you don't hold in your hands). A bare unencrypted file on disk, permissioned `0600`, is the honest floor for local dev.
+- **Desktop (Electron, Tauri, ...)** — use the platform keychain binding your framework exposes (e.g. Electron's `safeStorage`, or the OS keychain directly) rather than a plain file; these run in a context with real users and real disks that get imaged and backed up by other software.
+- **Browser** — store the `CryptoKey` object itself in IndexedDB instead of exporting to JWK — `generateDidKeypair()` returns an extractable key, but a browser app never has to extract it. Structured-clone support means IndexedDB can hold the `CryptoKey` directly (`idb.put('keys', privateKey, 'owner')`), so the raw key material never touches JS-readable memory as a string.
+
+On every path, reconstruct the key with `importDidPrivateKeyJwk()` (or read the `CryptoKey` straight back out of IndexedDB) and hand it to `signWithDid()` / `buildAuthChallengePayload()` when authenticating to a server — see the "Authentication: challenge–response" section of [Identity](./docs/spec/identity.md) in the spec.
+
+**The asymmetry that makes this matter:** losing the key doesn't break anything local — nothing in the stack ever asks for it again, `openOrInitialize()`/`open()` only need the `did`. But you can never again authenticate as that identity to any server, because there's no recovery path — `did:key` identity _is_ the key (see [Deferred: key rotation](./docs/spec/identity.md#deferred-key-rotation)). An early "didn't bother persisting it" decision is invisible until the day you want to serve or share the stack, and by then it's permanent. Persist it from the first run, even if you don't yet know why you'd need it.
 
 ### Types
 

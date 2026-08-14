@@ -14,6 +14,7 @@
  */
 
 import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 import type {
   StackAdapter,
   StackRecord,
@@ -79,6 +80,28 @@ export type LocalOpenOptions = {
   force?: boolean;
 };
 
+export type LocalOpenOrInitializeOptions = {
+  /** Absolute path to the .db file — opened if it exists, initialized if not. */
+  path: string;
+  /**
+   * Entity ID of the stack owner, consulted only on the initialize path
+   * (the file doesn't exist yet). Pass a plain DID string, or a lazy
+   * `() => string | Promise<string>` (e.g. wrapping `generateDidKeypair()`)
+   * so keypair generation only happens when a stack is actually being
+   * created — the provider is never invoked when the file already exists.
+   *
+   * A plain string is also asserted against the existing stack's owner on
+   * the open path, to catch silent config divergence. A lazy provider is
+   * *not* checked there — invoking it just to compare would defeat the
+   * point of making it lazy.
+   */
+  entityId: string | (() => string | Promise<string>);
+  /** IANA timezone string. Consulted only on the initialize path. */
+  timezone?: string;
+  /** Bypass the storage-ownership lock check. See LocalOpenOptions.force. */
+  force?: boolean;
+};
+
 // -------------------------------------------------------
 // LocalAdapter
 // -------------------------------------------------------
@@ -123,6 +146,34 @@ export class LocalAdapter implements StackAdapter {
     const record = await NativeSQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     return new LocalAdapter(record, blob, opts.path, opts.force);
+  }
+
+  /**
+   * Open the stack at `path` if it already exists, or initialize a new one
+   * there if it doesn't — the first-run choreography (does the db exist?
+   * open : generate identity, initialize) that every adopter otherwise
+   * has to write by hand. See LocalOpenOrInitializeOptions for how
+   * `entityId` is used differently on each path.
+   */
+  static async openOrInitialize(opts: LocalOpenOrInitializeOptions): Promise<LocalAdapter> {
+    if (existsSync(opts.path)) {
+      const adapter = await LocalAdapter.open({ path: opts.path, force: opts.force });
+      if (typeof opts.entityId === 'string' && opts.entityId !== adapter.ownerEntityId) {
+        throw new Error(
+          `Cannot open: stack at "${opts.path}" is owned by "${adapter.ownerEntityId}", ` +
+            `but openOrInitialize() was called with entityId "${opts.entityId}".`,
+        );
+      }
+      return adapter;
+    }
+
+    const entityId = typeof opts.entityId === 'function' ? await opts.entityId() : opts.entityId;
+    return LocalAdapter.initialize({
+      path: opts.path,
+      entityId,
+      timezone: opts.timezone,
+      force: opts.force,
+    });
   }
 
   private async getTokenStore(): Promise<NativeTokenStore> {
