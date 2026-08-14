@@ -45,8 +45,8 @@ await stack.defineType('org.haverstack/folder@1', 'Folder', {
 - **A "file" in the drive** is, today, any record carrying an attachment association —
   typically a `note` with the file attached and the body as commentary. A first-class
   `file` type (a required `file-ref` plus name) is expected to follow
-  [`photo`](./photo.md)'s pattern, now that #63's `file-ref` kind has landed; this
-  file's conventions will be amended when a real writer needs it.
+  [`photo`](./photo.md)'s pattern; this file's conventions will be amended when a real
+  writer needs it.
 - **Folder-level permissions do not exist** — permissions are per-record and grants are
   per-type; a folder's `permissions` field governs the folder record itself, **not**
   its contents. Apps must not present a folder as an access boundary unless they also

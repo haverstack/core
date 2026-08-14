@@ -140,7 +140,7 @@ authority on **any** record, of any type:
 - **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file
   referenced from a record's body text (`note`, `article`, `page`, `message`). How the
   body refers to the embed is app territory in v1; a commons syntax is an expected
-  follow-up proposal, now that `file-ref` fields (#63) have landed.
+  follow-up proposal.
 - **`series`** — `{ kind: 'relationship', label: 'series', recordId }` groups records
   that are occurrences of one recurring thing (materialized [`event`](./event.md)
   occurrences are the motivating case). Reserved now so recurrence proposals build on
@@ -226,20 +226,20 @@ shape** — notes are kept, messages are sent, articles are published.
 
 **Statuses.** _Draft_: settled enough to build against (still subject to in-place
 change until there's an install base). _Staged_: design recorded, registration blocked
-on a named implementation issue, so a required field is schema-enforced rather than
-convention-only from day one — no type currently holds this status; `photo` held it
-until #63 landed (see its changelog). _Proposed_: design recorded to fix intent, but
-per the governance rule it stays parked until a concrete intended writer exists — the
-group cluster graduates when a group-tools app or demo is real. The group cluster
-additionally depends on the grant/group reshape (#57/#58) landing as decided.
+on a named implementation dependency, so a required field is schema-enforced rather
+than convention-only from day one — no type currently holds this status; `photo` held
+it until the `file-ref` field kind it depended on existed (see its changelog).
+_Proposed_: design recorded to fix intent, but per the governance rule it stays parked
+until a concrete intended writer exists — the group cluster graduates when a
+group-tools app or demo is real. The group cluster additionally depends on the
+grant/group reshape (#57/#58) landing as decided.
 
 Deliberately absent from the initial set: `post` (public social shapes are reconciled
 with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
 one), recurrence rules (see `event`: occurrences are materialized in @1),
-`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern,
-now that #63's `file-ref` kind has landed; until a real writer needs it, a record plus
-attachment covers it), and `checkin` (subsumed by the `location` cross-type convention
-plus any record).
+`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern;
+until a real writer needs it, a record plus attachment covers it), and `checkin`
+(subsumed by the `location` cross-type convention plus any record).
 
 ---
 

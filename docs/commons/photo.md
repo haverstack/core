@@ -9,9 +9,9 @@ binary plus caption, alt text, and capture time.
 
 The essential field of a photo is the image itself, but type schemas validate `content`
 only: a "required attachment association" would be a convention the schema can't
-enforce and `isCompatible()` can't see. The `file-ref` field kind (#63) fixes exactly
-this, making `photo` its first and motivating consumer — the required `image` field
-below is schema-enforced, not convention-only.
+enforce and `isCompatible()` can't see. The `file-ref` field kind fixes exactly this,
+making `photo` its first and motivating consumer — the required `image` field below is
+schema-enforced, not convention-only.
 
 ## Schema
 
@@ -55,6 +55,7 @@ await stack.defineType('org.haverstack/photo@1', 'Photo', {
 
 ## Changelog
 
-- **Draft** — graduated from Staged now that #63 (`file-ref` field kind) has landed;
-  `image` is schema-enforced as specified, unchanged from the staged design.
-- **Staged** — design recorded; registration blocked on #63 (`file-ref` field kind).
+- **Draft** — graduated from Staged: the `file-ref` field kind now exists, so `image`
+  is schema-enforced as specified, unchanged from the staged design.
+- **Staged** — design recorded; registration blocked on the `file-ref` field kind not
+  yet existing.

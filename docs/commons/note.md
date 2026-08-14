@@ -39,7 +39,7 @@ await stack.defineType('org.haverstack/note@1', 'Note', {
   associations with label `embed` — see the cross-type conventions in the
   [README](./README.md). How the body refers to an embedded file (e.g. a markdown
   image reference) is app territory in @1; a commons convention here is an expected
-  follow-up proposal, now that `file-ref` fields (#63) have landed.
+  follow-up proposal.
 - **Cross-references**: a note that is _about_ another record (annotating a bookmark, a
   contact) uses `{ kind: 'relationship', label: 'about', recordId }`.
 
@@ -51,8 +51,7 @@ await stack.defineType('org.haverstack/note@1', 'Note', {
 
 Consumers wanting maximum reach should accept any type compatible with this shape and
 treat `title`/`format` as optional enrichments. Note that `text` ⇄ `string` are mutually
-readable under the strengthened `isCompatible` relation (#54), so short-string types
-also qualify.
+readable under `isCompatible()`, so short-string types also qualify.
 
 ## Deliberately excluded
 
@@ -60,7 +59,7 @@ also qualify.
 - `tags: string[]` — tag associations exist.
 - `pinned`, `archived`, `color` — perspectives; app sidecar or tags.
 - Rich-text formats beyond markdown/plain (HTML in particular) — HTML notes are an
-  XSS-shaped liability the dangerous-type work (#66) exists to avoid; apps holding HTML
+  XSS-shaped liability the dangerous-type safeguards exist to avoid; apps holding HTML
   should convert on write.
 
 ## Changelog

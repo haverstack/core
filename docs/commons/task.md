@@ -20,13 +20,13 @@ await stack.defineType('org.haverstack/task@1', 'Task', {
 
 ## Field semantics
 
-| Field         | Kind      | Required | Meaning                                                                                                                                                                                                      |
-| ------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `title`       | `string`  | yes      | What needs doing. Single line by convention.                                                                                                                                                                 |
-| `done`        | `boolean` | yes      | Whether it's complete. Required (not optional-absent-means-open) so that it is a top-level scalar every adapter can filter on: `content: { done: false }` is _the_ query of every task app.                  |
-| `notes`       | `text`    | no       | Longer description. Markdown by convention.                                                                                                                                                                  |
-| `due`         | `date`    | no       | When it's due. A deadline, not a calendar block — tasks with rich scheduling belong to a future `event` proposal.                                                                                            |
-| `completedAt` | `date`    | no       | When it was completed. Writers should set it when setting `done: true` and clear it (write `null`, per the #69 merge-patch semantics) when un-completing. If `done` and `completedAt` disagree, `done` wins. |
+| Field         | Kind      | Required | Meaning                                                                                                                                                                                              |
+| ------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`       | `string`  | yes      | What needs doing. Single line by convention.                                                                                                                                                         |
+| `done`        | `boolean` | yes      | Whether it's complete. Required (not optional-absent-means-open) so that it is a top-level scalar every adapter can filter on: `content: { done: false }` is _the_ query of every task app.          |
+| `notes`       | `text`    | no       | Longer description. Markdown by convention.                                                                                                                                                          |
+| `due`         | `date`    | no       | When it's due. A deadline, not a calendar block — tasks with rich scheduling belong to a future `event` proposal.                                                                                    |
+| `completedAt` | `date`    | no       | When it was completed. Writers should set it when setting `done: true` and clear it (write `null`, per merge-patch semantics) when un-completing. If `done` and `completedAt` disagree, `done` wins. |
 
 ## Conventions
 

@@ -121,7 +121,7 @@ four mechanical reasons, not just taxonomy:
    exists to express. Posts-as-messages would hand board apps threads whose parents
    they structurally cannot traverse.
 3. **Different deletion physics.** Inside a stack, recoverability is real: "anything a
-   write-holder does, the owner can undo" (#59). Broadcast breaks it — the network has
+   write-holder does, the owner can undo." Broadcast breaks it — the network has
    copies; deletion is a request (ATProto's tombstones exist because of this). The type
    boundary keeps the commons honest about which text lives under which physics.
 4. **Different authorship requirements.** In-stack, `entityId` means author because
