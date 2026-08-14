@@ -12,8 +12,6 @@ import { toMs, fromMs } from './mappers.js';
 
 export type SharedTokenLogicDeps = {
   exec: SqlExecutor;
-  /** Called after every mutating operation. Omit for engines with durable writes. */
-  onWrite?: () => void;
 };
 
 export class SharedTokenLogic {
@@ -21,10 +19,6 @@ export class SharedTokenLogic {
 
   private get exec(): SqlExecutor {
     return this.deps.exec;
-  }
-
-  private write(): void {
-    this.deps.onWrite?.();
   }
 
   async createToken(
@@ -48,7 +42,6 @@ export class SharedTokenLogic {
         opts.expiresAt ? toMs(opts.expiresAt) : null,
       ],
     );
-    this.write();
     return { id, token };
   }
 
@@ -87,6 +80,5 @@ export class SharedTokenLogic {
 
   async revokeToken(id: string): Promise<void> {
     this.exec.run('DELETE FROM tokens WHERE id = ?', [id]);
-    this.write();
   }
 }

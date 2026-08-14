@@ -35,13 +35,6 @@ import { makeCursor } from './cursor.js';
 
 export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
-  /**
-   * Called (and awaited) after every mutating operation. Omit for engines
-   * with durable writes (e.g. native SQLite/WAL); an engine whose storage
-   * is external to the database handle uses this to flush, which is why it
-   * may return a Promise.
-   */
-  onWrite?: () => void | Promise<void>;
 };
 
 /** Top-level field names in `schema` whose kind is 'file-ref'. */
@@ -60,10 +53,6 @@ export class SharedSqlRecordLogic {
 
   private get exec(): SqlExecutor {
     return this.deps.exec;
-  }
-
-  private async write(): Promise<void> {
-    await this.deps.onWrite?.();
   }
 
   /**
@@ -156,7 +145,6 @@ export class SharedSqlRecordLogic {
 
     fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
     this.syncFileRefs(record.id, record.typeId, record.content);
-    await this.write();
     return record;
   }
 
@@ -192,7 +180,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
@@ -221,7 +208,6 @@ export class SharedSqlRecordLogic {
         throw err;
       }
     }
-    await this.write();
   }
 
   /**
@@ -270,7 +256,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
@@ -301,7 +286,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   async restoreVersion(
@@ -335,7 +319,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
@@ -363,7 +346,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
@@ -434,7 +416,6 @@ export class SharedSqlRecordLogic {
       }
 
       this.exec.exec('COMMIT');
-      if (deletedIds.length) await this.write();
       return deletedIds;
     } catch (err) {
       this.exec.exec('ROLLBACK');
@@ -521,7 +502,6 @@ export class SharedSqlRecordLogic {
    */
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
     this.insertVersionRow(id, version);
-    await this.write();
   }
 
   /**
@@ -570,7 +550,6 @@ export class SharedSqlRecordLogic {
       type.id,
       fileRefFieldNames(type.schema as Record<string, { kind?: string }>),
     );
-    await this.write();
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
@@ -606,7 +585,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   async dissociate(
@@ -638,7 +616,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   private bumpVersion(id: string, expectedVersion?: number): void {
