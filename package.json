@@ -12,7 +12,6 @@
     "format:check": "prettier --check .",
     "publish:core": "pnpm --filter @haverstack/core publish --access public",
     "publish:adapter-local": "pnpm --filter @haverstack/adapter-local publish --access public",
-    "publish:record-adapter-sqljs": "pnpm --filter @haverstack/record-adapter-sqljs publish --access public",
     "publish:blob-adapter-disk": "pnpm --filter @haverstack/blob-adapter-disk publish --access public",
     "publish:api": "pnpm --filter @haverstack/adapter-api publish --access public",
     "publish:wire-types": "pnpm --filter @haverstack/wire-types publish --access public"

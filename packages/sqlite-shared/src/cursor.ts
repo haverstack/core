@@ -1,8 +1,8 @@
 /**
  * Cursor encode/decode for keyset pagination. Uses btoa/atob rather than
- * Node's Buffer so the same codec works unmodified in a browser adapter —
- * cursor payloads here are plain ASCII ("field|value|id"), so no UTF-8
- * encoding step is needed.
+ * Node's Buffer so the codec stays runtime-agnostic — cursor payloads
+ * here are plain ASCII ("field|value|id"), so no UTF-8 encoding step is
+ * needed.
  */
 
 import { StackQueryError } from '@haverstack/core';

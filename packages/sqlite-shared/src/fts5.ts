@@ -1,34 +1,37 @@
 /**
- * FTS5 query sanitization — used by the native (node:sqlite) adapter.
+ * FTS5 query sanitization and indexing — the full-text search half of the
+ * shared record logic.
  *
- * FTS5's query grammar is close to FTS4's but not identical, so this is a
- * separate function rather than a shared one (see the note on
- * sanitizeFts4Query for the general approach), reviewed against real
- * FTS5 rather than assumed. Two differences that matter here:
- *
- * - FTS5's NEAR is a function-call form — `NEAR(a b, 10)` — not FTS4's
- *   infix `a NEAR/10 b`. Deleting the whole span (as FTS4 does for its
- *   infix operator) would also delete the terms inside it, which can
- *   leave a dangling operator when NEAR(...) sits next to AND/OR (e.g.
- *   "x AND NEAR(a b, 5)" -> "x AND" — a syntax error). So this keeps
- *   the terms and drops only the NEAR(...) wrapper and distance.
- * - FTS5 has real column-filter syntax (`colname:term`) and errors hard
- *   on any name but the table's actual columns — since records_fts has
- *   exactly one column and callers have no business targeting columns
- *   explicitly, colons are stripped outright rather than validated.
+ * FTS5's query language supports operators (AND/OR/NOT, phrases, NEAR,
+ * wildcards) that can be expensive or cause parse errors with untrusted
+ * input, so a search string is rewritten before it reaches the engine:
  *
  *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
  *   removed: wildcards (*), NEAR(...) (terms kept, wrapper dropped), column-filter
  *            colons, bare NOT (no left operand)
  *   capped:  parenthesis nesting depth (default: 2)
  *
- * Bounds the grammar, not the cost — same as the FTS4 sanitizer, and for
- * the same reason (node:sqlite blocks the calling thread, so there is no
- * timeout to set from inside the call). See docs/spec/wire-format.md
- * § Bounding query cost.
+ * Two FTS5 grammar details drive the less obvious rules:
+ *
+ * - FTS5's NEAR is a function-call form — `NEAR(a b, 10)`. Deleting the
+ *   whole span would also delete the terms inside it, which can leave a
+ *   dangling operator when NEAR(...) sits next to AND/OR (e.g. "x AND
+ *   NEAR(a b, 5)" -> "x AND" — a syntax error). So this keeps the terms
+ *   and drops only the NEAR(...) wrapper and distance.
+ * - FTS5 has real column-filter syntax (`colname:term`) and errors hard
+ *   on any name but the table's actual columns — since records_fts has
+ *   exactly one column and callers have no business targeting columns
+ *   explicitly, colons are stripped outright rather than validated.
+ *
+ * What this bounds is the grammar, not the cost: a syntactically modest
+ * search over a large index can still be expensive, and node:sqlite blocks
+ * the calling thread, so there is no timeout to set from inside the call.
+ * Bounding execution time belongs to whoever drives the engine under load
+ * — see docs/spec/wire-format.md § Bounding query cost for the server-side
+ * expectation and the `timeout` wire error that goes with it.
  */
 
-import type { FtsStrategy } from './fts-strategy.js';
+import type { SqlExecutor } from './executor.js';
 
 export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   if (!query) return '';
@@ -87,14 +90,19 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
  * DELETE leaves stale, still-searchable entries. remove() therefore reads
  * the current rowid/content and must run before the caller's change.
  */
-export const fts5Strategy: FtsStrategy = {
-  insert(exec, recordId, content) {
+export const fts5Strategy = {
+  /** Index a record that has no FTS entry yet (used right after an INSERT). */
+  insert(exec: SqlExecutor, recordId: string, content: string): void {
     exec.run(`INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`, [
       content,
       recordId,
     ]);
   },
-  remove(exec, recordId) {
+  /**
+   * Remove a record's FTS entry. MUST be called before the records row's
+   * content changes or the row is deleted — see the note above.
+   */
+  remove(exec: SqlExecutor, recordId: string): void {
     const row = exec.get<{ rowid: number; content: string }>(
       'SELECT rowid, content FROM records WHERE id = ?',
       [recordId],

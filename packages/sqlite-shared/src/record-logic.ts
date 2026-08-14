@@ -3,10 +3,9 @@
  * close/flush stay per-engine, since schema setup, pragmas, locking, and
  * durability differ there). Every CRUD/query/version/type/association
  * operation lives here exactly once, parametrized over a SqlExecutor
- * (normalizes sql.js vs node:sqlite's call conventions) and an
- * FtsStrategy (the one place FTS4 and FTS5 genuinely differ). Concrete
- * adapters construct one of these and delegate their StackRecordAdapter
- * methods to it — see record-adapter-sqljs and record-adapter-sqlite.
+ * (which normalizes each engine's call conventions). Concrete adapters
+ * construct one of these and delegate their StackRecordAdapter methods
+ * to it — see record-adapter-sqlite.
  */
 
 import {
@@ -29,24 +28,13 @@ import type {
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import type { FtsStrategy } from './fts-strategy.js';
 import { buildWhereClause, buildOrderClause, getSortField } from './query.js';
-import type { SanitizeSearch } from './query.js';
+import { fts5Strategy } from './fts5.js';
 import { rowToRecord, rowToAssociation, rowToType, rowToVersion, toMs } from './mappers.js';
 import { makeCursor } from './cursor.js';
 
 export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
-  fts: FtsStrategy;
-  sanitizeSearch: SanitizeSearch;
-  /**
-   * Called (and awaited) after every mutating operation. Omit for engines
-   * with durable writes (e.g. native SQLite/WAL); sql.js uses this to
-   * export the database and hand the bytes to the host's persistence
-   * (temp-file-and-rename on Node, or a caller-supplied async callback
-   * for the browser build — hence this may return a Promise).
-   */
-  onWrite?: () => void | Promise<void>;
 };
 
 /** Top-level field names in `schema` whose kind is 'file-ref'. */
@@ -65,14 +53,6 @@ export class SharedSqlRecordLogic {
 
   private get exec(): SqlExecutor {
     return this.deps.exec;
-  }
-
-  private get fts(): FtsStrategy {
-    return this.deps.fts;
-  }
-
-  private async write(): Promise<void> {
-    await this.deps.onWrite?.();
   }
 
   /**
@@ -163,9 +143,8 @@ export class SharedSqlRecordLogic {
       this.insertAssociations(record.id, record.associations);
     }
 
-    this.fts.insert(this.exec, record.id, JSON.stringify(record.content));
+    fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
     this.syncFileRefs(record.id, record.typeId, record.content);
-    await this.write();
     return record;
   }
 
@@ -189,19 +168,18 @@ export class SharedSqlRecordLogic {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      this.fts.remove(this.exec, id);
+      fts5Strategy.remove(this.exec, id);
       this.exec.run(
         'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
         [JSON.stringify(merged), toMs(new Date()), id],
       );
-      this.fts.insert(this.exec, id, JSON.stringify(merged));
+      fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
       this.syncFileRefs(id, existing.typeId, merged);
       this.exec.exec('COMMIT');
     } catch (err) {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
@@ -230,7 +208,6 @@ export class SharedSqlRecordLogic {
         throw err;
       }
     }
-    await this.write();
   }
 
   /**
@@ -254,7 +231,7 @@ export class SharedSqlRecordLogic {
         );
       }
     }
-    this.fts.remove(this.exec, id);
+    fts5Strategy.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [id]);
@@ -279,7 +256,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
@@ -310,7 +286,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   async restoreVersion(
@@ -328,7 +303,7 @@ export class SharedSqlRecordLogic {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      this.fts.remove(this.exec, id);
+      fts5Strategy.remove(this.exec, id);
       this.exec.run(
         'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
         [target.typeId, JSON.stringify(target.content), toMs(new Date()), id],
@@ -337,14 +312,13 @@ export class SharedSqlRecordLogic {
         this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
         if (target.associations.length) this.insertAssociations(id, target.associations);
       }
-      this.fts.insert(this.exec, id, JSON.stringify(target.content));
+      fts5Strategy.insert(this.exec, id, JSON.stringify(target.content));
       this.syncFileRefs(id, target.typeId, target.content);
       this.exec.exec('COMMIT');
     } catch (err) {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
@@ -360,19 +334,18 @@ export class SharedSqlRecordLogic {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      this.fts.remove(this.exec, id);
+      fts5Strategy.remove(this.exec, id);
       this.exec.run(
         'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
         [toTypeId, JSON.stringify(content), toMs(new Date()), id],
       );
-      this.fts.insert(this.exec, id, JSON.stringify(content));
+      fts5Strategy.insert(this.exec, id, JSON.stringify(content));
       this.syncFileRefs(id, toTypeId, content);
       this.exec.exec('COMMIT');
     } catch (err) {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
@@ -380,7 +353,7 @@ export class SharedSqlRecordLogic {
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
-    const { sql: where, params } = buildWhereClause(query, this.deps.sanitizeSearch);
+    const { sql: where, params } = buildWhereClause(query);
     const order = buildOrderClause(query);
     const limit = query.limit ?? 50;
 
@@ -443,7 +416,6 @@ export class SharedSqlRecordLogic {
       }
 
       this.exec.exec('COMMIT');
-      if (deletedIds.length) await this.write();
       return deletedIds;
     } catch (err) {
       this.exec.exec('ROLLBACK');
@@ -530,7 +502,6 @@ export class SharedSqlRecordLogic {
    */
   async saveVersion(id: string, version: RecordVersion): Promise<void> {
     this.insertVersionRow(id, version);
-    await this.write();
   }
 
   /**
@@ -579,7 +550,6 @@ export class SharedSqlRecordLogic {
       type.id,
       fileRefFieldNames(type.schema as Record<string, { kind?: string }>),
     );
-    await this.write();
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
@@ -615,7 +585,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   async dissociate(
@@ -647,7 +616,6 @@ export class SharedSqlRecordLogic {
       this.exec.exec('ROLLBACK');
       throw err;
     }
-    await this.write();
   }
 
   private bumpVersion(id: string, expectedVersion?: number): void {
