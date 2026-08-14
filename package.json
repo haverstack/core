@@ -14,7 +14,8 @@
     "publish:adapter-local": "pnpm --filter @haverstack/adapter-local publish --access public",
     "publish:blob-adapter-disk": "pnpm --filter @haverstack/blob-adapter-disk publish --access public",
     "publish:api": "pnpm --filter @haverstack/adapter-api publish --access public",
-    "publish:wire-types": "pnpm --filter @haverstack/wire-types publish --access public"
+    "publish:wire-types": "pnpm --filter @haverstack/wire-types publish --access public",
+    "publish:commons": "pnpm --filter @haverstack/commons publish --access public"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,24 +1,19 @@
 # `org.haverstack/photo@1` — Photo
 
-> **Status:** Staged — blocked on `file-ref` fields (#63). The design is recorded now
-> so intent is fixed; **do not register this type until #63 lands** and this file is
-> promoted to Draft.
+> **Status:** Draft.
 
 An image as a first-class object — the photo-library / Tumblr-photo-post shape — as
 opposed to an image illustrating some other record (which is just an attachment
 association on that record). A photo record is "this image is in my library": the
 binary plus caption, alt text, and capture time.
 
-## Why staged
-
 The essential field of a photo is the image itself, but type schemas validate `content`
 only: a "required attachment association" would be a convention the schema can't
-enforce and `isCompatible()` can't see. Issue #63's `file-ref` field kind fixes exactly
-this — making `photo` its first and motivating consumer. Shipping earlier with a
-convention-only image, then making a `file-ref` field required later, would force a
-version bump for no gain; waiting means `photo@1` is right from day one.
+enforce and `isCompatible()` can't see. The `file-ref` field kind (#63) fixes exactly
+this, making `photo` its first and motivating consumer — the required `image` field
+below is schema-enforced, not convention-only.
 
-## Schema (pending #63)
+## Schema
 
 ```ts
 await stack.defineType('org.haverstack/photo@1', 'Photo', {
@@ -38,7 +33,7 @@ await stack.defineType('org.haverstack/photo@1', 'Photo', {
 | `alt`     | `string`   | no       | Accessibility description of the image content — a property of the image (describes the bytes), not a perspective; travels with it. |
 | `takenAt` | `date`     | no       | Capture time (typically from EXIF). Distinct from `createdAt`, which is when the record entered the stack (import time).            |
 
-## Conventions (to finalize at promotion)
+## Conventions
 
 - **Geotag**: the cross-type `location` relationship to a [`place`](./place.md)
   record — not raw coordinates in content.
@@ -52,7 +47,7 @@ await stack.defineType('org.haverstack/photo@1', 'Photo', {
 - **Video/audio**: sibling proposals, not a generalized `media` type — photo-specific
   prior art (EXIF, photo libraries) is too good to dilute.
 
-## Read-compat core (pending #63)
+## Read-compat core
 
 ```ts
 { image: { kind: 'file-ref', required: true } }
@@ -60,4 +55,6 @@ await stack.defineType('org.haverstack/photo@1', 'Photo', {
 
 ## Changelog
 
+- **Draft** — graduated from Staged now that #63 (`file-ref` field kind) has landed;
+  `image` is schema-enforced as specified, unchanged from the staged design.
 - **Staged** — design recorded; registration blocked on #63 (`file-ref` field kind).

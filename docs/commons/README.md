@@ -32,7 +32,7 @@ org.haverstack/contact@1
 org.haverstack/article@1
 org.haverstack/place@1
 org.haverstack/page@1
-org.haverstack/photo@1   (staged — see below)
+org.haverstack/photo@1
 org.haverstack/message@1 (proposed — see below)
 org.haverstack/event@1   (proposed)
 org.haverstack/poll@1    (proposed)
@@ -140,7 +140,7 @@ authority on **any** record, of any type:
 - **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file
   referenced from a record's body text (`note`, `article`, `page`, `message`). How the
   body refers to the embed is app territory in v1; a commons syntax is an expected
-  follow-up once `file-ref` fields (#63) land.
+  follow-up proposal, now that `file-ref` fields (#63) have landed.
 - **`series`** — `{ kind: 'relationship', label: 'series', recordId }` groups records
   that are occurrences of one recurring thing (materialized [`event`](./event.md)
   occurrences are the motivating case). Reserved now so recurrence proposals build on
@@ -217,7 +217,7 @@ shape** — notes are kept, messages are sent, articles are published.
 | `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft    | `{ title, text }`         |
 | `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft    | `{ latitude, longitude }` |
 | `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
-| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Staged   | `{ image }` (pending #63) |
+| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Draft    | `{ image }`               |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
 | `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
 | `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
@@ -226,24 +226,31 @@ shape** — notes are kept, messages are sent, articles are published.
 
 **Statuses.** _Draft_: settled enough to build against (still subject to in-place
 change until there's an install base). _Staged_: design recorded, registration blocked
-on a named implementation issue (`photo` waits on #63 so its required image is
-schema-enforced rather than convention-only). _Proposed_: design recorded to fix
-intent, but per the governance rule it stays parked until a concrete intended writer
-exists — the group cluster graduates when a group-tools app or demo is real. The group
-cluster additionally depends on the grant/group reshape (#57/#58) landing as decided.
+on a named implementation issue, so a required field is schema-enforced rather than
+convention-only from day one — no type currently holds this status; `photo` held it
+until #63 landed (see its changelog). _Proposed_: design recorded to fix intent, but
+per the governance rule it stays parked until a concrete intended writer exists — the
+group cluster graduates when a group-tools app or demo is real. The group cluster
+additionally depends on the grant/group reshape (#57/#58) landing as decided.
 
 Deliberately absent from the initial set: `post` (public social shapes are reconciled
 with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
 one), recurrence rules (see `event`: occurrences are materialized in @1),
-`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern
-once #63 lands; until then a record plus attachment covers it), and `checkin` (subsumed
-by the `location` cross-type convention plus any record).
+`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern,
+now that #63's `file-ref` kind has landed; until a real writer needs it, a record plus
+attachment covers it), and `checkin` (subsumed by the `location` cross-type convention
+plus any record).
 
 ---
 
-## Planned tooling
+## Tooling
 
-A `@haverstack/commons` package that exports the canonical schemas as constants and a
-`defineCommonsTypes(stack, [...])` helper, so "register the type exactly as written"
-is a one-liner and drift is structurally impossible. Not started; the definitions in
-this directory are authoritative until it exists.
+[`@haverstack/commons`](../../packages/commons) exports the canonical schemas for
+every Draft-status type as constants and a `defineCommonsTypes(stack, [...])` helper,
+so "register the type exactly as written" is a one-liner and hand-copying a schema out
+of markdown — the drift the governance process exists to prevent — is no longer
+necessary. Apps should depend on the package rather than transcribing a fenced code
+block from this directory. These files remain the design record: rationale,
+conventions, and read-compat cores live here, and the package's constants are kept in
+lockstep with them. Proposed types (not yet Draft) are docs-only and stay out of the
+package until they graduate.

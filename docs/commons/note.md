@@ -39,7 +39,7 @@ await stack.defineType('org.haverstack/note@1', 'Note', {
   associations with label `embed` — see the cross-type conventions in the
   [README](./README.md). How the body refers to an embedded file (e.g. a markdown
   image reference) is app territory in @1; a commons convention here is an expected
-  follow-up proposal once `file-ref` fields (#63) land.
+  follow-up proposal, now that `file-ref` fields (#63) have landed.
 - **Cross-references**: a note that is _about_ another record (annotating a bookmark, a
   contact) uses `{ kind: 'relationship', label: 'about', recordId }`.
 

@@ -1,0 +1,44 @@
+{
+  "name": "@haverstack/commons",
+  "version": "0.1.0",
+  "description": "Canonical Schema Commons type definitions for Haverstack — register commons types exactly as written",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haverstack/core",
+    "directory": "packages/commons"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "personal data",
+    "schema commons",
+    "interop"
+  ],
+  "scripts": {
+    "prepublishOnly": "pnpm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "@haverstack/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
