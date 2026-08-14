@@ -9,10 +9,9 @@ import {
   didCredentialFromKeypair,
   base64urlEncode,
   base64urlDecode,
-  generateDidKeypair,
-  verifyDidSignature,
-} from '../src/index.js';
-import type { DidKeypair } from '../src/index.js';
+} from '../src/auth.js';
+import { generateDidKeypair, verifyDidSignature } from '../src/did.js';
+import type { DidKeypair } from '../src/did.js';
 
 const ORIGIN = 'https://stack.example.com';
 const NONCE = 'k7Qm2ZxRt9vLbNc4Hy8Wf3';

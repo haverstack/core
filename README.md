@@ -49,7 +49,7 @@ On the app's side, connecting is the keypair plus a URL. `APIAdapter` performs t
 
 ```ts
 import { APIAdapter } from '@haverstack/adapter-api';
-import { didCredentialFromKeypair } from '@haverstack/core';
+import { didCredentialFromKeypair } from '@haverstack/core/wire';
 
 const adapter = await APIAdapter.open({
   url: 'https://stack.example.com',
@@ -97,7 +97,8 @@ Planned:
 ## Quick start
 
 ```ts
-import { Stack, generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core';
+import { Stack } from '@haverstack/core';
+import { generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
 import { writeFile } from 'node:fs/promises';
 
@@ -243,7 +244,7 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 | `adapter-api`           | full   | Hosted/shared stacks via HTTP                                                   |
 | `adapter-json`          | full   | Portable JSON files _(planned)_                                                 |
 
-Use `combineAdapters({ record, blob })` from `@haverstack/core` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
+Use `combineAdapters({ record, blob })` from `@haverstack/core/adapter` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
 ---
 
@@ -277,14 +278,20 @@ docs/
 packages/
   core/                   # @haverstack/core
     src/
-      index.ts            # Public exports
+      index.ts            # Root public exports — Stack, data types, general-purpose utilities
+      did-entry.ts         # ./did public exports — keygen, custody, signing (did:key)
+      wire-entry.ts        # ./wire public exports — auth handshake, attachment-download policy
+      adapter-entry.ts     # ./adapter public exports — the interfaces a storage adapter implements
       types.ts            # All type definitions (StackRecordAdapter, StackBlobAdapter, StackAdapter, …)
       stack.ts            # Stack class
       combine.ts          # combineAdapters() — compose record + blob adapters
-      access.ts           # Permission and grant checking
+      access.ts           # Permission and grant checking (internal — no public export)
       id.ts               # Crockford base-32 ID generation
       schema.ts           # Schema hashing and type compatibility
       validate.ts         # Content validation
+      did.ts              # did:key implementation
+      auth.ts              # Auth handshake implementation
+      attachment-download.ts # Attachment download content-type resolution
       testing.ts          # MemoryAdapter test helper (@haverstack/core/testing)
     tests/
   adapter-local/          # @haverstack/adapter-local

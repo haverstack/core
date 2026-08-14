@@ -11,7 +11,7 @@ import {
   APIAdapterHandshakeError,
   APIAdapterReauthError,
 } from '../src/index.js';
-import { buildAuthChallengePayload } from '@haverstack/core';
+import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
 import {

@@ -8,6 +8,18 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./did": {
+      "import": "./dist/did-entry.js",
+      "types": "./dist/did-entry.d.ts"
+    },
+    "./wire": {
+      "import": "./dist/wire-entry.js",
+      "types": "./dist/wire-entry.d.ts"
+    },
+    "./adapter": {
+      "import": "./dist/adapter-entry.js",
+      "types": "./dist/adapter-entry.d.ts"
+    },
     "./testing": {
       "import": "./dist/testing.js",
       "types": "./dist/testing.d.ts"

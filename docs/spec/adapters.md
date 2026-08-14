@@ -46,10 +46,10 @@ Packages follow a naming convention that makes the adapter type discoverable:
 
 `adapter-local` is the batteries-included package for the common local case. It wraps `NativeSQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file. Bearer tokens, when used, live in a separate sibling file (`<path>.tokens`, via `NativeTokenStore`) — never inside the portable stack database.
 
-Use `combineAdapters()` from `@haverstack/core` when you want different backends for records and blobs — for example, native SQLite records with S3 blob storage:
+Use `combineAdapters()` from `@haverstack/core/adapter` when you want different backends for records and blobs — for example, native SQLite records with S3 blob storage:
 
 ```ts
-import { combineAdapters } from '@haverstack/core';
+import { combineAdapters } from '@haverstack/core/adapter';
 import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3'; // hypothetical
 

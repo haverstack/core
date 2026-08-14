@@ -6,7 +6,8 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { TokenInfo, TokenSession } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core';
+import type { TokenInfo } from '@haverstack/core/wire';
 import type { SqlExecutor } from './executor.js';
 import { toMs, fromMs } from './mappers.js';
 

@@ -90,7 +90,7 @@ Both are unauthenticated — they are how a token is obtained. `signature` is ba
 
 **The token's `expiresAt` is advisory.** A client MAY renew ahead of it and MUST NOT depend on it being present — it is optional, so 401-driven renewal is the floor a client needs regardless, and `APIAdapter` uses only that today. A server should therefore read an aggressive expiry as costing a wasted round-trip per lifetime rather than as something clients will schedule around.
 
-**What gets signed is not the nonce.** It is a domain-separated payload, built identically on both sides by `buildAuthChallengePayload()` in `@haverstack/core` — exported for exactly this reason, so a server and a client cannot each derive "the same string" and diverge on the first ambiguity:
+**What gets signed is not the nonce.** It is a domain-separated payload, built identically on both sides by `buildAuthChallengePayload()` in `@haverstack/core/wire` — exported for exactly this reason, so a server and a client cannot each derive "the same string" and diverge on the first ambiguity:
 
 ```
 haverstack-auth-v1\n<origin>\n<did>\n<nonce>
@@ -105,7 +105,7 @@ Two rules follow, and a server that skips either has a conformance gap rather th
 - **A server MUST build the payload from its own configured public origin**, never from a request header. `Host` and `X-Forwarded-Host` are client-controlled, so deriving the origin from one lets a client choose which origin it signs for, which is the whole property being bought.
 - **A server MUST verify against the payload it builds itself.** Nothing signed or claimed by the client contributes to it beyond the `did` and `nonce` fields named above.
 
-`@haverstack/core` provides both halves — `signAuthChallenge()` / `verifyAuthChallenge()` — and `didCredentialFromKeypair()` builds the `{ did, sign }` credential `APIAdapter` takes. The credential is a **signing callback, never a private key**: key custody stays with the app (see [Identity](./identity.md)), so a caller is free to back it with a hardware key or a keychain prompt.
+`@haverstack/core/wire` provides both halves — `signAuthChallenge()` / `verifyAuthChallenge()` — and `didCredentialFromKeypair()` builds the `{ did, sign }` credential `APIAdapter` takes. The credential is a **signing callback, never a private key**: key custody stays with the app (see [Identity](./identity.md)), so a caller is free to back it with a hardware key or a keychain prompt.
 
 ### Auth errors
 
@@ -424,7 +424,7 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 - **Everything else** is forced to `Content-Type: application/octet-stream` with `Content-Disposition: attachment` — forcing the content type alone is not sufficient, since disposition determines whether a browser treats the response as inline-renderable at all.
 - **`X-Content-Type-Options: nosniff` is sent on every attachment download response**, forced or not — without it, browsers may sniff an `application/octet-stream` body back into the dangerous type the forcing just removed.
 
-`@haverstack/core` exports the canonical implementation of this resolution and policy — `resolveAttachmentDownloadContentType()`, `isSafeAttachmentContentType()`, `inferContentTypeFromFilename()`, and the `NOSNIFF_HEADER_NAME`/`NOSNIFF_HEADER_VALUE` constants — so server implementations share one safe-list rather than each re-deriving it.
+`@haverstack/core/wire` exports the canonical implementation of this resolution and policy — `resolveAttachmentDownloadContentType()`, `isSafeAttachmentContentType()`, `inferContentTypeFromFilename()`, and the `NOSNIFF_HEADER_NAME`/`NOSNIFF_HEADER_VALUE` constants — so server implementations share one safe-list rather than each re-deriving it.
 
 The filename in `Content-Disposition` is taken from `?filename` if given, else the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise.
 

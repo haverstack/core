@@ -16,7 +16,8 @@ import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
 import { StackNotFoundError, StackQueryError } from '@haverstack/core';
-import type { StackBlobAdapter, BlobFileInfo, FileId } from '@haverstack/core';
+import type { FileId } from '@haverstack/core';
+import type { StackBlobAdapter, BlobFileInfo } from '@haverstack/core/adapter';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
