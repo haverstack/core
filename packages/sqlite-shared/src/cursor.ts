@@ -26,14 +26,10 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
     throw new StackQueryError(`Invalid cursor: malformed "${cursor}"`);
   }
   const parts = decoded.split('|');
-  // Three parts: field|value|id. Two parts: value|id, implying createdAt.
-  const [field, value, id] =
-    parts.length === 3
-      ? (parts as [string, string, string])
-      : (['createdAt', ...parts] as [string, string, string]);
-  if (field === undefined || value === undefined || id === undefined) {
+  if (parts.length !== 3) {
     throw new StackQueryError(`Invalid cursor: malformed "${cursor}"`);
   }
+  const [field, value, id] = parts as [string, string, string];
   if (!SORT_FIELDS.includes(field as SortField)) {
     throw new StackQueryError(`Invalid cursor: unknown sort field "${field}"`);
   }

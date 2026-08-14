@@ -19,9 +19,9 @@ describe('encodeCursor / decodeCursor', () => {
     expect(decodeCursor(cursor)).toEqual({ field: 'createdAt', value: 12345, id: 'rec01' });
   });
 
-  test('accepts the legacy 2-part (value|id) format as createdAt', () => {
+  test('throws StackQueryError for a 2-part (value|id) cursor', () => {
     const legacy = btoa('12345|rec01');
-    expect(decodeCursor(legacy)).toEqual({ field: 'createdAt', value: 12345, id: 'rec01' });
+    expect(() => decodeCursor(legacy)).toThrow(StackQueryError);
   });
 
   test('throws StackQueryError for non-base64 garbage', () => {
