@@ -34,9 +34,9 @@ await stack.defineType('org.haverstack/bookmark@1', 'Bookmark', {
 - **Page snapshot**: an archived copy of the page's content is an attachment association
   with label `snapshot` (one per capture; multiple captures are multiple associations).
   The underlying file's `mimeType` — a property of the `_attachment@1` record, not the
-  association — follows the deterministic first-recorded rule (#65); apps should prefer
+  association — follows the deterministic first-recorded rule; apps should prefer
   archival-friendly types (PDF, WARC, single-file HTML stored as an attachment — served
-  under the #66 safe-list rules).
+  under the dangerous-type safe-list rules).
 - **Favicon / preview image**: attachment association with label `preview`.
 
 ## Read-compat core

@@ -84,6 +84,7 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | Node native SQLite (`node:sqlite`) `StackRecordAdapter` — used by `adapter-local` |
 | [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                                                |
 | [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                                             |
+| [`@haverstack/commons`](./packages/commons)                             | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
 
 Planned:
 
@@ -302,6 +303,10 @@ packages/
   adapter-api/            # @haverstack/adapter-api
     src/
       index.ts            # APIAdapter (StackAdapter)
+    tests/
+  commons/                # @haverstack/commons
+    src/
+      index.ts            # Canonical Schema Commons type constants + defineCommonsTypes()
     tests/
 ```
 

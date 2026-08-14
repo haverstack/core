@@ -61,11 +61,10 @@ or via associations, not by address.
   `{ kind: 'relationship', label: 'entity', recordId: <_entity record id> }` on the
   contact. This keeps the directory entry (mutable, user-owned petname territory) apart
   from the identity record, in line with the properties-vs-perspectives principle and
-  the DID identity direction (#49): your name for someone is your perspective; their key
-  is a property.
+  the DID identity model: your name for someone is your perspective; their key is a
+  property.
 - **Grouping** (family, team, club): tag associations for casual grouping. A commons
-  position on linking contacts to `_group` records is deferred until the group reshape
-  (#58) settles.
+  position on linking contacts to `_group` records has not been proposed yet.
 - **Birthdays**: excluded from @1 — calendar-shaped data (partial dates, year-unknown
   birthdays, recurrence) belongs with the future `event` proposal.
 
@@ -84,8 +83,8 @@ lead — can be listed by a contacts consumer.
 - Postal addresses — genuinely structured, rarely shared between apps; future proposal
   with vCard `ADR` as prior art.
 - `birthday` and dates — see conventions.
-- Any identity/key material — that is `_entity`/#49 territory; a contact asserts
-  nothing cryptographic.
+- Any identity/key material — that is `_entity` territory; a contact asserts nothing
+  cryptographic.
 
 ## Changelog
 

@@ -70,7 +70,8 @@ write, which is the whole reason this type needs no author field.
 - **Comments across trust boundaries**: a public blog's comment section is this same
   shape living in the author's personal stack — commenters are entities holding a
   `create` grant on `message@1`. Webmention-grade interop with real primitives
-  underneath; making that practical for strangers depends on the identity work (#49).
+  underneath, practical for strangers because entity identity is a self-certifying DID
+  (a public key, nothing else) rather than an account in some directory.
 
 ## Read-compat core
 
@@ -85,7 +86,8 @@ discussion.
 
 - Social-post semantics — #15 territory (see above).
 - Reactions — a future micro-proposal (likely tag associations by non-authors — which
-  needs the association-permission rules from the #57/#58 reshape to settle first).
+  needs finer-grained association permissions than today's `update-own`/`update-any`
+  grant actions provide).
 - Chat features (presence, ephemerality, delivery/read receipts) — out of scope by
   design posture, not by omission.
 - `to`/`cc` addressing — presence in the group's stack is the addressing.
