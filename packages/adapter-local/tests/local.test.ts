@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -92,6 +92,58 @@ describe('open', () => {
     await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
     const adapter = await LocalAdapter.open({ path: dbPath });
     expect(adapter.ownerEntityId).toBe('owner-abc');
+    expect(adapter.timezone).toBe('Europe/London');
+  });
+});
+
+describe('openOrInitialize', () => {
+  test('initializes a new database when none exists', async () => {
+    const adapter = await LocalAdapter.openOrInitialize({ path: dbPath, entityId: 'owner-abc' });
+    expect(existsSync(dbPath)).toBe(true);
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+  });
+
+  test('opens an existing database instead of re-initializing', async () => {
+    await initAdapter({ entityId: 'owner-abc' });
+    const record = makeRecord({ id: 'existing' });
+    await (await LocalAdapter.open({ path: dbPath })).createRecord(record);
+
+    const adapter = await LocalAdapter.openOrInitialize({ path: dbPath, entityId: 'owner-abc' });
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+    expect(await adapter.getRecord('existing')).not.toBeNull();
+  });
+
+  test('does not invoke a lazy entityId provider on the open path', async () => {
+    await initAdapter({ entityId: 'owner-abc' });
+    const provider = vi.fn(() => 'should-not-be-called');
+
+    const adapter = await LocalAdapter.openOrInitialize({ path: dbPath, entityId: provider });
+
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  test('invokes a lazy entityId provider on the initialize path, sync or async', async () => {
+    const adapter = await LocalAdapter.openOrInitialize({
+      path: dbPath,
+      entityId: async () => 'generated-owner',
+    });
+    expect(adapter.ownerEntityId).toBe('generated-owner');
+  });
+
+  test('throws if a plain-string entityId does not match the existing owner', async () => {
+    await initAdapter({ entityId: 'owner-abc' });
+    await expect(
+      LocalAdapter.openOrInitialize({ path: dbPath, entityId: 'owner-xyz' }),
+    ).rejects.toThrow(/owned by "owner-abc"/);
+  });
+
+  test('passes timezone through on the initialize path only', async () => {
+    const adapter = await LocalAdapter.openOrInitialize({
+      path: dbPath,
+      entityId: 'owner-abc',
+      timezone: 'Europe/London',
+    });
     expect(adapter.timezone).toBe('Europe/London');
   });
 });

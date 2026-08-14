@@ -19,23 +19,26 @@ You'll also need a storage adapter:
 ## Quick start
 
 ```ts
-import { Stack, generateDidKeypair } from '@haverstack/core';
+import { Stack, generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core';
 import { LocalAdapter } from '@haverstack/adapter-local';
+import { writeFile } from 'node:fs/promises';
 
-// First run — generate an identity keypair. `did` is a "did:key:z6Mk..."
-// string derived from the public key — that's your entityId. Persist
-// `privateKey` yourself somewhere safe (OS keychain, encrypted file, ...);
-// the stack never stores it, only the public identity.
-const { did, privateKey } = await generateDidKeypair();
+const dbPath = './my-stack.db';
+const keyPath = './my-stack.key.json'; // see "Key custody" below for where this really belongs
 
-const adapter = await LocalAdapter.initialize({
-  path: './my-stack.db',
-  entityId: did,
+// First run: neither file exists yet, so this generates an identity
+// keypair and persists the private key before initializing. Every run
+// after that: the db exists, so this just opens it — the entityId
+// function below is never called, so no throwaway keypair is minted.
+const adapter = await LocalAdapter.openOrInitialize({
+  path: dbPath,
   timezone: 'America/New_York',
+  entityId: async () => {
+    const { did, privateKey } = await generateDidKeypair();
+    await writeFile(keyPath, JSON.stringify(await exportDidPrivateKeyJwk(privateKey)));
+    return did;
+  },
 });
-
-// Subsequent runs — open the existing stack
-// const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
 // ownerProfile creates your own _entity profile record on first run —
 // safe to keep passing on every open, it's a no-op once the record exists.
@@ -83,6 +86,8 @@ The fundamental unit of data. Every record has:
 ### Identity
 
 `entityId` is a DID string (e.g. `did:key:z6Mk...`) — a keypair, not a name issued by any provider. `generateDidKeypair()` mints the mandatory floor method, `did:key`. `_entity` records are local profile cards _about_ a DID (`{ did, name, handle? }`), not the identity itself — the petname pattern. See [Identity](https://github.com/haverstack/core/blob/main/docs/spec/identity.md) in the spec.
+
+**Key custody.** Nothing in `@haverstack/core` or any adapter stores the `privateKey` — only the public `did` travels with stack data. Persisting it (JWK via `exportDidPrivateKeyJwk()`/`importDidPrivateKeyJwk()`, or the `CryptoKey` itself in a browser's IndexedDB) is on you. Losing it doesn't break anything local — but you can never again authenticate as that identity to a server, since `did:key` identity _is_ the key. See [Key custody](https://github.com/haverstack/core#key-custody) in the main README for per-platform recipes.
 
 ### Types
 
