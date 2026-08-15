@@ -15,7 +15,11 @@
     "publish:blob-adapter-disk": "pnpm --filter @haverstack/blob-adapter-disk publish --access public",
     "publish:api": "pnpm --filter @haverstack/adapter-api publish --access public",
     "publish:wire-types": "pnpm --filter @haverstack/wire-types publish --access public",
-    "publish:commons": "pnpm --filter @haverstack/commons publish --access public"
+    "publish:commons": "pnpm --filter @haverstack/commons publish --access public",
+    "publish:record-adapter-sqlite": "pnpm --filter @haverstack/record-adapter-sqlite publish --access public",
+    "publish:conformance-fixtures": "pnpm --filter @haverstack/conformance-fixtures publish --access public",
+    "publish:all": "pnpm run publish:core && pnpm run publish:wire-types && pnpm run publish:blob-adapter-disk && pnpm run publish:record-adapter-sqlite && pnpm run publish:commons && pnpm run publish:conformance-fixtures && pnpm run publish:adapter-local && pnpm run publish:api",
+    "verify:pack": "node scripts/verify-pack.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

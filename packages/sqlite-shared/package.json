@@ -1,7 +1,7 @@
 {
   "name": "@haverstack/sqlite-shared",
   "version": "0.1.0",
-  "description": "Engine-independent SQL building blocks shared between Haverstack's SQLite-backed record adapters. Internal package, not a StackAdapter implementation.",
+  "description": "Internal shared logic for SQLite-backed Haverstack record adapters. Not published — bundled into its consumers. No API stability promise.",
   "type": "module",
   "exports": {
     ".": {
@@ -26,18 +26,18 @@
     "internal"
   ],
   "scripts": {
-    "prepublishOnly": "pnpm run build",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*"
+    "@haverstack/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
-  }
+  },
+  "private": true
 }

@@ -123,7 +123,9 @@ Note that this is about _our_ history, not about inputs we genuinely receive. Ha
 
 **Optional adapter capabilities follow one pattern**: an optional interface method, checked for truthiness at the call site, with a described fallback when absent — never a boolean flag in `capabilities`. `combineAdapters()` forwards an optional method only when the underlying part actually implements it.
 
-**Logic shared between the two SQLite adapters goes in `@haverstack/sqlite-shared`**, an internal (unpublished-as-public-API) package. Keeping schema DDL, the cursor codec, and the CRUD logic in one place is what keeps the two engines from silently drifting and keeps a cursor minted by one decodable by the other. Only genuinely engine-specific code (WASM init vs. `DatabaseSync`, pragma setup, lifecycle) belongs in the adapter packages.
+**Logic shared between SQLite-backed adapters goes in `@haverstack/sqlite-shared`**, an internal package. Keeping schema DDL, the cursor codec, and the CRUD logic in one place is what keeps engines from silently drifting and keeps a cursor minted by one decodable by another. Only genuinely engine-specific code (database construction, pragma setup, lifecycle) belongs in the adapter packages.
+
+The package is `private` and **bundled into its consumers at build time** — `record-adapter-sqlite` builds with `tsup` and inlines it, so nothing installing that adapter from the registry resolves `@haverstack/sqlite-shared`. Two consequences when working here: adding an export to `sqlite-shared` does not expand any package's public API, and a new SQLite adapter reuses it by living in this repository rather than by installing it. Adding a `dependencies` entry on it would undo that — it belongs in `devDependencies`.
 
 **Wire-format behavior is pinned by shared fixtures.** `@haverstack/conformance-fixtures` is pure data — no test framework, no adapter, no server. Two independent consumers exercise the same fixtures: `adapter-api`'s tests, and any server implementation. A change to the wire contract updates the fixtures, the spec, and the implementation together.
 
@@ -152,7 +154,7 @@ docs/
   commons/                # Schema Commons — shared, app-neutral record types
 packages/
   core/                   # Stack, ScopedStack, types, schema, validation, MemoryAdapter
-  sqlite-shared/          # Internal: shared SQL logic for SQLite-backed adapters
+  sqlite-shared/          # Internal: shared SQL logic, bundled into consumers, not published
   record-adapter-sqlite/  # Node native SQLite (node:sqlite), FTS5, WAL
   blob-adapter-disk/      # Content-addressed blobs on disk
   adapter-local/          # Convenience: SQLite records + disk blobs

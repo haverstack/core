@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/adapter-api",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Remote server adapter for Haverstack",
   "type": "module",
   "exports": {
@@ -22,8 +22,8 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*",
-    "@haverstack/wire-types": "workspace:*"
+    "@haverstack/core": "workspace:^",
+    "@haverstack/wire-types": "workspace:^"
   },
   "devDependencies": {
     "@haverstack/conformance-fixtures": "workspace:*",

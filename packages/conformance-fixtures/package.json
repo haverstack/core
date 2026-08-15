@@ -33,7 +33,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@haverstack/wire-types": "workspace:*"
+    "@haverstack/wire-types": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

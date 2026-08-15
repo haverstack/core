@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/blob-adapter-disk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Disk blob adapter for Haverstack",
   "type": "module",
   "exports": {
@@ -36,7 +36,7 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*"
+    "@haverstack/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
