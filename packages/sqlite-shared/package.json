@@ -32,7 +32,7 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*"
+    "@haverstack/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

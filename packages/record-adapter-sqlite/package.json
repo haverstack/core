@@ -40,7 +40,7 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*"
+    "@haverstack/core": "workspace:^"
   },
   "devDependencies": {
     "@haverstack/sqlite-shared": "workspace:*",

@@ -39,9 +39,9 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/core": "workspace:*",
-    "@haverstack/record-adapter-sqlite": "workspace:*",
-    "@haverstack/blob-adapter-disk": "workspace:*"
+    "@haverstack/core": "workspace:^",
+    "@haverstack/record-adapter-sqlite": "workspace:^",
+    "@haverstack/blob-adapter-disk": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

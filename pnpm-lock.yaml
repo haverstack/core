@@ -36,10 +36,10 @@ importers:
   packages/adapter-api:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@haverstack/wire-types':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../wire-types
     devDependencies:
       '@haverstack/conformance-fixtures':
@@ -58,13 +58,13 @@ importers:
   packages/adapter-local:
     dependencies:
       '@haverstack/blob-adapter-disk':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../blob-adapter-disk
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@haverstack/record-adapter-sqlite':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../record-adapter-sqlite
     devDependencies:
       '@types/node':
@@ -80,7 +80,7 @@ importers:
   packages/blob-adapter-disk:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@types/node':
@@ -96,7 +96,7 @@ importers:
   packages/commons:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@types/node':
@@ -112,7 +112,7 @@ importers:
   packages/conformance-fixtures:
     dependencies:
       '@haverstack/wire-types':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../wire-types
     devDependencies:
       '@types/node':
@@ -137,7 +137,7 @@ importers:
   packages/record-adapter-sqlite:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@haverstack/sqlite-shared':
@@ -159,7 +159,7 @@ importers:
   packages/sqlite-shared:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@types/node':
@@ -175,7 +175,7 @@ importers:
   packages/wire-types:
     dependencies:
       '@haverstack/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@types/node':
