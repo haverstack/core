@@ -10,7 +10,7 @@
  * For most local use cases this is the only package you need.
  * If you want a different blob backend (e.g. S3), import
  * NativeSQLiteRecordAdapter and DiskBlobAdapter separately and
- * compose them with combineAdapters() from @haverstack/core.
+ * compose them with combineAdapters() from @haverstack/core/adapter.
  */
 
 import { dirname, join } from 'path';
@@ -25,20 +25,18 @@ import type {
   QueryResult,
   Association,
   Permission,
-  AdapterCapabilities,
   RecordId,
   FileId,
-  BlobFileInfo,
-  TokenInfo,
   TokenSession,
 } from '@haverstack/core';
+import type { AdapterCapabilities, BlobFileInfo, StackBlobAdapter } from '@haverstack/core/adapter';
+import type { TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,
   NativeTokenStore,
   defaultTokenStorePath,
 } from '@haverstack/record-adapter-sqlite';
 import { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
-import type { StackBlobAdapter } from '@haverstack/core';
 
 export {
   NativeSQLiteRecordAdapter,
@@ -50,7 +48,8 @@ export type {
   NativeRecordOpenOptions,
   NativeTokenStoreOptions,
 } from '@haverstack/record-adapter-sqlite';
-export type { TokenInfo, TokenSession } from '@haverstack/core';
+export type { TokenSession } from '@haverstack/core';
+export type { TokenInfo } from '@haverstack/core/wire';
 export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 
 // -------------------------------------------------------
@@ -373,4 +372,4 @@ export class LocalAdapter implements StackAdapter {
 }
 
 // Also export combineAdapters for users who want to compose their own adapters
-export { combineAdapters } from '@haverstack/core';
+export { combineAdapters } from '@haverstack/core/adapter';

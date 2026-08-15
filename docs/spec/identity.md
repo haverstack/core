@@ -14,7 +14,7 @@ One claim in the served topology falls outside that guarantee, and it is named r
 | `did:web` | a domain in DID clothing             | optional, for those who _want_ domain identity |
 | `did:plc` | ATProto's rotation directory         | optional, for a future ATProto bridge          |
 
-`@haverstack/core` generates and verifies `did:key` (Ed25519) via `generateDidKeypair()` / `verifyDidSignature()` / etc. (`did.ts`) using Web Crypto only — zero infrastructure, zero resolution, zero registry, no dependency. Other methods are valid `entityId` values but core doesn't mint or resolve them.
+`@haverstack/core/did` generates and verifies `did:key` (Ed25519) via `generateDidKeypair()` / `verifyDidSignature()` / etc. (`did.ts`) using Web Crypto only — zero infrastructure, zero resolution, zero registry, no dependency. Other methods are valid `entityId` values but core doesn't mint or resolve them.
 
 **Key custody is not this library's job.** `generateDidKeypair()` returns a `privateKey`; nothing in `@haverstack/core` or any adapter stores it — only the public DID travels with stack data. Where the private key lives (OS keychain, encrypted file, hardware key) and how it's backed up is an app/UX concern.
 
@@ -177,7 +177,7 @@ Token issuance is not an out-of-band secret handoff, and the handshake that repl
 2. Client signs a domain-separated payload binding the server's origin, its DID and the nonce — `buildAuthChallengePayload()` builds it, `signAuthChallenge()` signs it — and sends the signature back: `POST /auth/token { did, nonce, signature }`.
 3. Server verifies against the payload it builds itself (`verifyAuthChallenge()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken(did)` and returns the bearer token.
 
-`@haverstack/core` supplies both halves of steps 2 and 3 and runs no server; a server implementation brings the endpoints, nonce storage and single-use enforcement.
+`@haverstack/core/wire` supplies both halves of steps 2 and 3 and runs no server; a server implementation brings the endpoints, nonce storage and single-use enforcement.
 
 "Access granted to the holder of key X" is verifiable with no provider, no email loop, no OAuth.
 

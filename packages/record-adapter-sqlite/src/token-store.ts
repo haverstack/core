@@ -12,7 +12,8 @@
  * SqlExecutor interface.
  */
 
-import type { StackTokenStore, TokenInfo, TokenSession } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core';
+import type { StackTokenStore, TokenInfo } from '@haverstack/core/wire';
 import {
   TOKENS_SCHEMA_SQL,
   PRAGMA_JOURNAL_MODE_WAL,

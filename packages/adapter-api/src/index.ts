@@ -16,12 +16,7 @@
  * patchContent()/deleteRecord()/etc.'s expectedVersion option.
  */
 
-import {
-  assertQueryCapabilities,
-  StackQueryError,
-  buildAuthChallengePayload,
-  base64urlEncode,
-} from '@haverstack/core';
+import { StackQueryError } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
@@ -33,12 +28,14 @@ import type {
   QueryResult,
   Association,
   Permission,
-  AdapterCapabilities,
   RecordId,
   FileId,
   EntityId,
-  DidCredential,
 } from '@haverstack/core';
+import { assertQueryCapabilities } from '@haverstack/core/adapter';
+import type { AdapterCapabilities } from '@haverstack/core/adapter';
+import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
+import type { DidCredential } from '@haverstack/core/wire';
 import type {
   WireRecord,
   WireQueryResponse,

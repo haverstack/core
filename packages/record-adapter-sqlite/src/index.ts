@@ -27,22 +27,15 @@
 
 import { DatabaseSync } from './node-sqlite.js';
 import { existsSync } from 'fs';
-import type {
-  StackRecordAdapter,
-  StackType,
-  TypeId,
-  RecordId,
-  FileId,
-  RecordVersion,
-} from '@haverstack/core';
+import type { StackType, TypeId, RecordId, FileId, RecordVersion } from '@haverstack/core';
 import type {
   StackRecord,
   StackQuery,
   QueryResult,
   Association,
   Permission,
-  AdapterCapabilities,
 } from '@haverstack/core';
+import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
 import {
   RECORD_SCHEMA_SQL,
   FTS5_SCHEMA_SQL,

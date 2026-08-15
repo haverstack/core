@@ -47,12 +47,14 @@ import {
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
+} from '@haverstack/core';
+import {
   buildAuthChallengePayload,
   verifyAuthChallenge,
   base64urlDecode,
-  generateDidKeypair,
   didCredentialFromKeypair,
-} from '@haverstack/core';
+} from '@haverstack/core/wire';
+import { generateDidKeypair } from '@haverstack/core/did';
 
 const BASE_URL = 'https://stack.example.com';
 

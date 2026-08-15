@@ -3,7 +3,14 @@
  * -------------------------------------------------------
  * Core library for Haverstack — portable personal data stack.
  *
- * Exports the Stack class, all types, and utility functions.
+ * Exports the Stack class, the app/plugin-facing data types, and the
+ * general-purpose utilities every caller needs. Audience-specific surfaces
+ * live behind their own subpaths, which this root does not re-export:
+ *   ./did      — key generation, custody and signing (did:key)
+ *   ./wire     — the auth handshake and attachment-download policy shared
+ *                by both sides of a client/server connection
+ *   ./adapter  — the interfaces a storage adapter implements
+ *   ./testing  — the in-memory MemoryAdapter for tests
  * Storage adapters are published as separate packages:
  *   @haverstack/adapter-sqlite
  */
@@ -24,7 +31,6 @@ export {
   StackPayloadTooLargeError,
   StackTimeoutError,
   StackClosedError,
-  assertQueryCapabilities,
 } from './stack.js';
 export type {
   StackErrorCode,
@@ -37,10 +43,6 @@ export type {
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
 } from './stack.js';
-
-// Permissions
-export { checkAccess, groupRoleFromAssociations } from './access.js';
-export type { AccessMode, RecordResolver, GroupRole } from './access.js';
 
 // Types
 export type {
@@ -70,16 +72,9 @@ export type {
   DateRange,
   Migration,
   MigrationFn,
-  AdapterCapabilities,
-  StackFeatures,
-  StackRecordAdapter,
-  ExpectedVersionOptions,
-  StackBlobAdapter,
-  BlobFileInfo,
   StackAdapter,
-  StackTokenStore,
+  StackFeatures,
   TokenSession,
-  TokenInfo,
   EntityContent,
   AppContent,
   GroupContent,
@@ -90,67 +85,12 @@ export type {
 
 export { SYSTEM_TYPES } from './types.js';
 
-// Adapter composition
-export { combineAdapters } from './combine.js';
-
 // Utilities
-export {
-  generateId,
-  crockford32Encode,
-  crockford32Decode,
-  isValidIdFormat,
-  idTimestamp,
-} from './id.js';
-export {
-  hashSchema,
-  isCompatible,
-  diffSchemas,
-  parseTypeId,
-  buildTypeId,
-  baseIdOf,
-} from './schema.js';
+
+// No in-repo caller: client-minted IDs are the default per spec, and an app
+// needing the ID before the write round-trips has to mint one itself.
+export { generateId } from './id.js';
+export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
-export {
-  validateContent,
-  validateReservedKeys,
-  isValid,
-  RESERVED_CONTENT_KEYS,
-} from './validate.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
-export {
-  InvalidDidError,
-  generateDidKeypair,
-  didFromPublicKey,
-  parseDidKey,
-  isValidDidKey,
-  publicKeyFromDidKey,
-  isValidDid,
-  signWithDid,
-  verifyDidSignature,
-  exportDidPrivateKeyJwk,
-  importDidPrivateKeyJwk,
-} from './did.js';
-export type { DidKeypair } from './did.js';
-export {
-  InvalidAuthChallengeError,
-  AUTH_PAYLOAD_LABEL,
-  authOriginFromUrl,
-  buildAuthChallengePayload,
-  signAuthChallenge,
-  verifyAuthChallenge,
-  didCredentialFromKeypair,
-  base64urlEncode,
-  base64urlDecode,
-} from './auth.js';
-export type { AuthChallenge, DidCredential } from './auth.js';
-export {
-  isSafeAttachmentContentType,
-  inferContentTypeFromFilename,
-  resolveAttachmentDownloadContentType,
-  firstRecordedAttachment,
-  FORCED_CONTENT_TYPE,
-  NOSNIFF_HEADER_NAME,
-  NOSNIFF_HEADER_VALUE,
-} from './attachment-download.js';
-export type { AttachmentDownloadContentType } from './attachment-download.js';

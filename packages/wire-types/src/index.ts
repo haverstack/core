@@ -7,8 +7,8 @@ import type {
   ValidationError,
   SchemaDriftViolation,
   StackErrorCode,
-  AdapterCapabilities,
 } from '@haverstack/core';
+import type { AdapterCapabilities } from '@haverstack/core/adapter';
 import {
   StackError,
   StackValidationError,

@@ -333,7 +333,8 @@ An app that keeps a live list of notes from a hosted stack. Everything outside t
 ### Connecting
 
 ```ts
-import { Stack, didCredentialFromKeypair } from '@haverstack/core';
+import { Stack } from '@haverstack/core';
+import { didCredentialFromKeypair } from '@haverstack/core/wire';
 import { APIAdapter } from '@haverstack/adapter-api';
 
 // The keypair was generated once and persisted by the app — the stack never

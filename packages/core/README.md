@@ -19,7 +19,8 @@ You'll also need a storage adapter:
 ## Quick start
 
 ```ts
-import { Stack, generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core';
+import { Stack } from '@haverstack/core';
+import { generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
 import { writeFile } from 'node:fs/promises';
 
