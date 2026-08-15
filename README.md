@@ -285,14 +285,14 @@ packages/
       types.ts            # All type definitions (StackRecordAdapter, StackBlobAdapter, StackAdapter, …)
       stack.ts            # Stack class
       combine.ts          # combineAdapters() — compose record + blob adapters
-      access.ts           # Permission and grant checking (internal — no public export)
+      access.ts           # Permission and grant checking
       id.ts               # Crockford base-32 ID generation
       schema.ts           # Schema hashing and type compatibility
       validate.ts         # Content validation
       did.ts              # did:key implementation
       auth.ts              # Auth handshake implementation
       attachment-download.ts # Attachment download content-type resolution
-      testing.ts          # MemoryAdapter test helper (@haverstack/core/testing)
+      testing.ts          # MemoryAdapter test helper — exported as @haverstack/core/testing
     tests/
   adapter-local/          # @haverstack/adapter-local
     src/
