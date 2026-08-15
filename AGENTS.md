@@ -68,7 +68,7 @@ This is about _our_ history. Genuinely foreign input — a third-party server's 
 - **`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission checks live in `packages/core` so every adapter inherits them. Don't reimplement an invariant inside an adapter. (The one documented exception: the `_config` query exclusion must live in each adapter's own query predicate.)
 - **Package prefixes declare the contract**: `adapter-*` = full `StackAdapter`, `record-adapter-*` = `StackRecordAdapter`, `blob-adapter-*` = `StackBlobAdapter`.
 - **Optional capabilities are optional methods**, checked for truthiness at the call site with a documented fallback — never a boolean in `capabilities`.
-- **Shared SQLite logic goes in `@haverstack/sqlite-shared`**, not duplicated across the two adapters.
+- **Shared SQLite logic goes in `@haverstack/sqlite-shared`**, not duplicated across adapters. It is `private` and bundled into its consumers at build time, so it is never a `dependencies` entry and adding an export to it does not widen any package's public API.
 - **Wire behavior is pinned by `@haverstack/conformance-fixtures`** — pure data, consumed by both `adapter-api` and server implementations. Changing the wire contract means updating fixtures, spec, and implementation together.
 
 ## Tests

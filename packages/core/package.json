@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/core",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Core library for Haverstack — portable personal data stack",
   "type": "module",
   "exports": {
