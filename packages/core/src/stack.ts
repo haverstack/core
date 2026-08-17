@@ -961,15 +961,11 @@ export class Stack implements StackClient {
         });
 
         for (const record of result.records) {
-          const migratedContent = migrateFn(record.content);
-          const errors = validateContent(migratedContent, latestType.schema);
-          if (errors.length > 0) {
-            throw new StackValidationError(errors);
-          }
-
-          await this.adapter.commitMigration(record.id, latestId, migratedContent, {
-            snapshot: this.buildVersionSnapshot(record),
-          });
+          // Same checked path commitMigration() takes — a migration
+          // function is no more entitled to move a DID binding or repoint
+          // an attachment than a request body is. No ifVersion: a batch
+          // pass doesn't know each record's version going in.
+          await this.commitMigrationChecked(record, latestId, migrateFn(record.content));
           migrated++;
         }
 
@@ -1445,6 +1441,31 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
+    return this.commitMigrationChecked(existing, toTypeId, content, opts.ifVersion);
+  }
+
+  /**
+   * The checked migration write, shared by commitMigration() and
+   * migrateAll(). Takes the record already in hand rather than an id: a
+   * batch pass holds each record from its own query page, and re-fetching
+   * per record would cost a read apiece for nothing.
+   *
+   * Both callers owe the same checks. migrateAll()'s content comes from a
+   * registered Migration function rather than a request body, but "app
+   * code" is not a trust boundary here — the app calling commitMigration()
+   * is the same app that registered the function, and neither may move a
+   * DID binding or repoint an attachment. registerMigration() also places
+   * no constraint on `from` and `to` sharing a baseId, so a migration path
+   * can cross type families; family-crossing is exactly what the checks
+   * below care about.
+   */
+  private async commitMigrationChecked(
+    existing: StackRecord,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+    ifVersion?: number,
+  ): Promise<StackRecord> {
+    const id = existing.id;
 
     const type = await this.getTypeCached(toTypeId);
     if (!type) {
@@ -1497,7 +1518,7 @@ export class Stack implements StackClient {
     }
 
     return this.adapter.commitMigration(id, toTypeId, content, {
-      expectedVersion: opts.ifVersion,
+      expectedVersion: ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
     });
   }

@@ -1029,6 +1029,74 @@ describe('migrateAll', () => {
     expect(result.migrated).toBe(1);
     expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V2);
   });
+
+  // migrateAll() and commitMigration() share one checked write path: a
+  // migration function is app code, but so is the app calling
+  // commitMigration(), and neither is entitled to move a DID binding or
+  // slip a reserved key past validation.
+  test('aborts when a migration function would move a DID binding', async () => {
+    await stack.defineType(
+      '_entity@2',
+      'Entity',
+      {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+      },
+      { migratesFrom: '_entity@1' },
+    );
+    stack.registerMigration({
+      from: '_entity@1',
+      to: '_entity@2',
+      migrate: (content) => ({ ...content, did: 'did:key:zHijacked' }),
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(card.id))?.content).toEqual({
+      did: 'did:key:zAlice',
+      name: 'Alice',
+    });
+  });
+
+  test('aborts when a migration function emits a reserved content key', async () => {
+    await stack.defineType(
+      NOTE_V3,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V2 },
+    );
+    stack.registerMigration({
+      from: NOTE_V2,
+      to: NOTE_V3,
+      migrate: (content) => ({ ...content, ['__proto__']: 'polluted' }),
+    });
+    await stack.create(NOTE_V2, { text: 'hi', title: '' });
+
+    await expect(stack.migrateAll('com.example.test/note')).rejects.toThrow(StackValidationError);
+  });
+
+  test('still carries an unchanged DID binding through a migration', async () => {
+    await stack.defineType(
+      '_entity@2',
+      'Entity',
+      {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        pronouns: { kind: 'string' },
+      },
+      { migratesFrom: '_entity@1' },
+    );
+    stack.registerMigration({
+      from: '_entity@1',
+      to: '_entity@2',
+      migrate: (content) => ({ ...content, pronouns: 'they/them' }),
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    const result = await stack.migrateAll('_entity');
+    expect(result.migrated).toBe(1);
+    expect((await adapter.getRecord(card.id))?.typeId).toBe('_entity@2');
+  });
 });
 
 // -------------------------------------------------------
