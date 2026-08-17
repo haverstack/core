@@ -1097,6 +1097,148 @@ describe('Stack.commitMigration', () => {
 });
 
 // -------------------------------------------------------
+// Stack.commitMigration — integrity checks
+//
+// Migrate writes a full content replacement under a new typeId, so it is
+// create-shaped at the destination and update-shaped over the record as it
+// stands. These cover the checks it owes on both counts — without them,
+// migrate is a second write path to state create()/update() refuse.
+// -------------------------------------------------------
+
+describe('Stack.commitMigration — binding fields', () => {
+  test('refuses moving an _entity card onto another did', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(
+      stack.commitMigration(card.id, '_entity@1', { did: 'did:key:zBob', name: 'Alice' }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(card.id))?.content).toEqual({
+      did: 'did:key:zAlice',
+      name: 'Alice',
+    });
+  });
+
+  test('refuses shedding a did by migrating out of the family', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(stack.commitMigration(card.id, NOTE_V1, { text: 'shed' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('refuses a did another _entity card already claims', async () => {
+    await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+    const bare = await stack.create('_entity@1', { did: '', name: 'Unbound' });
+
+    await expect(
+      stack.commitMigration(bare.id, '_entity@1', { did: 'did:key:zAlice', name: 'Unbound' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('allows a migration that carries the same did through', async () => {
+    await stack.defineType('_entity@2', 'Entity', {
+      did: { kind: 'string', required: true },
+      name: { kind: 'string', required: true },
+      pronouns: { kind: 'string' },
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    const migrated = await stack.commitMigration(card.id, '_entity@2', {
+      did: 'did:key:zAlice',
+      name: 'Alice',
+      pronouns: 'they/them',
+    });
+    expect(migrated.typeId).toBe('_entity@2');
+  });
+});
+
+describe('Stack.commitMigration — _attachment protections', () => {
+  test('refuses repointing fileId', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    await expect(
+      stack.commitMigration(a.id, '_attachment@1', {
+        fileId: 'other-hash',
+        mimeType: 'text/plain',
+        size: 1,
+      }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(a.id))?.content).toEqual(a.content);
+  });
+
+  test('refuses rewriting mimeType and size', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    await expect(
+      stack.commitMigration(a.id, '_attachment@1', {
+        fileId: a.content.fileId,
+        mimeType: 'image/png',
+        size: 999,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('allows a migration that carries the immutable fields through', async () => {
+    await stack.defineType('_attachment@2', 'Attachment', {
+      fileId: { kind: 'string', required: true },
+      mimeType: { kind: 'string', required: true },
+      size: { kind: 'number', required: true },
+      filename: { kind: 'string' },
+      caption: { kind: 'string' },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    const migrated = await stack.commitMigration(a.id, '_attachment@2', {
+      fileId: a.content.fileId,
+      mimeType: 'text/plain',
+      size: 1,
+      caption: 'hi',
+    });
+    expect(migrated.typeId).toBe('_attachment@2');
+  });
+
+  test('applies the mimeType-establishment check when arriving from outside the family', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const note = await stack.create(NOTE_V1, { text: 'decoy' });
+
+    await expect(
+      stack.commitMigration(note.id, '_attachment@1', {
+        fileId: a.content.fileId,
+        mimeType: 'image/png',
+        size: 1,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+});
+
+describe('Stack.commitMigration — _group', () => {
+  test('refuses migrating a record into _group, whose admin roster is stamped at creation', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'x' });
+
+    await expect(
+      stack.commitMigration(note.id, '_group@1', { name: 'Ghost Group' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('allows a _group record to migrate between versions, keeping its roster', async () => {
+    await stack.defineType('_group@2', 'Group', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+      stackUrl: { kind: 'string' },
+      topic: { kind: 'string' },
+    });
+    const group = await stack.create('_group@1', { name: 'Real Group' });
+
+    const migrated = await stack.commitMigration(group.id, '_group@2', {
+      name: 'Real Group',
+      topic: 'books',
+    });
+    expect(migrated.typeId).toBe('_group@2');
+    expect(migrated.associations).toEqual(group.associations);
+  });
+});
+
+// -------------------------------------------------------
 // restoreVersion — typeId and validation
 // -------------------------------------------------------
 

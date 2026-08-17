@@ -1423,6 +1423,13 @@ export class Stack implements StackClient {
    * as update()/restoreVersion(). No `ifVersion` precondition — the wire
    * endpoint this backs doesn't accept `If-Match` (see
    * docs/spec/wire-format.md § Optimistic concurrency).
+   *
+   * Because `content` is a full replacement written under a new `typeId`,
+   * this is create-shaped at the destination *and* update-shaped over the
+   * record as it stands, so it owes both sets of integrity checks — the
+   * binding rules, the attachment rules, and `_config`'s. Missing either
+   * half would make migrate a second, unguarded write path to the same
+   * state create()/update() refuse to reach.
    */
   async commitMigration(
     id: string,
@@ -1446,6 +1453,37 @@ export class Stack implements StackClient {
     }
 
     assertContentSize(content, this.features.maxContentBytes, 'Content');
+
+    const fromFamily = baseIdOf(existing.typeId);
+    const toFamily = baseIdOf(toTypeId);
+    const existingContent = existing.content as Record<string, unknown>;
+
+    // A `_group` record's `admin` roster entry is stamped by create(), the
+    // single site that does it — migrate cannot, since the adapter's
+    // commitMigration() writes `typeId` and `content` alone and leaves
+    // associations untouched. Minting one here would produce a group with
+    // an empty roster, manageable by nobody but the owner, so migrating
+    // *into* the family is refused. Version-to-version stays open and
+    // carries the existing roster with it.
+    if (toFamily === SYSTEM_TYPES.GROUP && fromFamily !== SYSTEM_TYPES.GROUP) {
+      throw new StackConflictError(
+        'Cannot migrate a record into _group: a group’s admin roster is stamped at creation. ' +
+          'Create the group instead.',
+      );
+    }
+
+    if (fromFamily === SYSTEM_TYPES.ATTACHMENT) {
+      this.checkAttachmentImmutableOnMigrate(
+        existingContent as unknown as AttachmentContent,
+        content as unknown as AttachmentContent,
+      );
+    } else if (toFamily === SYSTEM_TYPES.ATTACHMENT) {
+      // A record arriving from outside the family stakes a fresh claim on
+      // its fileId, exactly as create() does — so it owes create()'s check.
+      await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
+    }
+
+    await this.checkBindingsOnMigrate(existing.typeId, toTypeId, id, existingContent, content);
 
     if (id === SYSTEM_TYPES.CONFIG) {
       this.checkConfigEntityIdUnchanged(
@@ -1491,6 +1529,44 @@ export class Stack implements StackClient {
       if (unique.includes(field)) {
         await this.checkBindingUnique(family, field, merged[field], id);
       }
+    }
+  }
+
+  /**
+   * Bindings across a migration. `content` is a full replacement rather
+   * than a patch, so there is no "field absent from the patch" case to
+   * exempt: every binding field either keeps its value, moves to a new
+   * one, or is shed by omission — and immutability refuses the last two
+   * whichever family they happen in. Asked across the union of the two
+   * families' binding fields, so a card can neither shed its DID by
+   * migrating out of `_entity`/`_app` nor pick one up on the way in.
+   *
+   * Uniqueness is asked only of the destination family, which is where the
+   * record's claim lives once the write lands, and excludes the record
+   * itself — re-sending the value it already holds claims nothing.
+   * See docs/spec/identity.md § DID bindings.
+   */
+  private async checkBindingsOnMigrate(
+    fromTypeId: TypeId,
+    toTypeId: TypeId,
+    id: RecordId,
+    existing: Record<string, unknown>,
+    content: Record<string, unknown>,
+  ): Promise<void> {
+    const fromFamily = baseIdOf(fromTypeId);
+    const toFamily = baseIdOf(toTypeId);
+
+    const checked = new Set<string>();
+    for (const family of fromFamily === toFamily ? [fromFamily] : [fromFamily, toFamily]) {
+      for (const field of bindingFieldsOf(family)) {
+        if (checked.has(field)) continue;
+        checked.add(field);
+        this.checkBindingImmutable(family, field, existing[field], content[field]);
+      }
+    }
+
+    for (const field of uniqueBindingFieldsOf(toFamily)) {
+      await this.checkBindingUnique(toFamily, field, content[field], id);
     }
   }
 
@@ -1638,6 +1714,40 @@ export class Stack implements StackClient {
       errors.push({ path: 'fileId', message: 'fileId is immutable' });
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'size') && merged.size !== existing.size) {
+      errors.push({ path: 'size', message: 'size is immutable' });
+    }
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
+    }
+  }
+
+  /**
+   * The same immutability checkAttachmentImmutableFields() enforces, asked
+   * value-wise instead of presence-wise: a migration replaces content
+   * wholesale, so it necessarily re-sends `mimeType`, `fileId` and `size`
+   * (all required) and a presence check would refuse every migration. Only
+   * an actual change is a violation.
+   *
+   * Repointing `fileId` is the one that matters most: an `_attachment@1`
+   * record naming a fileId is what canAccessFile()'s uploader clause reads,
+   * so moving an existing record onto another file's hash is a route to
+   * bytes the record's author never uploaded.
+   */
+  private checkAttachmentImmutableOnMigrate(
+    existing: AttachmentContent,
+    next: AttachmentContent,
+  ): void {
+    const errors: ValidationError[] = [];
+    if (next.mimeType !== existing.mimeType) {
+      errors.push({
+        path: 'mimeType',
+        message: 'mimeType is immutable after creation; delete and re-upload to change it',
+      });
+    }
+    if (next.fileId !== existing.fileId) {
+      errors.push({ path: 'fileId', message: 'fileId is immutable' });
+    }
+    if (next.size !== existing.size) {
       errors.push({ path: 'size', message: 'size is immutable' });
     }
     if (errors.length > 0) {
@@ -2903,38 +3013,40 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration on behalf of the subject: update
-   * authority on the record as it stands today — `requireUpdatable()`, the
-   * same gate `update()` and `restoreVersion()` use, refusing a non-owner
-   * write to a `_grant` Record — *and* create authority on `toTypeId`, the
-   * same authority `create()` would demand to mint a fresh record there.
-   * Without the latter, a requester holding only ordinary write access to
-   * some Record could migrate it into `_app`/`_config`/`_grant` — families
-   * otherwise reachable only through `defineType()`'s system bootstrap —
-   * forging system-record membership without ever holding a create grant
-   * on it. did/appId (on `_app`) and the owner's own did (on `_entity`)
-   * are protected the same way update() protects them, checked against
-   * both the Record's current family and `toTypeId` since migrate replaces
-   * `content` wholesale rather than patching it. See
-   * docs/spec/access-control.md § A `_grant` Record is only writable by
-   * the owner acting alone.
+   * Commit a per-record migration — **the owner acting alone, only**.
+   *
+   * Migration is owner-driven by design: `migrateAll()`, the bulk path,
+   * lives on `Stack` and is deliberately absent from `StackClient`, the
+   * same way `grant()`/`revoke()` are. This is its per-record counterpart
+   * and carries the same restriction, rather than inventing a grant model
+   * that the bulk path deliberately doesn't have.
+   *
+   * The restriction is what makes the verb safe to expose at all. Migrate
+   * replaces `content` and `typeId` wholesale, so a grant-based version
+   * would have to re-derive every gate `create()` applies at the
+   * destination *and* every gate `update()` applies over the existing
+   * content, and would reopen each one it missed. The sharpest is the
+   * non-owner `_attachment@1` refusal create() carries: without it, a
+   * requester holding a create grant on `_attachment@1` and write access
+   * to any record they authored could migrate that record into the family
+   * naming any `fileId`, then read the bytes through canAccessFile()'s
+   * uploader clause — the exact escalation that carve-out exists to refuse
+   * (see docs/spec/attachments.md § Creating `_attachment@1` records
+   * directly). Ordinary write access to a record is not consent to move it
+   * between families.
+   *
+   * A server implementing `POST /records/:id/migrate` therefore serves it
+   * to the stack owner and answers 403 otherwise. See
+   * docs/spec/data-model.md § Type migrations.
    */
   async commitMigration(
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
   ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id);
-    if (!(await this.checkCreateGrant(toTypeId))) {
-      throw new StackPermissionError(`No create grant for type "${toTypeId}"`);
+    if (!this.ownerActingAlone) {
+      throw new StackPermissionError('Only the stack owner may commit a migration');
     }
-    const existingContent = record.content as Record<string, unknown>;
-    const touchesIdentity = (field: 'did' | 'appId') => content[field] !== existingContent[field];
-    this.requireOwnerForAppIdentity(record.typeId, touchesIdentity);
-    this.requireOwnerForAppIdentity(toTypeId, touchesIdentity);
-    this.requireOwnerForOwnerDid(record.typeId, content.did);
-    this.requireOwnerForOwnerDid(toTypeId, content.did);
-    await this.requireFileRefAccess(toTypeId, content);
     return this.stack.commitMigration(id, toTypeId, content);
   }
 
