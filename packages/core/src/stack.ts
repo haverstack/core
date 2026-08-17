@@ -481,20 +481,21 @@ const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
  * Checked before the format check: the Crockford charset already excludes
  * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
  * as a generic format error instead of a specific, actionable one.
+ *
+ * Throws StackQueryError, not StackValidationError: a malformed id is
+ * structurally bad input the request never gets past — it doesn't reach
+ * type-schema validation — the same reasoning that makes an undecodable
+ * pagination cursor a StackQueryError rather than a content-validation
+ * failure. See StackQueryError's doc comment.
  */
 function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackValidationError([
-      { path: 'id', message: `ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.` },
-    ]);
+    throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
   }
   if (!isValidIdFormat(id)) {
-    throw new StackValidationError([
-      {
-        path: 'id',
-        message: `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
-      },
-    ]);
+    throw new StackQueryError(
+      `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
+    );
   }
 }
 
@@ -547,6 +548,19 @@ export interface StackClient {
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
+  /**
+   * Commit a per-record migration: change `typeId` and `content` together,
+   * validated against `toTypeId`'s schema. The only way a record's typeId
+   * changes after creation — see docs/spec/wire-format.md § Migration
+   * commit. No `ifVersion` precondition: `POST /records/:id/migrate` does
+   * not accept `If-Match` on the wire (see docs/spec/wire-format.md §
+   * Optimistic concurrency).
+   */
+  commitMigration(
+    id: string,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
   putAttachment(
     data: Uint8Array,
@@ -1394,6 +1408,53 @@ export class Stack implements StackClient {
 
     return this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+    });
+  }
+
+  /**
+   * Commit a per-record migration: replace `content` and `typeId` together
+   * in one step, validated against `toTypeId`'s schema exactly as
+   * create()/update() validate against a type's schema. The single-record
+   * counterpart to migrateAll() — content here is supplied by the caller
+   * (computed client-side by the type's owning app, per
+   * docs/spec/wire-format.md § Migration commit) rather than a registered
+   * Migration function. Snapshots the prior state to version history, same
+   * as update()/restoreVersion(). No `ifVersion` precondition — the wire
+   * endpoint this backs doesn't accept `If-Match` (see
+   * docs/spec/wire-format.md § Optimistic concurrency).
+   */
+  async commitMigration(
+    id: string,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+
+    const type = await this.getTypeCached(toTypeId);
+    if (!type) {
+      throw new Error(`Unknown type: "${toTypeId}". Call defineType() first.`);
+    }
+
+    const errors = [...validateReservedKeys(content), ...validateContent(content, type.schema)];
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
+    }
+
+    assertContentSize(content, this.features.maxContentBytes, 'Content');
+
+    if (id === SYSTEM_TYPES.CONFIG) {
+      this.checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (content as ConfigContent).entityId,
+      );
+    }
+
+    return this.adapter.commitMigration(id, toTypeId, content, {
       snapshot: this.buildVersionSnapshot(existing),
     });
   }
@@ -2839,6 +2900,42 @@ export class ScopedStack implements StackClient {
       }
     }
     return this.stack.restoreVersion(id, version, opts);
+  }
+
+  /**
+   * Commit a per-record migration on behalf of the subject: update
+   * authority on the record as it stands today — `requireUpdatable()`, the
+   * same gate `update()` and `restoreVersion()` use, refusing a non-owner
+   * write to a `_grant` Record — *and* create authority on `toTypeId`, the
+   * same authority `create()` would demand to mint a fresh record there.
+   * Without the latter, a requester holding only ordinary write access to
+   * some Record could migrate it into `_app`/`_config`/`_grant` — families
+   * otherwise reachable only through `defineType()`'s system bootstrap —
+   * forging system-record membership without ever holding a create grant
+   * on it. did/appId (on `_app`) and the owner's own did (on `_entity`)
+   * are protected the same way update() protects them, checked against
+   * both the Record's current family and `toTypeId` since migrate replaces
+   * `content` wholesale rather than patching it. See
+   * docs/spec/access-control.md § A `_grant` Record is only writable by
+   * the owner acting alone.
+   */
+  async commitMigration(
+    id: string,
+    toTypeId: TypeId,
+    content: Record<string, unknown>,
+  ): Promise<StackRecord> {
+    const record = await this.requireUpdatable(id);
+    if (!(await this.checkCreateGrant(toTypeId))) {
+      throw new StackPermissionError(`No create grant for type "${toTypeId}"`);
+    }
+    const existingContent = record.content as Record<string, unknown>;
+    const touchesIdentity = (field: 'did' | 'appId') => content[field] !== existingContent[field];
+    this.requireOwnerForAppIdentity(record.typeId, touchesIdentity);
+    this.requireOwnerForAppIdentity(toTypeId, touchesIdentity);
+    this.requireOwnerForOwnerDid(record.typeId, content.did);
+    this.requireOwnerForOwnerDid(toTypeId, content.did);
+    await this.requireFileRefAccess(toTypeId, content);
+    return this.stack.commitMigration(id, toTypeId, content);
   }
 
   /**

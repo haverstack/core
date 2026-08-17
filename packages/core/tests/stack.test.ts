@@ -459,20 +459,20 @@ describe('create — client-supplied id', () => {
 
   test('rejects an id with the wrong length', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'too-short' })).rejects.toThrow(
-      StackValidationError,
+      StackQueryError,
     );
   });
 
   test('rejects an id with characters outside the Crockford charset', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'UPPERCASE123' })).rejects.toThrow(
-      StackValidationError,
+      StackQueryError,
     );
   });
 
   test('rejects an id using the reserved "_" prefix', async () => {
     await expect(
       stack.create(NOTE_V1, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('rejects a duplicate id with StackConflictError', async () => {
@@ -1032,6 +1032,71 @@ describe('migrateAll', () => {
 });
 
 // -------------------------------------------------------
+// Stack.commitMigration
+// -------------------------------------------------------
+
+describe('Stack.commitMigration', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+  });
+
+  test('changes typeId and content together, bumping version', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    const migrated = await stack.commitMigration(record.id, NOTE_V2, {
+      text: 'hello',
+      title: 'pinned',
+    });
+
+    expect(migrated.typeId).toBe(NOTE_V2);
+    expect(migrated.content).toEqual({ text: 'hello', title: 'pinned' });
+    expect(migrated.version).toBe(2);
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V2);
+  });
+
+  test('snapshots the pre-migration typeId and content to version history', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.commitMigration(record.id, NOTE_V2, { text: 'original', title: '' });
+
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(1);
+    expect(versions[0].typeId).toBe(NOTE_V1);
+    expect(versions[0].content).toEqual({ text: 'original' });
+  });
+
+  test('validates content against toTypeId’s schema', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.commitMigration(record.id, NOTE_V2, { title: 'missing text' }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V1); // never committed
+  });
+
+  test('throws for an unregistered toTypeId', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' }),
+    ).rejects.toThrow('Unknown type');
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(
+      stack.commitMigration(generateId(), NOTE_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+});
+
+// -------------------------------------------------------
 // restoreVersion — typeId and validation
 // -------------------------------------------------------
 
@@ -1534,6 +1599,33 @@ describe('_config protections', () => {
   test('ScopedStack delegation: the owner cannot delete _config via scoped delete either', async () => {
     await seedConfig('owner-123');
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
+  });
+
+  test('commitMigration() rejects a change to entityId', async () => {
+    await seedConfig('owner-123');
+    await stack.defineType('_config@2', 'Config', {
+      entityId: { kind: 'string', required: true },
+      timezone: { kind: 'string' },
+    });
+
+    await expect(
+      stack.commitMigration(CONFIG_ID, '_config@2', { entityId: 'someone-else' }),
+    ).rejects.toThrow(StackConflictError);
+    expect((await adapter.getRecord(CONFIG_ID))?.typeId).toBe(CONFIG_TYPE); // never committed
+  });
+
+  test('commitMigration() allows the same entityId', async () => {
+    await seedConfig('owner-123');
+    await stack.defineType('_config@2', 'Config', {
+      entityId: { kind: 'string', required: true },
+      timezone: { kind: 'string' },
+    });
+
+    const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
+      entityId: 'owner-123',
+      timezone: 'America/New_York',
+    });
+    expect(migrated.typeId).toBe('_config@2');
   });
 });
 
@@ -2157,6 +2249,17 @@ describe('reserved content keys', () => {
       );
       // Rejected outright, so the rest of the patch doesn't land either.
       expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
+    },
+  );
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'commitMigration() rejects a %s content key',
+    async (key) => {
+      const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+      await expect(stack.commitMigration(record.id, NOTE_V1, withKey(key, 'x'))).rejects.toThrow(
+        StackValidationError,
+      );
     },
   );
 
