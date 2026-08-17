@@ -552,14 +552,15 @@ export interface StackClient {
    * Commit a per-record migration: change `typeId` and `content` together,
    * validated against `toTypeId`'s schema. The only way a record's typeId
    * changes after creation — see docs/spec/wire-format.md § Migration
-   * commit. No `ifVersion` precondition: `POST /records/:id/migrate` does
-   * not accept `If-Match` on the wire (see docs/spec/wire-format.md §
-   * Optimistic concurrency).
+   * commit. Takes `ifVersion` like every other mutation that bumps a
+   * record's version (see docs/spec/versioning.md § Optimistic
+   * concurrency); over the wire that is `If-Match`.
    */
   commitMigration(
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   getAttachment(fileId: string): Promise<Uint8Array>;
   putAttachment(
@@ -1420,9 +1421,10 @@ export class Stack implements StackClient {
    * (computed client-side by the type's owning app, per
    * docs/spec/wire-format.md § Migration commit) rather than a registered
    * Migration function. Snapshots the prior state to version history, same
-   * as update()/restoreVersion(). No `ifVersion` precondition — the wire
-   * endpoint this backs doesn't accept `If-Match` (see
-   * docs/spec/wire-format.md § Optimistic concurrency).
+   * as update()/restoreVersion(), and takes the same optional `ifVersion`
+   * precondition every version-bumping mutation takes — checked atomically
+   * at the adapter, not here (see docs/spec/versioning.md § Optimistic
+   * concurrency).
    *
    * Because `content` is a full replacement written under a new `typeId`,
    * this is create-shaped at the destination *and* update-shaped over the
@@ -1435,12 +1437,14 @@ export class Stack implements StackClient {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.checkIfVersion(existing, opts.ifVersion);
 
     const type = await this.getTypeCached(toTypeId);
     if (!type) {
@@ -1493,6 +1497,7 @@ export class Stack implements StackClient {
     }
 
     return this.adapter.commitMigration(id, toTypeId, content, {
+      expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
     });
   }
@@ -3043,11 +3048,12 @@ export class ScopedStack implements StackClient {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner may commit a migration');
     }
-    return this.stack.commitMigration(id, toTypeId, content);
+    return this.stack.commitMigration(id, toTypeId, content, opts);
   }
 
   /**

@@ -665,11 +665,14 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
+    opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', `/records/${id}/migrate`, {
-      toTypeId,
-      content,
-    });
+    const raw = await this.request<WireRecord>(
+      'POST',
+      `/records/${id}/migrate`,
+      { toTypeId, content },
+      { ifMatch: opts.expectedVersion },
+    );
     return parseRecord(raw);
   }
 

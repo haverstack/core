@@ -60,7 +60,7 @@ Restoring an `_app` or `_entity` Record is fenced for the same reason, by the ru
 
 ## Optimistic concurrency (`ifVersion`)
 
-`version` is not conflict detection by itself — it exists to power rollback and soft-delete recovery. Nothing reads or writes it unless a caller opts in. Every mutating method (`update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `restoreVersion`) accepts an optional `ifVersion`:
+`version` is not conflict detection by itself — it exists to power rollback and soft-delete recovery. Nothing reads or writes it unless a caller opts in. Every mutating method (`update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `restoreVersion`, `commitMigration`) accepts an optional `ifVersion`:
 
 ```ts
 await stack.update(id, { title: 'New' }, { ifVersion: 5 });

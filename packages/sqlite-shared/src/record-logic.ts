@@ -329,8 +329,16 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ): Promise<StackRecord> {
+    // Checked here rather than folded into the UPDATE's WHERE clause:
+    // fts5Strategy.remove() has to run before the content changes, so the
+    // precondition has to settle first — same shape as patchContent() and
+    // restoreVersion().
+    const existing = await this.getRecord(id);
+    if (!existing) throw new Error(`Record not found: "${id}"`);
+    this.checkExpectedVersion(existing, opts.expectedVersion);
+
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);

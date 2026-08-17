@@ -346,10 +346,11 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, typeId: toTypeId, content });
     this.records.set(id, updated);

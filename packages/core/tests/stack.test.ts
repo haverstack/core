@@ -1510,10 +1510,39 @@ describe('ifVersion', () => {
     expect(restored.content.text).toBe('hello');
   });
 
+  test('commitMigration() enforces ifVersion', async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+
+    await expect(
+      stack.commitMigration(record.id, NOTE_V2, { text: 'v2', title: '' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackVersionConflictError);
+    // A rejected migration must leave the record at its current type.
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V1);
+
+    const migrated = await stack.commitMigration(
+      record.id,
+      NOTE_V2,
+      { text: 'v2', title: 'ok' },
+      { ifVersion: 2 },
+    ); // v3
+    expect(migrated.version).toBe(3);
+    expect(migrated.typeId).toBe(NOTE_V2);
+  });
+
   test('ifVersion on a nonexistent record throws StackNotFoundError, not StackVersionConflictError', async () => {
     await expect(stack.update('nonexistent', { text: 'x' }, { ifVersion: 1 })).rejects.toThrow(
       StackNotFoundError,
     );
+    await expect(
+      stack.commitMigration('nonexistent', NOTE_V1, { text: 'x' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackNotFoundError);
   });
 });
 

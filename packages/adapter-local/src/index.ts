@@ -290,7 +290,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { snapshot?: RecordVersion },
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion },
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
