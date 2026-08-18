@@ -6,6 +6,7 @@ import {
   StackValidationError,
   StackConflictError,
   StackPayloadTooLargeError,
+  StackQueryError,
 } from '../src/stack.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
@@ -686,7 +687,7 @@ describe('ScopedStack.create — client-supplied id', () => {
   test('rejects a malformed id from a grantee', async () => {
     await expect(
       stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, { id: 'too-short' }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('rejects a reserved-prefix id from a grantee', async () => {
@@ -694,7 +695,7 @@ describe('ScopedStack.create — client-supplied id', () => {
       stack
         .asEntity(MEMBER)
         .create(COMMENT, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('rejects an id whose timestamp is far outside the clock-skew tolerance', async () => {
@@ -916,6 +917,232 @@ describe('ScopedStack — grant-based update/delete', () => {
     const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
     const updated = await stack.asEntity(STRANGER).update(record.id, { text: 'edited' });
     expect(updated.content.text).toBe('edited');
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack.commitMigration
+// -------------------------------------------------------
+
+describe('ScopedStack.commitMigration', () => {
+  const COMMENT_V2 = 'com.example.test/comment@2';
+
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType(
+      COMMENT_V2,
+      'Comment',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: COMMENT },
+    );
+  });
+
+  test('anonymous requester cannot migrate a record', async () => {
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    await expect(
+      stack.asEntity(null).commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(
+      stack.asEntity(OWNER).commitMigration(generateId(), COMMENT_V2, { text: 'hello' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('the owner acting alone can migrate a record', async () => {
+    const record = await stack.create(COMMENT, { text: 'hello' });
+
+    const migrated = await stack
+      .asEntity(OWNER)
+      .commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' });
+    expect(migrated.typeId).toBe(COMMENT_V2);
+    expect(migrated.content).toEqual({ text: 'hello', title: '' });
+  });
+
+  // Migration is owner-driven: migrateAll() is Stack-only and absent from
+  // StackClient, and the per-record path carries the same restriction. No
+  // combination of grants substitutes for it — ordinary write access to a
+  // record is not consent to move it between families.
+  test('an update grant on the record’s current family does not authorize migrating it', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, NOTE, { text: 'hello' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('update and create grants together still do not authorize a migration', async () => {
+    await stack.grant(MEMBER, [
+      { actions: ['update-any'], typeId: COMMENT },
+      { actions: ['create'], typeId: NOTE },
+    ]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, NOTE, { text: 'hello' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a grant naming both actions on one family does not cover an in-family migration', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any', 'create'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('record-level write on the record does not authorize migrating it', async () => {
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    await stack.setPermissions(record.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot migrate an ordinary record into _app', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, '_app@1', {
+        appId: 'com.example.impostor',
+        name: 'Impostor',
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot migrate an ordinary record into _grant', async () => {
+    await stack.grant(MEMBER, [{ actions: ['update-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(record.id, '_grant@1', {
+        typeId: COMMENT,
+        actions: ['create'],
+      }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('the owner acting alone can migrate a record into a system family', async () => {
+    const record = await stack.create(COMMENT, { text: 'hello' });
+
+    const migrated = await stack.asEntity(OWNER).commitMigration(record.id, '_app@1', {
+      appId: 'com.example.owner-tool',
+      name: 'Owner Tool',
+    });
+    expect(migrated.typeId).toBe('_app@1');
+  });
+
+  // The owner's authority here is its own, so delegation never carries it:
+  // an owner principal acting for a subject is not the owner acting alone,
+  // the same rule deleteAttachment() and setPermissions() apply.
+  test('an owner principal acting on behalf of a subject cannot migrate', async () => {
+    const record = await stack.create(COMMENT, { text: 'hello' });
+
+    await expect(
+      stack
+        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder cannot migrate a _grant record, even to a type they could otherwise create', async () => {
+    const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
+    await stack.setPermissions(grantRecord.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(grantRecord.id, COMMENT, { text: 'x' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a write-holder with record-level write on an _app card cannot migrate it out of _app and shed its did', async () => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: 'did:key:z6MkNotesApp',
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+
+    await expect(
+      stack.asEntity(MEMBER).commitMigration(shared.id, COMMENT, { text: 'hijacked' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner cannot claim the owner’s own did while migrating a record into _entity', async () => {
+    await stack.grant(MEMBER, [
+      { actions: ['update-any'], typeId: COMMENT },
+      { actions: ['create'], typeId: '_entity@1' },
+    ]);
+    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .commitMigration(record.id, '_entity@1', { did: OWNER, name: 'Impostor' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // Regression: create() refuses a non-owner _attachment@1 record naming a
+  // fileId they can't already reach, because an _attachment@1 record is
+  // what canAccessFile()'s uploader clause reads. Migrate must not be a
+  // second way in. See docs/spec/attachments.md § Creating `_attachment@1`
+  // records directly.
+  test('a grantee cannot reach attachment bytes by migrating a record into _attachment', async () => {
+    const secret = await stack.putAttachment(new Uint8Array([1, 2, 3, 4]), 'text/plain', 's.txt');
+    const fileId = secret.content.fileId;
+
+    await stack.grant(MEMBER, [
+      { actions: ['create', 'update-own', 'read-own'], typeId: COMMENT },
+      { actions: ['create', 'read-own'], typeId: '_attachment@1' },
+    ]);
+    const view = stack.asEntity(MEMBER);
+
+    // The direct route is already refused, and the bytes are out of reach.
+    await expect(
+      view.create('_attachment@1', { fileId, mimeType: 'text/plain', size: 4 }),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.getAttachment(fileId)).rejects.toThrow(StackPermissionError);
+
+    const decoy = await view.create(COMMENT, { text: 'decoy' });
+    await expect(
+      view.commitMigration(decoy.id, '_attachment@1', {
+        fileId,
+        mimeType: 'text/plain',
+        size: 4,
+      }),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.getAttachment(fileId)).rejects.toThrow(StackPermissionError);
+  });
+
+  // Regression: _entity is grantable and requireOwnerForOwnerDid() guards
+  // only the owner's own did, so binding immutability is what stops a
+  // grantee moving a contact card onto another DID.
+  test('a grantee cannot move an _entity card onto another did by migrating', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+    await stack.grant(MEMBER, [{ actions: ['update-any', 'create'], typeId: '_entity@1' }]);
+
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .commitMigration(card.id, '_entity@1', { did: 'did:key:zBob', name: 'Alice' }),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await adapter.getRecord(card.id))?.content).toEqual({
+      did: 'did:key:zAlice',
+      name: 'Alice',
+    });
   });
 });
 

@@ -459,20 +459,20 @@ describe('create — client-supplied id', () => {
 
   test('rejects an id with the wrong length', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'too-short' })).rejects.toThrow(
-      StackValidationError,
+      StackQueryError,
     );
   });
 
   test('rejects an id with characters outside the Crockford charset', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'UPPERCASE123' })).rejects.toThrow(
-      StackValidationError,
+      StackQueryError,
     );
   });
 
   test('rejects an id using the reserved "_" prefix', async () => {
     await expect(
       stack.create(NOTE_V1, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('rejects a duplicate id with StackConflictError', async () => {
@@ -1029,6 +1029,281 @@ describe('migrateAll', () => {
     expect(result.migrated).toBe(1);
     expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V2);
   });
+
+  // migrateAll() and commitMigration() share one checked write path: a
+  // migration function is app code, but so is the app calling
+  // commitMigration(), and neither is entitled to move a DID binding or
+  // slip a reserved key past validation.
+  test('aborts when a migration function would move a DID binding', async () => {
+    await stack.defineType(
+      '_entity@2',
+      'Entity',
+      {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+      },
+      { migratesFrom: '_entity@1' },
+    );
+    stack.registerMigration({
+      from: '_entity@1',
+      to: '_entity@2',
+      migrate: (content) => ({ ...content, did: 'did:key:zHijacked' }),
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(card.id))?.content).toEqual({
+      did: 'did:key:zAlice',
+      name: 'Alice',
+    });
+  });
+
+  test('aborts when a migration function emits a reserved content key', async () => {
+    await stack.defineType(
+      NOTE_V3,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V2 },
+    );
+    stack.registerMigration({
+      from: NOTE_V2,
+      to: NOTE_V3,
+      migrate: (content) => ({ ...content, ['__proto__']: 'polluted' }),
+    });
+    await stack.create(NOTE_V2, { text: 'hi', title: '' });
+
+    await expect(stack.migrateAll('com.example.test/note')).rejects.toThrow(StackValidationError);
+  });
+
+  test('still carries an unchanged DID binding through a migration', async () => {
+    await stack.defineType(
+      '_entity@2',
+      'Entity',
+      {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        pronouns: { kind: 'string' },
+      },
+      { migratesFrom: '_entity@1' },
+    );
+    stack.registerMigration({
+      from: '_entity@1',
+      to: '_entity@2',
+      migrate: (content) => ({ ...content, pronouns: 'they/them' }),
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    const result = await stack.migrateAll('_entity');
+    expect(result.migrated).toBe(1);
+    expect((await adapter.getRecord(card.id))?.typeId).toBe('_entity@2');
+  });
+});
+
+// -------------------------------------------------------
+// Stack.commitMigration
+// -------------------------------------------------------
+
+describe('Stack.commitMigration', () => {
+  beforeEach(async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
+      { migratesFrom: NOTE_V1 },
+    );
+  });
+
+  test('changes typeId and content together, bumping version', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    const migrated = await stack.commitMigration(record.id, NOTE_V2, {
+      text: 'hello',
+      title: 'pinned',
+    });
+
+    expect(migrated.typeId).toBe(NOTE_V2);
+    expect(migrated.content).toEqual({ text: 'hello', title: 'pinned' });
+    expect(migrated.version).toBe(2);
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V2);
+  });
+
+  test('snapshots the pre-migration typeId and content to version history', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' });
+    await stack.commitMigration(record.id, NOTE_V2, { text: 'original', title: '' });
+
+    const versions = await stack.getVersions(record.id);
+    expect(versions.length).toBe(1);
+    expect(versions[0].typeId).toBe(NOTE_V1);
+    expect(versions[0].content).toEqual({ text: 'original' });
+  });
+
+  test('validates content against toTypeId’s schema', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.commitMigration(record.id, NOTE_V2, { title: 'missing text' }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V1); // never committed
+  });
+
+  test('throws for an unregistered toTypeId', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' }),
+    ).rejects.toThrow('Unknown type');
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(
+      stack.commitMigration(generateId(), NOTE_V2, { text: 'hello', title: '' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+});
+
+// -------------------------------------------------------
+// Stack.commitMigration — integrity checks
+//
+// Migrate writes a full content replacement under a new typeId, so it is
+// create-shaped at the destination and update-shaped over the record as it
+// stands. These cover the checks it owes on both counts — without them,
+// migrate is a second write path to state create()/update() refuse.
+// -------------------------------------------------------
+
+describe('Stack.commitMigration — binding fields', () => {
+  test('refuses moving an _entity card onto another did', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(
+      stack.commitMigration(card.id, '_entity@1', { did: 'did:key:zBob', name: 'Alice' }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(card.id))?.content).toEqual({
+      did: 'did:key:zAlice',
+      name: 'Alice',
+    });
+  });
+
+  test('refuses shedding a did by migrating out of the family', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    await expect(stack.commitMigration(card.id, NOTE_V1, { text: 'shed' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('refuses a did another _entity card already claims', async () => {
+    await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+    const bare = await stack.create('_entity@1', { did: '', name: 'Unbound' });
+
+    await expect(
+      stack.commitMigration(bare.id, '_entity@1', { did: 'did:key:zAlice', name: 'Unbound' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('allows a migration that carries the same did through', async () => {
+    await stack.defineType('_entity@2', 'Entity', {
+      did: { kind: 'string', required: true },
+      name: { kind: 'string', required: true },
+      pronouns: { kind: 'string' },
+    });
+    const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
+
+    const migrated = await stack.commitMigration(card.id, '_entity@2', {
+      did: 'did:key:zAlice',
+      name: 'Alice',
+      pronouns: 'they/them',
+    });
+    expect(migrated.typeId).toBe('_entity@2');
+  });
+});
+
+describe('Stack.commitMigration — _attachment protections', () => {
+  test('refuses repointing fileId', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    await expect(
+      stack.commitMigration(a.id, '_attachment@1', {
+        fileId: 'other-hash',
+        mimeType: 'text/plain',
+        size: 1,
+      }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(a.id))?.content).toEqual(a.content);
+  });
+
+  test('refuses rewriting mimeType and size', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    await expect(
+      stack.commitMigration(a.id, '_attachment@1', {
+        fileId: a.content.fileId,
+        mimeType: 'image/png',
+        size: 999,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('allows a migration that carries the immutable fields through', async () => {
+    await stack.defineType('_attachment@2', 'Attachment', {
+      fileId: { kind: 'string', required: true },
+      mimeType: { kind: 'string', required: true },
+      size: { kind: 'number', required: true },
+      filename: { kind: 'string' },
+      caption: { kind: 'string' },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+
+    const migrated = await stack.commitMigration(a.id, '_attachment@2', {
+      fileId: a.content.fileId,
+      mimeType: 'text/plain',
+      size: 1,
+      caption: 'hi',
+    });
+    expect(migrated.typeId).toBe('_attachment@2');
+  });
+
+  test('applies the mimeType-establishment check when arriving from outside the family', async () => {
+    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const note = await stack.create(NOTE_V1, { text: 'decoy' });
+
+    await expect(
+      stack.commitMigration(note.id, '_attachment@1', {
+        fileId: a.content.fileId,
+        mimeType: 'image/png',
+        size: 1,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+});
+
+describe('Stack.commitMigration — _group', () => {
+  test('refuses migrating a record into _group, whose admin roster is stamped at creation', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'x' });
+
+    await expect(
+      stack.commitMigration(note.id, '_group@1', { name: 'Ghost Group' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('allows a _group record to migrate between versions, keeping its roster', async () => {
+    await stack.defineType('_group@2', 'Group', {
+      name: { kind: 'string', required: true },
+      handle: { kind: 'string' },
+      stackUrl: { kind: 'string' },
+      topic: { kind: 'string' },
+    });
+    const group = await stack.create('_group@1', { name: 'Real Group' });
+
+    const migrated = await stack.commitMigration(group.id, '_group@2', {
+      name: 'Real Group',
+      topic: 'books',
+    });
+    expect(migrated.typeId).toBe('_group@2');
+    expect(migrated.associations).toEqual(group.associations);
+  });
 });
 
 // -------------------------------------------------------
@@ -1303,10 +1578,39 @@ describe('ifVersion', () => {
     expect(restored.content.text).toBe('hello');
   });
 
+  test('commitMigration() enforces ifVersion', async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.update(record.id, { text: 'v2' }); // v2
+
+    await expect(
+      stack.commitMigration(record.id, NOTE_V2, { text: 'v2', title: '' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackVersionConflictError);
+    // A rejected migration must leave the record at its current type.
+    expect((await adapter.getRecord(record.id))?.typeId).toBe(NOTE_V1);
+
+    const migrated = await stack.commitMigration(
+      record.id,
+      NOTE_V2,
+      { text: 'v2', title: 'ok' },
+      { ifVersion: 2 },
+    ); // v3
+    expect(migrated.version).toBe(3);
+    expect(migrated.typeId).toBe(NOTE_V2);
+  });
+
   test('ifVersion on a nonexistent record throws StackNotFoundError, not StackVersionConflictError', async () => {
     await expect(stack.update('nonexistent', { text: 'x' }, { ifVersion: 1 })).rejects.toThrow(
       StackNotFoundError,
     );
+    await expect(
+      stack.commitMigration('nonexistent', NOTE_V1, { text: 'x' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackNotFoundError);
   });
 });
 
@@ -1534,6 +1838,33 @@ describe('_config protections', () => {
   test('ScopedStack delegation: the owner cannot delete _config via scoped delete either', async () => {
     await seedConfig('owner-123');
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
+  });
+
+  test('commitMigration() rejects a change to entityId', async () => {
+    await seedConfig('owner-123');
+    await stack.defineType('_config@2', 'Config', {
+      entityId: { kind: 'string', required: true },
+      timezone: { kind: 'string' },
+    });
+
+    await expect(
+      stack.commitMigration(CONFIG_ID, '_config@2', { entityId: 'someone-else' }),
+    ).rejects.toThrow(StackConflictError);
+    expect((await adapter.getRecord(CONFIG_ID))?.typeId).toBe(CONFIG_TYPE); // never committed
+  });
+
+  test('commitMigration() allows the same entityId', async () => {
+    await seedConfig('owner-123');
+    await stack.defineType('_config@2', 'Config', {
+      entityId: { kind: 'string', required: true },
+      timezone: { kind: 'string' },
+    });
+
+    const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
+      entityId: 'owner-123',
+      timezone: 'America/New_York',
+    });
+    expect(migrated.typeId).toBe('_config@2');
   });
 });
 
@@ -2157,6 +2488,17 @@ describe('reserved content keys', () => {
       );
       // Rejected outright, so the rest of the patch doesn't land either.
       expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
+    },
+  );
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'commitMigration() rejects a %s content key',
+    async (key) => {
+      const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+      await expect(stack.commitMigration(record.id, NOTE_V1, withKey(key, 'x'))).rejects.toThrow(
+        StackValidationError,
+      );
     },
   );
 

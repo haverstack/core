@@ -774,6 +774,22 @@ describe('commitMigration', () => {
     const result = await adapter.commitMigration('rec-abc123', 'com.example/note@2', {});
     expect(result.typeId).toBe('com.example/note@2');
   });
+
+  test('sends If-Match when expectedVersion is given', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.commitMigration('rec-abc123', 'com.example/note@2', {}, { expectedVersion: 5 });
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['If-Match']).toBe('"5"');
+  });
+
+  test('omits If-Match when expectedVersion is not given', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.commitMigration('rec-abc123', 'com.example/note@2', {});
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
+  });
 });
 
 // -------------------------------------------------------

@@ -429,6 +429,38 @@ describe('expectedVersion', () => {
     expect(undeleted.version).toBe(4);
   });
 
+  test('commitMigration enforces expectedVersion and leaves typeId untouched on mismatch', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+
+    await expect(
+      adapter.commitMigration(
+        record.id,
+        'com.example/note@2',
+        { text: 'migrated' },
+        {
+          expectedVersion: 1,
+        },
+      ),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    const untouched = await adapter.getRecord(record.id);
+    expect(untouched?.typeId).toBe(record.typeId);
+    expect(untouched?.version).toBe(2);
+    // The rejected write must not have disturbed the FTS index either.
+    const stillFindsV2 = await adapter.queryRecords({ filter: { search: 'v2' } });
+    expect(stillFindsV2.records.map((r) => r.id)).toEqual([record.id]);
+
+    const migrated = await adapter.commitMigration(
+      record.id,
+      'com.example/note@2',
+      { text: 'migrated' },
+      { expectedVersion: 2 },
+    ); // -> v3
+    expect(migrated.typeId).toBe('com.example/note@2');
+    expect(migrated.version).toBe(3);
+  });
+
   test('hard deleteRecord enforces expectedVersion and leaves the record untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());

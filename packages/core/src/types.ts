@@ -557,15 +557,15 @@ export interface StackRecordAdapter {
 
   /**
    * Commit a migration: write new content under a new typeId in one step.
-   * This is the only way a record's typeId changes after creation — used
-   * exclusively by Stack.migrateAll(); Stack.update() never changes typeId
-   * as a side effect. Bumps version internally.
+   * This is the only way a record's typeId changes after creation — used by
+   * Stack.commitMigration() and Stack.migrateAll(); Stack.update() never
+   * changes typeId as a side effect. Bumps version internally.
    */
   commitMigration(
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions,
   ): Promise<StackRecord>;
 
   // Types
