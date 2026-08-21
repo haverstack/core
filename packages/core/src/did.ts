@@ -80,6 +80,15 @@ const base58btcDecode = (encoded: string): Uint8Array => {
 const ED25519_MULTICODEC_PREFIX = new Uint8Array([0xed, 0x01]);
 const ED25519_RAW_KEY_LENGTH = 32;
 const DID_KEY_PREFIX = 'did:key:z';
+/** Multicodec prefix plus raw key — what a did:key's base58 payload decodes to. */
+const DID_KEY_DECODED_LENGTH = ED25519_MULTICODEC_PREFIX.length + ED25519_RAW_KEY_LENGTH;
+// base58btc expands by at most log(256)/log(58) characters per byte, so a
+// longer payload cannot decode to DID_KEY_DECODED_LENGTH bytes. Screening on
+// it keeps base58btcDecode's BigInt accumulation, which is quadratic in its
+// input, off strings whose length the caller never bounded.
+const DID_KEY_MAX_BASE58_LENGTH = Math.ceil(
+  DID_KEY_DECODED_LENGTH * (Math.log(256) / Math.log(58)),
+);
 
 export type DidKeypair = {
   /** e.g. "did:key:z6Mk..." */
@@ -114,16 +123,18 @@ export const didFromPublicKey = async (publicKey: CryptoKey): Promise<string> =>
 export const parseDidKey = (did: string): Uint8Array | null => {
   if (!did.startsWith(DID_KEY_PREFIX)) return null;
 
+  const encoded = did.slice(DID_KEY_PREFIX.length);
+  if (encoded.length > DID_KEY_MAX_BASE58_LENGTH) return null;
+
   let decoded: Uint8Array;
   try {
-    decoded = base58btcDecode(did.slice(DID_KEY_PREFIX.length));
+    decoded = base58btcDecode(encoded);
   } catch {
     return null;
   }
 
-  const expectedLength = ED25519_MULTICODEC_PREFIX.length + ED25519_RAW_KEY_LENGTH;
   if (
-    decoded.length !== expectedLength ||
+    decoded.length !== DID_KEY_DECODED_LENGTH ||
     decoded[0] !== ED25519_MULTICODEC_PREFIX[0] ||
     decoded[1] !== ED25519_MULTICODEC_PREFIX[1]
   ) {
