@@ -128,3 +128,17 @@ describe('private key JWK export/import', () => {
     expect(await verifyDidSignature(did, signature, data)).toBe(true);
   });
 });
+
+// Resolves the entry point rather than ../src/did.js: what the package
+// exports is part of its contract, and only a test that goes through the
+// entry point pins it.
+describe('@haverstack/core/did entry surface', () => {
+  test('exports the did:key narrowing isValidDid() documents', async () => {
+    const entry = await import('../src/did-entry.js');
+    expect(entry.isValidDid('did:web:example.com')).toBe(true);
+    expect(entry.isValidDidKey('did:web:example.com')).toBe(false);
+    expect(entry.isValidDidKey('did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK')).toBe(
+      true,
+    );
+  });
+});
