@@ -280,7 +280,11 @@ export type GrantContent = {
   granteeEntityId?: EntityId;
   /**
    * A `_group` Record ID whose roster the grant applies to — any member or
-   * admin qualifies. Mutually exclusive with granteeEntityId. See
+   * admin qualifies. Mutually exclusive with granteeEntityId.
+   *
+   * Never satisfies the principal half of a delegated request: a roster is
+   * editable by any of the group's admins, so roster-derived authority
+   * would let someone other than the owner name an app to a type. See
    * docs/spec/access-control.md § Type-level grants.
    */
   granteeGroupId?: RecordId;
