@@ -2185,6 +2185,24 @@ describe('grant', () => {
     ]);
     expect(records).toHaveLength(1);
   });
+
+  test('creates a group-targeted grant record', async () => {
+    const records = await stack.grant({ groupId: 'group-abc' }, [
+      { actions: ['read-any'], typeId: NOTE_V1 },
+    ]);
+    expect(records).toHaveLength(1);
+    expect(records[0].content).toEqual({
+      typeId: NOTE_V1,
+      actions: ['read-any'],
+      granteeGroupId: 'group-abc',
+    });
+  });
+
+  test('rejects a group-targeted grant on _grant@1', async () => {
+    await expect(
+      stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: '_grant@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
 });
 
 // -------------------------------------------------------
@@ -2217,6 +2235,43 @@ describe('listGrants', () => {
     const actionSets = grants.map((g) => (g.content as { actions: string[] }).actions);
     expect(actionSets).toContainEqual(['create']);
     expect(actionSets).toContainEqual(['read-any']);
+  });
+
+  test('a groupId target returns grants naming that exact group', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant({ groupId: 'group-xyz' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-abc', [{ actions: ['update-own'], typeId: NOTE_V1 }]);
+
+    const grants = await stack.listGrants({ groupId: 'group-abc' });
+    expect(grants).toHaveLength(1);
+    expect(grants[0].content).toMatchObject({ actions: ['create'] });
+  });
+
+  test('an entityId target also returns grants naming a group the entity belongs to', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: 'entity-abc',
+    });
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-xyz', [{ actions: ['delete-own'], typeId: NOTE_V1 }]);
+
+    const grants = await stack.listGrants('entity-abc');
+    expect(grants).toHaveLength(1);
+    expect(grants[0].content).toMatchObject({ actions: ['read-any'] });
+  });
+
+  test('an entityId target does not return a group grant for a group the entity does not belong to', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: 'entity-xyz',
+    });
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+
+    expect(await stack.listGrants('entity-abc')).toHaveLength(0);
   });
 });
 
@@ -2268,6 +2323,20 @@ describe('revoke', () => {
     await stack.grant(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
     await stack.revoke(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
     expect(await stack.listGrants(null)).toHaveLength(0);
+  });
+
+  test('a groupId target revokes the grant matching that exact group', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.revoke({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants({ groupId: 'group-abc' })).toHaveLength(0);
+  });
+
+  test('a groupId target does not affect a grant for a different group or an entity', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant({ groupId: 'group-xyz' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.revoke({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants()).toHaveLength(2);
   });
 });
 
