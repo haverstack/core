@@ -132,6 +132,28 @@ describe('private key JWK export/import', () => {
 // Resolves the entry point rather than ../src/did.js: what the package
 // exports is part of its contract, and only a test that goes through the
 // entry point pins it.
+// A did:key's base58 payload has one valid length, so anything longer is
+// screened out before base58btcDecode sees it — its BigInt accumulation is
+// quadratic, and a DID off the wire is a string the caller chose the size of.
+describe('parseDidKey length screening', () => {
+  test('rejects an over-long DID without decoding it', () => {
+    const started = performance.now();
+    expect(isValidDidKey('did:key:z' + 'a'.repeat(200_000))).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  test('still accepts a real did:key at its full length', async () => {
+    const { did } = await generateDidKeypair();
+    expect(isValidDidKey(did)).toBe(true);
+    expect(parseDidKey(did)).not.toBeNull();
+  });
+
+  test('rejects a payload one character past the maximum', async () => {
+    const { did } = await generateDidKeypair();
+    expect(isValidDidKey(did + 'a')).toBe(false);
+  });
+});
+
 describe('@haverstack/core/did entry surface', () => {
   test('exports the did:key narrowing isValidDid() documents', async () => {
     const entry = await import('../src/did-entry.js');
