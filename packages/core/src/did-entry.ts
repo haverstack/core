@@ -13,6 +13,11 @@ export type { DidKeypair } from './did.js';
 // server startup.
 export { isValidDid } from './did.js';
 
+// No in-repo caller: it exists for callers needing the did:key narrowing
+// isValidDid()'s docstring points to — rejecting a method
+// verifyDidSignature() cannot verify, without attempting one.
+export { isValidDidKey } from './did.js';
+
 // No in-repo caller: root README.md § Key custody documents
 // exportDidPrivateKeyJwk() -> store -> importDidPrivateKeyJwk() ->
 // signWithDid() as the key-custody journey an app follows.
