@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/blob-adapter-disk",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Disk blob adapter for Haverstack",
   "type": "module",
   "exports": {

@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/sqlite-shared",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Internal shared logic for SQLite-backed Haverstack record adapters. Not published — bundled into its consumers. No API stability promise.",
   "type": "module",
   "exports": {
