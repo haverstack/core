@@ -12,13 +12,15 @@ type RecordVersion = {
   typeId: string; // The Record's typeId at the moment this version was snapshotted
   content: object;
   updatedAt: Date;
-  entityId?: string; // Who made this change
+  entityId?: string; // The Record's author, carried through from the snapshot
   associations?: Association[]; // Present if the record had associations at snapshot time
   permissions?: Permission[]; // Present if the record had permissions at snapshot time
 };
 ```
 
 `typeId` makes a version entry interpretable regardless of migration state: a snapshot taken before a migration records the pre-migration type, so restoring it later doesn't mislabel `@1`-shaped content as `@2`. It's also what lets `_grant` baseId matching work independent of which version a snapshot predates.
+
+**`entityId` on a version is authorship, not attribution of the change.** It is the Record's own `entityId` copied into the snapshot, and `entityId` is stamped once by `create()` and never moves — so every version of a Record reports the same author, whoever performed the mutation that produced it. Where a write-holder who is not the author edits a Record, or an app edits it on someone's behalf, the version history does not record which of them did so. **A version history is a record of states, not of actors**, and nothing in a `RecordVersion` should be read as an audit trail of who did what.
 
 **API surface:**
 
@@ -42,7 +44,7 @@ The distinction is a pure version-number comparison against the live record, nev
 
 **History is the mutation/recovery surface, not a read surface.** Under `ScopedStack`, `getVersions()`/`getVersion()` require the same access `update()`/`associate()` require — a write-holder, or the owner/creator (or a Group's admin, for a `_group`'s own history) — not plain read access. Gating history on current read access would make a Record's entire past exactly as public as its present: share a Record after editing out something sensitive, and every current reader would see the pre-edit revisions too, as an automatic side effect of an ACL that only describes _now_. Requiring the mutate surface instead ties history access to "can undo," the same justification the `write` bit rests on. History is deliberately **not** time-sliced per reader (a contributor added today sees the same history a contributor added last year would, including pre-their-involvement content); ACLs aren't per-version timestamped, and building that slicing is out of scope. A denied requester gets `StackPermissionError`, matching every other write-gated verb. "The same access" means the same permission and grant resolution, not the owner-only fences a few families put on mutation: a `_grant` Record is [owner-write-only](./access-control.md#type-level-grants), and its history is still readable by a write-holder, since reading it changes nothing and a write-holder who cannot audit the grant they hold has lost the recovery this gate exists to protect.
 
-Independently, snapshot `permissions` — audit data by design — are **stripped from every `RecordVersion` returned to anyone but the owner acting as itself**, including a write-holder who passes the history gate, and including a delegated request whose principal is the owner. A write-holder never needs the ACL trail to undo content or associations, and a snapshot's `permissions` are the stack's sharing graph, which [delegation](./access-control.md#delegation-principal-and-subject) is not a route to. `entityId` (change attribution) is not stripped — useful for Group attribution and far less sensitive than a permissions history.
+Independently, snapshot `permissions` — audit data by design — are **stripped from every `RecordVersion` returned to anyone but the owner acting as itself**, including a write-holder who passes the history gate, and including a delegated request whose principal is the owner. A write-holder never needs the ACL trail to undo content or associations, and a snapshot's `permissions` are the stack's sharing graph, which [delegation](./access-control.md#delegation-principal-and-subject) is not a route to. `entityId` (the Record's author, per [above](#version-history)) is not stripped — it is the same value the live Record already exposes to every reader, and far less sensitive than a permissions history.
 
 **Publishing history is a projection, not a history read.** An app that wants to expose a Record's revisions publicly (e.g. a static-site generator's changelog) does not do so by relaxing the rule above — it materializes the chosen revisions as first-class, app-defined Records (their own content, their own `permissions`, decoupled from `RecordVersion`'s audit shape), built at the point the app decides to publish. That's a deliberate, curatable act — the embarrassing draft or the edited-out paragraph never leaks unless the owner chooses to include it.
 
