@@ -123,7 +123,18 @@ export type RecordVersion = {
   typeId: TypeId;
   content: Record<string, unknown>;
   updatedAt: Date;
-  entityId?: EntityId; // Who made this change
+  /**
+   * The record's **author** at the moment this version was snapshotted —
+   * carried through from `record.entityId`, not the entity that performed
+   * the change this version records. Those differ whenever anyone but the
+   * author writes: `entityId` is stamped once by `create()` and never
+   * moves, so every version of a record reports the same one.
+   *
+   * Recording the acting identity is haverstack/core#176; until then no
+   * mutation but `create()` attributes itself, and nothing here should be
+   * read as an audit trail of who did what.
+   */
+  entityId?: EntityId;
   associations?: Association[];
   permissions?: Permission[];
 };

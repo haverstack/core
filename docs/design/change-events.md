@@ -70,10 +70,17 @@ type RecordChange = {
   version: number; // the version this change produced
   updatedAt: Date; // ISO string on the wire
   parentId?: RecordId;
-  entityId?: EntityId;
-  appId?: AppId;
-  principalId?: EntityId;
-  /** The record as of this change. Optional — see D2. */
+  /**
+   * Who performed this change — see D2a. Absent when unknown: every mutation
+   * before the acting identity is recorded (haverstack/core#176), and every
+   * write by an unscoped `Stack`, which has no requester to name.
+   */
+  actor?: {
+    entityId: EntityId; // the subject
+    principalId?: EntityId; // the principal, when delegated
+    appId?: AppId; // self-reported, never a trust input
+  };
+  /** The record as of this change. Optional — see D2. Never on `purged`. */
   record?: StackRecord;
   /** Resume cursor. Present only on a resumable feed — see D7. */
   seq?: string;
@@ -116,8 +123,8 @@ rather than degrade.
 
 ### D2. The stub is the contract; the record body is an optional payload
 
-**What a subscriber is guaranteed** is identity, type, version, attribution, and
-`parentId` — enough to route the event (invalidate this cache key, append this audit
+**What a subscriber is guaranteed** is identity, type, version, `parentId`, and the
+`actor` — enough to route the event (invalidate this cache key, append this audit
 entry, drop this index entry) without a fetch. **`record` is optional**: present when the
 emitter has it in hand and the subscriber asked for it, absent otherwise, and never
 required for correctness. A consumer that needs guaranteed-current state re-reads;
@@ -137,6 +144,83 @@ first reactive consumer that would otherwise answer every event with a `get()` i
 common case rather than an exotic one. What stays deferred is any promise that it is
 _always_ present: the fallback above is the contract, and a server declaring
 `records: false` is conformant.
+
+### D2a. The envelope describes the change; the record describes the record
+
+An earlier draft carried the record's own `entityId`, `appId` and `principalId` in the
+envelope, and the audit-log example below read them back as "who it is attributed to".
+**That reading was wrong, and the mistake is the argument.** Those are the record's
+fields: `entityId` means _author_ and is frozen at `create()`, and `principalId` is only
+ever set at `create()`. Five mutations by three identities therefore all report the
+original author, and a delegated write reports no principal at all — see
+[#176](https://github.com/haverstack/core/issues/176).
+
+The names invited it. On a type called `RecordChange`, a field called `entityId` reads as
+"the entity behind this change", because that is what the name says. Documenting the other
+meaning would have left the trap in place rather than removed it — and it had already
+caught the most informed possible reader, one section apart, in this document.
+
+So record provenance comes out of the envelope, and one field replaces it:
+
+- **`actor` is who performed the change** — the subject, plus the principal when
+  delegated. It is the only identity the envelope carries.
+- **The record's own fields ride the record.** A consumer that wants them uses
+  `?include=record` or the documented fetch fallback (D2), which is where they belonged:
+  they describe the record, not the change.
+
+`actor` is absent until the acting identity is recorded at all (#176), and absent
+permanently for writes by an unscoped `Stack`, which has no requester to name. **Absent
+means unknown; it never means "the author".**
+
+**`ChangeFilter.entityId` is unaffected and still filters on the record's author**, not on
+the actor. Filtering is exact and applied by the emitter, so a consumer filtering by author
+never needed the field echoed back into the envelope in order to do it.
+
+**Attribution is record-level, not history-grade.** D3 keeps prior state out of the
+envelope because history is gated on the mutate surface while the feed's gate is plain
+`canRead`. That argument is about prior _content_ — the revision someone deliberately
+edited out, which sharing a record afterwards must not disclose. Knowing _that_ a record
+changed, and who changed it, reveals nothing about what was removed; and identity is
+already record-level, since `entityId` sits on the record where every reader sees it. "Who
+wrote version 7" is the same class of fact as "who wrote version 1". The two rules are
+consistent, and this paragraph exists so that they do not later look as though they aren't.
+
+### D2b. A `purged` frame carries nothing about the record
+
+**A `purged` frame carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt` and
+`actor` — no record provenance, and `record` is never present**, whatever the subscriber
+asked for or the server advertises.
+
+Hard delete is the erasure primitive: it destroys the record and its version history, and
+the reason to reach for it over soft delete is that no trace should remain. Deleting the
+data is the point, the verb is owner-only, and its destructiveness is
+[stated plainly](../spec/versioning.md#deletion) — so there is no misunderstanding to
+protect a caller from, and nothing to be gained by keeping a souvenir.
+
+The hazard is not disclosure at emission, which is already bounded: a subscriber who
+cannot read the record receives no event, so anyone holding a purge frame was entitled to
+its author anyway. **The hazard is durability.** A frame naming the author would hand every
+subscriber a permanent, un-erasable note — "this DID had a record here, and it was
+destroyed" — written into their logs at the moment the stack finished erasing its own copy.
+The stack cannot un-emit. An erasure primitive that seeds durable records of what was
+erased defeats itself.
+
+What follows is worth keeping deliberately: **a purge event tells you to forget something
+you already knew, and tells someone who never knew it nothing.** `recordId` is opaque, so a
+consumer holding the record can evict it, and a consumer that never held it learns nothing
+it could act on.
+
+The `record` prohibition matters more than it looks. D2 says `record` is present "when the
+emitter has it in hand", and the [server checklist](#server-implementation-checklist)
+_requires_ a server to hold the purged record at mutation time in order to evaluate
+readability. A straightforward reading of those two together would ship the full body of a
+just-hard-deleted record to every subscriber passing `?include=record`. That is the same
+objection at much larger scale, so the prohibition is stated rather than left to inference.
+
+The audit cost is accepted and bounded: a purge is auditable as "the owner destroyed a
+record of type T at version N", with no author and no content. Hard delete is
+owner-acting-alone and refuses delegation, so the actor was never in question — what is
+lost is whose record it was, which is the thing being erased.
 
 ### D3. No `previous` — and the reason is a permission boundary, not cost
 
@@ -296,6 +380,7 @@ type ChangeFilter = {
   /** Matched by baseId, like grants: `com.example/note@1` also covers `@2`. */
   typeId?: TypeId | TypeId[];
   parentId?: RecordId | null;
+  /** The record's author. Not the actor — see D2a. */
   entityId?: EntityId;
   kinds?: ChangeKind[];
 };
@@ -469,8 +554,8 @@ reactivity, which is the whole point of designing the event model once.
 
 ### A second consumer: audit log
 
-Where `op` and the attribution fields earn their place — `kind` alone cannot tell a
-reshare from an edit, and that distinction is the entire content of an audit trail:
+Where `op` and `actor` earn their place — `kind` alone cannot tell a reshare from an edit,
+and that distinction is the entire content of an audit trail:
 
 ```ts
 await stack.subscribe(
@@ -479,9 +564,12 @@ await stack.subscribe(
       at: change.updatedAt,
       what: change.op, // 'permissions' reads very differently from 'update'
       record: `${change.recordId}@${change.version}`,
-      by: change.entityId, // who it is attributed to
-      via: change.principalId, // the app that authenticated, when delegated
-      app: change.appId, // self-reported, never a trust input
+      // Who performed it — not who authored the record. Absent means
+      // unknown (an unscoped write, or a stack predating #176), which is
+      // a distinct fact from "nobody", so it is logged as such.
+      by: change.actor?.entityId ?? 'unknown',
+      via: change.actor?.principalId, // the app that authenticated, when delegated
+      app: change.actor?.appId, // self-reported, never a trust input
     });
   },
   { onError: (err) => log.failed(err) },
@@ -491,6 +579,12 @@ await stack.subscribe(
 No filter, so this sees everything the session may read. Under a `ScopedStack` that is
 already the right set; the audit log of a scoped session is the audit log of what that
 session could see, which is the only one it could honestly keep.
+
+Two entries this log cannot make, both by design. It never records **whose** record was
+touched — that is the record's `entityId`, which rides the record rather than the envelope
+(D2a), so a log that wants it subscribes with `includeRecords: true`. And a `purged` entry
+carries neither author nor content (D2b), so a hard delete is auditable as "the owner
+destroyed a record of type T at version N" and no further: the erasure is the point.
 
 ## Wire contract — normative
 
@@ -530,9 +624,9 @@ Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 
 ?typeId=          (repeatable; baseId or versioned, matched by baseId)
 ?parentId=        ("null" for root records, as GET /records)
-?entityId=
+?entityId=        (the record's author, not the actor — see D2a)
 ?kind=            (repeatable: created|changed|deleted|purged)
-?include=record
+?include=record   (ignored for kind=purged — see D2b)
 ```
 
 Response: `200 text/event-stream`, a stream of frames.
@@ -545,7 +639,15 @@ id: AA3f1R
 event: record
 data: {"kind":"changed","op":"update","recordId":"1hk153x00001",
        "typeId":"com.example/note@1","version":7,
-       "updatedAt":"2026-08-13T12:00:00.000Z","entityId":"did:key:z6Mk..."}
+       "updatedAt":"2026-08-13T12:00:00.000Z",
+       "actor":{"entityId":"did:key:z6Mk..."}}
+
+id: AA3f1S
+event: record
+data: {"kind":"purged","op":"hard-delete","recordId":"1hk153x00002",
+       "typeId":"com.example/note@1","version":4,
+       "updatedAt":"2026-08-13T12:00:03.000Z",
+       "actor":{"entityId":"did:key:z6MkOwner..."}}
 
 : keepalive
 
@@ -664,6 +766,10 @@ Collected here for the same reason
 - **Never accept a bearer token as a query parameter**, on this endpoint or any other, no
   matter how convenient `EventSource` would make it.
 - **Evaluate readability at mutation time for `purged`**, before the record is destroyed.
+- **Never put the purged record, or anything identifying it, into a `purged` frame.**
+  Holding the record for the readability check above makes it easy to serve it under
+  `?include=record`, and to fill an author field from it. Both defeat the erasure the verb
+  exists to perform — see D2b.
 - **Invalidate per-connection grant caches on `_grant` events.** Caching grants is
   necessary for throughput and unsafe without this.
 - **Close on buffer overflow; never drop a frame silently.** A client that cannot tell it
@@ -697,6 +803,14 @@ State them here so no one designs against a guarantee that isn't offered.
 - **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never
   existed" after the fact, so a consumer that missed a `purged` event finds it only by
   enumerating.
+- **`actor` can be absent, and absent is not a value.** An unscoped `Stack` write has no
+  requester to name, and nothing before
+  [#176](https://github.com/haverstack/core/issues/176) records one at all. A consumer must
+  treat the absence as "unknown" rather than substituting the record's author, which is a
+  different fact (D2a).
+- **A purge is auditable only in outline.** `kind`, `op`, `recordId`, `typeId`, `version`
+  and the actor — never the author or the content (D2b). Deliberate: retaining either
+  would defeat the erasure the verb performs.
 
 ## Work items
 
@@ -705,8 +819,16 @@ server builds against.
 
 **`@haverstack/core`**
 
+> **Ordering:** [#176](https://github.com/haverstack/core/issues/176) — recording the
+> acting identity on mutations — lands before the emitter. `actor` is the envelope's only
+> identity field (D2a), and shipping an emitter that leaves it permanently absent is worse
+> than one that never promised it. #176 also touches `wire-types` and
+> `conformance-fixtures`, so running the two in sequence keeps each serializer and each
+> fixture set to a single edit.
+
 - [ ] `RecordChange`, `ChangeKind`, `ChangeOp`, `ChangeFilter`, `SubscribeOptions` in `types.ts`
 - [ ] Emitter in `Stack`, one emission per version bump, at the points D4 fixes
+- [ ] `actor` populated from the acting identity; never populated on a `purged` frame
 - [ ] `ScopedStack.subscribe()` — `canRead` per event, grants prefetched per subscription
 - [ ] `subscribe()` on `StackClient`; optional `subscribeChanges?()` on `StackRecordAdapter`
 - [ ] `onReset` plumbed from the adapter to the subscriber — a swallowed gap signal is the
@@ -723,6 +845,9 @@ server builds against.
 - [ ] A sequence fixture for resume: connect, mutate, reconnect with `Last-Event-ID`
 - [ ] A sequence fixture for `reset` on an unhonorable cursor
 - [ ] Permission fixture: a record the session cannot read produces no frame
+- [ ] Purge fixture: a `purged` frame requested with `?include=record` carries no `record`
+      and no author (D2b) — the one rule here a server is most likely to get wrong, since
+      it already holds the record at that moment
 
 **`@haverstack/adapter-api`**
 
