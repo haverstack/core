@@ -27,6 +27,7 @@ import type { SchemaDriftViolation } from './schema.js';
 import { validateContent, validateReservedKeys } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
+import type { GroupRole } from './access.js';
 import { firstRecordedAttachment } from './attachment-download.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
@@ -70,6 +71,131 @@ const EMPTY_FAMILY = Symbol('empty-family');
  * itself derived from — so this can't drift from the type.
  */
 const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
+
+/**
+ * Who a grant() / revoke() / listGrants() call targets: a specific entity
+ * (DID), a `_group` Record's roster (by ID), or `null` for the default
+ * grant / default-only listing. See docs/spec/access-control.md § Type-level
+ * grants.
+ */
+export type GrantTarget = EntityId | { groupId: RecordId } | null;
+
+/** Direct (non-roster) match between a stored _grant's content and a GrantTarget. */
+function matchesGrantTarget(content: GrantContent, target: GrantTarget): boolean {
+  if (target !== null && typeof target === 'object') {
+    // Guarded so an absent groupId can't match the absent granteeGroupId on
+    // every entity-targeted and default grant — `undefined === undefined`
+    // would otherwise sweep them all into a revoke aimed at one group.
+    if (!target.groupId) return false;
+    return content.granteeGroupId === target.groupId;
+  }
+  if (target === null) {
+    return !content.granteeEntityId && !content.granteeGroupId;
+  }
+  return content.granteeEntityId === target;
+}
+
+/**
+ * Reject a grant target that names nobody. An empty groupId or entityId is
+ * a caller error that must never reach storage: both are falsy, so a
+ * grantee test written against truthiness reads the stored record as a
+ * *default* grant — every authenticated entity — rather than the group or
+ * entity the caller meant to name. `null` is the only way to say "default".
+ */
+function validateGrantTarget(target: GrantTarget): void {
+  if (target === null) return;
+  if (typeof target === 'string') {
+    if (target.length === 0) {
+      throw new StackQueryError(
+        'A grant target entityId cannot be empty. Pass null for a default grant.',
+      );
+    }
+    return;
+  }
+  if (typeof target.groupId !== 'string' || target.groupId.length === 0) {
+    throw new StackQueryError('A group grant target requires a non-empty groupId.');
+  }
+  // Deliberately not a format check: granteeGroupId is a reference to an
+  // existing Record, and no other reference here is format-validated —
+  // parentId, association recordId and Permission.groupId are all resolved
+  // rather than parsed. A groupId that resolves to nothing denies, which is
+  // the same fail-closed path as a group the requester isn't on.
+}
+
+/**
+ * Whether a stored _grant's target covers `grantee` — a direct DID match,
+ * roster membership (any role) via granteeGroupId when `allowGroup`, or a
+ * default grant when `allowDefault`. A record naming both fields (only
+ * reachable by writing around grant()) requires both to be satisfied.
+ *
+ * Presence, not truthiness, decides which tier a record belongs to: an
+ * empty granteeGroupId names no roster and must fail, never fall through to
+ * the default tier and widen to every authenticated entity.
+ *
+ * Module-level and shared by ScopedStack's access checks and
+ * Stack.listGrants(), which documents itself as using the same resolution —
+ * two copies of this rule would be two chances for a listing and an access
+ * check to disagree about who a grant covers.
+ */
+async function grantCoversGrantee(
+  c: GrantContent,
+  grantee: EntityId,
+  opts: {
+    allowDefault: boolean;
+    allowGroup: boolean;
+    groupRoles: Map<string, GroupRole | null>;
+    resolveRecord: (id: RecordId) => Promise<StackRecord | null>;
+  },
+): Promise<boolean> {
+  const namesEntity = c.granteeEntityId !== undefined;
+  const namesGroup = c.granteeGroupId !== undefined;
+  if (!namesEntity && !namesGroup) return opts.allowDefault;
+  if (namesEntity && c.granteeEntityId !== grantee) return false;
+  if (namesGroup) {
+    if (!opts.allowGroup) return false;
+    if (!c.granteeGroupId) return false;
+    const role = await resolveGroupRoleMemoized(
+      c.granteeGroupId,
+      grantee,
+      opts.groupRoles,
+      opts.resolveRecord,
+    );
+    if (role === null) return false;
+  }
+  return true;
+}
+
+/**
+ * Resolve an entity's role on a `_group` Record's roster, memoized in the
+ * `groupRoles` map the caller supplies. That map is built per operation and
+ * threaded alongside `prefetchedGrants`, so it has exactly the lifetime
+ * prefetchedGrants does: a query examining many Records resolves a given
+ * roster once, and no resolved role outlives the operation that resolved
+ * it. Caching for longer — for the life of a `ScopedStack`, say — would let
+ * a roster change go unnoticed by an instance a caller holds, and removal
+ * from a group is the direction that must never go stale.
+ */
+async function resolveGroupRoleMemoized(
+  groupId: RecordId,
+  entityId: EntityId,
+  groupRoles: Map<string, GroupRole | null>,
+  resolveRecord: (id: RecordId) => Promise<StackRecord | null>,
+): Promise<GroupRole | null> {
+  const key = `${groupId}:${entityId}`;
+  const cached = groupRoles.get(key);
+  if (cached !== undefined) return cached;
+  const group = await resolveRecord(groupId);
+  // Only a real `_group` Record carries a roster. Without the family check
+  // any Record's relationship associations would serve as one, and a group
+  // migrated out of the family would keep resolving after it had stopped
+  // being a group.
+  const role =
+    group && baseIdOf(group.typeId) === SYSTEM_TYPES.GROUP
+      ? groupRoleFromAssociations(group.associations, entityId)
+      : null;
+  groupRoles.set(key, role);
+  return role;
+}
 
 /**
  * System type families grant() refuses to target: a grant on any of them
@@ -2026,8 +2152,9 @@ export class Stack implements StackClient {
 
   /**
    * Create _grant records authorizing entities to act on records of
-   * specific types; null entityId writes a default grant (any
-   * authenticated entity).
+   * specific types; null target writes a default grant (any authenticated
+   * entity); `{ groupId }` targets a `_group` Record's roster instead of a
+   * single entity.
    *
    * Granting an **app** a `-own` action does not contain it the way the
    * suffix suggests: when that app acts for someone, `-own` is read as the
@@ -2037,15 +2164,16 @@ export class Stack implements StackClient {
    * needs, not the suffix that looks narrowest. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
-   * The grantee lives in content.granteeEntityId,
+   * The grantee lives in content.granteeEntityId / content.granteeGroupId,
    * not record.entityId. See docs/spec/access-control.md § Type-level
    * grants.
    */
   async grant(
-    entityId: EntityId | null,
+    target: GrantTarget,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
     this.assertOpen();
+    validateGrantTarget(target);
     this.checkGrantsValid(grants);
     const records: StackRecord[] = [];
     for (const g of grants) {
@@ -2053,7 +2181,8 @@ export class Stack implements StackClient {
         await this.create(`${SYSTEM_TYPES.GRANT}@1`, {
           typeId: g.typeId,
           actions: g.actions,
-          ...(entityId && { granteeEntityId: entityId }),
+          ...(typeof target === 'string' && { granteeEntityId: target }),
+          ...(target !== null && typeof target === 'object' && { granteeGroupId: target.groupId }),
         }),
       );
     }
@@ -2061,36 +2190,53 @@ export class Stack implements StackClient {
   }
 
   /**
-   * List _grant records. Omit `entityId` for all grants; pass null for
-   * only default grants; pass a specific entityId for the grants that
-   * currently apply to that entity (ones naming them, plus every default
-   * grant) — the same resolution hasGrant() uses.
+   * List _grant records. Omit `target` for all grants; pass null for only
+   * default grants; pass `{ groupId }` for grants naming that exact group;
+   * pass a specific entityId for the grants that currently apply to that
+   * entity (ones naming them, ones naming a group they belong to, plus
+   * every default grant) — the same resolution hasGrant() uses.
    */
-  async listGrants(entityId?: EntityId | null): Promise<StackRecord[]> {
+  async listGrants(target?: GrantTarget): Promise<StackRecord[]> {
     this.assertOpen();
+    if (target !== undefined) validateGrantTarget(target);
     const all = await queryAllPages((q) => this.query(q), {
       filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
     });
-    if (entityId === undefined) return all;
-    return all.filter((r) => {
-      const granteeEntityId = (r.content as GrantContent).granteeEntityId;
-      return entityId === null
-        ? !granteeEntityId
-        : !granteeEntityId || granteeEntityId === entityId;
-    });
+    if (target === undefined) return all;
+    if (target === null || typeof target === 'object') {
+      return all.filter((r) => matchesGrantTarget(r.content as GrantContent, target));
+    }
+
+    // target is an EntityId: resolve group rosters, since a grant naming a
+    // group the entity belongs to also currently applies to them. Shares
+    // grantCoversGrantee() with the access checks, so a listing can't
+    // disagree with them about who a grant covers.
+    const groupRoles = new Map<string, GroupRole | null>();
+    const result: StackRecord[] = [];
+    for (const r of all) {
+      const covers = await grantCoversGrantee(r.content as GrantContent, target, {
+        allowDefault: true,
+        allowGroup: true,
+        groupRoles,
+        resolveRecord: (id) => this.get(id),
+      });
+      if (covers) result.push(r);
+    }
+    return result;
   }
 
   /**
-   * The inverse of grant(): soft-deletes _grant records matching `entityId`
+   * The inverse of grant(): soft-deletes _grant records matching `target`
    * (null for default grants) and each `{ typeId, actions }` pair, at the
    * same granularity grant() writes. A soft delete like any other — the
    * owner can undelete a revocation.
    */
   async revoke(
-    entityId: EntityId | null,
+    target: GrantTarget,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<void> {
     this.assertOpen();
+    validateGrantTarget(target);
     const all = await queryAllPages((q) => this.query(q), {
       filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
     });
@@ -2100,7 +2246,7 @@ export class Stack implements StackClient {
       const matches = all.filter((r) => {
         const c = r.content as GrantContent;
         if (baseIdOf(c.typeId) !== familyId) return false;
-        if ((c.granteeEntityId ?? null) !== entityId) return false;
+        if (!matchesGrantTarget(c, target)) return false;
         return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
       });
       for (const match of matches) {
@@ -2179,6 +2325,7 @@ export class Stack implements StackClient {
       typeId: { kind: 'string', required: true },
       actions: { kind: 'array', items: { kind: 'string' }, required: true },
       granteeEntityId: { kind: 'string' },
+      granteeGroupId: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
       fileId: { kind: 'string', required: true },
@@ -2384,12 +2531,25 @@ export class ScopedStack implements StackClient {
       grantee: EntityId | null;
       record?: StackRecord;
       prefetchedGrants?: StackRecord[];
+      groupRoles?: Map<string, GroupRole | null>;
       matchOwn?: boolean;
       allowDefault?: boolean;
+      allowGroup?: boolean;
     },
   ): Promise<boolean> {
-    const { grantee, record, prefetchedGrants, matchOwn = true, allowDefault = true } = opts;
+    const {
+      grantee,
+      record,
+      prefetchedGrants,
+      matchOwn = true,
+      allowDefault = true,
+      allowGroup = true,
+    } = opts;
     if (!grantee) return false;
+    // Absent when the caller has no operation-scoped map to share — one
+    // call's worth of memoization, which is still every grant record in
+    // this loop naming the same group.
+    const groupRoles = opts.groupRoles ?? new Map<string, GroupRole | null>();
 
     const familyId = baseIdOf(typeId);
 
@@ -2411,17 +2571,24 @@ export class ScopedStack implements StackClient {
       });
     }
 
-    return grantRecords.some((r) => {
+    for (const r of grantRecords) {
       const c = r.content as GrantContent;
-      if (baseIdOf(c.typeId) !== familyId) return false;
-      if (!c.granteeEntityId && !allowDefault) return false;
-      if (c.granteeEntityId && c.granteeEntityId !== grantee) return false;
-      return actions.some((action) => {
+      if (baseIdOf(c.typeId) !== familyId) continue;
+      const covers = await grantCoversGrantee(c, grantee, {
+        allowDefault,
+        allowGroup,
+        groupRoles,
+        resolveRecord: this.resolveRecord,
+      });
+      if (!covers) continue;
+      const matches = actions.some((action) => {
         if (!(c.actions as string[]).includes(action)) return false;
         if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
         return true;
       });
-    });
+      if (matches) return true;
+    }
+    return false;
   }
 
   /**
@@ -2436,6 +2603,17 @@ export class ScopedStack implements StackClient {
    * people who turn up, not software the owner installed — an app reaches
    * only the types named to it, which is the whole of what containment
    * promises.
+   *
+   * Group-targeted grants don't count here either, for the same reason one
+   * step removed: a `_group` roster is editable by any of its admins, not
+   * just the stack owner, so a grant reaching a principal through a roster
+   * would let someone other than the owner name an app to a type the owner
+   * never named it to. The rule is about how the authority arrived, not
+   * about who holds it — which is what makes it enforceable, since a
+   * roster entry is an opaque DID and `_app.did` is optional, so nothing
+   * can reliably tell an app's DID from a person's. An owner who means to
+   * grant an app names it directly, one grant at a time.
+   * See docs/spec/access-control.md § Type-level grants.
    */
   private principalAllows(
     typeId: TypeId,
@@ -2449,6 +2627,7 @@ export class ScopedStack implements StackClient {
       prefetchedGrants,
       matchOwn: false,
       allowDefault: false,
+      allowGroup: false,
     });
   }
 
@@ -2464,21 +2643,31 @@ export class ScopedStack implements StackClient {
   private subjectAllows(
     typeId: TypeId,
     actions: GrantAction[],
-    opts: { record?: StackRecord; prefetchedGrants?: StackRecord[] } = {},
+    opts: {
+      record?: StackRecord;
+      prefetchedGrants?: StackRecord[];
+      groupRoles?: Map<string, GroupRole | null>;
+    } = {},
   ): Promise<boolean> {
     return this.hasGrant(typeId, actions, {
       grantee: this.subjectEntityId,
       record: opts.record,
       prefetchedGrants: opts.prefetchedGrants,
+      groupRoles: opts.groupRoles,
     });
   }
 
-  private async canRead(record: StackRecord, prefetchedGrants?: StackRecord[]): Promise<boolean> {
+  private async canRead(
+    record: StackRecord,
+    prefetchedGrants?: StackRecord[],
+    groupRoles?: Map<string, GroupRole | null>,
+  ): Promise<boolean> {
     const reachable =
       (await this.checkRead(record)) ||
       (await this.subjectAllows(record.typeId, ['read-own', 'read-any'], {
         record,
         prefetchedGrants,
+        groupRoles,
       }));
     if (!reachable) return false;
     return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
@@ -2580,11 +2769,12 @@ export class ScopedStack implements StackClient {
           filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
         })
       : undefined;
+    const groupRoles = new Map<string, GroupRole | null>();
 
     const match = await findFirstMatch(
       (q) => this.stack.query(q),
       { filter: { attachmentFileId: fileId } },
-      (record) => this.canRead(record, prefetchedGrants),
+      (record) => this.canRead(record, prefetchedGrants, groupRoles),
     );
     return match !== undefined;
   }
@@ -2777,13 +2967,17 @@ export class ScopedStack implements StackClient {
           filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
         })
       : undefined;
+    // Scoped to this query, like prefetchedGrants beside it: every
+    // candidate Record shares one roster resolution per group, and nothing
+    // is carried into the next operation.
+    const groupRoles = new Map<string, GroupRole | null>();
 
     let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       totalFetched += page.records.length;
       for (const record of page.records) {
-        if (await this.canRead(record, prefetchedGrants)) records.push(record);
+        if (await this.canRead(record, prefetchedGrants, groupRoles)) records.push(record);
       }
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 

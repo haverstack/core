@@ -2185,6 +2185,51 @@ describe('grant', () => {
     ]);
     expect(records).toHaveLength(1);
   });
+
+  test('creates a group-targeted grant record', async () => {
+    const records = await stack.grant({ groupId: 'group-abc' }, [
+      { actions: ['read-any'], typeId: NOTE_V1 },
+    ]);
+    expect(records).toHaveLength(1);
+    expect(records[0].content).toEqual({
+      typeId: NOTE_V1,
+      actions: ['read-any'],
+      granteeGroupId: 'group-abc',
+    });
+  });
+
+  test('rejects a group-targeted grant on _grant@1', async () => {
+    await expect(
+      stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: '_grant@1' }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // An empty or absent target names nobody, and both are falsy — a grantee
+  // test written against truthiness would read the stored record as a
+  // default grant and hand the type to every authenticated entity. null is
+  // the only way to say "default".
+  test('rejects a group target with an empty groupId', async () => {
+    await expect(
+      stack.grant({ groupId: '' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]),
+    ).rejects.toThrow(StackQueryError);
+    expect(await stack.listGrants()).toHaveLength(0);
+  });
+
+  test('rejects a group target with a missing groupId', async () => {
+    await expect(
+      stack.grant({ groupId: undefined as unknown as string }, [
+        { actions: ['read-any'], typeId: NOTE_V1 },
+      ]),
+    ).rejects.toThrow(StackQueryError);
+    expect(await stack.listGrants()).toHaveLength(0);
+  });
+
+  test('rejects an empty entityId target', async () => {
+    await expect(stack.grant('', [{ actions: ['read-any'], typeId: NOTE_V1 }])).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(await stack.listGrants()).toHaveLength(0);
+  });
 });
 
 // -------------------------------------------------------
@@ -2217,6 +2262,64 @@ describe('listGrants', () => {
     const actionSets = grants.map((g) => (g.content as { actions: string[] }).actions);
     expect(actionSets).toContainEqual(['create']);
     expect(actionSets).toContainEqual(['read-any']);
+  });
+
+  test('a groupId target returns grants naming that exact group', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant({ groupId: 'group-xyz' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-abc', [{ actions: ['update-own'], typeId: NOTE_V1 }]);
+
+    const grants = await stack.listGrants({ groupId: 'group-abc' });
+    expect(grants).toHaveLength(1);
+    expect(grants[0].content).toMatchObject({ actions: ['create'] });
+  });
+
+  test('an entityId target also returns grants naming a group the entity belongs to', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: 'entity-abc',
+    });
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-xyz', [{ actions: ['delete-own'], typeId: NOTE_V1 }]);
+
+    const grants = await stack.listGrants('entity-abc');
+    expect(grants).toHaveLength(1);
+    expect(grants[0].content).toMatchObject({ actions: ['read-any'] });
+  });
+
+  // listGrants() documents itself as using the same resolution the access
+  // checks use, so it shares grantCoversGrantee() with them. A listing that
+  // claimed a grant applied where an access check denied it would be worse
+  // than no listing at all.
+  test('a grant naming a record outside the _group family is not reported as applying', async () => {
+    const notAGroup = await stack.create(NOTE_V1, { text: 'not a group' });
+    await stack.associate(notAGroup.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: 'entity-abc',
+    });
+    await stack.grant({ groupId: notAGroup.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+
+    expect(await stack.listGrants('entity-abc')).toHaveLength(0);
+  });
+
+  test('a group target naming no group is refused rather than over-reporting', async () => {
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await expect(stack.listGrants({ groupId: '' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('an entityId target does not return a group grant for a group the entity does not belong to', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: 'entity-xyz',
+    });
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+
+    expect(await stack.listGrants('entity-abc')).toHaveLength(0);
   });
 });
 
@@ -2268,6 +2371,35 @@ describe('revoke', () => {
     await stack.grant(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
     await stack.revoke(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
     expect(await stack.listGrants(null)).toHaveLength(0);
+  });
+
+  test('a groupId target revokes the grant matching that exact group', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.revoke({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants({ groupId: 'group-abc' })).toHaveLength(0);
+  });
+
+  test('a groupId target does not affect a grant for a different group or an entity', async () => {
+    await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant({ groupId: 'group-xyz' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.revoke({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants()).toHaveLength(2);
+  });
+
+  // A target naming no group must not match the absent granteeGroupId on
+  // every entity-targeted and default grant, which is what an unguarded
+  // `undefined === undefined` comparison would do.
+  test('a group target naming no group is refused, leaving other grants standing', async () => {
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant(null, [{ actions: ['create'], typeId: NOTE_V1 }]);
+
+    await expect(
+      stack.revoke({ groupId: undefined as unknown as string }, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).rejects.toThrow(StackQueryError);
+    expect(await stack.listGrants()).toHaveLength(2);
   });
 });
 

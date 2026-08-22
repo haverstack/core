@@ -824,6 +824,227 @@ describe('ScopedStack — grant-based read', () => {
 });
 
 // -------------------------------------------------------
+// ScopedStack — group-targeted grants
+// -------------------------------------------------------
+
+describe('ScopedStack — group-targeted grants', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+  });
+
+  test('group member can create via a group-targeted create grant', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' });
+    expect(record.content.text).toBe('hi');
+  });
+
+  test('group admin also satisfies a group-targeted grant — no admin-only tier', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'admin', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+  });
+
+  test('non-member cannot act via a group-targeted grant', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'hello' });
+    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('group grant is visible in query() results for a member', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+    await stack.create(COMMENT, { text: 'a' });
+    await stack.create(COMMENT, { text: 'b' });
+    const result = await stack.asEntity(MEMBER).query({ filter: { typeId: COMMENT } });
+    expect(result.records).toHaveLength(2);
+  });
+
+  test('a revoked group grant no longer applies', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
+    await stack.revoke({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Resolving a group roster costs a record fetch; memoizing per
+  // ScopedStack instance keeps a query examining many records from
+  // re-walking the same roster once per candidate — see
+  // docs/spec/access-control.md § Type-level grants.
+  test('roster resolution for a group-targeted grant is memoized within one request', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+    for (let i = 0; i < 5; i++) {
+      await stack.create(COMMENT, { text: `comment ${i}` });
+    }
+
+    const getSpy = vi.spyOn(stack, 'get');
+    const view = stack.asEntity(MEMBER);
+    const result = await view.query({ filter: { typeId: COMMENT } });
+    expect(result.records).toHaveLength(5);
+    const groupFetches = getSpy.mock.calls.filter(([id]) => id === group.id);
+    expect(groupFetches).toHaveLength(1);
+  });
+
+  // A `_group` roster is editable by any of its admins, not just the stack
+  // owner, so a grant that reached a principal through a roster would let
+  // someone other than the owner name an app to a type the owner never
+  // named it to. See docs/spec/access-control.md § Type-level grants.
+  test('a group-targeted grant does not give a delegated principal authority', async () => {
+    const APP = 'did:key:z6MkApp';
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: APP }],
+      }),
+    );
+    // Both halves of the intersection are otherwise satisfied: the subject
+    // holds a direct grant, and the app is on the granted group's roster.
+    await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: MEMBER }).create(COMMENT, { text: 'hi' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a directly named app still reaches the subject through the intersection', async () => {
+    const APP = 'did:key:z6MkApp';
+    await stack.grant(APP, [{ actions: ['create'], typeId: COMMENT }]);
+
+    // The subject needs its own standing too — authority intersects.
+    await expect(
+      stack.asEntity(APP, { onBehalfOf: MEMBER }).create(COMMENT, { text: 'hi' }),
+    ).rejects.toThrow(StackPermissionError);
+
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(MEMBER);
+    expect(record.principalId).toBe(APP);
+  });
+
+  test('a group-targeted grant still applies to the subject under delegation', async () => {
+    const APP = 'did:key:z6MkApp';
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+      }),
+    );
+    // Only the principal side refuses roster-derived authority; the subject
+    // is the entity a grant is written about, so its group grant counts.
+    await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
+    await stack.grant(APP, [{ actions: ['create'], typeId: COMMENT }]);
+
+    const record = await stack
+      .asEntity(APP, { onBehalfOf: MEMBER })
+      .create(COMMENT, { text: 'hi' });
+    expect(record.entityId).toBe(MEMBER);
+  });
+
+  test('a grant naming a record outside the _group family confers nothing', async () => {
+    // Any Record's relationship associations would otherwise serve as a
+    // roster, and a group migrated out of the family would keep resolving.
+    const notAGroup = await stack.create(COMMENT, { text: 'not a group' });
+    await stack.associate(notAGroup.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: MEMBER,
+    });
+    await stack.grant({ groupId: notAGroup.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+
+    const target = await stack.create(COMMENT, { text: 'secret' });
+    await expect(stack.asEntity(MEMBER).get(target.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an empty granteeGroupId denies rather than widening to a default grant', async () => {
+    // grant() refuses to write this; a _grant Record is an ordinary Record,
+    // so evaluation has to refuse it again. Falling through to the default
+    // tier here would grant the type to every authenticated entity.
+    await adapter.createRecord(
+      makeRecord({
+        typeId: '_grant@1',
+        content: { typeId: COMMENT, actions: ['read-any'], granteeGroupId: '' },
+      }),
+    );
+    const record = await stack.create(COMMENT, { text: 'secret' });
+    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('an empty granteeEntityId denies rather than widening to a default grant', async () => {
+    await adapter.createRecord(
+      makeRecord({
+        typeId: '_grant@1',
+        content: { typeId: COMMENT, actions: ['read-any'], granteeEntityId: '' },
+      }),
+    );
+    const record = await stack.create(COMMENT, { text: 'secret' });
+    await expect(stack.asEntity(STRANGER).get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  // Roster resolution is memoized for one operation, not for the life of
+  // the ScopedStack: asEntity() returns an object a caller may hold, and a
+  // cache outliving the operation would let removal from a group go
+  // unnoticed — the direction that must never go stale.
+  test('a roster change takes effect on a ScopedStack that has already been used', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: MEMBER,
+    });
+    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
+    const record = await stack.create(COMMENT, { text: 'secret' });
+
+    const view = stack.asEntity(MEMBER);
+    expect((await view.get(record.id))?.id).toBe(record.id);
+
+    await stack.dissociate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      recordId: MEMBER,
+    });
+    await expect(view.get(record.id)).rejects.toThrow(StackPermissionError);
+  });
+});
+
+// -------------------------------------------------------
 // ScopedStack — grant-based update/delete
 // -------------------------------------------------------
 

@@ -55,7 +55,9 @@ A Grant authorises one or more Entities to perform specific actions on Records o
 type GrantContent = {
   typeId: TypeId; // Which record type this grant covers
   actions: GrantAction[]; // Which actions are permitted
-  granteeEntityId?: string; // Who the grant applies to — a DID. Absent = default grant (any authenticated entity).
+  granteeEntityId?: string; // Who the grant applies to — a DID. Mutually exclusive with granteeGroupId.
+  granteeGroupId?: string; // A `_group` Record ID whose roster the grant applies to (any member or admin). Mutually exclusive with granteeEntityId; never satisfies a delegated principal.
+  // Both absent = default grant (any authenticated entity). Empty is not "absent" — a grant must name someone.
 };
 
 type GrantAction =
@@ -68,9 +70,9 @@ type GrantAction =
   | 'delete-any'; // Delete all records of this type
 ```
 
-The grantee lives in `content.granteeEntityId`, not `record.entityId`. `entityId` means "author" on every other Record in the system, and a `_grant` Record is always authored by the stack owner (the only caller of `grant()`) — never by the entity it names. A grant Record therefore carries no `entityId` of its own, and "everything this entity authored" queries (`filter: { entityId }`) don't pick up grants that merely name that entity.
+The grantee lives in `content.granteeEntityId` / `content.granteeGroupId`, not `record.entityId`. `entityId` means "author" on every other Record in the system, and a `_grant` Record is always authored by the stack owner (the only caller of `grant()`) — never by the entity or group it names. A grant Record therefore carries no `entityId` of its own, and "everything this entity authored" queries (`filter: { entityId }`) don't pick up grants that merely name that entity.
 
-`Stack.grant()` is the owner-facing helper for creating grant records; `Stack.listGrants(entityId?)` and `Stack.revoke(entityId, grants)` are the read/undo counterparts:
+`Stack.grant()` is the owner-facing helper for creating grant records; `Stack.listGrants(target?)` and `Stack.revoke(target, grants)` are the read/undo counterparts. `target` is `EntityId | { groupId: RecordId } | null`:
 
 ```ts
 // Grant a specific entity permission to create comments and manage their own
@@ -78,17 +80,26 @@ await stack.grant('bob-entity-id', [
   { typeId: 'com.example/comment@1', actions: ['create', 'read-own', 'update-own', 'delete-own'] },
 ]);
 
-// Default grant — applies to any authenticated entity (no granteeEntityId in content)
+// Grant a _group Record's roster — any member or admin qualifies
+await stack.grant({ groupId: 'editors-group-id' }, [
+  { typeId: 'com.example/comment@1', actions: ['create', 'read-any'] },
+]);
+
+// Default grant — applies to any authenticated entity (no granteeEntityId/granteeGroupId in content)
 await stack.grant(null, [{ typeId: 'com.example/comment@1', actions: ['create', 'read-own'] }]);
 
 await stack.listGrants(); // every grant record, any grantee
 await stack.listGrants(null); // only default grants
-await stack.listGrants('bob-entity-id'); // grants naming Bob, plus every default grant — what currently applies to him
+await stack.listGrants('bob-entity-id'); // grants naming Bob, grants naming a group he belongs to, plus every default grant — what currently applies to him
+await stack.listGrants({ groupId: 'editors-group-id' }); // grants naming that exact group
 
-// The inverse of grant(): soft-deletes the _grant record(s) matching entityId
+// The inverse of grant(): soft-deletes the _grant record(s) matching target
 // (null for a default grant) and each { typeId, actions } pair, matched by
 // typeId baseId and action set — the same granularity grant() writes at.
 await stack.revoke('bob-entity-id', [{ typeId: 'com.example/comment@1', actions: ['create'] }]);
+await stack.revoke({ groupId: 'editors-group-id' }, [
+  { typeId: 'com.example/comment@1', actions: ['create'] },
+]);
 ```
 
 A revocation is a soft delete like any other mutation — the owner can `undelete()` it the same as an accidental delete anywhere else.
@@ -105,10 +116,18 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 **The fence is on writes only.** `get()`, `query()`, `getVersions()` and `getVersion()` on a `_grant` Record stay on their ordinary gates. Reading how a Record you can already reach came to be is not the escalation the fence exists to stop, and taking history away would leave a write-holder unable to audit the grant they hold — [history](./versioning.md#history-access) is the recovery surface, so losing it costs more than it protects. Snapshot `permissions` are stripped there as everywhere, so a grant's history discloses no more of the sharing graph than its current state does. `restoreVersion()` is a write and stays refused, even though reading the snapshot it would restore does not. `_config` is already unreachable through `Stack.get()`; `_app` keeps record-level `write` for its display fields, fenced only on the bindings a trust decision reads (see [DID bindings](./identity.md#did-bindings)).
 
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
-- **Default grants** (no `granteeEntityId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant. They also **do not count on the principal's side** of a delegated request (see [Delegation](#delegation-principal-and-subject)): "any authenticated entity" means the people who turn up, not software the owner installed, so a contained app reaches only the types it is named in.
+- **Default grants** (no `granteeEntityId`/`granteeGroupId` in content): apply to any authenticated entity. Useful for "any logged-in user can comment" scenarios. Anonymous requesters (no `entityId`) are always denied, even under a default grant. They also **do not count on the principal's side** of a delegated request (see [Delegation](#delegation-principal-and-subject)): "any authenticated entity" means the people who turn up, not software the owner installed, so a contained app reaches only the types it is named in.
 - **Actions are independent**: `'create'` does not imply `'read-own'`, and so on. `['create', 'read-own', 'update-own', 'delete-own']` is a common bundle for contributor access, but each action must be listed explicitly.
 - **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester. Records with no `entityId` (written by an unscoped `Stack`) do not satisfy any `-own` check.
 - **The grantee may be an app**: `granteeEntityId` is a DID, and an app that holds its own key has one — so granting an installed app the types it needs is the existing model applied, not new machinery (see [App](./identity.md#app)). When such an app acts for a person, the `-own`/`-any` distinction on _its_ grant collapses to the bare verb; see [Delegation](#delegation-principal-and-subject).
+- **Group-targeted grants match any roster role.** A `granteeGroupId` grant is satisfied by any entity holding a `member` or `admin` association on the named `_group` Record — unlike record-level `access: 'group'` permissions, there's no `role: 'admin'` narrowing on the grant side; a set of grantees is undifferentiated by role, so the narrower record-level shape doesn't carry over. `granteeEntityId` and `granteeGroupId` are mutually exclusive on grants written through `grant()`; a `_grant` Record naming both (only reachable by writing around it) requires both to be satisfied, consistent with the refuse-again-at-evaluation posture above. The named Record must be in the `_group` family: any Record's `relationship` associations would otherwise serve as a roster, and a group migrated out of the family would keep resolving after it had stopped being a group.
+- **Group-targeted grants do not count on the principal's side** of a delegated request, for the same reason default grants don't (see [Delegation](#delegation-principal-and-subject)) — one step removed. A `_group` roster is editable by any of its admins, not only by the stack owner, so a grant reaching a principal through a roster would let someone other than the owner name an app to a type the owner never named it to. The rule is about **how the authority arrived, not who holds it**, which is what makes it enforceable: a roster entry is an opaque DID and an `_app` Record's `did` is optional, so nothing can reliably tell an app's DID from a person's. An owner who means to grant an app names it directly, one grant at a time — the same shape as any other capability system that has to name software. Group grants still apply to the **subject** under delegation; only the principal half refuses them.
+- **A grant target must name someone.** `grant()`, `revoke()` and `listGrants()` reject an empty `entityId` or an empty or absent `groupId` with `StackQueryError`. `null` is the only way to say "default grant": both an empty string and an absent field are falsy, so a target that names nobody would otherwise be stored as — and evaluated as — a grant to every authenticated entity. Evaluation refuses the same shape again, so a `_grant` Record carrying an empty `granteeEntityId` or `granteeGroupId` confers nothing however it came to exist. The `groupId` itself is **not** format-checked: it is a reference to an existing Record, like `parentId` or an association's `recordId`, and one that resolves to nothing simply denies.
+- **Group roster resolution is memoized per operation.** Resolving `granteeGroupId` re-fetches the `_group` Record the same way `access: 'group'` permission resolution does (walking `relationship` associations), so it costs the same per-group lookup. The resolved roles are cached for the lifetime of one operation and threaded alongside `prefetchedGrants` — exactly the lifetime that has — so a `query()` examining many Records resolves a given roster once instead of once per candidate. Deliberately **not** cached for the life of a `ScopedStack`: `asEntity()`/`forSession()` return an object a caller may hold for as long as it likes, and a cache outliving the operation would let removal from a group go unnoticed by that instance. Revocation is the direction an authorization cache must never fail in.
+
+**Granting a group grants everyone its admins ever add.** A `_group` roster is managed by the stack owner _and_ by any entity holding an `admin` association on it, and an admin may appoint further admins. So a group-targeted grant is a standing delegation, not a fixed list: whoever holds `admin` on that group decides, from then on, who the grant reaches. This is what delegating group management means, and it is bounded in two ways — the owner outranks the roster, so ownership can never be locked out of a group and pruning is always available; and roster-derived authority stops at the principal boundary (above), so it can never reach an app acting for someone. An owner who wants a roster only they can change appoints no other admins: a group begins with exactly one admin, its creator, and plain members hold no roster authority at all. Where one group would need two levels of trust, use two groups.
+
+**Groups are intended for people, and nothing enforces that.** A roster entry is an opaque DID; the system has no notion of "person" to check against, and an `_app` Record's `did` field is optional, so an app operating without one is indistinguishable from a person. Treat "members are people" as a convention of your own data, never as a guarantee the library upholds — the guarantee that _does_ hold is the principal-side rule above, which is written to be independent of telling the two apart.
 
 **The two layers deliberately use different granularities.** Record-level `write` is one coarse bit (above); grants are precise per verb. Type-wide access for a third-party app warrants verb precision in a way per-record sharing among intimates doesn't. `associate()`/`dissociate()` don't get their own grant action — they ride `update-own`/`update-any`, the same as content changes, keeping the grant vocabulary from growing a verb for every mutation kind.
 
@@ -197,6 +216,8 @@ Neither party can lend the other reach it lacks. This matters because the princi
 
 On the principal's side of the intersection, **`-own` and `-any` mean the same thing**: the question asked of the app is only whether it may perform this verb on this type at all, since which Records are reachable is settled by the subject. The suffix keeps its ordinary meaning for every undelegated principal.
 
+**Only a grant naming the principal directly counts on its side.** Neither a default grant nor a group-targeted one satisfies the principal half — both would let an app be named by someone other than the owner (by nobody at all, or by any admin of a granted group), and containment rests on the owner having named it. Both still count on the **subject's** side, where they mean what they ordinarily do. See [Type-level grants](#type-level-grants).
+
 Two consequences worth stating plainly rather than leaving to be discovered:
 
 - **Per-app isolation on a shared type is not offered.** Two apps both granted `commons/note@1` for the same person see the same notes. Containment is per type — an app reaches only the types the owner granted it — which is what keeps shared commons types interoperable by default.
@@ -225,4 +246,4 @@ Reading or writing a Record that exists but isn't accessible throws `StackPermis
 
 ### Known limitation
 
-`ScopedStack`'s group-membership check only resolves `_group` Records living in the same stack as the Record being accessed — it does not yet implement the cross-stack case described above. A server relying on cross-stack groups must still handle that case itself.
+`ScopedStack`'s group-membership check only resolves `_group` Records living in the same stack as the Record being accessed — it does not yet implement the cross-stack case described above. A server relying on cross-stack groups must still handle that case itself. The same limitation applies to `granteeGroupId` resolution for type-level grants (above): a group-targeted grant only resolves a roster in the same stack as the `_grant` Record.

@@ -272,8 +272,22 @@ export type GrantContent = {
   typeId: TypeId;
   /** Which actions are permitted. */
   actions: GrantAction[];
-  /** Who the grant applies to. Absent = default grant, applies to any authenticated entity. */
+  /**
+   * Who the grant applies to — a DID. Mutually exclusive with
+   * granteeGroupId. Both absent = default grant, applies to any
+   * authenticated entity.
+   */
   granteeEntityId?: EntityId;
+  /**
+   * A `_group` Record ID whose roster the grant applies to — any member or
+   * admin qualifies. Mutually exclusive with granteeEntityId.
+   *
+   * Never satisfies the principal half of a delegated request: a roster is
+   * editable by any of the group's admins, so roster-derived authority
+   * would let someone other than the owner name an app to a type. See
+   * docs/spec/access-control.md § Type-level grants.
+   */
+  granteeGroupId?: RecordId;
 };
 
 /** Content for _attachment records — one per upload, tracks file metadata. */
