@@ -1226,3 +1226,131 @@ describe('flush', () => {
     await expect(adapter.flush()).resolves.toBeUndefined();
   });
 });
+
+// -------------------------------------------------------
+// Actor attribution
+// -------------------------------------------------------
+
+describe('actor attribution', () => {
+  const ACTOR = 'did:key:zActor';
+  const OTHER = 'did:key:zOther';
+  const APP = 'did:key:zApp';
+
+  test('createRecord persists the actor columns', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const created = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const read = await adapter.getRecord(created.id);
+    expect(read?.updatedBy).toBe(ACTOR);
+    expect(read?.updatedVia).toBeUndefined();
+    await adapter.close();
+  });
+
+  test('every mutating verb restamps the actor', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+
+    await adapter.patchContent(r.id, { text: 'v2' }, { updatedBy: OTHER, updatedVia: APP });
+    let read = await adapter.getRecord(r.id);
+    expect([read?.updatedBy, read?.updatedVia]).toEqual([OTHER, APP]);
+
+    await adapter.associate(r.id, { kind: 'tag', label: 'x' }, { updatedBy: ACTOR });
+    read = await adapter.getRecord(r.id);
+    expect([read?.updatedBy, read?.updatedVia]).toEqual([ACTOR, undefined]);
+
+    await adapter.dissociate(r.id, { kind: 'tag', label: 'x' }, { updatedBy: OTHER });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+
+    await adapter.setPermissions(r.id, [{ access: 'public' }], { updatedBy: ACTOR });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+
+    await adapter.deleteRecord(r.id, { updatedBy: OTHER });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+
+    await adapter.undeleteRecord(r.id, { updatedBy: ACTOR });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+
+    await adapter.commitMigration(
+      r.id,
+      'com.example.test/note@1',
+      { text: 'm' },
+      {
+        updatedBy: OTHER,
+      },
+    );
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+    await adapter.close();
+  });
+
+  test('a mutation naming no actor clears the previous one', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+
+    await adapter.patchContent(r.id, { text: 'v2' }, {});
+
+    const read = await adapter.getRecord(r.id);
+    expect(read?.updatedBy).toBeUndefined();
+    expect(read?.entityId).toBe(ACTOR);
+    await adapter.close();
+  });
+
+  test('version snapshots round-trip the actor', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+
+    await adapter.patchContent(
+      r.id,
+      { text: 'v2' },
+      {
+        updatedBy: OTHER,
+        snapshot: {
+          version: 1,
+          typeId: r.typeId,
+          content: r.content,
+          updatedAt: r.updatedAt,
+          entityId: ACTOR,
+          updatedBy: ACTOR,
+          updatedVia: APP,
+        },
+      },
+    );
+
+    const [v1] = await adapter.getVersions(r.id);
+    expect(v1.entityId).toBe(ACTOR);
+    expect(v1.updatedBy).toBe(ACTOR);
+    expect(v1.updatedVia).toBe(APP);
+    await adapter.close();
+  });
+
+  test('restoreVersion stamps the restorer, not the restored version', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+
+    await adapter.patchContent(
+      r.id,
+      { text: 'v2' },
+      {
+        updatedBy: OTHER,
+        snapshot: {
+          version: 1,
+          typeId: r.typeId,
+          content: r.content,
+          updatedAt: r.updatedAt,
+          entityId: ACTOR,
+          updatedBy: ACTOR,
+        },
+      },
+    );
+
+    await adapter.restoreVersion(r.id, 1, { updatedBy: APP });
+
+    const read = await adapter.getRecord(r.id);
+    expect(read?.content.text).toBe('Hello world');
+    expect(read?.updatedBy).toBe(APP);
+    await adapter.close();
+  });
+});

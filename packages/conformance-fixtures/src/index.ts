@@ -194,7 +194,9 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       'entirely, discarding both values the client sent. These are the two fields that answer ' +
       '"who did this", and principalId exists to be the one a client cannot assert: honouring ' +
       'it would let any requester dress a write up as a verified app action and defeat the _app ' +
-      'cross-check that reads it. appId is the deliberate exception, self-reported by design. ' +
+      'cross-check that reads it. updatedBy and updatedVia answer the same question about the ' +
+      'mutation rather than the record, so they are assigned and ignored on the same terms. ' +
+      'appId is the deliberate exception, self-reported by design. ' +
       'See docs/spec/wire-format.md § Records.',
     method: 'POST',
     path: '/records',
@@ -207,6 +209,8 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       version: 1,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       principalId: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      updatedBy: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      updatedVia: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
       appId: 'com.example.myapp',
     },
     responseStatus: 200,
@@ -218,6 +222,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       content: { title: 'Forged', body: 'World' },
       version: 1,
       entityId: 'entity-contributor-789',
+      updatedBy: 'entity-contributor-789',
       appId: 'com.example.myapp',
     },
   },
@@ -250,6 +255,8 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       version: 1,
       entityId: 'entity-contributor-789',
       principalId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      updatedBy: 'entity-contributor-789',
+      updatedVia: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       appId: 'com.example.blog',
     },
   },
@@ -450,6 +457,29 @@ export const queryRecordsFixtures: ConformanceFixture<
 
 export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
+    name: 'patch-record-restamps-the-actor',
+    description:
+      'A write by someone other than the author moves updatedBy to the requester and leaves ' +
+      'entityId alone — the record keeps its author, and gains a record of who last changed ' +
+      'it. Under delegation updatedVia names the app alongside it, exactly as principalId does ' +
+      'for the create. Both are assigned from the session and ignored on input, like entityId ' +
+      'and principalId. See docs/spec/data-model.md § Authorship and attribution.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { title: 'edited by a contributor' },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'edited by a contributor' },
+      version: 2,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      updatedBy: 'entity-contributor-789',
+    },
+  },
+  {
     name: 'patch-content-merges-and-adds-fields',
     description:
       'The PATCH body carries only the content patch — never typeId, version, or updatedAt. ' +
@@ -616,7 +646,9 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
     name: 'get-versions-non-owner-write-holder-strips-permissions',
     description:
       'GET /records/:id/versions for a non-owner write-holder — who passes the mutate-surface ' +
-      'gate above — omits permissions from every returned snapshot. entityId is not stripped.',
+      'gate above — omits permissions from every returned snapshot. entityId is not stripped, ' +
+      'nor are updatedBy/updatedVia: they are the same class of fact as the author a reader ' +
+      'already sees on the live record.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
@@ -627,6 +659,7 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
         content: { title: 'original title' },
         updatedAt: '2024-01-01T00:00:00.000Z',
         entityId: 'entity-contributor-789',
+        updatedBy: 'entity-contributor-789',
       },
     ],
   },

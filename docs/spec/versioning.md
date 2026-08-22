@@ -13,6 +13,8 @@ type RecordVersion = {
   content: object;
   updatedAt: Date;
   entityId?: string; // The Record's author, carried through from the snapshot
+  updatedBy?: string; // Who performed the mutation that produced this version
+  updatedVia?: string; // The principal behind it, when it isn't updatedBy
   associations?: Association[]; // Present if the record had associations at snapshot time
   permissions?: Permission[]; // Present if the record had permissions at snapshot time
 };
@@ -20,7 +22,7 @@ type RecordVersion = {
 
 `typeId` makes a version entry interpretable regardless of migration state: a snapshot taken before a migration records the pre-migration type, so restoring it later doesn't mislabel `@1`-shaped content as `@2`. It's also what lets `_grant` baseId matching work independent of which version a snapshot predates.
 
-**`entityId` on a version is authorship, not attribution of the change.** It is the Record's own `entityId` copied into the snapshot, and `entityId` is stamped once by `create()` and never moves — so every version of a Record reports the same author, whoever performed the mutation that produced it. Where a write-holder who is not the author edits a Record, or an app edits it on someone's behalf, the version history does not record which of them did so. **A version history is a record of states, not of actors**, and nothing in a `RecordVersion` should be read as an audit trail of who did what.
+**`entityId` on a version is authorship; `updatedBy` is attribution of the change.** `entityId` is the Record's own author copied into the snapshot, and it never moves — so every version reports the same author. `updatedBy` is the requester that produced _that_ version, with `updatedVia` naming the principal beside it under delegation. The two agree at version 1 and diverge whenever anyone but the author writes. See [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution).
 
 **API surface:**
 

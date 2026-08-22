@@ -4,6 +4,7 @@ import type {
   StackType,
   TypeId,
   RecordVersion,
+  ActorOptions,
   StackQuery,
   QueryResult,
   Association,
@@ -61,8 +62,21 @@ export class MemoryAdapter implements StackAdapter {
     return this.records.get(id) ?? null;
   }
 
-  private bump(record: StackRecord): StackRecord {
-    return { ...record, version: record.version + 1, updatedAt: new Date() };
+  /**
+   * Advance a record one version, restamping the actor. An absent actor
+   * clears the previous one rather than inheriting it — an unscoped write
+   * names no requester, and carrying the last one forward would attribute
+   * it to whoever happened to touch the record before.
+   */
+  private bump(record: StackRecord, actor: ActorOptions = {}): StackRecord {
+    const { updatedBy: _by, updatedVia: _via, ...rest } = record;
+    return {
+      ...rest,
+      version: record.version + 1,
+      updatedAt: new Date(),
+      ...(actor.updatedBy && { updatedBy: actor.updatedBy }),
+      ...(actor.updatedVia && { updatedVia: actor.updatedVia }),
+    };
   }
 
   /** Opt-in CAS check mirroring the real adapters' expectedVersion contract. */
@@ -94,20 +108,27 @@ export class MemoryAdapter implements StackAdapter {
   async patchContent(
     id: string,
     patch: Record<string, unknown | null>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump({ ...existing, content: applyMergePatch(existing.content, patch) });
+    const updated = this.bump(
+      { ...existing, content: applyMergePatch(existing.content, patch) },
+      opts,
+    );
     this.records.set(id, updated);
     return updated;
   }
 
   async deleteRecord(
     id: string,
-    opts: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: {
+      hard?: boolean;
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+    } & ActorOptions = {},
   ) {
     if (opts.hard) {
       const record = this.records.get(id);
@@ -119,21 +140,21 @@ export class MemoryAdapter implements StackAdapter {
       if (record) {
         this.checkExpectedVersion(record, opts.expectedVersion);
         if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-        this.records.set(id, this.bump({ ...record, deletedAt: new Date() }));
+        this.records.set(id, this.bump({ ...record, deletedAt: new Date() }, opts));
       }
     }
   }
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const { deletedAt: _deletedAt, ...rest } = record;
-    const updated = this.bump(rest as StackRecord);
+    const updated = this.bump(rest as StackRecord, opts);
     this.records.set(id, updated);
     return updated;
   }
@@ -227,39 +248,39 @@ export class MemoryAdapter implements StackAdapter {
   async associate(
     id: string,
     association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const assocs = record.associations ?? [];
-    this.records.set(id, this.bump(withAssociations(record, [...assocs, association])));
+    this.records.set(id, this.bump(withAssociations(record, [...assocs, association]), opts));
   }
 
   async dissociate(
     id: string,
     association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
-    this.records.set(id, this.bump(withAssociations(record, assocs)));
+    this.records.set(id, this.bump(withAssociations(record, assocs), opts));
   }
 
   async setPermissions(
     id: string,
     permissions: Permission[],
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    this.records.set(id, this.bump({ ...record, permissions }));
+    this.records.set(id, this.bump({ ...record, permissions }, opts));
   }
 
   async getVersions(id: string) {
@@ -326,7 +347,7 @@ export class MemoryAdapter implements StackAdapter {
   async restoreVersion(
     id: string,
     version: number,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
@@ -337,7 +358,7 @@ export class MemoryAdapter implements StackAdapter {
     const merged = { ...record, typeId: target.typeId, content: target.content };
     const withAssoc =
       target.associations !== undefined ? withAssociations(merged, target.associations) : merged;
-    const updated = this.bump(withAssoc);
+    const updated = this.bump(withAssoc, opts);
     this.records.set(id, updated);
     return updated;
   }
@@ -346,13 +367,13 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump({ ...record, typeId: toTypeId, content });
+    const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
     this.records.set(id, updated);
     return updated;
   }

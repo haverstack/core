@@ -18,6 +18,8 @@ export const RECORD_SCHEMA_SQL = `
     entity_id   TEXT,
     app_id      TEXT,
     principal_id TEXT,
+    updated_by  TEXT,
+    updated_via TEXT,
     deleted_at  INTEGER,
     permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
   ) STRICT;
@@ -38,6 +40,8 @@ export const RECORD_SCHEMA_SQL = `
     content     TEXT NOT NULL CHECK (json_valid(content)),
     updated_at  INTEGER NOT NULL,
     entity_id   TEXT,
+    updated_by  TEXT,
+    updated_via TEXT,
     associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
     permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)

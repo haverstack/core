@@ -207,6 +207,12 @@ export class APIAdapterAuthUnsupportedError extends APIAdapterError {
 // -------------------------------------------------------
 // Domain object parsers (wire JSON → typed domain objects)
 // -------------------------------------------------------
+//
+// Responses only. This adapter is a client: it never reads a request body,
+// so the identity fields a server assigns from the session — entityId,
+// principalId, updatedBy, updatedVia — arrive already decided, and parsing
+// them is reading an answer rather than accepting a claim.
+// See docs/spec/wire-format.md § Records.
 
 const parseRecord = (raw: WireRecord): StackRecord => {
   const record: StackRecord = {
@@ -221,6 +227,8 @@ const parseRecord = (raw: WireRecord): StackRecord => {
   if (raw.entityId != null) record.entityId = raw.entityId;
   if (raw.appId != null) record.appId = raw.appId;
   if (raw.principalId != null) record.principalId = raw.principalId;
+  if (raw.updatedBy != null) record.updatedBy = raw.updatedBy;
+  if (raw.updatedVia != null) record.updatedVia = raw.updatedVia;
   if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
   if (raw.permissions != null) record.permissions = raw.permissions;
   if (raw.associations != null) record.associations = raw.associations;
@@ -249,6 +257,8 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
     updatedAt: new Date(raw.updatedAt),
   };
   if (raw.entityId != null) v.entityId = raw.entityId;
+  if (raw.updatedBy != null) v.updatedBy = raw.updatedBy;
+  if (raw.updatedVia != null) v.updatedVia = raw.updatedVia;
   if (raw.associations != null) v.associations = raw.associations;
   if (raw.permissions != null) v.permissions = raw.permissions;
   return v;

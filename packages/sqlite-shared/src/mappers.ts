@@ -25,6 +25,8 @@ export const rowToRecord = (
   if (row.entity_id) record.entityId = row.entity_id as string;
   if (row.app_id) record.appId = row.app_id as string;
   if (row.principal_id) record.principalId = row.principal_id as string;
+  if (row.updated_by) record.updatedBy = row.updated_by as string;
+  if (row.updated_via) record.updatedVia = row.updated_via as string;
   if (row.deleted_at) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.permissions) record.permissions = JSON.parse(row.permissions as string);
   if (associations.length) record.associations = associations;
@@ -72,6 +74,8 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
     updatedAt: fromMs(row.updated_at as number),
   };
   if (row.entity_id) v.entityId = row.entity_id as string;
+  if (row.updated_by) v.updatedBy = row.updated_by as string;
+  if (row.updated_via) v.updatedVia = row.updated_via as string;
   if (row.associations) v.associations = JSON.parse(row.associations as string);
   if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
   return v;

@@ -34,6 +34,8 @@ export type WireRecord = {
   entityId?: string;
   appId?: string;
   principalId?: string;
+  updatedBy?: string;
+  updatedVia?: string;
   deletedAt?: string;
   permissions?: Permission[];
   associations?: Association[];
@@ -75,6 +77,8 @@ export type WireVersion = {
   content: Record<string, unknown>;
   updatedAt: string;
   entityId?: string;
+  updatedBy?: string;
+  updatedVia?: string;
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -92,6 +96,8 @@ export function serializeRecord(r: StackRecord): WireRecord {
   if (r.entityId !== undefined) w.entityId = r.entityId;
   if (r.appId !== undefined) w.appId = r.appId;
   if (r.principalId !== undefined) w.principalId = r.principalId;
+  if (r.updatedBy !== undefined) w.updatedBy = r.updatedBy;
+  if (r.updatedVia !== undefined) w.updatedVia = r.updatedVia;
   if (r.deletedAt !== undefined) w.deletedAt = r.deletedAt.toISOString();
   if (r.permissions !== undefined) w.permissions = r.permissions;
   if (r.associations !== undefined) w.associations = r.associations;
@@ -120,6 +126,8 @@ export function serializeVersion(v: RecordVersion): WireVersion {
     updatedAt: v.updatedAt.toISOString(),
   };
   if (v.entityId !== undefined) w.entityId = v.entityId;
+  if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
+  if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
   if (v.associations !== undefined) w.associations = v.associations;
   if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;
