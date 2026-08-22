@@ -97,10 +97,9 @@ function matchesGrantTarget(content: GrantContent, target: GrantTarget): boolean
 
 /**
  * Reject a grant target that names nobody. An empty groupId or entityId is
- * a caller error that must never reach storage: both are falsy, so a
- * grantee test written against truthiness reads the stored record as a
- * *default* grant — every authenticated entity — rather than the group or
- * entity the caller meant to name. `null` is the only way to say "default".
+ * falsy, so a stored record carrying one reads as a *default* grant — every
+ * authenticated entity — instead of the target the caller meant. `null` is
+ * the only way to say "default".
  */
 function validateGrantTarget(target: GrantTarget): void {
   if (target === null) return;
@@ -115,27 +114,17 @@ function validateGrantTarget(target: GrantTarget): void {
   if (typeof target.groupId !== 'string' || target.groupId.length === 0) {
     throw new StackQueryError('A group grant target requires a non-empty groupId.');
   }
-  // Deliberately not a format check: granteeGroupId is a reference to an
-  // existing Record, and no other reference here is format-validated —
-  // parentId, association recordId and Permission.groupId are all resolved
-  // rather than parsed. A groupId that resolves to nothing denies, which is
-  // the same fail-closed path as a group the requester isn't on.
+  // Not a format check: granteeGroupId is a reference to an existing
+  // Record, like parentId or an association's recordId, and none of those
+  // are parsed either. One that resolves to nothing simply denies.
 }
 
 /**
- * Whether a stored _grant's target covers `grantee` — a direct DID match,
- * roster membership (any role) via granteeGroupId when `allowGroup`, or a
- * default grant when `allowDefault`. A record naming both fields (only
- * reachable by writing around grant()) requires both to be satisfied.
- *
- * Presence, not truthiness, decides which tier a record belongs to: an
- * empty granteeGroupId names no roster and must fail, never fall through to
- * the default tier and widen to every authenticated entity.
- *
- * Module-level and shared by ScopedStack's access checks and
- * Stack.listGrants(), which documents itself as using the same resolution —
- * two copies of this rule would be two chances for a listing and an access
- * check to disagree about who a grant covers.
+ * Whether a stored _grant covers `grantee`: a direct DID match, roster
+ * membership when `allowGroup`, or a default when `allowDefault`. Presence
+ * decides the tier, never truthiness — an empty grantee field names nobody.
+ * Module-level so the access checks and listGrants() cannot drift apart.
+ * See docs/spec/access-control.md § Type-level grants.
  */
 async function grantCoversGrantee(
   c: GrantContent,
@@ -166,14 +155,11 @@ async function grantCoversGrantee(
 }
 
 /**
- * Resolve an entity's role on a `_group` Record's roster, memoized in the
- * `groupRoles` map the caller supplies. That map is built per operation and
- * threaded alongside `prefetchedGrants`, so it has exactly the lifetime
- * prefetchedGrants does: a query examining many Records resolves a given
- * roster once, and no resolved role outlives the operation that resolved
- * it. Caching for longer — for the life of a `ScopedStack`, say — would let
- * a roster change go unnoticed by an instance a caller holds, and removal
- * from a group is the direction that must never go stale.
+ * An entity's role on a `_group` roster, memoized in the caller's
+ * `groupRoles` map. That map is built per operation and threaded alongside
+ * `prefetchedGrants`, so no resolved role outlives the operation that
+ * resolved it — removal from a group must never go stale.
+ * See docs/spec/access-control.md § Type-level grants.
  */
 async function resolveGroupRoleMemoized(
   groupId: RecordId,
@@ -2604,16 +2590,10 @@ export class ScopedStack implements StackClient {
    * only the types named to it, which is the whole of what containment
    * promises.
    *
-   * Group-targeted grants don't count here either, for the same reason one
-   * step removed: a `_group` roster is editable by any of its admins, not
-   * just the stack owner, so a grant reaching a principal through a roster
-   * would let someone other than the owner name an app to a type the owner
-   * never named it to. The rule is about how the authority arrived, not
-   * about who holds it — which is what makes it enforceable, since a
-   * roster entry is an opaque DID and `_app.did` is optional, so nothing
-   * can reliably tell an app's DID from a person's. An owner who means to
-   * grant an app names it directly, one grant at a time.
-   * See docs/spec/access-control.md § Type-level grants.
+   * Group-targeted grants don't count here either, one step removed: a
+   * roster is editable by any of the group's admins, so authority reaching
+   * a principal through one would let someone other than the owner name an
+   * app to a type. See docs/spec/access-control.md § Type-level grants.
    */
   private principalAllows(
     typeId: TypeId,
