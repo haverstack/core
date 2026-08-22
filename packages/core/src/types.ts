@@ -108,6 +108,19 @@ export type StackRecord = {
    * this DID. See docs/spec/identity.md § App.
    */
   principalId?: EntityId;
+  /**
+   * The subject that performed the mutation this version records — unlike
+   * `entityId`, it moves with every write. Absent means an unscoped `Stack`
+   * wrote it, which names no requester.
+   * See docs/spec/data-model.md § Authorship and attribution.
+   */
+  updatedBy?: EntityId;
+  /**
+   * The authenticated principal behind that mutation, when it isn't the
+   * subject — `principalId` is the same fact about the create.
+   * See docs/spec/data-model.md § Authorship and attribution.
+   */
+  updatedVia?: EntityId;
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[];
   associations?: Association[];
@@ -129,6 +142,10 @@ export type RecordVersion = {
    * See docs/spec/versioning.md § Version history.
    */
   entityId?: EntityId;
+  /** Who performed the mutation that produced this version. */
+  updatedBy?: EntityId;
+  /** The principal behind that mutation, when it isn't `updatedBy`. */
+  updatedVia?: EntityId;
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -486,6 +503,17 @@ export type SnapshotOptions = {
 };
 
 /**
+ * Who is performing a mutation, stamped onto the record in the same write.
+ * `ScopedStack` supplies it from the request's identities; a caller of
+ * plain `Stack` supplies it only when reconstructing an attributed write.
+ * See docs/spec/data-model.md § Authorship and attribution.
+ */
+export type ActorOptions = {
+  updatedBy?: EntityId;
+  updatedVia?: EntityId;
+};
+
+/**
  * The record-storage half of an adapter: structured data, queries,
  * associations, versioning, type definitions, and stack identity.
  */
@@ -519,16 +547,16 @@ export interface StackRecordAdapter {
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
   deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean } & ExpectedVersionOptions & SnapshotOptions,
+    opts?: { hard?: boolean } & ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<void>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(
     id: RecordId,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
@@ -536,19 +564,19 @@ export interface StackRecordAdapter {
   associate(
     id: RecordId,
     association: Association,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<void>;
   dissociate(
     id: RecordId,
     association: Association,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<void>;
 
   /** Replace all permissions on a record. Bumps version internally. */
   setPermissions(
     id: RecordId,
     permissions: Permission[],
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<void>;
 
   // Versions
@@ -568,7 +596,7 @@ export interface StackRecordAdapter {
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 
   /**
@@ -581,7 +609,7 @@ export interface StackRecordAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: ExpectedVersionOptions & SnapshotOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 
   // Types

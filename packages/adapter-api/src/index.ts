@@ -221,6 +221,8 @@ const parseRecord = (raw: WireRecord): StackRecord => {
   if (raw.entityId != null) record.entityId = raw.entityId;
   if (raw.appId != null) record.appId = raw.appId;
   if (raw.principalId != null) record.principalId = raw.principalId;
+  if (raw.updatedBy != null) record.updatedBy = raw.updatedBy;
+  if (raw.updatedVia != null) record.updatedVia = raw.updatedVia;
   if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
   if (raw.permissions != null) record.permissions = raw.permissions;
   if (raw.associations != null) record.associations = raw.associations;
@@ -249,6 +251,8 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
     updatedAt: new Date(raw.updatedAt),
   };
   if (raw.entityId != null) v.entityId = raw.entityId;
+  if (raw.updatedBy != null) v.updatedBy = raw.updatedBy;
+  if (raw.updatedVia != null) v.updatedVia = raw.updatedVia;
   if (raw.associations != null) v.associations = raw.associations;
   if (raw.permissions != null) v.permissions = raw.permissions;
   return v;

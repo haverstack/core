@@ -25,6 +25,8 @@ import type {
   QueryResult,
   Association,
   Permission,
+  ActorOptions,
+  ExpectedVersionOptions,
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
@@ -115,8 +117,9 @@ export class SharedSqlRecordLogic {
       this.exec.run(
         `INSERT INTO records
           (id, type_id, created_at, updated_at, content, version,
-           parent_id, entity_id, app_id, principal_id, deleted_at, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
+           deleted_at, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           record.id,
           record.typeId,
@@ -128,6 +131,8 @@ export class SharedSqlRecordLogic {
           record.entityId ?? null,
           record.appId ?? null,
           record.principalId ?? null,
+          record.updatedBy ?? null,
+          record.updatedVia ?? null,
           record.deletedAt ? toMs(record.deletedAt) : null,
           record.permissions ? JSON.stringify(record.permissions) : null,
         ],
@@ -158,7 +163,7 @@ export class SharedSqlRecordLogic {
   async patchContent(
     id: string,
     patch: Record<string, unknown | null>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
@@ -170,8 +175,14 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
-        'UPDATE records SET content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-        [JSON.stringify(merged), toMs(new Date()), id],
+        `UPDATE records SET content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
+        [
+          JSON.stringify(merged),
+          toMs(new Date()),
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
+          id,
+        ],
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
       this.syncFileRefs(id, existing.typeId, merged);
@@ -188,7 +199,11 @@ export class SharedSqlRecordLogic {
 
   async deleteRecord(
     id: string,
-    opts: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: {
+      hard?: boolean;
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+    } & ActorOptions = {},
   ): Promise<void> {
     if (opts.hard) {
       this.hardDeleteRecord(id, opts.expectedVersion);
@@ -198,8 +213,15 @@ export class SharedSqlRecordLogic {
         if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
         const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
         const changed = this.exec.run(
-          `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-          [toMs(new Date()), toMs(new Date()), id, ...verParams],
+          `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
+          [
+            toMs(new Date()),
+            toMs(new Date()),
+            opts.updatedBy ?? null,
+            opts.updatedVia ?? null,
+            id,
+            ...verParams,
+          ],
         );
         if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
         this.exec.exec('COMMIT');
@@ -240,15 +262,15 @@ export class SharedSqlRecordLogic {
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
       const changed = this.exec.run(
-        `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-        [toMs(new Date()), id, ...verParams],
+        `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
+        [toMs(new Date()), opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
       );
       if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
       this.exec.exec('COMMIT');
@@ -265,17 +287,19 @@ export class SharedSqlRecordLogic {
   async setPermissions(
     id: string,
     permissions: Permission[],
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<void> {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
       const changed = this.exec.run(
-        `UPDATE records SET permissions = ?, version = version + 1, updated_at = ? WHERE id = ?${clause}`,
+        `UPDATE records SET permissions = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
         [
           permissions.length ? JSON.stringify(permissions) : null,
           toMs(new Date()),
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
           id,
           ...verParams,
         ],
@@ -291,7 +315,7 @@ export class SharedSqlRecordLogic {
   async restoreVersion(
     id: string,
     version: number,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
@@ -305,8 +329,15 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
-        'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-        [target.typeId, JSON.stringify(target.content), toMs(new Date()), id],
+        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
+        [
+          target.typeId,
+          JSON.stringify(target.content),
+          toMs(new Date()),
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
+          id,
+        ],
       );
       if (target.associations !== undefined) {
         this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
@@ -329,7 +360,7 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
     // Checked here rather than folded into the UPDATE's WHERE clause:
     // fts5Strategy.remove() has to run before the content changes, so the
@@ -344,8 +375,15 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
-        'UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ?',
-        [toTypeId, JSON.stringify(content), toMs(new Date()), id],
+        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
+        [
+          toTypeId,
+          JSON.stringify(content),
+          toMs(new Date()),
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
+          id,
+        ],
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(content));
       this.syncFileRefs(id, toTypeId, content);
@@ -461,8 +499,9 @@ export class SharedSqlRecordLogic {
     try {
       this.exec.run(
         `INSERT INTO versions
-          (record_id, version, type_id, content, updated_at, entity_id, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (record_id, version, type_id, content, updated_at, entity_id,
+           updated_by, updated_via, associations, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           version.version,
@@ -470,6 +509,8 @@ export class SharedSqlRecordLogic {
           JSON.stringify(version.content),
           toMs(version.updatedAt),
           version.entityId ?? null,
+          version.updatedBy ?? null,
+          version.updatedVia ?? null,
           version.associations ? JSON.stringify(version.associations) : null,
           version.permissions ? JSON.stringify(version.permissions) : null,
         ],
@@ -579,14 +620,14 @@ export class SharedSqlRecordLogic {
   async associate(
     recordId: string,
     association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<void> {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
       // Bump (and CAS-check) first, before the associations-table write, so
       // a lost race never partially applies.
-      this.bumpVersion(recordId, opts.expectedVersion);
+      this.bumpVersion(recordId, opts);
       this.insertAssociations(recordId, [association]);
       this.exec.exec('COMMIT');
     } catch (err) {
@@ -598,12 +639,12 @@ export class SharedSqlRecordLogic {
   async dissociate(
     recordId: string,
     association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<void> {
     this.exec.exec('BEGIN');
     try {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
-      this.bumpVersion(recordId, opts.expectedVersion);
+      this.bumpVersion(recordId, opts);
       this.exec.run(
         `DELETE FROM associations
        WHERE record_id = ?
@@ -626,13 +667,13 @@ export class SharedSqlRecordLogic {
     }
   }
 
-  private bumpVersion(id: string, expectedVersion?: number): void {
-    const { clause, params: verParams } = this.versionGuard(expectedVersion);
+  private bumpVersion(id: string, opts: ExpectedVersionOptions & ActorOptions = {}): void {
+    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
     const changed = this.exec.run(
-      `UPDATE records SET version = version + 1, updated_at = ? WHERE id = ?${clause}`,
-      [toMs(new Date()), id, ...verParams],
+      `UPDATE records SET version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
+      [toMs(new Date()), opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
     );
-    if (changed === 0) this.throwVersionConflict(id, expectedVersion);
+    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
   }
 
   /**

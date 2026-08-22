@@ -56,6 +56,7 @@ import type {
   AppContent,
   RecordId,
   TokenSession,
+  ActorOptions,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -1141,6 +1142,11 @@ export class Stack implements StackClient {
       ...(opts.entityId && { entityId: opts.entityId }),
       ...(opts.appId && { appId: opts.appId }),
       ...(opts.principalId && { principalId: opts.principalId }),
+      // A create's actor is its author, so these are derived rather than
+      // taken: stamping them here keeps "absent means an unscoped write"
+      // true of version 1 as it is of every later version.
+      ...(opts.entityId && { updatedBy: opts.entityId }),
+      ...(opts.principalId && { updatedVia: opts.principalId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(associations?.length && { associations }),
     };
@@ -1205,7 +1211,7 @@ export class Stack implements StackClient {
   async update(
     id: string,
     content: Record<string, unknown | null>,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1265,6 +1271,8 @@ export class Stack implements StackClient {
     return this.adapter.patchContent(id, content, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1277,7 +1285,7 @@ export class Stack implements StackClient {
   async associate(
     id: string,
     association: Association,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1290,6 +1298,8 @@ export class Stack implements StackClient {
     await this.adapter.associate(id, association, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1300,7 +1310,7 @@ export class Stack implements StackClient {
   async dissociate(
     id: string,
     association: Association,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1313,6 +1323,8 @@ export class Stack implements StackClient {
     await this.adapter.dissociate(id, association, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1324,7 +1336,7 @@ export class Stack implements StackClient {
   async setPermissions(
     id: string,
     permissions: Permission[],
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1337,6 +1349,8 @@ export class Stack implements StackClient {
     await this.adapter.setPermissions(id, permissions, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1347,7 +1361,7 @@ export class Stack implements StackClient {
    * (docs/spec.md § The `_config` record). See docs/spec/versioning.md
    * § Deletion.
    */
-  async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
+  async delete(id: string, opts: DeleteRecordOptions & ActorOptions = {}): Promise<void> {
     this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
       throw new StackConflictError(
@@ -1368,6 +1382,8 @@ export class Stack implements StackClient {
     await this.adapter.deleteRecord(id, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1377,7 +1393,7 @@ export class Stack implements StackClient {
    * throws StackNotFoundError for them just like any other missing record.
    * Snapshots and bumps version, same as delete().
    */
-  async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
+  async undelete(id: string, opts: IfVersionOptions & ActorOptions = {}): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
@@ -1389,6 +1405,8 @@ export class Stack implements StackClient {
     return this.adapter.undeleteRecord(id, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1470,7 +1488,7 @@ export class Stack implements StackClient {
   async restoreVersion(
     id: string,
     version: number,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1518,6 +1536,8 @@ export class Stack implements StackClient {
     return this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -1545,7 +1565,7 @@ export class Stack implements StackClient {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
@@ -1553,7 +1573,7 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    return this.commitMigrationChecked(existing, toTypeId, content, opts.ifVersion);
+    return this.commitMigrationChecked(existing, toTypeId, content, opts);
   }
 
   /**
@@ -1575,7 +1595,7 @@ export class Stack implements StackClient {
     existing: StackRecord,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    ifVersion?: number,
+    opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     const id = existing.id;
 
@@ -1630,8 +1650,10 @@ export class Stack implements StackClient {
     }
 
     return this.adapter.commitMigration(id, toTypeId, content, {
-      expectedVersion: ifVersion,
+      expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
     });
   }
 
@@ -2351,6 +2373,8 @@ export class Stack implements StackClient {
       content: record.content,
       updatedAt: record.updatedAt,
       ...(record.entityId && { entityId: record.entityId }),
+      ...(record.updatedBy && { updatedBy: record.updatedBy }),
+      ...(record.updatedVia && { updatedVia: record.updatedVia }),
       associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
@@ -2464,6 +2488,22 @@ export class ScopedStack implements StackClient {
   /** Whether a delegated app is acting for someone other than itself. */
   private get delegated(): boolean {
     return this.subjectEntityId !== this.principalEntityId;
+  }
+
+  /**
+   * Who this request is, for stamping onto whatever it mutates. Attribution
+   * follows record-level authorship: the subject is the actor, and the
+   * principal is named beside it only when the two differ.
+   * See docs/spec/data-model.md § Authorship and attribution.
+   */
+  private get actor(): ActorOptions {
+    // Both keys are always present, so spreading this last overrides
+    // anything a caller passed: a scoped requester names itself by making
+    // the request, never by describing itself in the options.
+    return {
+      updatedBy: this.subjectEntityId ?? undefined,
+      updatedVia: this.delegated ? (this.principalEntityId ?? undefined) : undefined,
+    };
   }
 
   /**
@@ -2985,7 +3025,7 @@ export class ScopedStack implements StackClient {
       this.requireOwnerForOwnerDid(record.typeId, content.did);
     }
     await this.requireFileRefAccess(record.typeId, content);
-    return this.stack.update(id, content, opts);
+    return this.stack.update(id, content, { ...opts, ...this.actor });
   }
 
   /**
@@ -3089,7 +3129,7 @@ export class ScopedStack implements StackClient {
   ): Promise<void> {
     const record = await this.requireUpdatable(id);
     await this.requireAssociationAccess(record.typeId, association);
-    return this.stack.associate(id, association, opts);
+    return this.stack.associate(id, association, { ...opts, ...this.actor });
   }
 
   async dissociate(
@@ -3098,7 +3138,7 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<void> {
     await this.requireUpdatable(id);
-    return this.stack.dissociate(id, association, opts);
+    return this.stack.dissociate(id, association, { ...opts, ...this.actor });
   }
 
   async setPermissions(
@@ -3127,7 +3167,7 @@ export class ScopedStack implements StackClient {
       }
     }
 
-    return this.stack.setPermissions(id, permissions, opts);
+    return this.stack.setPermissions(id, permissions, { ...opts, ...this.actor });
   }
 
   /**
@@ -3141,7 +3181,7 @@ export class ScopedStack implements StackClient {
     if (opts.hard && !this.ownerActingAlone) {
       throw new StackPermissionError('Hard delete is owner-only');
     }
-    return this.stack.delete(id, opts);
+    return this.stack.delete(id, { ...opts, ...this.actor });
   }
 
   /**
@@ -3151,7 +3191,7 @@ export class ScopedStack implements StackClient {
    */
   async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
     await this.requireDeletable(id);
-    return this.stack.undelete(id, opts);
+    return this.stack.undelete(id, { ...opts, ...this.actor });
   }
 
   /**
@@ -3209,7 +3249,7 @@ export class ScopedStack implements StackClient {
         }
       }
     }
-    return this.stack.restoreVersion(id, version, opts);
+    return this.stack.restoreVersion(id, version, { ...opts, ...this.actor });
   }
 
   /**
@@ -3248,7 +3288,7 @@ export class ScopedStack implements StackClient {
     if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner may commit a migration');
     }
-    return this.stack.commitMigration(id, toTypeId, content, opts);
+    return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 
   /**

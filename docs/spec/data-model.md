@@ -21,6 +21,8 @@ type StackRecord = {
   entityId?: string; // Author Entity. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Access control)
   appId?: string; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
   principalId?: string; // The authenticated principal, when it isn't the author — a delegated app's own DID. Absent means the writer authenticated as the author (see Identity)
+  updatedBy?: string; // Who performed the most recent mutation. Unlike entityId, it moves with every write (see Authorship and attribution)
+  updatedVia?: string; // The principal behind that mutation, when it isn't updatedBy
   deletedAt?: Date; // Present if soft-deleted
   permissions?: Permission[]; // Access control (see Access control)
   associations?: Association[]; // Tags, attachments, relationships
@@ -28,6 +30,21 @@ type StackRecord = {
 ```
 
 **Design principle:** native fields are things the library needs to operate (routing, querying, syncing, hierarchy). Everything semantic and domain-specific goes in `content`.
+
+### Authorship and attribution
+
+Two different questions, answered by two different pairs of fields.
+
+**`entityId` and `principalId` describe the Record.** `entityId` is its author, stamped once by `create()`; it never moves, because "whose Record is this" does not change when someone else edits it. `principalId` is the principal behind that create. Together they are the Record's provenance, and `entityId` is what every `-own` grant resolves against — so a later editor never acquires `-own` standing over what they edited.
+
+**`updatedBy` and `updatedVia` describe the latest mutation.** Every mutation restamps them: `updatedBy` is the requester (the subject), and `updatedVia` names the principal beside it only when the two differ, exactly as `principalId` does for the create. At version 1 the two pairs agree, since a Record's first actor is its author; from version 2 they diverge whenever anyone but the author writes.
+
+Because a [version snapshot](./versioning.md#version-history) captures the Record as it stood at that version, each snapshot carries the actor that produced it. **A version history is therefore a record of both states and actors**, and the live Record answers for the current version.
+
+- **Absent means unknown, never "the author".** An unscoped `Stack` names no requester, so it writes no actor — and clears any the Record carried, rather than leaving the previous one in place to be read as this one.
+- **Neither is a permission input.** No grant, permission entry or gate resolves against `updatedBy`. It is an audit fact, not an authority one, and reading it as authority would let a write-holder acquire standing by touching a Record.
+- **Both are assigned from the authenticated session** and ignored on input, on the same terms and for the same reason as `entityId` and `principalId` — see [Wire format § Records](./wire-format.md#records).
+- **`restoreVersion()` stamps the restorer.** A rollback is a write by whoever performs it, so it never restores the stamp along with the content — the same carve-out that keeps it from restoring `permissions`.
 
 ### Record IDs
 
