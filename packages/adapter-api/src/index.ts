@@ -207,6 +207,12 @@ export class APIAdapterAuthUnsupportedError extends APIAdapterError {
 // -------------------------------------------------------
 // Domain object parsers (wire JSON → typed domain objects)
 // -------------------------------------------------------
+//
+// Responses only. This adapter is a client: it never reads a request body,
+// so the identity fields a server assigns from the session — entityId,
+// principalId, updatedBy, updatedVia — arrive already decided, and parsing
+// them is reading an answer rather than accepting a claim.
+// See docs/spec/wire-format.md § Records.
 
 const parseRecord = (raw: WireRecord): StackRecord => {
   const record: StackRecord = {
