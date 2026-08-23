@@ -71,9 +71,8 @@ type RecordChange = {
   updatedAt: Date; // ISO string on the wire
   parentId?: RecordId;
   /**
-   * Who performed this change — see D2a. Absent when unknown: every mutation
-   * before the acting identity is recorded (haverstack/core#176), and every
-   * write by an unscoped `Stack`, which has no requester to name.
+   * Who performed this change — see D2a. Absent when unknown: a write by an
+   * unscoped `Stack`, which has no requester to name.
    */
   actor?: {
     entityId: EntityId; // the subject
@@ -168,9 +167,17 @@ So record provenance comes out of the envelope, and one field replaces it:
   `?include=record` or the documented fetch fallback (D2), which is where they belonged:
   they describe the record, not the change.
 
-`actor` is absent until the acting identity is recorded at all (#176), and absent
-permanently for writes by an unscoped `Stack`, which has no requester to name. **Absent
-means unknown; it never means "the author".**
+`actor` is absent for writes by an unscoped `Stack`, which has no requester to name.
+**Absent means unknown; it never means "the author".**
+
+**Where the emitter reads it from.** For every mutation that bumps a version, the record
+carries it: `updatedBy` and `updatedVia` are stamped in the same write (see
+[Data model § Authorship and attribution](../spec/data-model.md#authorship-and-attribution)),
+so reading them back after the write matches what was persisted by construction. **Hard
+delete is the exception, and the only one.** It destroys the record and bumps no version,
+so nothing is stamped and there is nothing left to read — a `purged` frame's `actor` comes
+from the request that performed the delete. That verb is owner-acting-alone and refuses
+delegation, so the actor there is always the owner, with no principal beside it.
 
 **`ChangeFilter.entityId` is unaffected and still filters on the record's author**, not on
 the actor. Filtering is exact and applied by the emitter, so a consumer filtering by author
@@ -565,8 +572,8 @@ await stack.subscribe(
       what: change.op, // 'permissions' reads very differently from 'update'
       record: `${change.recordId}@${change.version}`,
       // Who performed it — not who authored the record. Absent means
-      // unknown (an unscoped write, or a stack predating #176), which is
-      // a distinct fact from "nobody", so it is logged as such.
+      // unknown (an unscoped write), which is a distinct fact from
+      // "nobody", so it is logged as such.
       by: change.actor?.entityId ?? 'unknown',
       via: change.actor?.principalId, // the app that authenticated, when delegated
       app: change.actor?.appId, // self-reported, never a trust input
@@ -804,10 +811,8 @@ State them here so no one designs against a guarantee that isn't offered.
   existed" after the fact, so a consumer that missed a `purged` event finds it only by
   enumerating.
 - **`actor` can be absent, and absent is not a value.** An unscoped `Stack` write has no
-  requester to name, and nothing before
-  [#176](https://github.com/haverstack/core/issues/176) records one at all. A consumer must
-  treat the absence as "unknown" rather than substituting the record's author, which is a
-  different fact (D2a).
+  requester to name. A consumer must treat the absence as "unknown" rather than
+  substituting the record's author, which is a different fact (D2a).
 - **A purge is auditable only in outline.** `kind`, `op`, `recordId`, `typeId`, `version`
   and the actor — never the author or the content (D2b). Deliberate: retaining either
   would defeat the erasure the verb performs.
@@ -819,16 +824,16 @@ server builds against.
 
 **`@haverstack/core`**
 
-> **Ordering:** [#176](https://github.com/haverstack/core/issues/176) — recording the
-> acting identity on mutations — lands before the emitter. `actor` is the envelope's only
-> identity field (D2a), and shipping an emitter that leaves it permanently absent is worse
-> than one that never promised it. #176 also touches `wire-types` and
-> `conformance-fixtures`, so running the two in sequence keeps each serializer and each
-> fixture set to a single edit.
+> **Ordering: satisfied.** [#176](https://github.com/haverstack/core/issues/176) —
+> recording the acting identity on mutations — landed first, so `updatedBy`/`updatedVia`
+> are on `StackRecord` and `RecordVersion` and the emitter has an actor to read. `actor`
+> is the envelope's only identity field (D2a), and an emitter shipping ahead of that would
+> have left it permanently absent. Nothing further blocks this work.
 
 - [ ] `RecordChange`, `ChangeKind`, `ChangeOp`, `ChangeFilter`, `SubscribeOptions` in `types.ts`
 - [ ] Emitter in `Stack`, one emission per version bump, at the points D4 fixes
-- [ ] `actor` populated from the acting identity; never populated on a `purged` frame
+- [ ] `actor` populated from the record's `updatedBy`/`updatedVia` — except on a `purged`
+      frame, where the record is gone and it comes from the request instead (D2a)
 - [ ] `ScopedStack.subscribe()` — `canRead` per event, grants prefetched per subscription
 - [ ] `subscribe()` on `StackClient`; optional `subscribeChanges?()` on `StackRecordAdapter`
 - [ ] `onReset` plumbed from the adapter to the subscriber — a swallowed gap signal is the
