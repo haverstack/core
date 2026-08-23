@@ -3201,7 +3201,7 @@ describe('deleteAttachment', () => {
       async deleteUnreferencedAttachmentRecords(
         fileId: string,
         metadataTypeId: string,
-      ): Promise<string[]> {
+      ): Promise<StackRecord[]> {
         calls.push('atomic');
         const toDelete = [...this.records.values()].filter(
           (r) =>
@@ -3211,7 +3211,7 @@ describe('deleteAttachment', () => {
           this.records.delete(r.id);
           this.order.splice(this.order.indexOf(r.id), 1);
         }
-        return toDelete.map((r) => r.id);
+        return toDelete;
       }
     }
     const atomicStack = await Stack.create(

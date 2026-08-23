@@ -246,7 +246,7 @@ describe('tokens', () => {
 // -------------------------------------------------------
 
 describe('deleteUnreferencedAttachmentRecords', () => {
-  test('deletes an unreferenced metadata record and returns its id', async () => {
+  test('deletes an unreferenced metadata record and returns it', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(
       makeRecord({
@@ -260,7 +260,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       'file-1',
       'com.example.test/_attachment@1',
     );
-    expect(deleted).toEqual(['meta1']);
+    expect(deleted.map((r) => r.id)).toEqual(['meta1']);
     expect(await adapter.getRecord('meta1')).toBeNull();
   });
 });

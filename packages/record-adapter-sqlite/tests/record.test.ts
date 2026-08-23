@@ -1159,14 +1159,19 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     ).rejects.toThrow(StackConflictError);
   });
 
-  test('deletes an unreferenced metadata record and returns its id', async () => {
+  test('returns the destroyed metadata record, not just its id', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(
       makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
     );
 
     const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_TYPE);
-    expect(deleted).toEqual(['meta1']);
+    // The last copy that will ever exist: after this call there is nothing
+    // left to read the record's type or version back from.
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.id).toBe('meta1');
+    expect(deleted[0]!.typeId).toBe(ATTACHMENT_TYPE);
+    expect(deleted[0]!.version).toBe(1);
     expect(await adapter.getRecord('meta1')).toBeNull();
   });
 
@@ -1183,7 +1188,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       'shared-file',
       ATTACHMENT_TYPE,
     );
-    expect(deleted.sort()).toEqual(['meta1', 'meta2']);
+    expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
   });
 
   test('returns an empty array when no metadata records exist for the file', async () => {

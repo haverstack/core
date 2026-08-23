@@ -212,6 +212,10 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
+**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+
+This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
+
 **`GET /records` query params:**
 
 ```
@@ -301,7 +305,7 @@ GET  /records/:id/permissions        — get current permissions
 PUT  /records/:id/permissions        — replace all permissions (empty array = private)
 ```
 
-Both endpoints use the envelope `{ "permissions": [...] }` as the request/response body. `PUT` accepts the same optional `If-Match` precondition described under [Records](#records).
+`GET` uses the envelope `{ "permissions": [...] }` as its response body, and `PUT` takes the same envelope as its request body. `PUT` answers `200` with the updated **Record** — it bumps `version` like any other mutation, and the rule under [Records](#records) is uniform — and accepts the same optional `If-Match` precondition described there.
 
 ## Versions
 
@@ -333,9 +337,9 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
-Both endpoints accept the same optional `If-Match` precondition described under [Records](#records).
+Both endpoints accept the same optional `If-Match` precondition described under [Records](#records), and both answer `200` with the updated Record, per the rule under [Records](#records).
 
-Response shape is consistent regardless of kind:
+`GET .../associations` response shape is consistent regardless of kind:
 
 ```json
 {

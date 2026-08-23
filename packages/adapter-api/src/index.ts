@@ -686,12 +686,20 @@ export class APIAdapter implements StackAdapter {
     return parseRecord(raw);
   }
 
+  /**
+   * A soft delete answers with the record it produced; a hard delete has
+   * none to answer with and returns 204, which parses to null — the same
+   * shape a local adapter reports for a record that was not there.
+   */
   async deleteRecord(
     id: RecordId,
     opts: { hard?: boolean; expectedVersion?: number } = {},
-  ): Promise<void> {
+  ): Promise<StackRecord | null> {
     const path = opts.hard ? `/records/${id}?hard=true` : `/records/${id}`;
-    await this.request<void>('DELETE', path, undefined, { ifMatch: opts.expectedVersion });
+    const raw = await this.request<WireRecord | undefined>('DELETE', path, undefined, {
+      ifMatch: opts.expectedVersion,
+    });
+    return raw ? parseRecord(raw) : null;
   }
 
   async undeleteRecord(
@@ -751,22 +759,27 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     association: Association,
     opts: { expectedVersion?: number } = {},
-  ): Promise<void> {
-    await this.request<void>('POST', `/records/${id}/associations`, association, {
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>('POST', `/records/${id}/associations`, association, {
       ifMatch: opts.expectedVersion,
     });
+    return parseRecord(raw);
   }
 
   async dissociate(
     id: RecordId,
     association: Association,
     opts: { expectedVersion?: number } = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
     // §9.3.5) and proxies/gateways are free to drop or reject it.
-    await this.request<void>('POST', `/records/${id}/associations/delete`, association, {
-      ifMatch: opts.expectedVersion,
-    });
+    const raw = await this.request<WireRecord>(
+      'POST',
+      `/records/${id}/associations/delete`,
+      association,
+      { ifMatch: opts.expectedVersion },
+    );
+    return parseRecord(raw);
   }
 
   // -------------------------------------------------------
@@ -777,8 +790,8 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     permissions: Permission[],
     opts: { expectedVersion?: number } = {},
-  ): Promise<void> {
-    await this.request<void>(
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>(
       'PUT',
       `/records/${id}/permissions`,
       { permissions },
@@ -786,6 +799,7 @@ export class APIAdapter implements StackAdapter {
         ifMatch: opts.expectedVersion,
       },
     );
+    return parseRecord(raw);
   }
 
   // -------------------------------------------------------

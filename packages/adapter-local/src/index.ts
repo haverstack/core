@@ -221,7 +221,7 @@ export class LocalAdapter implements StackAdapter {
   async deleteRecord(
     id: RecordId,
     opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
@@ -239,7 +239,7 @@ export class LocalAdapter implements StackAdapter {
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
     metadataTypeId: TypeId,
-  ): Promise<RecordId[]> {
+  ): Promise<StackRecord[]> {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
   }
 
@@ -247,7 +247,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     association: Association,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.associate(id, association, opts);
   }
 
@@ -255,7 +255,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     association: Association,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.dissociate(id, association, opts);
   }
 
@@ -263,7 +263,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     permissions: Permission[],
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.setPermissions(id, permissions, opts);
   }
 

@@ -521,17 +521,31 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
 // Records: delete / undelete
 // -------------------------------------------------------
 
-export const deleteRecordFixtures: ConformanceFixture<undefined, undefined>[] = [
+export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | undefined>[] = [
   {
     name: 'delete-record-soft',
-    description: 'DELETE /records/:id soft-deletes — record and version history are retained.',
+    description:
+      'DELETE /records/:id soft-deletes — record and version history are retained — and answers ' +
+      'with the record it produced, carrying deletedAt and the bumped version. ' +
+      'See docs/spec/wire-format.md § Records.',
     method: 'DELETE',
     path: '/records/1hk153x00001',
-    responseStatus: 204,
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      deletedAt: '2024-01-02T00:00:00.000Z',
+    },
   },
   {
     name: 'delete-record-hard',
-    description: 'DELETE /records/:id?hard=true permanently removes the record and its history.',
+    description:
+      'DELETE /records/:id?hard=true permanently removes the record and its history. The one ' +
+      'mutation with no record to answer with: it produces no version, so 204 and no body.',
     method: 'DELETE',
     path: '/records/1hk153x00001?hard=true',
     responseStatus: 204,
@@ -562,28 +576,48 @@ export const undeleteRecordFixtures: ConformanceFixture<undefined, WireRecord>[]
 // Associations
 // -------------------------------------------------------
 
-export const associateFixtures: ConformanceFixture<Record<string, unknown>, undefined>[] = [
+export const associateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
     name: 'associate-tag',
-    description: 'POST /records/:id/associations adds an association and bumps version.',
+    description:
+      'POST /records/:id/associations adds an association and bumps version, answering with the ' +
+      'record it produced. See docs/spec/wire-format.md § Records.',
     method: 'POST',
     path: '/records/1hk153x00001/associations',
     requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 204,
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      associations: [{ kind: 'tag', label: 'starred' }],
+    },
   },
 ];
 
-export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, undefined>[] = [
+export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
     name: 'dissociate-tag',
     description:
-      'POST /records/:id/associations/delete removes an association and bumps version. POST, ' +
+      'POST /records/:id/associations/delete removes an association and bumps version, ' +
+      'answering with the record it produced — here with associations gone entirely. POST, ' +
       'not DELETE — a DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a ' +
       'portability landmine for proxies/gateways that drop or reject it.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 204,
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
+    },
   },
 ];
 
@@ -591,26 +625,47 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, und
 // Permissions
 // -------------------------------------------------------
 
-export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[] }, undefined>[] = [
-  {
-    name: 'set-permissions-public',
-    description:
-      'PUT /records/:id/permissions replaces all permissions. Body and (if returned) response ' +
-      'both use the { "permissions": [...] } envelope.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/permissions',
-    requestBody: { permissions: [{ access: 'public' }] },
-    responseStatus: 204,
-  },
-  {
-    name: 'set-permissions-empty-is-private',
-    description: 'An empty permissions array makes the record private (owner-only).',
-    method: 'PUT',
-    path: '/records/1hk153x00001/permissions',
-    requestBody: { permissions: [] },
-    responseStatus: 204,
-  },
-];
+export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[] }, WireRecord>[] =
+  [
+    {
+      name: 'set-permissions-public',
+      description:
+        'PUT /records/:id/permissions replaces all permissions. The request body uses the ' +
+        '{ "permissions": [...] } envelope; the response is the updated Record, since this ' +
+        'bumps version like any other mutation. See docs/spec/wire-format.md § Records.',
+      method: 'PUT',
+      path: '/records/1hk153x00001/permissions',
+      requestBody: { permissions: [{ access: 'public' }] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-02T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 2,
+        permissions: [{ access: 'public' }],
+      },
+    },
+    {
+      name: 'set-permissions-empty-is-private',
+      description:
+        'An empty permissions array makes the record private (owner-only), and the record comes ' +
+        'back with no permissions field at all rather than an empty one.',
+      method: 'PUT',
+      path: '/records/1hk153x00001/permissions',
+      requestBody: { permissions: [] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-03T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 3,
+      },
+    },
+  ];
 
 // -------------------------------------------------------
 // Versions: read

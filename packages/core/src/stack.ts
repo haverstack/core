@@ -29,6 +29,8 @@ import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations } from './access.js';
 import type { GroupRole } from './access.js';
 import { firstRecordedAttachment } from './attachment-download.js';
+import { ChangeEmitter, Subscription, buildEmission, matchesFilter } from './changes.js';
+import type { EmittedChange } from './changes.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -57,6 +59,11 @@ import type {
   RecordId,
   TokenSession,
   ActorOptions,
+  ChangeActor,
+  ChangeOp,
+  RecordChange,
+  SubscribeOptions,
+  Unsubscribe,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -686,6 +693,7 @@ export interface StackClient {
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
+  subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
 // -------------------------------------------------------
@@ -774,10 +782,41 @@ export class Stack implements StackClient {
   /** Set by close(). See docs/spec/adapters.md § Lifecycle. */
   private closed = false;
 
+  /**
+   * Every change made through this Stack. `ScopedStack` filters this same
+   * stream rather than opening its own, so no scoped view can observe a
+   * change the stack did not emit. See docs/spec/events.md.
+   */
+  private readonly changes = new ChangeEmitter();
+
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
   ) {}
+
+  /**
+   * Announce a mutation that has already been persisted. Called after the
+   * adapter write resolves and before the mutating method settles, so
+   * `await stack.update(...)` guarantees subscribers have been notified —
+   * and nothing about work they deferred. A handler cannot fail the write:
+   * there is nothing left to fail. See docs/spec/events.md § Handlers.
+   */
+  private emitChange(
+    op: ChangeOp,
+    record: StackRecord,
+    opts: { actor?: ChangeActor; at?: Date } = {},
+  ): void {
+    this.changes.emit(buildEmission(op, record, opts));
+  }
+
+  /**
+   * The requester behind a hard delete, which stamps nothing on a record
+   * that no longer exists. Owner-acting-alone is the only way to reach the
+   * verb, so there is never a principal to name beside the subject.
+   */
+  private static purgeActor(opts: ActorOptions): ChangeActor | undefined {
+    return opts.updatedBy ? { entityId: opts.updatedBy } : undefined;
+  }
 
   private async getTypeCached(id: TypeId): Promise<StackType | null> {
     const cached = this.typeCache.get(id);
@@ -868,6 +907,7 @@ export class Stack implements StackClient {
       opts.onBehalfOf ?? entityId,
       this.idTimestampSkewMsValue,
       this.adapter,
+      this.changes,
     );
   }
 
@@ -1151,7 +1191,9 @@ export class Stack implements StackClient {
       ...(associations?.length && { associations }),
     };
 
-    return this.adapter.createRecord(record) as Promise<StackRecord & { content: T }>;
+    const created = await this.adapter.createRecord(record);
+    this.emitChange('create', created);
+    return created as StackRecord & { content: T };
   }
 
   /**
@@ -1268,12 +1310,14 @@ export class Stack implements StackClient {
       );
     }
 
-    return this.adapter.patchContent(id, content, {
+    const updated = await this.adapter.patchContent(id, content, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('update', updated);
+    return updated;
   }
 
   /**
@@ -1295,12 +1339,13 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if ((existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
-    await this.adapter.associate(id, association, {
+    const updated = await this.adapter.associate(id, association, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('associate', updated);
   }
 
   /**
@@ -1320,12 +1365,13 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) return;
 
-    await this.adapter.dissociate(id, association, {
+    const updated = await this.adapter.dissociate(id, association, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('dissociate', updated);
   }
 
   /**
@@ -1346,12 +1392,13 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (permissionsEqual(existing.permissions ?? [], permissions)) return;
 
-    await this.adapter.setPermissions(id, permissions, {
+    const updated = await this.adapter.setPermissions(id, permissions, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('permissions', updated);
   }
 
   /**
@@ -1369,7 +1416,16 @@ export class Stack implements StackClient {
       );
     }
     if (opts.hard) {
-      return this.adapter.deleteRecord(id, { hard: true, expectedVersion: opts.ifVersion });
+      // The adapter hands back what it destroyed, captured inside the same
+      // write: a read here instead would race the delete, and afterwards
+      // there is nothing left to read. Null means there was no record, so
+      // nothing was purged and nothing is announced.
+      const purged = await this.adapter.deleteRecord(id, {
+        hard: true,
+        expectedVersion: opts.ifVersion,
+      });
+      if (purged) this.emitChange('hard-delete', purged, { actor: Stack.purgeActor(opts) });
+      return;
     }
 
     const existing = await this.adapter.getRecord(id);
@@ -1379,12 +1435,13 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
-    await this.adapter.deleteRecord(id, {
+    const deleted = await this.adapter.deleteRecord(id, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    if (deleted) this.emitChange('delete', deleted);
   }
 
   /**
@@ -1402,12 +1459,14 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    return this.adapter.undeleteRecord(id, {
+    const undeleted = await this.adapter.undeleteRecord(id, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('undelete', undeleted);
+    return undeleted;
   }
 
   /**
@@ -1533,12 +1592,14 @@ export class Stack implements StackClient {
       );
     }
 
-    return this.adapter.restoreVersion(id, version, {
+    const restored = await this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('restore', restored);
+    return restored;
   }
 
   /**
@@ -1649,12 +1710,14 @@ export class Stack implements StackClient {
       );
     }
 
-    return this.adapter.commitMigration(id, toTypeId, content, {
+    const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
+    this.emitChange('migrate', migrated);
+    return migrated;
   }
 
   /** Uniqueness for every unique binding field a newly created card claims. */
@@ -1947,7 +2010,10 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
+      // The metadata record is written inside the adapter, so create()
+      // never sees it and this is the only place it can be announced.
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename, appId);
+      this.emitChange('create', record);
       return record as StackRecord & { content: AttachmentContent };
     }
     const fileId = await this.adapter.putAttachment(data);
@@ -1973,14 +2039,31 @@ export class Stack implements StackClient {
    * Throws StackConflictError if any record in the stack still references the file.
    * Throws StackNotFoundError if neither metadata records nor bytes exist.
    */
-  async deleteAttachment(fileId: string): Promise<void> {
+  async deleteAttachment(fileId: string, opts: ActorOptions = {}): Promise<void> {
     this.assertOpen();
     const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
-    const deletedRecordIds = this.adapter.deleteUnreferencedAttachmentRecords
-      ? await this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)
-      : await this.deleteUnreferencedAttachmentRecordsFallback(fileId, metadataTypeId);
+    let deletedRecords: StackRecord[];
+    if (this.adapter.deleteUnreferencedAttachmentRecords) {
+      // Purged inside the adapter's own transaction, so these never reach
+      // delete() and are announced here instead — from the records it
+      // hands back, which are the last copies that will ever exist.
+      deletedRecords = await this.adapter.deleteUnreferencedAttachmentRecords(
+        fileId,
+        metadataTypeId,
+      );
+      const at = new Date();
+      for (const record of deletedRecords) {
+        this.emitChange('hard-delete', record, { actor: Stack.purgeActor(opts), at });
+      }
+    } else {
+      deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(
+        fileId,
+        metadataTypeId,
+        opts,
+      );
+    }
 
-    if (!deletedRecordIds.length) {
+    if (!deletedRecords.length) {
       try {
         await this.adapter.getAttachment(fileId);
       } catch {
@@ -1999,7 +2082,8 @@ export class Stack implements StackClient {
   private async deleteUnreferencedAttachmentRecordsFallback(
     fileId: string,
     metadataTypeId: string,
-  ): Promise<string[]> {
+    opts: ActorOptions = {},
+  ): Promise<StackRecord[]> {
     // A soft-deleted record still counts as a reference — it must find its
     // attachments intact on undelete. See docs/spec/attachments.md
     // § Deleting attachments.
@@ -2025,10 +2109,10 @@ export class Stack implements StackClient {
       : metaResults.filter((r) => (r.content as AttachmentContent).fileId === fileId);
 
     for (const record of metaRecords) {
-      await this.delete(record.id, { hard: true });
+      await this.delete(record.id, { hard: true, ...opts });
     }
 
-    return metaRecords.map((r) => r.id);
+    return metaRecords;
   }
 
   /**
@@ -2038,7 +2122,7 @@ export class Stack implements StackClient {
    * not a failure. See docs/spec/attachments.md § Garbage collection.
    */
   async collectAttachmentGarbage(
-    opts: CollectAttachmentGarbageOptions = {},
+    opts: CollectAttachmentGarbageOptions & ActorOptions = {},
   ): Promise<CollectAttachmentGarbageResult> {
     this.assertOpen();
     const graceMs = opts.graceMs ?? DEFAULT_GC_GRACE_MS;
@@ -2098,7 +2182,7 @@ export class Stack implements StackClient {
       }
 
       try {
-        await this.deleteAttachment(fileId);
+        await this.deleteAttachment(fileId, { updatedBy: opts.updatedBy });
       } catch (err) {
         // Raced with a new reference, or another sweep/call already removed
         // it — not a sweep failure, just move on to the next candidate.
@@ -2122,6 +2206,24 @@ export class Stack implements StackClient {
    * ones that buffer, and for checkpointing a stack that stays open —
    * close() covers the teardown case on its own.
    */
+  /**
+   * Observe every change made through this Stack. Unscoped, so no
+   * permission filter applies — a caller holding a `Stack` already reaches
+   * every record by other means; `ScopedStack.subscribe()` is the filtered
+   * view. See docs/spec/events.md.
+   *
+   * Async so that a remote stack can resolve once its feed is live, which
+   * makes subscribe-then-query the gap-free startup order everywhere. A
+   * local stack is live immediately.
+   */
+  async subscribe(
+    handler: (change: RecordChange) => void,
+    opts: SubscribeOptions = {},
+  ): Promise<Unsubscribe> {
+    this.assertOpen();
+    return this.changes.subscribe(handler, opts);
+  }
+
   async flush(): Promise<void> {
     this.assertOpen();
     await this.adapter.flush?.();
@@ -2139,6 +2241,7 @@ export class Stack implements StackClient {
     // half-open and invite a second close() onto an already-closed adapter.
     // Flushes through the adapter directly, past the now-tripped guard.
     this.closed = true;
+    this.changes.closeAll();
     try {
       await this.adapter.flush?.();
     } finally {
@@ -2466,6 +2569,93 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
  * grants). Under delegation both halves apply, and a mistake on the
  * authority side is an escalation rather than a preference.
  */
+/**
+ * The authority lookups canRead needs, held for the life of one
+ * subscription. A subscription is long-lived where a query is not, so the
+ * cache is only safe because every write that can change canRead's answer
+ * arrives as an event that drops it — see ScopedSubscription.
+ */
+class FeedAuthorityCache {
+  private grantRecords: StackRecord[] | null = null;
+  /** Roster roles, memoized per group, as ScopedStack.query() does per query. */
+  roles = new Map<string, GroupRole | null>();
+
+  /** Every `_grant` record, refilled through `load` after an invalidation. */
+  async grants(load: () => Promise<StackRecord[]>): Promise<StackRecord[]> {
+    if (this.grantRecords === null) this.grantRecords = await load();
+    return this.grantRecords;
+  }
+
+  invalidateFor(typeFamily: string): void {
+    if (typeFamily === SYSTEM_TYPES.GRANT) this.grantRecords = null;
+    if (typeFamily === SYSTEM_TYPES.GROUP) this.roles = new Map();
+  }
+}
+
+/**
+ * A ScopedStack's delivery: canRead per event, with the grant and roster
+ * lookups it needs cached for the life of the subscription and dropped the
+ * moment anything that feeds them changes.
+ *
+ * Two properties do the work, and neither is optional:
+ *
+ * **Deliveries are serialized.** The permission decision is asynchronous,
+ * so without a queue two changes to one record could resolve out of order
+ * and be delivered newest-first — breaking the one ordering guarantee the
+ * feed makes. Every emission is appended to a chain instead.
+ *
+ * **The filter fails closed.** A permission check that throws drops the
+ * event and reports the error; it never delivers on the assumption that a
+ * failed check would have passed.
+ *
+ * See docs/spec/events.md § Permission scoping.
+ */
+class ScopedSubscription extends Subscription {
+  private readonly cache = new FeedAuthorityCache();
+  /** Tail of the delivery chain — see the class comment. */
+  private queue: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly canRead: (record: StackRecord, cache: FeedAuthorityCache) => Promise<boolean>,
+    handler: (change: RecordChange) => void,
+    opts: SubscribeOptions,
+  ) {
+    super(handler, opts);
+  }
+
+  accept(emission: EmittedChange): void {
+    // Invalidation reads every emission, including the ones this
+    // subscriber may not see: a revocation the subscriber cannot read is
+    // exactly the one that must still expire its cache.
+    this.invalidateFor(emission);
+    if (!matchesFilter(emission, this.opts.filter)) return;
+    this.queue = this.queue.then(() => this.filterAndDeliver(emission));
+  }
+
+  /**
+   * A cached grant set outlives the write that revokes it unless something
+   * drops it. Both writes that can change canRead's answer — a `_grant`
+   * record, or a `_group` roster — arrive here as ordinary events, which
+   * is what makes the cache safe to hold at all. A future authority change
+   * that did not emit would silently strand it.
+   */
+  private invalidateFor(emission: EmittedChange): void {
+    this.cache.invalidateFor(baseIdOf(emission.change.typeId));
+  }
+
+  private async filterAndDeliver(emission: EmittedChange): Promise<void> {
+    if (this.isClosed) return;
+    try {
+      if (!(await this.canRead(emission.record, this.cache))) return;
+    } catch (err) {
+      // Fail closed: an undecided permission question is not a yes.
+      this.reportError(err);
+      return;
+    }
+    this.deliver(emission);
+  }
+}
+
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
@@ -2477,6 +2667,10 @@ export class ScopedStack implements StackClient {
     // must carry the subject's entityId and the principal behind it,
     // neither of which the adapter-level atomic capability takes.
     private readonly adapter: StackAdapter,
+    // The stack's own stream, filtered by subscribe(). Held here rather
+    // than reached through a method on Stack so the unfiltered stream
+    // stays inside this module.
+    private readonly changes: ChangeEmitter,
   ) {}
 
   get features(): StackFeatures {
@@ -3350,7 +3544,7 @@ export class ScopedStack implements StackClient {
     if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner can delete attachments');
     }
-    return this.stack.deleteAttachment(fileId);
+    return this.stack.deleteAttachment(fileId, this.actor);
   }
 
   /**
@@ -3363,6 +3557,43 @@ export class ScopedStack implements StackClient {
     if (!this.ownerActingAlone) {
       throw new StackPermissionError('Only the stack owner can collect attachment garbage');
     }
-    return this.stack.collectAttachmentGarbage(opts);
+    return this.stack.collectAttachmentGarbage({ ...opts, ...this.actor });
+  }
+
+  /**
+   * Observe the changes this request may read. The predicate is canRead
+   * applied per event — the same one get() and query() answer with, so a
+   * feed can't disagree with them about what this session sees.
+   *
+   * A record the subscriber cannot read produces no event at all, rather
+   * than an empty or redacted one: the existence of a change is itself a
+   * disclosure, the same reasoning that keeps query()'s `total` null.
+   * See docs/spec/events.md § Permission scoping.
+   */
+  async subscribe(
+    handler: (change: RecordChange) => void,
+    opts: SubscribeOptions = {},
+  ): Promise<Unsubscribe> {
+    this.stack.assertOpen();
+    return this.changes.add(
+      new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),
+    );
+  }
+
+  /**
+   * canRead for one event, through the subscription's own cache. Grants
+   * are prefetched once and refilled after an invalidation rather than
+   * re-queried per event, which would be a `_grant` scan for every change
+   * the stack makes.
+   */
+  private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
+    const grants = this.principalEntityId
+      ? await cache.grants(() =>
+          queryAllPages((q) => this.stack.query(q), {
+            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+          }),
+        )
+      : undefined;
+    return this.canRead(record, grants, cache.roles);
   }
 }
