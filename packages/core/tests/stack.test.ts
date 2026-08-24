@@ -2244,6 +2244,37 @@ describe('grant', () => {
     );
     expect(await stack.listGrants()).toHaveLength(0);
   });
+
+  // A mutate verb reaches content through the record it returns and through
+  // history, so one granted without read conveys what get() refuses. See
+  // docs/spec/access-control.md § Write implies read.
+  test('rejects a mutate action with no read action alongside it', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['update-any'], typeId: NOTE_V1 }]),
+    ).rejects.toThrow(StackValidationError);
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['create', 'delete-own'], typeId: NOTE_V1 }]),
+    ).rejects.toThrow(StackValidationError);
+    expect(await stack.listGrants()).toHaveLength(0);
+  });
+
+  test('rejects a -any mutate action paired only with read-own', async () => {
+    await expect(
+      stack.grant('entity-abc', [{ actions: ['read-own', 'delete-any'], typeId: NOTE_V1 }]),
+    ).rejects.toThrow(StackValidationError);
+    expect(await stack.listGrants()).toHaveLength(0);
+  });
+
+  test('accepts a -own mutate action paired with the wider read-any', async () => {
+    await stack.grant('entity-abc', [{ actions: ['read-any', 'update-own'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants()).toHaveLength(1);
+  });
+
+  // Contribute-without-reading is the one blind write the model offers.
+  test('accepts a create-only grant', async () => {
+    await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
+    expect(await stack.listGrants()).toHaveLength(1);
+  });
 });
 
 // -------------------------------------------------------
@@ -2268,7 +2299,7 @@ describe('listGrants', () => {
 
   test('a specific entityId returns grants naming it plus every default grant', async () => {
     await stack.grant('entity-abc', [{ actions: ['create'], typeId: NOTE_V1 }]);
-    await stack.grant('entity-xyz', [{ actions: ['delete-own'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-xyz', [{ actions: ['read-own', 'delete-own'], typeId: NOTE_V1 }]);
     await stack.grant(null, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
 
     const grants = await stack.listGrants('entity-abc');
@@ -2281,7 +2312,7 @@ describe('listGrants', () => {
   test('a groupId target returns grants naming that exact group', async () => {
     await stack.grant({ groupId: 'group-abc' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
     await stack.grant({ groupId: 'group-xyz' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
-    await stack.grant('entity-abc', [{ actions: ['update-own'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-abc', [{ actions: ['read-own', 'update-own'], typeId: NOTE_V1 }]);
 
     const grants = await stack.listGrants({ groupId: 'group-abc' });
     expect(grants).toHaveLength(1);
@@ -2296,7 +2327,7 @@ describe('listGrants', () => {
       recordId: 'entity-abc',
     });
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
-    await stack.grant('entity-xyz', [{ actions: ['delete-own'], typeId: NOTE_V1 }]);
+    await stack.grant('entity-xyz', [{ actions: ['read-own', 'delete-own'], typeId: NOTE_V1 }]);
 
     const grants = await stack.listGrants('entity-abc');
     expect(grants).toHaveLength(1);
@@ -2522,6 +2553,34 @@ describe('setPermissions', () => {
     await stack.setPermissions(record.id, []);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
+  });
+
+  // See docs/spec/access-control.md § Write implies read.
+  test('rejects an entry conveying write without read', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(
+      stack.setPermissions(record.id, [
+        { access: 'entity', entityId: 'entity-abc', read: false, write: true },
+      ]),
+    ).rejects.toThrow(StackValidationError);
+    await expect(
+      stack.setPermissions(record.id, [
+        { access: 'group', groupId: 'group-abc', read: false, write: true },
+      ]),
+    ).rejects.toThrow(StackValidationError);
+    expect((await adapter.getRecord(record.id))?.permissions).toBeUndefined();
+  });
+
+  test('create() refuses the same shape at authoring time', async () => {
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'hello' },
+        {
+          permissions: [{ access: 'entity', entityId: 'entity-abc', read: false, write: true }],
+        },
+      ),
+    ).rejects.toThrow(StackValidationError);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {

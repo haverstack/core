@@ -309,6 +309,8 @@ PUT  /records/:id/permissions        — replace all permissions (empty array = 
 
 `GET` uses the envelope `{ "permissions": [...] }` as its response body, and `PUT` takes the same envelope as its request body. `PUT` answers `200` with the updated **Record** — it bumps `version` like any other mutation, and the rule under [Records](#records) is uniform — and accepts the same optional `If-Match` precondition described there.
 
+An entry conveying `write` without `read` is refused with `422` (code `validation`), here and wherever else a request body carries `permissions`: the write bit reaches content and history through the mutate surface, so it withholds nothing without read. See [Access control § Write implies read](./access-control.md#write-implies-read).
+
 ## Versions
 
 **The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.

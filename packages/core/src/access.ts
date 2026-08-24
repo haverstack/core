@@ -7,7 +7,8 @@
  * control; exported standalone for callers that want the raw predicate.
  */
 
-import type { Association, EntityId, RecordId, StackRecord } from './types.js';
+import type { Association, EntityId, Permission, RecordId, StackRecord } from './types.js';
+import type { ValidationError } from './validate.js';
 
 export type AccessMode = 'read' | 'write';
 
@@ -51,21 +52,54 @@ export async function checkAccess(
     if (p.access === 'public' && mode === 'read') return true;
 
     if (p.access === 'entity' && p.entityId === subjectEntityId) {
-      if (mode === 'read' && p.read) return true;
-      if (mode === 'write' && p.write) return true;
+      if (entryConveys(p, mode)) return true;
     }
 
     if (p.access === 'group' && subjectEntityId) {
       const role = await resolveGroupRole(p.groupId, subjectEntityId, resolveRecord);
       const satisfiesRole = p.role === 'admin' ? role === 'admin' : role !== null;
-      if (satisfiesRole) {
-        if (mode === 'read' && p.read) return true;
-        if (mode === 'write' && p.write) return true;
-      }
+      if (satisfiesRole && entryConveys(p, mode)) return true;
     }
   }
 
   return false;
+}
+
+/**
+ * Whether an entry the requester already matches conveys `mode`. The write
+ * bit is inert without read alongside it: the mutate surface hands back the
+ * record it wrote and opens its whole history, so a write bit without read
+ * would disclose exactly what withholding read asks to withhold. Refused at
+ * the write by validatePermissions() and again here, since a `permissions`
+ * array can also arrive from an import or a foreign server. See
+ * docs/spec/access-control.md § Write implies read.
+ */
+function entryConveys(p: { read: boolean; write: boolean }, mode: AccessMode): boolean {
+  return mode === 'read' ? p.read : p.write && p.read;
+}
+
+/**
+ * Rejects permission entries that convey write without read — the shape
+ * entryConveys() refuses to honor, caught at the point of storage so an
+ * owner writing one is told rather than left with a bit that does nothing.
+ * See docs/spec/access-control.md § Write implies read.
+ */
+export function validatePermissions(
+  permissions: Permission[] | undefined,
+  path = 'permissions',
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+  (permissions ?? []).forEach((p, i) => {
+    if (p.access === 'public') return;
+    if (p.write && !p.read) {
+      errors.push({
+        path: `${path}[${i}]`,
+        message:
+          'write requires read: a write-holder reaches the record and its history through the mutate surface, so `write: true, read: false` withholds nothing',
+      });
+    }
+  });
+  return errors;
 }
 
 async function resolveGroupRole(

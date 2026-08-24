@@ -26,7 +26,7 @@ import {
 import type { SchemaDriftViolation } from './schema.js';
 import { validateContent, validateReservedKeys } from './validate.js';
 import { applyMergePatch } from './merge.js';
-import { checkAccess, groupRoleFromAssociations } from './access.js';
+import { checkAccess, groupRoleFromAssociations, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
 import { firstRecordedAttachment } from './attachment-download.js';
 import { ChangeEmitter, Subscription, buildEmission, matchesFilter } from './changes.js';
@@ -79,6 +79,35 @@ const EMPTY_FAMILY = Symbol('empty-family');
  * itself derived from — so this can't drift from the type.
  */
 const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
+
+/**
+ * The read actions that make a mutate action coherent, scope for scope: a
+ * `-any` verb needs read over the same reach it can mutate, a `-own` verb
+ * needs read over its author's own. A grant carrying neither conveys the
+ * verb to nobody. `create` has no companion — writing a Record you then
+ * cannot read is the drop-box, and it discloses nothing.
+ * See docs/spec/access-control.md § Write implies read.
+ */
+const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
+  ['update-own', ['read-own', 'read-any']],
+  ['delete-own', ['read-own', 'read-any']],
+  ['update-any', ['read-any']],
+  ['delete-any', ['read-any']],
+]);
+
+/**
+ * Whether one grant's action list conveys `action`. The companion has to
+ * sit in the same `_grant` Record, not merely somewhere in the grantee's
+ * set: a grant is revoked whole, so a rule satisfied across two records
+ * would let revoking the read one leave a mutate-without-read grant
+ * standing — the configuration this rule exists to refuse, arrived at
+ * without anyone writing it.
+ */
+function grantConveys(actions: readonly string[], action: GrantAction): boolean {
+  if (!actions.includes(action)) return false;
+  const companions = READ_COMPANIONS.get(action);
+  return !companions || companions.some((c) => actions.includes(c));
+}
 
 /**
  * Who a grant() / revoke() / listGrants() call targets: a specific entity
@@ -1150,7 +1179,11 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
-    const errors = [...validateReservedKeys(content), ...validateContent(content, type.schema)];
+    const errors = [
+      ...validateReservedKeys(content),
+      ...validateContent(content, type.schema),
+      ...validatePermissions(opts.permissions),
+    ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
@@ -1385,6 +1418,10 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
+    const errors = validatePermissions(permissions);
+    if (errors.length > 0) {
+      throw new StackValidationError(errors);
+    }
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -2404,6 +2441,16 @@ export class Stack implements StackClient {
           message: `Cannot grant on "${baseIdOf(g.typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
         });
       }
+
+      g.actions.forEach((action, j) => {
+        if (grantConveys(g.actions, action)) return;
+        const companions = READ_COMPANIONS.get(action);
+        if (!companions) return;
+        errors.push({
+          path: `grants[${i}].actions[${j}]`,
+          message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read`,
+        });
+      });
     });
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -2817,7 +2864,7 @@ export class ScopedStack implements StackClient {
       });
       if (!covers) continue;
       const matches = actions.some((action) => {
-        if (!(c.actions as string[]).includes(action)) return false;
+        if (!grantConveys(c.actions as string[], action)) return false;
         if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
         return true;
       });
