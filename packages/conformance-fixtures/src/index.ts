@@ -1040,6 +1040,34 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-permission-write-without-read',
+    description:
+      'PUT /records/:id/permissions carrying an entry with write and no read returns 422 with ' +
+      'code "validation". A write-holder reaches the record and its whole history through the ' +
+      'mutate surface, so the combination withholds nothing while appearing to — the server ' +
+      'refuses it wherever a request body carries permissions, POST /records included. See ' +
+      'docs/spec/access-control.md § Write implies read.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      permissions: [{ access: 'entity', entityId: 'did:key:z6MkMember', read: false, write: true }],
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'permissions[0]',
+            message:
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so `write: true, read: false` withholds nothing',
+          },
+        ],
+      },
+    },
+  },
+  {
     name: 'error-validation-attachment-mimetype-conflict-on-create',
     description:
       'POST /records creating an _attachment@1 record whose ' +
