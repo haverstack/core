@@ -77,6 +77,11 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
  * stack has just destroyed would hand every subscriber a permanent copy of
  * the thing being erased. See docs/spec/events.md § Purged records carry
  * nothing.
+ *
+ * The record rides by reference, shared across every frame projected from
+ * one emission: handlers are contractually read-only over it, and copying
+ * per subscriber would charge every consumer for a defect none of them
+ * have. See docs/spec/events.md § The event shape.
  */
 export function emitted(emission: EmittedChange, includeRecords: boolean): RecordChange {
   const { change, record } = emission;

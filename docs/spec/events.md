@@ -63,6 +63,8 @@ type RecordChange = {
 
 Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other seven verbs, and the bug is invisible until an index drifts from the records it describes.
 
+**`record` is shared, and a handler must not mutate it.** One emission is delivered to every subscription, and they receive the same record object rather than a copy each — copying per subscriber would cost every consumer for a defect none of them have. A handler that needs to alter what it received copies first; mutating in place corrupts what the other subscribers on that stack see.
+
 **The stub is the contract; the record body is an optional payload.** A subscriber is guaranteed identity, type, version, `parentId` and `actor` — enough to route an event without a fetch. `record` is present when the emitter has it and the subscriber asked for it (`includeRecords`), absent otherwise, and never required for correctness. A subscriber needing guaranteed-current state re-reads; `record` is that read's cache and may already be stale when it is handled.
 
 Permission-wise the two are equivalent: **a subscriber who may not read a record receives no event about it at all**, so there is no case where the envelope is deliverable and the body is not. The body is a bandwidth decision, not an access one.
@@ -199,7 +201,7 @@ interface StackClient {
 - **Losing access is invisible.** When a permission change revokes read access, the subscriber receives no event — they simply stop hearing about the record. There is no "removed from your view" signal, and adding one would disclose the revocation itself. A long-lived cache can therefore hold a record its holder may no longer read; consumers displaying shared data should revalidate on a schedule of their own.
 - **Gaining access arrives as `changed`, not `created`.** Hence upsert semantics.
 - **A restart with no feed is a full resync.** Local stacks have no `seq`.
-- **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events.
+- **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events. A scoped subscription serializes its permission checks, so a fan-out that outpaces them queues: pending events are held, with the record each describes, until their check runs.
 - **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.
 - **`actor` can be absent, and absent is not a value.** An unscoped `Stack` write has no requester to name. A consumer must treat absence as "unknown" rather than substituting the record's author, which is a different fact.
 - **A purge is auditable only in outline.** `kind`, `op`, `recordId`, `typeId`, `version` and the actor — never the author or the content. Deliberate: retaining either would defeat the erasure the verb performs.

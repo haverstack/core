@@ -1049,6 +1049,43 @@ describe('dissociate', () => {
 });
 
 // -------------------------------------------------------
+// Foreign servers on the version-bumping mutations
+// -------------------------------------------------------
+
+describe('a mutation that bumps a version must answer with a Record', () => {
+  const ASSOC: Association = { kind: 'relationship', label: 'author', recordId: 'rec-other' };
+
+  test('associate reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    const thrown = await adapter.associate('rec-abc123', ASSOC).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    // The endpoint is named, so a foreign server's gap is identifiable.
+    expect((thrown as Error).message).toContain('POST /records/rec-abc123/associations');
+  });
+
+  test('dissociate reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.dissociate('rec-abc123', ASSOC)).rejects.toThrow(APIAdapterError);
+  });
+
+  test('setPermissions reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.setPermissions('rec-abc123', [{ access: 'public' }])).rejects.toThrow(
+      APIAdapterError,
+    );
+  });
+
+  test('a soft delete reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.deleteRecord('rec-abc123')).rejects.toThrow(APIAdapterError);
+  });
+});
+
+// -------------------------------------------------------
 // Versions
 // -------------------------------------------------------
 

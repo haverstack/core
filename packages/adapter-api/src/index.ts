@@ -235,6 +235,23 @@ const parseRecord = (raw: WireRecord): StackRecord => {
   return record;
 };
 
+/**
+ * A Record body a mutation is required to answer with. Every mutation that
+ * bumps `version` returns one, so an empty body is a foreign server that
+ * has not implemented the current wire format — reported as such rather
+ * than as a property access on `undefined`.
+ * See docs/spec/wire-format.md § Records.
+ */
+const requireRecordBody = (raw: WireRecord | undefined, endpoint: string): StackRecord => {
+  if (!raw) {
+    throw new APIAdapterError(
+      `${endpoint} answered with no Record body. Every mutation that bumps a version must ` +
+        'return the record it produced.',
+    );
+  }
+  return parseRecord(raw);
+};
+
 const parseType = (raw: WireType): StackType => {
   const t: StackType = {
     id: raw.id,
@@ -687,9 +704,9 @@ export class APIAdapter implements StackAdapter {
   }
 
   /**
-   * A soft delete answers with the record it produced; a hard delete has
-   * none to answer with and returns 204, which parses to null — the same
-   * shape a local adapter reports for a record that was not there.
+   * A soft delete answers with the record it produced; a hard delete bumps
+   * no version, so it has none to answer with and returns 204 — null here,
+   * the same shape a local adapter reports for a record that was not there.
    */
   async deleteRecord(
     id: RecordId,
@@ -699,7 +716,8 @@ export class APIAdapter implements StackAdapter {
     const raw = await this.request<WireRecord | undefined>('DELETE', path, undefined, {
       ifMatch: opts.expectedVersion,
     });
-    return raw ? parseRecord(raw) : null;
+    if (opts.hard) return raw ? parseRecord(raw) : null;
+    return requireRecordBody(raw, `DELETE /records/${id}`);
   }
 
   async undeleteRecord(
@@ -760,10 +778,13 @@ export class APIAdapter implements StackAdapter {
     association: Association,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', `/records/${id}/associations`, association, {
-      ifMatch: opts.expectedVersion,
-    });
-    return parseRecord(raw);
+    const raw = await this.request<WireRecord | undefined>(
+      'POST',
+      `/records/${id}/associations`,
+      association,
+      { ifMatch: opts.expectedVersion },
+    );
+    return requireRecordBody(raw, `POST /records/${id}/associations`);
   }
 
   async dissociate(
@@ -773,13 +794,13 @@ export class APIAdapter implements StackAdapter {
   ): Promise<StackRecord> {
     // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
     // §9.3.5) and proxies/gateways are free to drop or reject it.
-    const raw = await this.request<WireRecord>(
+    const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/associations/delete`,
       association,
       { ifMatch: opts.expectedVersion },
     );
-    return parseRecord(raw);
+    return requireRecordBody(raw, `POST /records/${id}/associations/delete`);
   }
 
   // -------------------------------------------------------
@@ -791,7 +812,7 @@ export class APIAdapter implements StackAdapter {
     permissions: Permission[],
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>(
+    const raw = await this.request<WireRecord | undefined>(
       'PUT',
       `/records/${id}/permissions`,
       { permissions },
@@ -799,7 +820,7 @@ export class APIAdapter implements StackAdapter {
         ifMatch: opts.expectedVersion,
       },
     );
-    return parseRecord(raw);
+    return requireRecordBody(raw, `PUT /records/${id}/permissions`);
   }
 
   // -------------------------------------------------------

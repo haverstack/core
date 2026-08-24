@@ -578,7 +578,9 @@ export type RecordChange = {
   /**
    * The record as of this change — present only when asked for and
    * available, never required for correctness, and never on `purged`.
-   * See docs/spec/events.md § Purged records carry nothing.
+   * Shared with every other subscriber on this emission, so a handler that
+   * needs to alter it copies first. See docs/spec/events.md § The event
+   * shape.
    */
   record?: StackRecord;
   /** Resume cursor, minted by a server. Local changes carry none. */

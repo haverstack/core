@@ -161,6 +161,13 @@ export class SharedSqlRecordLogic {
    * use this one: an `await` between BEGIN and COMMIT yields the microtask
    * queue mid-transaction, and the next operation to run would try to open
    * one of its own.
+   *
+   * The same synchrony is what lets the post-COMMIT reads below report the
+   * version their own mutation produced: `getRecord()` runs its body before
+   * the `await` yields, so nothing interleaves between the commit and the
+   * read. A backend that made these reads genuinely asynchronous would open
+   * that window, and a concurrent mutation could be reported under this
+   * one's verb.
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
