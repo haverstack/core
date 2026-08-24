@@ -69,7 +69,37 @@ It asks which packages moved and by how much, then writes a Markdown file under 
 - **Changesets are pending** → it opens (and keeps updating) a `chore: version packages` PR that applies every pending changeset: version fields bumped, `CHANGELOG.md` entries written, the changeset files deleted.
 - **That PR merges** → the same workflow sees no pending changesets, builds, runs `pnpm run verify:pack`, and publishes the changed packages to npm with `changeset publish`, tagging each release in git.
 
-So a release is one reviewable PR, and merging it is the act of publishing. The workflow needs an `NPM_TOKEN` repository secret with publish rights to the `@haverstack` scope; `GITHUB_TOKEN` is provided by Actions.
+So a release is one reviewable PR, and merging it is the act of publishing. Whoever can merge to `main` can publish, which is the reason `main` is protected.
+
+### How the publish authenticates
+
+There is no `NPM_TOKEN`, and there should never be one. Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/): the workflow requests a short-lived OIDC token from GitHub and npm trades it for publish rights, so no long-lived credential is stored in the repository at all.
+
+That costs some one-time setup, and it is per package. On npmjs.com, each of the eight published packages needs a trusted publisher under its settings:
+
+| Field             | Value           |
+| ----------------- | --------------- |
+| Publisher         | GitHub Actions  |
+| Organization/user | `haverstack`    |
+| Repository        | `core`          |
+| Workflow filename | `release.yml`   |
+| Environment       | _(leave empty)_ |
+
+Three things in `.github/workflows/release.yml` exist only to make this work, and are worth knowing before anyone edits them:
+
+- **`id-token: write`.** Without it GitHub mints no OIDC token and the publish falls back to looking for a credential that isn't there.
+- **`actions/setup-node@v7` or newer** — deliberately ahead of the `v4` the CI workflow pins. Earlier majors export a dummy `NODE_AUTH_TOKEN`, and the empty `.npmrc` credential that writes shadows the handshake.
+- **pnpm pinned to 10.** `changeset publish` shells out to `pnpm publish`, so pnpm performs the OIDC exchange itself. pnpm 11 regressed it into a 404 ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513)); confirm that is fixed before moving to 11.
+
+Renaming the workflow file breaks every trusted publisher at once, since each one matches on the filename.
+
+Two repository settings also have to be right, both under **Settings → Actions → General**: **Allow GitHub Actions to create and approve pull requests** must be on, or the version PR is silently never opened; and workflow permissions must allow the `contents: write` the workflow asks for.
+
+**Adding a ninth package** means publishing it once by hand — trusted publishing can only be configured on a package that already exists — and then adding its trusted publisher before the next automated release.
+
+**Want a human gate on the publish itself?** Create a GitHub environment (say `npm-publish`) with required reviewers, add `environment: npm-publish` to the release job, and put that same name in the Environment field of every trusted publisher. The two must agree; a mismatch fails the publish. Until you do all three, leave the field empty.
+
+`GITHUB_TOKEN` is provided by Actions and needs no setup.
 
 ### Choosing a bump while we are pre-1.0
 
