@@ -5,10 +5,19 @@ import type {
   StackBlobAdapter,
   AdapterCapabilities,
   BlobFileInfo,
-  RecordId,
+  StackRecord,
   FileId,
   TypeId,
 } from '../src/types.js';
+
+const purgedRecord: StackRecord = {
+  id: 'meta1',
+  typeId: '_attachment@1',
+  createdAt: new Date('2024-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+  content: { fileId: 'file-1' },
+  version: 1,
+};
 
 // -------------------------------------------------------
 // Minimal fakes
@@ -33,14 +42,20 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     patchContent: async () => {
       throw new Error('not implemented');
     },
-    deleteRecord: async () => {},
+    deleteRecord: async () => null,
     undeleteRecord: async () => {
       throw new Error('not implemented');
     },
     queryRecords: async () => ({ records: [], cursor: null, total: 0 }),
-    associate: async () => {},
-    dissociate: async () => {},
-    setPermissions: async () => {},
+    associate: async () => {
+      throw new Error('not implemented');
+    },
+    dissociate: async () => {
+      throw new Error('not implemented');
+    },
+    setPermissions: async () => {
+      throw new Error('not implemented');
+    },
     getVersions: async () => [],
     getVersion: async () => null,
     saveVersion: async () => {},
@@ -139,7 +154,7 @@ describe('combineAdapters', () => {
         record: makeRecordAdapter({
           deleteUnreferencedAttachmentRecords: async (fileId, metadataTypeId) => {
             calledWith = [fileId, metadataTypeId];
-            return ['meta1'] as RecordId[];
+            return [purgedRecord];
           },
         }),
         blob: makeBlobAdapter(),
@@ -147,7 +162,7 @@ describe('combineAdapters', () => {
 
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeDefined();
       const result = await adapter.deleteUnreferencedAttachmentRecords!('file-1', '_attachment@1');
-      expect(result).toEqual(['meta1']);
+      expect(result).toEqual([purgedRecord]);
       expect(calledWith).toEqual(['file-1', '_attachment@1']);
     });
 

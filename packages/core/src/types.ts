@@ -513,6 +513,114 @@ export type ActorOptions = {
   updatedVia?: EntityId;
 };
 
+// -------------------------------------------------------
+// Change events
+// -------------------------------------------------------
+
+/**
+ * The coarse branch every subscriber makes, closed at four values. A
+ * handler covering exactly these is complete, not merely adequate:
+ * `changed` is an upsert signal carrying seven distinct verbs.
+ * See docs/spec/events.md § The event shape.
+ */
+export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
+
+/**
+ * The precise verb behind a ChangeKind, for consumers that distinguish a
+ * reshare from an edit. The list is the mutations that bump `version`,
+ * plus create and hard delete.
+ */
+export type ChangeOp =
+  | 'create'
+  | 'update'
+  | 'associate'
+  | 'dissociate'
+  | 'permissions'
+  | 'migrate'
+  | 'restore'
+  | 'delete'
+  | 'undelete'
+  | 'hard-delete';
+
+/**
+ * Who performed a change — never who authored the record. Absent from a
+ * RecordChange entirely when unknown, which means a write by an unscoped
+ * `Stack`: absence is a fact of its own and never stands in for the
+ * author. See docs/spec/events.md § Attribution.
+ */
+export type ChangeActor = {
+  /** The subject the change is attributed to. */
+  entityId: EntityId;
+  /** The principal behind it, when a delegated app acted for the subject. */
+  principalId?: EntityId;
+  /** Self-reported at create, never a trust input. See AppId. */
+  appId?: AppId;
+};
+
+/**
+ * One change to one record. The envelope describes the change; the record
+ * describes the record, so nothing of the record's own provenance appears
+ * here — a consumer that wants it asks for `record`.
+ * See docs/spec/events.md § The event shape.
+ */
+export type RecordChange = {
+  kind: ChangeKind;
+  op: ChangeOp;
+  recordId: RecordId;
+  /** As stored at the moment of the change. */
+  typeId: TypeId;
+  /** The version this change produced; on `purged`, the version destroyed. */
+  version: number;
+  /** As persisted by this change; on `purged`, when the delete ran. */
+  updatedAt: Date;
+  parentId?: RecordId;
+  actor?: ChangeActor;
+  /**
+   * The record as of this change — present only when asked for and
+   * available, never required for correctness, and never on `purged`.
+   * Shared with every other subscriber on this emission, so a handler that
+   * needs to alter it copies first. See docs/spec/events.md § The event
+   * shape.
+   */
+  record?: StackRecord;
+  /** Resume cursor, minted by a server. Local changes carry none. */
+  seq?: string;
+};
+
+/**
+ * Applied by the emitter, exactly: a filtered subscription never receives
+ * an event outside its filter, so filtering again is redundant rather than
+ * defensive.
+ */
+export type ChangeFilter = {
+  /** Matched by baseId, as grants are, so a version bump orphans nothing. */
+  typeId?: TypeId | TypeId[];
+  parentId?: RecordId | null;
+  /** The record's author. Not the actor — see ChangeActor. */
+  entityId?: EntityId;
+  kinds?: ChangeKind[];
+};
+
+/** Ends a subscription. Safe to call more than once. */
+export type Unsubscribe = () => void;
+
+export type SubscribeOptions = {
+  filter?: ChangeFilter;
+  /** Ask the emitter to include `record`. Honored when it can; never assume it. */
+  includeRecords?: boolean;
+  /**
+   * Where a throwing handler's error goes. Without one the error is
+   * rethrown asynchronously rather than swallowed; either way it never
+   * reaches the caller of the mutation that produced the event.
+   */
+  onError?: (err: unknown) => void;
+  /**
+   * A gap opened that resumption could not close: reconcile by query.
+   * Never fires on a local stack, which has no gap to open.
+   */
+  onReset?: () => void;
+};
+
 /**
  * The record-storage half of an adapter: structured data, queries,
  * associations, versioning, type definitions, and stack identity.
@@ -549,10 +657,17 @@ export interface StackRecordAdapter {
     patch: Record<string, unknown | null>,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
+  /**
+   * Returns the record this call acted on: as it now stands after a soft
+   * delete, and as it stood immediately before destruction after a hard
+   * one — captured inside the same write, so nothing can observe or alter
+   * it in between. Null when there was no record to delete, which is the
+   * only case that mutates nothing.
+   */
   deleteRecord(
     id: RecordId,
     opts?: { hard?: boolean } & ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<void>;
+  ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(
     id: RecordId,
@@ -565,19 +680,19 @@ export interface StackRecordAdapter {
     id: RecordId,
     association: Association,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<void>;
+  ): Promise<StackRecord>;
   dissociate(
     id: RecordId,
     association: Association,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<void>;
+  ): Promise<StackRecord>;
 
   /** Replace all permissions on a record. Bumps version internally. */
   setPermissions(
     id: RecordId,
     permissions: Permission[],
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<void>;
+  ): Promise<StackRecord>;
 
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
@@ -624,7 +739,22 @@ export interface StackRecordAdapter {
    * Stack.deleteAttachment() has a non-atomic fallback. See
    * docs/spec/attachments.md § Deleting attachments.
    */
-  deleteUnreferencedAttachmentRecords?(fileId: FileId, metadataTypeId: TypeId): Promise<RecordId[]>;
+  deleteUnreferencedAttachmentRecords?(
+    fileId: FileId,
+    metadataTypeId: TypeId,
+  ): Promise<StackRecord[]>;
+
+  /**
+   * Relay changes that originated elsewhere — the inverse direction from
+   * `Stack`, which emits every change made through it. Optional, and
+   * absent on every local adapter: exactly one process owns a stack's
+   * storage, so locally there is no third party whose writes could have
+   * been missed. See docs/spec/events.md § Where events come from.
+   */
+  subscribeChanges?(
+    opts: { filter?: ChangeFilter; since?: string },
+    handler: (change: RecordChange) => void,
+  ): Promise<() => void>;
 
   // Lifecycle
   flush?(): Promise<void>;

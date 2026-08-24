@@ -212,6 +212,10 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
+**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+
+This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
+
 **`GET /records` query params:**
 
 ```
@@ -255,6 +259,8 @@ When present, the server applies the mutation only if the record's current versi
 `POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](./data-model.md#record-ids) for the validation and duplicate-conflict rules the server applies.
 
 **`entityId`, `principalId`, `updatedBy` and `updatedVia` are assigned by the server from the authenticated session, and MUST be ignored if a request body carries them.** They are the fields that answer "who did this", so a server that echoes back what it was handed makes every one of them self-reported — and `principalId` exists precisely to be the field that isn't (see [Identity § Attribution and what can be trusted](./identity.md#attribution-and-what-can-be-trusted)). A client naming its own `principalId` could dress any write up as a verified app action, defeating the `_app` cross-check that reads it. `ScopedStack` already overrides both regardless of what a caller passes, so a server built on it inherits this; one that maps a request body onto `Stack` directly has to drop them itself. `updatedBy` and `updatedVia` answer the same question about the mutation that `entityId` and `principalId` answer about the Record, so they are assigned and ignored on identical terms — see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution). The same applies to `version`, `createdAt`, and `updatedAt`, which the server assigns as it does on any write. `appId` is the deliberate exception — self-reported by design, and never a permission input. For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of grants — see [Attachments](./attachments.md#creating-_attachment1-records-directly) for the refusal, its carve-out, and `POST /attachments` as the non-owner-safe combined path.
+
+### Migration commit
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner** and answers `403` otherwise: migration is owner-driven, and no grant confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
 
@@ -301,7 +307,7 @@ GET  /records/:id/permissions        — get current permissions
 PUT  /records/:id/permissions        — replace all permissions (empty array = private)
 ```
 
-Both endpoints use the envelope `{ "permissions": [...] }` as the request/response body. `PUT` accepts the same optional `If-Match` precondition described under [Records](#records).
+`GET` uses the envelope `{ "permissions": [...] }` as its response body, and `PUT` takes the same envelope as its request body. `PUT` answers `200` with the updated **Record** — it bumps `version` like any other mutation, and the rule under [Records](#records) is uniform — and accepts the same optional `If-Match` precondition described there.
 
 ## Versions
 
@@ -333,9 +339,9 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
-Both endpoints accept the same optional `If-Match` precondition described under [Records](#records).
+Both endpoints accept the same optional `If-Match` precondition described under [Records](#records), and both answer `200` with the updated Record, per the rule under [Records](#records).
 
-Response shape is consistent regardless of kind:
+`GET .../associations` response shape is consistent regardless of kind:
 
 ```json
 {

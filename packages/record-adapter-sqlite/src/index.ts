@@ -27,14 +27,7 @@
 
 import { DatabaseSync } from './node-sqlite.js';
 import { existsSync } from 'fs';
-import type {
-  StackType,
-  TypeId,
-  RecordId,
-  FileId,
-  RecordVersion,
-  ActorOptions,
-} from '@haverstack/core';
+import type { StackType, TypeId, FileId, RecordVersion, ActorOptions } from '@haverstack/core';
 import type {
   StackRecord,
   StackQuery,
@@ -182,7 +175,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
   deleteRecord(
     id: string,
     opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
@@ -197,7 +190,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     id: string,
     permissions: Permission[],
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.setPermissions(id, permissions, opts);
   }
 
@@ -222,7 +215,10 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     return this.record.queryRecords(query);
   }
 
-  deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeId: TypeId): Promise<RecordId[]> {
+  deleteUnreferencedAttachmentRecords(
+    fileId: FileId,
+    metadataTypeId: TypeId,
+  ): Promise<StackRecord[]> {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
   }
 
@@ -266,7 +262,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     recordId: string,
     association: Association,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.associate(recordId, association, opts);
   }
 
@@ -274,7 +270,7 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     recordId: string,
     association: Association,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     return this.record.dissociate(recordId, association, opts);
   }
 

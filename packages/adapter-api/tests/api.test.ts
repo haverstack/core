@@ -799,8 +799,9 @@ describe('commitMigration', () => {
 describe('setPermissions', () => {
   test('sends PUT /records/:id/permissions with a permissions envelope', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
-    await adapter.setPermissions('rec-abc123', [{ access: 'public' }]);
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    const updated = await adapter.setPermissions('rec-abc123', [{ access: 'public' }]);
+    expect(updated.id).toBe('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/permissions`,
       expect.objectContaining({ method: 'PUT' }),
@@ -817,12 +818,21 @@ describe('setPermissions', () => {
 describe('deleteRecord', () => {
   test('sends DELETE /records/:id for soft delete', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
-    await adapter.deleteRecord('rec-abc123');
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ ...RECORD_RAW, version: 2, deletedAt: '2024-06-16T12:00:00.000Z' }),
+    );
+    const deleted = await adapter.deleteRecord('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123`,
       expect.objectContaining({ method: 'DELETE' }),
     );
+    expect(deleted?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('a hard delete has no record to answer with', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).resolves.toBeNull();
   });
 
   test('appends ?hard=true for hard delete', async () => {
@@ -996,7 +1006,7 @@ describe('queryRecords', () => {
 describe('associate', () => {
   test('sends POST /records/:id/associations', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     const assoc: Association = { kind: 'tag', label: 'starred' };
     await adapter.associate('rec-abc123', assoc);
     expect(mockFetch).toHaveBeenLastCalledWith(
@@ -1007,7 +1017,7 @@ describe('associate', () => {
 
   test('sends the association as JSON body', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     const assoc: Association = { kind: 'tag', label: 'starred' };
     await adapter.associate('rec-abc123', assoc);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -1019,7 +1029,7 @@ describe('dissociate', () => {
   // POST, not DELETE — a DELETE body has no defined wire semantics.
   test('sends POST /records/:id/associations/delete', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     const assoc: Association = { kind: 'tag', label: 'starred' };
     await adapter.dissociate('rec-abc123', assoc);
     expect(mockFetch).toHaveBeenLastCalledWith(
@@ -1030,11 +1040,48 @@ describe('dissociate', () => {
 
   test('sends the association as JSON body', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     const assoc: Association = { kind: 'tag', label: 'starred' };
     await adapter.dissociate('rec-abc123', assoc);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual(assoc);
+  });
+});
+
+// -------------------------------------------------------
+// Foreign servers on the version-bumping mutations
+// -------------------------------------------------------
+
+describe('a mutation that bumps a version must answer with a Record', () => {
+  const ASSOC: Association = { kind: 'relationship', label: 'author', recordId: 'rec-other' };
+
+  test('associate reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    const thrown = await adapter.associate('rec-abc123', ASSOC).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    // The endpoint is named, so a foreign server's gap is identifiable.
+    expect((thrown as Error).message).toContain('POST /records/rec-abc123/associations');
+  });
+
+  test('dissociate reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.dissociate('rec-abc123', ASSOC)).rejects.toThrow(APIAdapterError);
+  });
+
+  test('setPermissions reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.setPermissions('rec-abc123', [{ access: 'public' }])).rejects.toThrow(
+      APIAdapterError,
+    );
+  });
+
+  test('a soft delete reports an empty body as a protocol error', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.deleteRecord('rec-abc123')).rejects.toThrow(APIAdapterError);
   });
 });
 
