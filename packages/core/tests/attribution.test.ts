@@ -231,7 +231,7 @@ describe('attribution — separate from authorship checks', () => {
 
     const authored = await s2.asEntity(AUTHOR).create(NOTE, { text: 'a' });
     // EDITOR can neither read nor restamp it: read-own resolves on entityId.
-    await expect(s2.asEntity(EDITOR).get(authored.id)).rejects.toThrow();
+    expect(await s2.asEntity(EDITOR).get(authored.id)).toBeNull();
     expect((await s2.get(authored.id))?.updatedBy).toBe(AUTHOR);
   });
 });
