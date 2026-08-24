@@ -202,6 +202,7 @@ interface StackClient {
 - **Gaining access arrives as `changed`, not `created`.** Hence upsert semantics.
 - **A restart with no feed is a full resync.** Local stacks have no `seq`.
 - **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events. A scoped subscription serializes its permission checks, so a fan-out that outpaces them queues: pending events are held, with the record each describes, until their check runs.
+- **A hard delete relayed over the wire announces nothing.** The verb answers `204` by contract, so an adapter has no destroyed record to hand back and a `Stack` driving one emits no `purged` frame. Locally the record is in hand and the frame is emitted as described above; the wire case is the emitter having nothing to describe, and it resolves with the relay rather than here.
 - **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.
 - **`actor` can be absent, and absent is not a value.** An unscoped `Stack` write has no requester to name. A consumer must treat absence as "unknown" rather than substituting the record's author, which is a different fact.
 - **A purge is auditable only in outline.** `kind`, `op`, `recordId`, `typeId`, `version` and the actor — never the author or the content. Deliberate: retaining either would defeat the erasure the verb performs.

@@ -131,7 +131,14 @@ export class MemoryAdapter implements StackAdapter {
     } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
-    if (!record) return null;
+    if (!record) {
+      // A hard delete with nothing to fence is the one case the SQL
+      // adapters answer silently; every other shape of this call reports a
+      // record that isn't there, and a fixture that shrugged instead would
+      // pass tests the real adapters fail.
+      if (opts.hard && opts.expectedVersion === undefined) return null;
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.hard) {
       this.records.delete(id);

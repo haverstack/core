@@ -1715,6 +1715,20 @@ describe('delete', () => {
     expect(result.records.find((r) => r.id === record.id)).toBeDefined();
   });
 
+  test('a hard delete of a record that is not there is silent', async () => {
+    await expect(
+      stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true }),
+    ).resolves.toBeUndefined();
+  });
+
+  test('a hard delete under a precondition reports a record that is not there', async () => {
+    // The precondition cannot be satisfied by a record that does not
+    // exist, so the call reports that rather than succeeding vacuously.
+    await expect(
+      stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true, ifVersion: 1 }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+
   test('hard delete removes the record entirely', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.delete(record.id, { hard: true });
