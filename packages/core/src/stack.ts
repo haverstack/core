@@ -2577,17 +2577,32 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
  */
 class FeedAuthorityCache {
   private grantRecords: StackRecord[] | null = null;
+  /**
+   * Bumped by every invalidation, so a load that was already in flight can
+   * tell that its result is stale before seating it.
+   */
+  private generation = 0;
   /** Roster roles, memoized per group, as ScopedStack.query() does per query. */
   roles = new Map<string, GroupRole | null>();
 
   /** Every `_grant` record, refilled through `load` after an invalidation. */
   async grants(load: () => Promise<StackRecord[]>): Promise<StackRecord[]> {
-    if (this.grantRecords === null) this.grantRecords = await load();
-    return this.grantRecords;
+    if (this.grantRecords !== null) return this.grantRecords;
+    const generation = this.generation;
+    const loaded = await load();
+    // An invalidation during the load already dropped the set these
+    // replace, so seating them would outlive the write that expired them
+    // and no later event would drop them again. The event being decided
+    // precedes that write, so it is still decided on what was loaded.
+    if (this.generation === generation) this.grantRecords = loaded;
+    return loaded;
   }
 
   invalidateFor(typeFamily: string): void {
-    if (typeFamily === SYSTEM_TYPES.GRANT) this.grantRecords = null;
+    if (typeFamily === SYSTEM_TYPES.GRANT) {
+      this.grantRecords = null;
+      this.generation++;
+    }
     if (typeFamily === SYSTEM_TYPES.GROUP) this.roles = new Map();
   }
 }

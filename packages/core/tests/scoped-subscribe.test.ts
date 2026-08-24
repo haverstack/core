@@ -214,6 +214,39 @@ describe('a revocation takes effect on the next event, not the next subscription
     expect(reader.seen).toHaveLength(1);
   });
 
+  test('a revocation that lands mid-prefetch still expires the cached grants', async () => {
+    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    const reader = collector();
+    await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
+
+    // Hold the subscription's first grant prefetch open so the revocation
+    // commits while it is still in flight: the set it resolves with is
+    // already stale, and seating it would outlive every later invalidation.
+    const query = adapter.queryRecords.bind(adapter);
+    let held = false;
+    adapter.queryRecords = async (q) => {
+      const result = await query(q);
+      const grantQuery =
+        typeof q.filter?.typeId === 'string' && q.filter.typeId.startsWith('_grant');
+      if (grantQuery && !held) {
+        held = true;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return result;
+    };
+
+    await stack.create(NOTE, { text: 'starts the prefetch' });
+    await settle();
+    await stack.revoke(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const delivered = reader.seen.length;
+    await stack.create(NOTE, { text: 'after revocation' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(reader.seen.length).toBe(delivered);
+  });
+
   test('a record-level group permission follows the roster too', async () => {
     const group = await stack.create(
       '_group@1',
