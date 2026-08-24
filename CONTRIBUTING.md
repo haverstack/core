@@ -46,6 +46,75 @@ If you're an AI coding agent, [AGENTS.md](./AGENTS.md) is the condensed, checkab
 
 ---
 
+## Releasing
+
+Versions and npm publishes are automated with [Changesets](https://github.com/changesets/changesets). Nobody edits a `version` field by hand, and nobody runs `npm publish`.
+
+### What a contributor does
+
+Add a changeset to the same PR as the change:
+
+```sh
+pnpm changeset
+```
+
+It asks which packages moved and by how much, then writes a Markdown file under `.changeset/`. Commit it. A PR with no user-visible effect — a test, a doc fix, a refactor that ships identical output — needs no changeset.
+
+**Name only the packages you actually changed.** Dependents are worked out for you; see [The ripple rule](#the-ripple-rule) below.
+
+### What CI does
+
+`.github/workflows/release.yml` runs on every push to `main`:
+
+- **Changesets are pending** → it opens (and keeps updating) a `chore: version packages` PR that applies every pending changeset: version fields bumped, `CHANGELOG.md` entries written, the changeset files deleted.
+- **That PR merges** → the same workflow sees no pending changesets, builds, runs `pnpm run verify:pack`, and publishes the changed packages to npm with `changeset publish`, tagging each release in git.
+
+So a release is one reviewable PR, and merging it is the act of publishing. The workflow needs an `NPM_TOKEN` repository secret with publish rights to the `@haverstack` scope; `GITHUB_TOKEN` is provided by Actions.
+
+### Choosing a bump while we are pre-1.0
+
+Every package is on `0.x`, where semver puts breaking changes in the **minor** slot:
+
+| Change                                                              | Bump           |
+| ------------------------------------------------------------------- | -------------- |
+| Bug fix, docs, internals — nothing a consumer can observe           | `patch`        |
+| Renamed or removed exports, changed behavior, a new required option | `minor`        |
+| Nothing ships — tests, CI, repo tooling                             | _no changeset_ |
+
+**Don't select `major`.** It would cut a 1.0 release, which is a deliberate decision about the install base (see [No backward compatibility yet](#no-backward-compatibility-yet)) and not something a single PR should make.
+
+`@haverstack/sqlite-shared` is `private`, so Changesets skips it entirely — it has no version to publish. A change confined to it is recorded as a change to `@haverstack/record-adapter-sqlite`, the package that bundles it and actually ships.
+
+### The ripple rule
+
+Packages depend on each other through `workspace:^`, and on `0.x` a caret accepts patches but not minors. That single fact decides both directions:
+
+- **A `patch` to `@haverstack/core` moves nothing else.** `^0.11.1` already accepts `0.11.2`, so no dependent needs republishing — and Changesets leaves them alone on its own.
+- **A `minor` to `@haverstack/core` moves every dependent by a `minor` too.** `^0.11.1` rejects `0.12.0`, so each dependent has to be republished against the new core, and a release that carries a breaking change through to its own consumers is breaking in turn.
+
+Changesets gets the first case right unaided but would only patch-bump dependents in the second. `scripts/expand-changesets.mjs` closes that gap: during `pnpm run version:packages` it reads the pending changesets, walks `dependencies` and `peerDependencies` across the workspace, and writes the induced releases as one more changeset before `changeset version` consumes them all.
+
+The rule is transitive and applies to every workspace dependency, not just `core` — a `minor` to `@haverstack/wire-types` minor-bumps `@haverstack/adapter-api` and `@haverstack/conformance-fixtures` the same way. Preview it any time with:
+
+```sh
+node scripts/expand-changesets.mjs --dry-run
+```
+
+The script reads "breaking" off each package's own version rather than hardcoding `minor`, because the slot semver reserves for breaking changes moves at 1.0. Nothing here needs revisiting when a package graduates.
+
+### Releasing by hand
+
+Only when CI cannot. Both halves of the automation are ordinary scripts:
+
+```sh
+pnpm run version:packages   # expand, apply changesets, format
+pnpm run release            # build, verify:pack, changeset publish
+```
+
+`version:packages` needs a `GITHUB_TOKEN` in the environment — the changelog generator links each entry to its PR.
+
+---
+
 ## Comments
 
 The convention this codebase follows, in order of how often it comes up:
