@@ -62,6 +62,14 @@ It asks which packages moved and by how much, then writes a Markdown file under 
 
 **Name only the packages you actually changed.** Dependents are worked out for you; see [The ripple rule](#the-ripple-rule) below.
 
+### Without a checkout
+
+`.github/workflows/changeset.yml` does the same thing from the Actions UI — **Actions → Add changeset → Run workflow** — for when you are reviewing on a phone, or merging someone else's PR that arrived without one.
+
+Pick your PR's branch in the **Use workflow from** selector and the changeset is committed straight to it. Run it from `main` and it opens a small PR of its own instead. The package list is a dropdown, the bump is `patch` or `minor` (never `major`, per the rule below), and the summary is one line you can expand later by editing the file.
+
+**Run it before your last push, not after.** A commit pushed by `GITHUB_TOKEN` does not trigger workflows, so if the changeset ends up as the newest commit on a PR, required checks have nothing to run against and the PR sits unmergeable. Closing and reopening the PR re-triggers them; pushing anything else does too. Adding the changeset mid-PR sidesteps it entirely.
+
 ### What CI does
 
 `.github/workflows/release.yml` runs on every push to `main`:
@@ -95,7 +103,7 @@ Renaming the workflow file breaks every trusted publisher at once, since each on
 
 Two repository settings also have to be right, both under **Settings → Actions → General**: **Allow GitHub Actions to create and approve pull requests** must be on, or the version PR is silently never opened; and workflow permissions must allow the `contents: write` the workflow asks for.
 
-**Adding a ninth package** means publishing it once by hand — trusted publishing can only be configured on a package that already exists — and then adding its trusted publisher before the next automated release.
+**Adding a ninth package** means publishing it once by hand — trusted publishing can only be configured on a package that already exists — then adding its trusted publisher before the next automated release, and adding it to the `package` dropdown in `.github/workflows/changeset.yml`.
 
 **Want a human gate on the publish itself?** Create a GitHub environment (say `npm-publish`) with required reviewers, add `environment: npm-publish` to the release job, and put that same name in the Environment field of every trusted publisher. The two must agree; a mismatch fails the publish. Until you do all three, leave the field empty.
 

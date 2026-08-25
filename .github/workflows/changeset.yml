@@ -1,0 +1,90 @@
+name: Add changeset
+
+# Writes a changeset from the Actions UI, for anyone without a checkout to hand.
+# Pick your PR's branch in the "Use workflow from" selector and the changeset is
+# committed straight to it; run it from the default branch and it opens its own
+# PR instead.
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: The package you changed. Dependents follow automatically — don't list them.
+        required: true
+        type: choice
+        options:
+          - '@haverstack/core'
+          - '@haverstack/wire-types'
+          - '@haverstack/commons'
+          - '@haverstack/conformance-fixtures'
+          - '@haverstack/blob-adapter-disk'
+          - '@haverstack/record-adapter-sqlite'
+          - '@haverstack/adapter-local'
+          - '@haverstack/adapter-api'
+      bump:
+        description: 'patch = no consumer can observe it; minor = one could. Every package is 0.x, so minor is the breaking slot.'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+      summary:
+        description: One line for the changelog, imperative, as it should read to someone upgrading.
+        required: true
+        type: string
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Inputs travel through the environment rather than `${{ }}` inside the
+      # script, so a summary containing quotes or `$` is text and never shell.
+      # `changeset add` rejects an unknown or private package itself, which is
+      # what keeps a stale dropdown option from producing a changeset that
+      # would later fail `changeset version`.
+      - name: Write the changeset
+        env:
+          BUMP: ${{ inputs.bump }}
+          PACKAGE: ${{ inputs.package }}
+          SUMMARY: ${{ inputs.summary }}
+        run: pnpm exec changeset add "--$BUMP" "$PACKAGE" -m "$SUMMARY"
+
+      - name: Commit it
+        env:
+          BUMP: ${{ inputs.bump }}
+          PACKAGE: ${{ inputs.package }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name '${{ github.actor }}'
+          git config user.email '${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com'
+          git add .changeset
+          git commit -m "chore(changeset): $BUMP $PACKAGE"
+
+          if [ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]; then
+            git push origin "HEAD:$GITHUB_REF_NAME"
+            echo "Committed to $GITHUB_REF_NAME." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          branch="changeset/$GITHUB_RUN_ID"
+          git checkout -b "$branch"
+          git push origin "$branch"
+          gh pr create --base "$DEFAULT_BRANCH" --head "$branch" \
+            --title "chore(changeset): $BUMP $PACKAGE" \
+            --body "Changeset added from the Actions UI. Merging it queues a \`$BUMP\` release of \`$PACKAGE\`." \
+            >> "$GITHUB_STEP_SUMMARY"

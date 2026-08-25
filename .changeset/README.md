@@ -12,6 +12,8 @@ Add one with:
 pnpm changeset
 ```
 
+No checkout to hand? **Actions → Add changeset → Run workflow** does the same thing from the browser — see [CONTRIBUTING.md § Without a checkout](../CONTRIBUTING.md#without-a-checkout).
+
 ## Choosing a bump while we are pre-1.0
 
 Every package is still on `0.x`, where semver puts breaking changes in the
