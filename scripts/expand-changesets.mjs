@@ -1,5 +1,20 @@
 /**
- * Propagates breaking workspace bumps to dependents, as a generated changeset.
+ * Fixes up the pending changesets so `changeset version` does the right thing.
+ *
+ * Two passes, both run by `pnpm run version:packages` before `changeset
+ * version` consumes anything, so neither ever lands in a commit.
+ *
+ * ## Drop packages that cannot be released
+ *
+ * `@haverstack/sqlite-shared` is private, and Changesets refuses outright — not
+ * skips — a changeset naming both a private package and a public one. That
+ * template is exactly what changeset-bot's "add a changeset" link pre-fills,
+ * so the failure is one unedited commit away, and it surfaces at version time
+ * rather than on the pull request that caused it. A changeset naming _only_
+ * private packages is a different mistake and still fails, loudly and here:
+ * the change would otherwise release nowhere at all.
+ *
+ * ## Propagate breaking workspace bumps to dependents
  *
  * Changesets moves a dependent only when the dependency's new version falls
  * outside the range the dependent declares, and when it does move one it always
@@ -9,9 +24,8 @@
  * every dependent must be republished against the new core, and a release that
  * carries a breaking change through is breaking in turn.
  *
- * This script writes the missing releases into `.changeset/` just before
- * `changeset version` consumes them, so a contributor writes a changeset for
- * the package they actually touched and nothing else.
+ * The induced releases are written as one more changeset, so a contributor
+ * writes a changeset for the package they actually touched and nothing else.
  *
  * "Breaking" is read off each package's own version rather than hardcoded to
  * `minor`, because the slot semver reserves for it moves at 1.0: while a
@@ -57,6 +71,8 @@ function isAtLeast(bump, floor) {
 /** @type {Map<string, { version: string, deps: string[] }>} */
 const packages = new Map();
 const manifests = new Map();
+/** Named in the workspace but outside the release plan — see the header. */
+const privateNames = new Set();
 for (const dir of readdirSync(packagesDir)) {
   let manifest;
   try {
@@ -64,9 +80,10 @@ for (const dir of readdirSync(packagesDir)) {
   } catch {
     continue;
   }
-  // Private packages sit outside the release plan entirely, so a changeset
-  // naming one would be silently dropped.
-  if (manifest.private) continue;
+  if (manifest.private) {
+    privateNames.add(manifest.name);
+    continue;
+  }
   manifests.set(manifest.name, manifest);
   packages.set(manifest.name, { version: manifest.version, deps: [] });
 }
@@ -83,14 +100,32 @@ for (const [name, manifest] of manifests) {
   for (const dep of deps) dependents.get(dep).push(name);
 }
 
-// -- what the existing changesets already ask for ---------------------------
+// -- read, and drop what cannot be released ---------------------------------
 
 /** @type {Map<string, string>} package name -> largest bump requested */
 const requested = new Map();
 for (const file of readdirSync(changesetDir)) {
   if (!file.endsWith('.md') || file === 'README.md') continue;
-  const { releases } = parseChangesetFile(readFileSync(join(changesetDir, file), 'utf8'));
-  for (const { name, type } of releases) {
+  const path = join(changesetDir, file);
+  const { releases, summary } = parseChangesetFile(readFileSync(path, 'utf8'));
+
+  const releasable = releases.filter((r) => !privateNames.has(r.name));
+  if (releasable.length < releases.length) {
+    const dropped = releases.filter((r) => privateNames.has(r.name)).map((r) => r.name);
+    if (releasable.length === 0) {
+      console.error(
+        `${file} names only packages that are never published (${dropped.join(', ')}).\n` +
+          'Name the package that ships the change instead — for sqlite-shared that is ' +
+          '@haverstack/record-adapter-sqlite, which bundles it.',
+      );
+      process.exit(1);
+    }
+    const frontmatter = releasable.map((r) => `'${r.name}': ${r.type}`).join('\n');
+    if (!dryRun) writeFileSync(path, `---\n${frontmatter}\n---\n\n${summary}\n`);
+    console.log(`${dryRun ? 'would drop' : 'dropped'} ${dropped.join(', ')} from ${file}`);
+  }
+
+  for (const { name, type } of releasable) {
     if (!packages.has(name)) continue;
     if (!isAtLeast(requested.get(name), type)) requested.set(name, type);
   }

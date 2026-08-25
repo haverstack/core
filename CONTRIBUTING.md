@@ -125,7 +125,9 @@ Every package is on `0.x`, where semver puts breaking changes in the **minor** s
 
 **Don't select `major`.** It would cut a 1.0 release, which is a deliberate decision about the install base (see [No backward compatibility yet](#no-backward-compatibility-yet)) and not something a single PR should make.
 
-`@haverstack/sqlite-shared` is `private`, so Changesets skips it entirely — it has no version to publish. A change confined to it is recorded as a change to `@haverstack/record-adapter-sqlite`, the package that bundles it and actually ships.
+`@haverstack/sqlite-shared` is `private` and has no version to publish, so a change confined to it is recorded as a change to `@haverstack/record-adapter-sqlite`, the package that bundles it and actually ships.
+
+Naming it in a changeset alongside a public package makes Changesets **refuse the whole release plan** rather than skip the one line — and that is precisely what changeset-bot's pre-filled template produces, since it lists every workspace package it can see. `scripts/expand-changesets.mjs` drops the line before `changeset version` sees it, so committing the template unedited is harmless. A changeset naming _only_ private packages still fails, and should: that change would release nowhere.
 
 ### The ripple rule
 

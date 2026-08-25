@@ -89,7 +89,7 @@ pnpm changeset
 - **`patch`** for anything a consumer cannot observe; **`minor`** for anything they can. Every package is `0.x`, so minor _is_ the breaking slot.
 - **Never `major`** — that cuts a 1.0 release, which is not a PR-level decision.
 - **No changeset** for tests, CI, or repo tooling.
-- `@haverstack/sqlite-shared` is `private` and invisible to Changesets. Record a change to it against `@haverstack/record-adapter-sqlite`, which bundles it.
+- `@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against `@haverstack/record-adapter-sqlite`, which bundles it — a changeset naming only private packages is rejected. If a template hands you a list of every package (changeset-bot's does), trim it to what you changed.
 
 A `minor` on a package minor-bumps everything that depends on it, transitively; a `patch` bumps nothing else. Preview with `node scripts/expand-changesets.mjs --dry-run`. Never hand-edit a `version` field or a `CHANGELOG.md` — CI owns both. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).
 
