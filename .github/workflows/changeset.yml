@@ -68,10 +68,13 @@ jobs:
           PACKAGE: ${{ inputs.package }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
         run: |
           set -euo pipefail
-          git config user.name '${{ github.actor }}'
-          git config user.email '${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com'
+          # Attributed to whoever ran the workflow, not to a bot.
+          git config user.name "$ACTOR"
+          git config user.email "$ACTOR_ID+$ACTOR@users.noreply.github.com"
           git add .changeset
           git commit -m "chore(changeset): $BUMP $PACKAGE"
 
