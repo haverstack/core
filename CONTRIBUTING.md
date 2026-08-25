@@ -62,11 +62,15 @@ It asks which packages moved and by how much, then writes a Markdown file under 
 
 **Name only the packages you actually changed.** Dependents are worked out for you; see [The ripple rule](#the-ripple-rule) below.
 
+[changeset-bot](https://github.com/apps/changeset-bot) comments on every pull request saying whether a changeset is present, so a missing one surfaces while the PR is open instead of at release time. It is a reminder, not a gate — plenty of PRs correctly have none, and the bot has no way to know which. Nothing in the repository configures it; it is installed once on the repository itself.
+
 ### Without a checkout
 
 `.github/workflows/changeset.yml` does the same thing from the Actions UI — **Actions → Add changeset → Run workflow** — for when you are reviewing on a phone, or merging someone else's PR that arrived without one.
 
 Pick your PR's branch in the **Use workflow from** selector and the changeset is committed straight to it. Run it from `main` and it opens a small PR of its own instead. The package list is a dropdown, the bump is `patch` or `minor` (never `major`, per the rule below), and the summary is one line you can expand later by editing the file.
+
+changeset-bot's comment also carries a link that opens the web editor with the filename pre-filled, which is quicker when you already know the frontmatter you want. The difference is only who writes the YAML: the bot hands you an empty file, the workflow fills one in from dropdowns.
 
 **Run it before your last push, not after.** A commit pushed by `GITHUB_TOKEN` does not trigger workflows, so if the changeset ends up as the newest commit on a PR, required checks have nothing to run against and the PR sits unmergeable. Closing and reopening the PR re-triggers them; pushing anything else does too. Adding the changeset mid-PR sidesteps it entirely.
 
