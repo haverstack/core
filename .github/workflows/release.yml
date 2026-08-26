@@ -25,14 +25,14 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
-      # v7 or newer, not the v4 the CI workflow pins: earlier majors export a
-      # dummy NODE_AUTH_TOKEN, and the empty .npmrc credential it writes
-      # shadows the OIDC handshake.
+      # No `registry-url`: it writes an .npmrc referencing ${NODE_AUTH_TOKEN},
+      # which trusted publishing never sets, leaving pnpm to publish with
+      # unresolvable credentials. Without it pnpm runs the OIDC exchange
+      # itself against the default registry.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
       # Opens (or refreshes) the version PR while changesets are pending, and
