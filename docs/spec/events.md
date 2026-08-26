@@ -2,6 +2,8 @@
 
 Apps observe record changes by subscribing, rather than by polling `query()`. A subscription reports **that** something changed; `query()` and `get()` report **what** it now is.
 
+This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Wire format § Change feed](./wire-format.md#change-feed).
+
 **A change event is the observable side of the versioning one-rule.** Every mutation that snapshots prior state and bumps `version` emits exactly one event; hard delete, the one exception to that rule, is the one exception here too — it emits, carries no snapshot, and ends the record's stream. See [Versioning § Version history](./versioning.md#version-history).
 
 Two things follow immediately:
