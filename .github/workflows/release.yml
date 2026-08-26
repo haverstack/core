@@ -25,14 +25,17 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
-      # v7 or newer, not the v4 the CI workflow pins: earlier majors export a
-      # dummy NODE_AUTH_TOKEN, and the empty .npmrc credential it writes
-      # shadows the OIDC handshake.
+      # No `registry-url`, deliberately. It makes setup-node write an .npmrc
+      # holding `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`, and
+      # under trusted publishing that variable does not exist — pnpm then
+      # reports `Failed to replace env in config` and publishes with broken
+      # credentials, which npm answers with a 404 rather than a 401. Omitting
+      # it leaves no .npmrc at all, so pnpm runs the OIDC exchange itself and
+      # falls back to the default registry, which is the one we want.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
       # Opens (or refreshes) the version PR while changesets are pending, and

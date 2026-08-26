@@ -100,7 +100,7 @@ That costs some one-time setup, and it is per package. On npmjs.com, each of the
 Three things in `.github/workflows/release.yml` exist only to make this work, and are worth knowing before anyone edits them:
 
 - **`id-token: write`.** Without it GitHub mints no OIDC token and the publish falls back to looking for a credential that isn't there.
-- **`actions/setup-node@v7` or newer** — deliberately ahead of the `v4` the CI workflow pins. Earlier majors export a dummy `NODE_AUTH_TOKEN`, and the empty `.npmrc` credential that writes shadows the handshake.
+- **No `registry-url` on `actions/setup-node`.** Setting it makes the action write an `.npmrc` holding `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`. Under trusted publishing that variable does not exist, so pnpm reports `Failed to replace env in config` and publishes with broken credentials — which npm answers with `E404` on the `PUT`, not a `401`, because it will not confirm a package exists to an unauthenticated caller. A 404 publishing a package you know is there is an auth failure, every time. Without `registry-url` no `.npmrc` is written, pnpm runs the OIDC exchange itself, and the default registry is the one we want anyway.
 - **pnpm pinned to 10.** `changeset publish` shells out to `pnpm publish`, so pnpm performs the OIDC exchange itself. pnpm 11 regressed it into a 404 ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513)); confirm that is fixed before moving to 11.
 
 Renaming the workflow file breaks every trusted publisher at once, since each one matches on the filename.
