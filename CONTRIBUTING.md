@@ -50,70 +50,23 @@ If you're an AI coding agent, [AGENTS.md](./AGENTS.md) is the condensed, checkab
 
 Versions and npm publishes are automated with [Changesets](https://github.com/changesets/changesets). Nobody edits a `version` field by hand, and nobody runs `npm publish`.
 
-### What a contributor does
-
-Add a changeset to the same PR as the change:
+### Adding a changeset
 
 ```sh
 pnpm changeset
 ```
 
-It asks which packages moved and by how much, then writes a Markdown file under `.changeset/`. Commit it. A PR with no user-visible effect — a test, a doc fix, a refactor that ships identical output — needs no changeset.
+Commit the file it writes under `.changeset/` alongside the change it describes. **Name only the packages you actually changed** — dependents follow automatically, per [the ripple rule](#the-ripple-rule). A PR with no user-visible effect needs no changeset.
 
-**Name only the packages you actually changed.** Dependents are worked out for you; see [The ripple rule](#the-ripple-rule) below.
-
-[changeset-bot](https://github.com/apps/changeset-bot) comments on every pull request saying whether a changeset is present, so a missing one surfaces while the PR is open instead of at release time. It is a reminder, not a gate — plenty of PRs correctly have none, and the bot has no way to know which. Nothing in the repository configures it; it is installed once on the repository itself.
+[changeset-bot](https://github.com/apps/changeset-bot) comments on every PR saying whether a changeset is present. It is a reminder, not a gate: plenty of PRs correctly have none. It is installed on the repository and configured by nothing here.
 
 ### Without a checkout
 
-`.github/workflows/changeset.yml` does the same thing from the Actions UI — **Actions → Add changeset → Run workflow** — for when you are reviewing on a phone, or merging someone else's PR that arrived without one.
+**Actions → Add changeset → Run workflow.** Pick your PR's branch in the **Use workflow from** selector and the changeset commits straight to it; run it from `main` and it opens its own PR. changeset-bot's comment carries a link to the same thing in the web editor — the difference is only who writes the frontmatter.
 
-Pick your PR's branch in the **Use workflow from** selector and the changeset is committed straight to it. Run it from `main` and it opens a small PR of its own instead. The package list is a dropdown, the bump is `patch` or `minor` (never `major`, per the rule below), and the summary is one line you can expand later by editing the file.
+Run it before your last push. A commit pushed by `GITHUB_TOKEN` triggers no workflows, so a changeset landing as the newest commit leaves required checks with nothing to run against. Closing and reopening the PR re-triggers them.
 
-changeset-bot's comment also carries a link that opens the web editor with the filename pre-filled, which is quicker when you already know the frontmatter you want. The difference is only who writes the YAML: the bot hands you an empty file, the workflow fills one in from dropdowns.
-
-**Run it before your last push, not after.** A commit pushed by `GITHUB_TOKEN` does not trigger workflows, so if the changeset ends up as the newest commit on a PR, required checks have nothing to run against and the PR sits unmergeable. Closing and reopening the PR re-triggers them; pushing anything else does too. Adding the changeset mid-PR sidesteps it entirely.
-
-### What CI does
-
-`.github/workflows/release.yml` runs on every push to `main`:
-
-- **Changesets are pending** → it opens (and keeps updating) a `chore: version packages` PR that applies every pending changeset: version fields bumped, `CHANGELOG.md` entries written, the changeset files deleted.
-- **That PR merges** → the same workflow sees no pending changesets, builds, runs `pnpm run verify:pack`, and publishes the changed packages to npm with `changeset publish`, tagging each release in git.
-
-So a release is one reviewable PR, and merging it is the act of publishing. Whoever can merge to `main` can publish, which is the reason `main` is protected.
-
-### How the publish authenticates
-
-There is no `NPM_TOKEN`, and there should never be one. Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/): the workflow requests a short-lived OIDC token from GitHub and npm trades it for publish rights, so no long-lived credential is stored in the repository at all.
-
-That costs some one-time setup, and it is per package. On npmjs.com, each of the eight published packages needs a trusted publisher under its settings:
-
-| Field             | Value           |
-| ----------------- | --------------- |
-| Publisher         | GitHub Actions  |
-| Organization/user | `haverstack`    |
-| Repository        | `core`          |
-| Workflow filename | `release.yml`   |
-| Environment       | _(leave empty)_ |
-
-Three things in `.github/workflows/release.yml` exist only to make this work, and are worth knowing before anyone edits them:
-
-- **`id-token: write`.** Without it GitHub mints no OIDC token and the publish falls back to looking for a credential that isn't there.
-- **No `registry-url` on `actions/setup-node`.** Setting it makes the action write an `.npmrc` holding `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`. Under trusted publishing that variable does not exist, so pnpm reports `Failed to replace env in config` and publishes with broken credentials — which npm answers with `E404` on the `PUT`, not a `401`, because it will not confirm a package exists to an unauthenticated caller. A 404 publishing a package you know is there is an auth failure, every time. Without `registry-url` no `.npmrc` is written, pnpm runs the OIDC exchange itself, and the default registry is the one we want anyway.
-- **pnpm pinned to 10.** `changeset publish` shells out to `pnpm publish`, so pnpm performs the OIDC exchange itself. pnpm 11 regressed it into a 404 ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513)); confirm that is fixed before moving to 11.
-
-Renaming the workflow file breaks every trusted publisher at once, since each one matches on the filename.
-
-Two repository settings also have to be right, both under **Settings → Actions → General**: **Allow GitHub Actions to create and approve pull requests** must be on, or the version PR is silently never opened; and workflow permissions must allow the `contents: write` the workflow asks for.
-
-**Adding a ninth package** means publishing it once by hand — trusted publishing can only be configured on a package that already exists — then adding its trusted publisher before the next automated release, and adding it to the `package` dropdown in `.github/workflows/changeset.yml`.
-
-**Want a human gate on the publish itself?** Create a GitHub environment (say `npm-publish`) with required reviewers, add `environment: npm-publish` to the release job, and put that same name in the Environment field of every trusted publisher. The two must agree; a mismatch fails the publish. Until you do all three, leave the field empty.
-
-`GITHUB_TOKEN` is provided by Actions and needs no setup.
-
-### Choosing a bump while we are pre-1.0
+### Choosing a bump
 
 Every package is on `0.x`, where semver puts breaking changes in the **minor** slot:
 
@@ -123,32 +76,59 @@ Every package is on `0.x`, where semver puts breaking changes in the **minor** s
 | Renamed or removed exports, changed behavior, a new required option | `minor`        |
 | Nothing ships — tests, CI, repo tooling                             | _no changeset_ |
 
-**Don't select `major`.** It would cut a 1.0 release, which is a deliberate decision about the install base (see [No backward compatibility yet](#no-backward-compatibility-yet)) and not something a single PR should make.
+**Don't select `major`.** It cuts a 1.0 release, which is a decision about the install base (see [No backward compatibility yet](#no-backward-compatibility-yet)), not something a single PR makes.
 
-`@haverstack/sqlite-shared` is `private` and has no version to publish, so a change confined to it is recorded as a change to `@haverstack/record-adapter-sqlite`, the package that bundles it and actually ships.
-
-Naming it in a changeset alongside a public package makes Changesets **refuse the whole release plan** rather than skip the one line — and that is precisely what changeset-bot's pre-filled template produces, since it lists every workspace package it can see. `scripts/expand-changesets.mjs` drops the line before `changeset version` sees it, so committing the template unedited is harmless. A changeset naming _only_ private packages still fails, and should: that change would release nowhere.
+`@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against `@haverstack/record-adapter-sqlite`, which bundles it. Naming a private package beside a public one makes Changesets refuse the whole release plan, so `scripts/expand-changesets.mjs` drops the line first — changeset-bot's all-packages template is safe to commit unedited. A changeset naming _only_ private packages fails: it would release nowhere.
 
 ### The ripple rule
 
-Packages depend on each other through `workspace:^`, and on `0.x` a caret accepts patches but not minors. That single fact decides both directions:
+Packages depend on each other through `workspace:^`, and on `0.x` a caret accepts patches but not minors:
 
-- **A `patch` to `@haverstack/core` moves nothing else.** `^0.11.1` already accepts `0.11.2`, so no dependent needs republishing — and Changesets leaves them alone on its own.
-- **A `minor` to `@haverstack/core` moves every dependent by a `minor` too.** `^0.11.1` rejects `0.12.0`, so each dependent has to be republished against the new core, and a release that carries a breaking change through to its own consumers is breaking in turn.
+- **A `patch` moves nothing else.** `^0.11.1` already accepts `0.11.2`.
+- **A `minor` moves every dependent by a `minor`.** `^0.11.1` rejects `0.12.0`, so each dependent is republished against it — and carries the break through to its own consumers.
 
-Changesets gets the first case right unaided but would only patch-bump dependents in the second. `scripts/expand-changesets.mjs` closes that gap: during `pnpm run version:packages` it reads the pending changesets, walks `dependencies` and `peerDependencies` across the workspace, and writes the induced releases as one more changeset before `changeset version` consumes them all.
-
-The rule is transitive and applies to every workspace dependency, not just `core` — a `minor` to `@haverstack/wire-types` minor-bumps `@haverstack/adapter-api` and `@haverstack/conformance-fixtures` the same way. Preview it any time with:
+`scripts/expand-changesets.mjs` applies the second rule during `pnpm run version:packages`, transitively and for every workspace dependency: a `minor` to `@haverstack/wire-types` minor-bumps `@haverstack/adapter-api` and `@haverstack/conformance-fixtures`. It reads "breaking" off each package's own version, so the rule still holds past 1.0. Preview with:
 
 ```sh
 node scripts/expand-changesets.mjs --dry-run
 ```
 
-The script reads "breaking" off each package's own version rather than hardcoding `minor`, because the slot semver reserves for breaking changes moves at 1.0. Nothing here needs revisiting when a package graduates.
+### What CI does
+
+`.github/workflows/release.yml` runs on every push to `main`:
+
+- **Changesets pending** → opens and updates a `chore: version packages` PR applying them: versions bumped, `CHANGELOG.md` entries written, changeset files deleted.
+- **None pending** → builds, runs `pnpm run verify:pack`, publishes with `changeset publish`, and tags each release.
+
+A release is one reviewable PR, and merging it is the act of publishing. Whoever can merge to `main` can publish, which is why `main` is protected.
+
+### How the publish authenticates
+
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers/): a short-lived OIDC token, no `NPM_TOKEN` secret anywhere. Each published package carries a trusted publisher on npmjs.com:
+
+| Field             | Value           |
+| ----------------- | --------------- |
+| Publisher         | GitHub Actions  |
+| Organization/user | `haverstack`    |
+| Repository        | `core`          |
+| Workflow filename | `release.yml`   |
+| Environment       | _(leave empty)_ |
+
+Three things in `release.yml` are load-bearing:
+
+- **`id-token: write`** — no OIDC token is minted without it.
+- **No `registry-url` on `actions/setup-node`** — it writes an `.npmrc` referencing `${NODE_AUTH_TOKEN}`, which trusted publishing never sets, leaving pnpm to publish with unresolvable credentials. npm answers that with `E404` on the `PUT` rather than `401`, since it will not confirm a package exists to an unauthenticated caller.
+- **pnpm pinned to 10** — `changeset publish` shells out to `pnpm publish`, and pnpm 11 regressed OIDC ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513)).
+
+Renaming the workflow file breaks every trusted publisher at once; each matches on the filename.
+
+Under **Settings → Actions → General**, _Allow GitHub Actions to create and approve pull requests_ must stay on, or the version PR is never opened.
+
+**A ninth package** needs one manual publish (trusted publishing configures only on a package that exists), then its own trusted publisher and an entry in the `package` dropdown in `.github/workflows/changeset.yml`.
+
+**To gate the publish on a human:** create a GitHub environment with required reviewers, add `environment:` to the release job, and name it in every trusted publisher. All three must agree.
 
 ### Releasing by hand
-
-Only when CI cannot. Both halves of the automation are ordinary scripts:
 
 ```sh
 pnpm run version:packages   # expand, apply changesets, format

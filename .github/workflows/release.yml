@@ -25,13 +25,10 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
-      # No `registry-url`, deliberately. It makes setup-node write an .npmrc
-      # holding `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`, and
-      # under trusted publishing that variable does not exist — pnpm then
-      # reports `Failed to replace env in config` and publishes with broken
-      # credentials, which npm answers with a 404 rather than a 401. Omitting
-      # it leaves no .npmrc at all, so pnpm runs the OIDC exchange itself and
-      # falls back to the default registry, which is the one we want.
+      # No `registry-url`: it writes an .npmrc referencing ${NODE_AUTH_TOKEN},
+      # which trusted publishing never sets, leaving pnpm to publish with
+      # unresolvable credentials. Without it pnpm runs the OIDC exchange
+      # itself against the default registry.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
