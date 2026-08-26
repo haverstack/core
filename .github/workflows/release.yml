@@ -20,11 +20,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # pnpm 10 deliberately: 11 regressed OIDC publishing into a 404
-      # (pnpm/pnpm#11513). Confirm that is fixed before moving to 11.
+      # pnpm 11, ahead of the 10 the CI workflow pins: `changeset publish`
+      # shells out to `pnpm publish`, and the OIDC exchange that stands in for
+      # a stored token is an 11.x feature. pnpm 10 reports ENEEDAUTH instead.
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11
       # No `registry-url`: it writes an .npmrc referencing ${NODE_AUTH_TOKEN},
       # which trusted publishing never sets, leaving pnpm to publish with
       # unresolvable credentials. Without it pnpm runs the OIDC exchange

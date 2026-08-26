@@ -117,8 +117,8 @@ A release is one reviewable PR, and merging it is the act of publishing. Whoever
 Three things in `release.yml` are load-bearing:
 
 - **`id-token: write`** — no OIDC token is minted without it.
-- **No `registry-url` on `actions/setup-node`** — it writes an `.npmrc` referencing `${NODE_AUTH_TOKEN}`, which trusted publishing never sets, leaving pnpm to publish with unresolvable credentials. npm answers that with `E404` on the `PUT` rather than `401`, since it will not confirm a package exists to an unauthenticated caller.
-- **pnpm pinned to 10** — `changeset publish` shells out to `pnpm publish`, and pnpm 11 regressed OIDC ([pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513)).
+- **No `registry-url` on `actions/setup-node`** — it writes an `.npmrc` referencing `${NODE_AUTH_TOKEN}`, which trusted publishing never sets, leaving pnpm to publish with unresolvable credentials. npm answers that with `E404` on the `PUT` rather than `401`, since it will not confirm a package exists to an unauthenticated caller. A 404 publishing a package that exists is an auth failure; `ENEEDAUTH` is no credential at all.
+- **pnpm pinned to 11**, ahead of the 10 `ci.yml` pins — `changeset publish` shells out to `pnpm publish`, and the OIDC exchange is an 11.x feature. On 10 the publish fails with `ENEEDAUTH`.
 
 Renaming the workflow file breaks every trusted publisher at once; each matches on the filename.
 
