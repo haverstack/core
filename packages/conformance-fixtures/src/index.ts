@@ -28,6 +28,9 @@ import type {
   WireQueryResponse,
   WireError,
   WireVersion,
+  WireRecordChange,
+  WireReadyFrame,
+  WireResetFrame,
   DiscoveryResponse,
   AuthChallengeRequest,
   AuthChallengeResponse,
@@ -153,6 +156,54 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         maxContentBytes: 1048576,
       },
       auth: { methods: ['did-challenge'] },
+    },
+  },
+  {
+    name: 'discovery-advertises-a-change-feed',
+    description:
+      'A server offering a change feed says so as its own top-level object, so a client learns ' +
+      'at open() whether there is a feed to connect to rather than as a 404 partway through a ' +
+      'connection. `transports` lists what it speaks, `resume` whether a cursor is honored, and ' +
+      '`records` whether ?include=record is. An object rather than a boolean because the ' +
+      'surface grows entries — see docs/spec/wire-format.md § Change feed.',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      capabilities: {
+        fullTextSearch: true,
+        contentFieldQuery: true,
+        sortableFields: ['createdAt', 'updatedAt', 'version'],
+        maxAttachmentBytes: 52428800,
+        maxContentBytes: 1048576,
+      },
+      auth: { methods: ['did-challenge'] },
+      changes: { transports: ['sse'], resume: true, records: true },
+    },
+  },
+  {
+    name: 'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
+    description:
+      'Both flags false is fully conformant: such a server answers every connection with a ' +
+      'reset frame and never honors ?include=record. A client that treats either as required ' +
+      'refuses a server this spec permits — the fetch fallback is the contract for the record, ' +
+      'and reconciling by query is the contract for the gap.',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      capabilities: {
+        fullTextSearch: false,
+        contentFieldQuery: false,
+        sortableFields: ['createdAt'],
+        maxAttachmentBytes: null,
+        maxContentBytes: null,
+      },
+      changes: { transports: ['sse'], resume: false, records: false },
     },
   },
 ];
@@ -1941,15 +1992,687 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
 ];
 
 // -------------------------------------------------------
+// Change feed
+// -------------------------------------------------------
+//
+// GET /changes pins an ordered stream of SSE frames rather than one JSON
+// body, and most of what it must pin is what a *mutation* makes the open
+// connection say — hence a fixture type of its own. A frame is recorded as
+// its `id:`, `event:` name and parsed `data:`; the SSE encoding around them
+// is the transport's, not this spec's.
+//
+// Every connection below assumes a valid bearer token and Accept:
+// text/event-stream, and a server advertising `changes` in discovery. See
+// docs/spec/wire-format.md § Change feed.
+
+/** One SSE frame: `id:` (when the frame is resumable), `event:`, and parsed `data:`. */
+export type ChangeFeedFrame = {
+  /** SSE `id:`. Present only on frames a cursor can resume from — control frames carry none. */
+  id?: string;
+  /** SSE `event:` name. A client MUST ignore a name it does not recognize. */
+  event: string;
+  /** SSE `data:`, as parsed JSON. */
+  data: WireRecordChange | WireReadyFrame | WireResetFrame | Record<string, unknown>;
+};
+
+/** A mutation applied while the connection is open, and what it must produce there. */
+export type ChangeFeedActivity = {
+  /** An ordinary request, made by the session its own description names. */
+  mutation: ConformanceFixture;
+  /** The frames this mutation must produce on the open connection. Empty means none. */
+  frames: ChangeFeedFrame[];
+};
+
+export type ChangeFeedFixture = {
+  /** Unique, stable name — usable as a test-case id. */
+  name: string;
+  /** What this fixture pins down, and why. Also states the prior state and the session it assumes, since a connection carries no body. */
+  description: string;
+  /** Request path including query string, e.g. "/changes?typeId=com.example/note@1". */
+  path: string;
+  /** Headers this connection sends beyond Authorization and Accept — Last-Event-ID when resuming. */
+  requestHeaders?: Record<string, string>;
+  /** Requests applied before this connection opens. It learns of them only through a cursor, never as live frames. */
+  precedingMutations?: ConformanceFixture[];
+  responseStatus: number;
+  /** Frames delivered on connect, before any mutation below. `ready` always leads. */
+  openingFrames: ChangeFeedFrame[];
+  /** Mutations applied while the connection is open, in order. */
+  activity?: ChangeFeedActivity[];
+};
+
+/**
+ * Two or more connections whose *order* is the thing being pinned — what a
+ * server owes a client that comes back holding a cursor. Steps are applied
+ * in order against one server, each opened after the previous has closed.
+ */
+export type ChangeFeedSequenceFixture = {
+  /** Unique, stable name — usable as a test-case id. */
+  name: string;
+  /** What this sequence pins down, why order matters, and any assumed prior state. */
+  description: string;
+  steps: ChangeFeedFixture[];
+};
+
+const FEED_OWNER = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+const FEED_CONTRIBUTOR = 'entity-contributor-789';
+
+/** The head cursor a server reports on connect, before anything has happened. */
+const FEED_HEAD_SEQ = 'AA3f1Q';
+
+const READY: ChangeFeedFrame = { event: 'ready', data: { seq: FEED_HEAD_SEQ } };
+
+export const changeFeedFixtures: ChangeFeedFixture[] = [
+  {
+    name: 'change-feed-ready-leads-every-connection',
+    description:
+      'A connection is answered with a ready frame before anything else, carrying the head ' +
+      'cursor. It is what makes subscribe-then-query gap-free: a client that awaits it before ' +
+      'querying knows every later change reaches it as a frame, and the overlap is absorbed by ' +
+      'the version comparison it already makes. A server that sends changes before ready leaves ' +
+      'every client to discover that race on its own.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+  },
+  {
+    name: 'change-feed-created-frame',
+    description:
+      'A create produces one frame, kind "created" and op "create", carrying the identity, ' +
+      'type and version of what was written plus the actor who wrote it. The envelope has no ' +
+      "record provenance in it: `actor` is who performed the change, never the record's author " +
+      '— see docs/spec/events.md § Attribution. Here the two coincide, because a create is the ' +
+      'one mutation where they do.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-created-frame-mutation',
+          description: 'The owner creates a note.',
+          method: 'POST',
+          path: '/records',
+          requestBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 1,
+          },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 1,
+            entityId: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1R',
+            event: 'record',
+            data: {
+              kind: 'created',
+              op: 'create',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 1,
+              updatedAt: '2024-01-01T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-changed-frame-names-the-verb',
+    description:
+      'Seven mutation verbs arrive as kind "changed" — update, associate, dissociate, ' +
+      'permissions, migrate, restore and undelete — and `op` is what separates them. A client ' +
+      'branching on kind alone is correct and complete; one that needs to tell a reshare from ' +
+      'an edit reads op. Both fields are carried because the safe default has to be the easy ' +
+      'one: a client wired to three named events would silently miss the other seven verbs. ' +
+      'The actor is the contributor who made this write, while the record keeps its own author.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-changed-frame-mutation',
+          description: 'A contributor edits the note.',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
+          requestBody: { title: 'edited by a contributor' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { title: 'edited by a contributor' },
+            version: 2,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_CONTRIBUTOR,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1S',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'update',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
+              actor: { entityId: FEED_CONTRIBUTOR },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-deleted-frame-is-not-terminal',
+    description:
+      'A soft delete is kind "deleted" and bumps a version like any other mutation, so the ' +
+      'record can still be undeleted, restored or read as history. That is what separates it ' +
+      'from "purged" below, and why the two are distinct kinds rather than one delete signal: a ' +
+      'consumer that drops its history on a soft delete has thrown away recoverable state.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-deleted-frame-mutation',
+          description: 'The owner soft-deletes the note.',
+          method: 'DELETE',
+          path: '/records/1hk153x00001',
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 3,
+            entityId: FEED_OWNER,
+            deletedAt: '2024-01-03T00:00:00.000Z',
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1T',
+            event: 'record',
+            data: {
+              kind: 'deleted',
+              op: 'delete',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 3,
+              updatedAt: '2024-01-03T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-purged-frame-carries-nothing-about-the-record',
+    description:
+      'The rule a server is most likely to break, because it is holding the record at exactly ' +
+      'that moment: readability for a purge can only be evaluated before the write, so the ' +
+      'record is in hand when the frame is built. It carries kind, op, recordId, typeId, ' +
+      'version, updatedAt and actor — no record body even though this connection asked for one, ' +
+      'no parentId, and no author. Hard delete is the erasure primitive, and a frame naming ' +
+      'what was erased writes a permanent note of it into every subscriber log at the moment ' +
+      'the stack finished destroying its own copy. What survives is the useful property: a ' +
+      'purge tells a consumer holding the record to forget it, and tells one that never held it ' +
+      'nothing. The actor comes from the request, since a hard delete stamps nothing on a ' +
+      'record that no longer exists; the verb is owner-only and refuses delegation, so there is ' +
+      'never a principal beside it. See docs/spec/events.md § Purged records carry nothing.',
+    path: '/changes?include=record',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-purged-frame-mutation',
+          description: 'The owner hard-deletes a note that had a parent and an author.',
+          method: 'DELETE',
+          path: '/records/1hk153x00002?hard=true',
+          responseStatus: 204,
+        },
+        frames: [
+          {
+            id: 'AA3f1U',
+            event: 'record',
+            data: {
+              kind: 'purged',
+              op: 'hard-delete',
+              recordId: '1hk153x00002',
+              typeId: 'com.example/note@1',
+              version: 4,
+              updatedAt: '2024-01-04T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-include-record-carries-the-body',
+    description:
+      'A connection passing ?include=record against a server advertising records:true gets the ' +
+      'record as of the change, so a reactive consumer answers an event without a fetch. It is ' +
+      'a bandwidth decision, never an access one: a subscriber who may not read the record ' +
+      'receives no frame at all, so there is no case where the envelope is deliverable and the ' +
+      'body is not. It stays optional — a server declaring records:false is conformant, and the ' +
+      'fallback is a fetch — so a client that assumes presence breaks against half the servers ' +
+      'this spec permits.',
+    path: '/changes?include=record',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-include-record-mutation',
+          description: 'The owner edits the note.',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
+          requestBody: { title: 'Updated title' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { title: 'Updated title' },
+            version: 2,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1V',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'update',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+              record: {
+                id: '1hk153x00001',
+                typeId: 'com.example/note@1',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+                content: { title: 'Updated title' },
+                version: 2,
+                entityId: FEED_OWNER,
+                updatedBy: FEED_OWNER,
+              },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-unreadable-record-produces-no-frame',
+    description:
+      'This connection belongs to a contributor with no grant on 1hk153x09001, a private record ' +
+      "of the owner's. The owner edits it, and the contributor receives nothing — not an empty " +
+      'frame, not a redacted one. The existence of a change is itself a disclosure: a frame ' +
+      'stripped of its content still reports that a record exists and that someone is working ' +
+      "on it, which is the same reasoning that keeps a scoped query's total null. The predicate " +
+      'is canRead applied per event, so a feed cannot disagree with get() and query() about ' +
+      'what this session sees. Assumes the second edit, to a note the contributor may read, so ' +
+      'that the fixture distinguishes filtering from a server that simply emits nothing.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-unreadable-record-mutation',
+          description: "The owner edits a private record the connection's session cannot read.",
+          method: 'PATCH',
+          path: '/records/1hk153x09001',
+          requestBody: { title: 'private' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x09001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { title: 'private' },
+            version: 2,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_OWNER,
+            permissions: [],
+          },
+        },
+        frames: [],
+      },
+      {
+        mutation: {
+          name: 'change-feed-readable-record-mutation',
+          description: 'The owner edits a note this session may read.',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
+          requestBody: { title: 'shared' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { title: 'shared' },
+            version: 2,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1X',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'update',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-typeid-filter-matches-by-baseid',
+    description:
+      'A ?typeId filter is matched by baseId, exactly as a grant is, so a type version bump ' +
+      'never silently orphans a subscription: a connection filtered on note@1 receives note@2 ' +
+      'changes, including the migration that produced them. A change to another type is not ' +
+      'delivered at all — filtering here is exact rather than advisory, so a client that ' +
+      'filters again is doing redundant work rather than defensive work.',
+    path: '/changes?typeId=com.example/note@1',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-typeid-filter-other-type-mutation',
+          description: 'A change to a record of an unrelated type.',
+          method: 'PATCH',
+          path: '/records/1hk153x03001',
+          requestBody: { url: 'https://example.com' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x03001',
+            typeId: 'com.example/bookmark@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { url: 'https://example.com' },
+            version: 2,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_OWNER,
+          },
+        },
+        frames: [],
+      },
+      {
+        mutation: {
+          name: 'change-feed-typeid-filter-migrated-record-mutation',
+          description: 'The note is migrated to note@2, which the filter still covers.',
+          method: 'POST',
+          path: '/records/1hk153x00001/migrate',
+          requestBody: {
+            toTypeId: 'com.example/note@2',
+            content: { title: 'Hello', tags: [] },
+          },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@2',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-05T00:00:00.000Z',
+            content: { title: 'Hello', tags: [] },
+            version: 5,
+            entityId: FEED_OWNER,
+            updatedBy: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1Y',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'migrate',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@2',
+              version: 5,
+              updatedAt: '2024-01-05T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-reset-when-no-cursor-is-honored',
+    description:
+      'A server advertising resume:false answers every connection presenting a cursor with a ' +
+      'reset, and is fully conformant in doing so. ready still leads — it carries the cursor ' +
+      'the client resumes from *after* reconciling — and its seq is absent here, since a server ' +
+      "that mints no cursors has none to name. A client's repair is the same for all three " +
+      'reset reasons and is the same work as startup: reconcile by query.',
+    path: '/changes',
+    requestHeaders: { 'Last-Event-ID': 'AA3f1R' },
+    responseStatus: 200,
+    openingFrames: [
+      { event: 'ready', data: {} },
+      { event: 'reset', data: { reason: 'not_supported' } },
+    ],
+  },
+  {
+    name: 'change-feed-unknown-frame-names-are-ignored',
+    description:
+      'A client MUST ignore a frame whose event name it does not recognize, which is what makes ' +
+      'a new frame an additive minor change rather than a break — type events and batch frames ' +
+      'arrive that way. This fixture is a client obligation rather than a server one: a server ' +
+      'implementing only this version emits no such frame, and a client that errors on one ' +
+      'refuses a server that is conformant with a later minor. The record frame after it must ' +
+      'still be delivered, since ignoring is not disconnecting.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [
+      READY,
+      { id: 'AA3f1Z', event: 'type', data: { typeId: 'com.example/note@2' } },
+      {
+        id: 'AA3f20',
+        event: 'record',
+        data: {
+          kind: 'changed',
+          op: 'update',
+          recordId: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          version: 2,
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          actor: { entityId: FEED_OWNER },
+        },
+      },
+    ],
+  },
+];
+
+export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
+  {
+    name: 'change-feed-resume-delivers-what-was-missed',
+    description:
+      'The obligation a single connection cannot express: a client that comes back holding a ' +
+      'cursor is owed what happened while it was gone. The first connection sees one change and ' +
+      'closes; a second change lands with nobody listening; the reconnect presents the last id ' +
+      'it saw and receives that second change, and only that one — the frame it already has is ' +
+      'not replayed, since the cursor names what was delivered rather than where to rewind to. ' +
+      'ready still leads on the reconnect. A server that answers this with a reset is ' +
+      'conformant only if it advertises resume:false; one advertising resume:true and resuming ' +
+      'from wherever it can is the failure this pins, because the gap it leaves is silent.',
+    steps: [
+      {
+        name: 'change-feed-resume-first-connection',
+        description: 'The client connects fresh and sees one change, whose id it retains.',
+        path: '/changes',
+        responseStatus: 200,
+        openingFrames: [READY],
+        activity: [
+          {
+            mutation: {
+              name: 'change-feed-resume-first-change',
+              description: 'The owner edits the note while the client is connected.',
+              method: 'PATCH',
+              path: '/records/1hk153x00001',
+              requestBody: { title: 'first' },
+              responseStatus: 200,
+              responseBody: {
+                id: '1hk153x00001',
+                typeId: 'com.example/note@1',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+                content: { title: 'first' },
+                version: 2,
+                entityId: FEED_OWNER,
+                updatedBy: FEED_OWNER,
+              },
+            },
+            frames: [
+              {
+                id: 'AA3f1R',
+                event: 'record',
+                data: {
+                  kind: 'changed',
+                  op: 'update',
+                  recordId: '1hk153x00001',
+                  typeId: 'com.example/note@1',
+                  version: 2,
+                  updatedAt: '2024-01-02T00:00:00.000Z',
+                  actor: { entityId: FEED_OWNER },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        name: 'change-feed-resume-second-connection',
+        description:
+          'The client reconnects presenting the last id it saw, after a change it missed.',
+        path: '/changes',
+        requestHeaders: { 'Last-Event-ID': 'AA3f1R' },
+        precedingMutations: [
+          {
+            name: 'change-feed-resume-missed-change',
+            description: 'A second edit, made while no connection was open.',
+            method: 'PATCH',
+            path: '/records/1hk153x00001',
+            requestBody: { title: 'second' },
+            responseStatus: 200,
+            responseBody: {
+              id: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              createdAt: '2024-01-01T00:00:00.000Z',
+              updatedAt: '2024-01-03T00:00:00.000Z',
+              content: { title: 'second' },
+              version: 3,
+              entityId: FEED_OWNER,
+              updatedBy: FEED_OWNER,
+            },
+          },
+        ],
+        responseStatus: 200,
+        openingFrames: [
+          { event: 'ready', data: { seq: 'AA3f1S' } },
+          {
+            id: 'AA3f1S',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'update',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 3,
+              updatedAt: '2024-01-03T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-reset-rather-than-resume-from-wherever-it-can',
+    description:
+      'The same reconnect against a server whose buffer no longer reaches the cursor. It says ' +
+      'so with a reset instead of delivering what it still holds, because a partial resume is ' +
+      'indistinguishable to the client from a complete one — it would apply the frames it got ' +
+      'and never learn about the ones it did not. Nothing is silently skipped is the property ' +
+      'that makes a feed worth trusting, and this is the one place a server is tempted to break ' +
+      'it. The reason is informational; the repair is a reconcile by query either way.',
+    steps: [
+      {
+        name: 'change-feed-reset-first-connection',
+        description: 'The client connects fresh and retains the head cursor from ready.',
+        path: '/changes',
+        responseStatus: 200,
+        openingFrames: [READY],
+      },
+      {
+        name: 'change-feed-reset-expired-cursor',
+        description:
+          'The client reconnects long enough afterwards that its cursor has fallen out of the ' +
+          "server's buffer.",
+        path: '/changes',
+        requestHeaders: { 'Last-Event-ID': FEED_HEAD_SEQ },
+        responseStatus: 200,
+        openingFrames: [
+          { event: 'ready', data: { seq: 'AB90zT' } },
+          { event: 'reset', data: { reason: 'cursor_expired' } },
+        ],
+      },
+    ],
+  },
+];
+
+// -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
 
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
- * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures
- * and authSequenceFixtures — each a different shape (binary body,
- * header-focused, or an ordered series rather than a plain JSON
- * request/response pair), imported separately.
+ * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
+ * authSequenceFixtures, changeFeedFixtures and changeFeedSequenceFixtures —
+ * each a different shape (binary body, header-focused, or an ordered series
+ * rather than a plain JSON request/response pair), imported separately.
  *
  * The auth fixtures are the one group here sent with no bearer token, since
  * they are how a token is earned.

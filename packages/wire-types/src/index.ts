@@ -7,6 +7,9 @@ import type {
   ValidationError,
   SchemaDriftViolation,
   StackErrorCode,
+  ChangeKind,
+  ChangeOp,
+  RecordChange,
 } from '@haverstack/core';
 import type { AdapterCapabilities } from '@haverstack/core/adapter';
 import {
@@ -338,6 +341,7 @@ export type DiscoveryResponse = {
   timezone?: string;
   capabilities: AdapterCapabilities;
   auth?: DiscoveryAuth;
+  changes?: DiscoveryChanges;
 };
 
 /**
@@ -361,6 +365,39 @@ export type AuthMethod = typeof AUTH_METHOD_DID_CHALLENGE;
 /** Whether a server advertises the DID challenge–response handshake. */
 export function supportsDidChallenge(discovery: DiscoveryResponse): boolean {
   return discovery.auth?.methods?.includes(AUTH_METHOD_DID_CHALLENGE) ?? false;
+}
+
+/**
+ * The change feed a server offers, absent when it offers none. An object
+ * rather than a boolean for the same reason `auth` is one: this surface
+ * grows entries — another transport, batched frames — and the alternative
+ * is a boolean followed by three more of them.
+ *
+ * See docs/spec/wire-format.md § Change feed.
+ */
+export type DiscoveryChanges = {
+  transports: ChangeTransport[];
+  /**
+   * Whether a resume cursor is honored. `false` is conformant and means
+   * every reconnect is answered with a `reset` frame.
+   */
+  resume: boolean;
+  /** Whether `?include=record` is honored. Never honored for a purge. */
+  records: boolean;
+};
+
+/** Server→client streaming over `fetch`. The only transport in this version. */
+export const CHANGE_TRANSPORT_SSE = 'sse';
+
+export type ChangeTransport = typeof CHANGE_TRANSPORT_SSE;
+
+/**
+ * Whether a server offers a change feed this client can consume. A client
+ * checks this and fails locally rather than learning it as a 404 partway
+ * through a connection — the same reason `auth.methods` exists.
+ */
+export function supportsChangeFeed(discovery: DiscoveryResponse): boolean {
+  return discovery.changes?.transports?.includes(CHANGE_TRANSPORT_SSE) ?? false;
 }
 
 // -------------------------------------------------------
@@ -447,6 +484,111 @@ export function isWireAuthError(body: unknown): body is WireAuthError {
 /** Whether retrying the handshake from a fresh nonce could succeed. */
 export function isRetryableAuthError(code: WireAuthErrorCode): boolean {
   return RETRYABLE_AUTH_CODES.has(code);
+}
+
+// -------------------------------------------------------
+// Change feed
+// -------------------------------------------------------
+
+/**
+ * One change, as a `record` frame carries it. The envelope describes the
+ * change and nothing else: the record's own provenance rides `record`,
+ * where a consumer that wants it asks for it. See docs/spec/events.md
+ * § Attribution.
+ */
+export type WireRecordChange = {
+  kind: ChangeKind;
+  op: ChangeOp;
+  recordId: string;
+  typeId: string;
+  version: number;
+  updatedAt: string;
+  parentId?: string;
+  actor?: WireChangeActor;
+  record?: WireRecord;
+  seq?: string;
+};
+
+/** Who performed a change. Never who authored the record. */
+export type WireChangeActor = {
+  entityId: string;
+  principalId?: string;
+  appId?: string;
+};
+
+/**
+ * A change as a server frames it. A purge carries neither the record nor
+ * its parent, whatever the subscriber asked for: hard delete is the
+ * erasure primitive, and a frame carrying the body — or anything else
+ * pointing at it — hands every subscriber a permanent copy of what the
+ * stack has just destroyed.
+ *
+ * The rule lives here rather than at each call site because a server holds
+ * the purged record at that moment, for the readability check it can only
+ * make before the write, and so is in exactly the position to leak it. See
+ * docs/spec/events.md § Purged records carry nothing.
+ */
+export function serializeChange(c: RecordChange): WireRecordChange {
+  const w: WireRecordChange = {
+    kind: c.kind,
+    op: c.op,
+    recordId: c.recordId,
+    typeId: c.typeId,
+    version: c.version,
+    updatedAt: c.updatedAt.toISOString(),
+  };
+  if (c.actor !== undefined) {
+    const actor: WireChangeActor = { entityId: c.actor.entityId };
+    if (c.actor.principalId !== undefined) actor.principalId = c.actor.principalId;
+    if (c.actor.appId !== undefined) actor.appId = c.actor.appId;
+    w.actor = actor;
+  }
+  if (c.seq !== undefined) w.seq = c.seq;
+  if (c.kind === 'purged') return w;
+  if (c.parentId !== undefined) w.parentId = c.parentId;
+  if (c.record !== undefined) w.record = serializeRecord(c.record);
+  return w;
+}
+
+/**
+ * Frame names. Every frame carries one, and a client MUST ignore a name it
+ * does not recognize — which is what makes a new frame an additive, minor
+ * change rather than a break. See docs/spec/wire-format.md § Change feed.
+ */
+export const CHANGE_FRAME_READY = 'ready';
+export const CHANGE_FRAME_RECORD = 'record';
+export const CHANGE_FRAME_RESET = 'reset';
+
+/**
+ * Sent first on every connection, before any change. It is what makes
+ * subscribe-then-query gap-free: everything after it is in the stream.
+ */
+export type WireReadyFrame = {
+  /** The head cursor. Absent from a server that mints none (`resume: false`). */
+  seq?: string;
+};
+
+/**
+ * Why a cursor could not be honored. Informational — a client's repair is
+ * the same for all three, and it is reconciling by query.
+ */
+export type ChangeResetReason = 'cursor_expired' | 'not_supported' | 'overflow';
+
+/** Your cursor cannot be honored; resynchronize by query. */
+export type WireResetFrame = {
+  reason: ChangeResetReason;
+};
+
+/**
+ * A cursor travels in an SSE `id:` field, so a value spanning a line would
+ * truncate the frame carrying it. Same charset and same reason as the auth
+ * nonce — see docs/spec/wire-format.md § The handshake.
+ */
+const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
+
+/** Whether a cursor is framable: unreserved base64url characters only. */
+export function isValidSeq(seq: string): boolean {
+  return SEQ_FORMAT.test(seq);
 }
 
 /** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */
