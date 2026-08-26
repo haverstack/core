@@ -875,8 +875,10 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-permission-denied',
     description:
-      'A write from a requester without the required grant on the record returns 403 with ' +
-      'code "permission" — reconstructed client-side as StackPermissionError.',
+      'A write from a requester who can read the record but holds no write authority over it ' +
+      'returns 403 with code "permission" — reconstructed client-side as StackPermissionError. ' +
+      'Readability is what earns the 403: a requester who cannot read the record gets 404 ' +
+      'instead (error-not-found-record-the-requester-cannot-read).',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { title: 'New title' },
@@ -973,15 +975,31 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'A write (e.g. PATCH) against a record id that does not exist — deleted or never ' +
       'created — returns 404 with code "not_found", reconstructed as StackNotFoundError. ' +
       '(GET /records/:id is deliberately excluded here: APIAdapter treats a 404 there as ' +
-      '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.) Must be ' +
-      'indistinguishable from the "exists but forbidden" case only in error *shape*, never in ' +
-      'status/code (anti-oracle rule).',
+      '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.)',
     method: 'PATCH',
     path: '/records/1hk153x0a00b',
     requestBody: { title: 'New title' },
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x0a00b" not found.' },
+    },
+  },
+  {
+    name: 'error-not-found-record-the-requester-cannot-read',
+    description:
+      'The anti-oracle rule, and the one fixture here that pins a *state* rather than a shape: ' +
+      'a record that exists but that the requester cannot read answers exactly as a missing one ' +
+      'does — 404, code "not_found", and a message naming only the id the client already sent. ' +
+      'Record ids encode their creation millisecond and increment within it, so 403 here would ' +
+      'confirm a guessed or derived id. 403 is reserved for a requester who can read the record ' +
+      '(error-permission-denied). Assumes "1hk153x00001" exists and the requester holds no read ' +
+      'access to it. See docs/spec/access-control.md § Errors and information exposure.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { title: 'New title' },
+    responseStatus: 404,
+    responseBody: {
+      error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
     },
   },
   {

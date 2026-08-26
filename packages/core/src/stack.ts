@@ -2597,10 +2597,11 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 
 /**
  * A permission-enforcing view of a Stack for a single (principal, subject)
- * pair, obtained
- * via `stack.asEntity(entityId)`. Missing records throw StackNotFoundError
- * (or return null on reads); existing-but-inaccessible ones throw
- * StackPermissionError. See docs/spec/access-control.md.
+ * pair, obtained via `stack.asEntity(entityId)`. A record the request
+ * cannot read answers exactly as a missing one does — null on reads,
+ * StackNotFoundError on the verbs that name one — so only a requester who
+ * could have read it is told a refusal was about access.
+ * See docs/spec/access-control.md § Errors and information exposure.
  *
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Grant lookup and the privilege-bearing gates that
@@ -2933,6 +2934,29 @@ export class ScopedStack implements StackClient {
     });
   }
 
+  /**
+   * How to refuse a record this request addressed by ID. A requester who
+   * can read the record is told it exists and the verb was refused;
+   * everyone else is told what a missing ID is told, so no one learns an ID
+   * is live who could not have learned it by reading. `message` therefore
+   * only ever reaches someone holding the record already.
+   * See docs/spec/access-control.md § Errors and information exposure.
+   */
+  private async denialFor(record: StackRecord, message?: string): Promise<StackError> {
+    // Prefetched here rather than threaded down from the gate: a write
+    // carried by a record-level permission settles without reading a grant
+    // at all, and that path must not pay for this one. Both halves of
+    // canRead share the one scan.
+    const grants =
+      this.principalEntityId || this.subjectEntityId
+        ? await queryAllPages((q) => this.stack.query(q), {
+            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
+          })
+        : undefined;
+    if (await this.canRead(record, grants)) return new StackPermissionError(message);
+    return new StackNotFoundError(`Record not found: "${record.id}"`);
+  }
+
   private async canRead(
     record: StackRecord,
     prefetchedGrants?: StackRecord[],
@@ -2988,16 +3012,16 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (opts.mutating ?? true) this.requireOwnerForGrantRecord(record.typeId);
+    if (opts.mutating ?? true) await this.requireOwnerForGrantRecord(record);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw new StackPermissionError();
+      if (!this.isGroupManager(record)) throw await this.denialFor(record);
       return record;
     }
     const allowed =
       ((await this.checkWrite(record)) ||
         (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
-    if (!allowed) throw new StackPermissionError();
+    if (!allowed) throw await this.denialFor(record);
     return record;
   }
 
@@ -3008,16 +3032,16 @@ export class ScopedStack implements StackClient {
   private async requireDeletable(id: string): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.requireOwnerForGrantRecord(record.typeId);
+    await this.requireOwnerForGrantRecord(record);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw new StackPermissionError();
+      if (!this.isGroupManager(record)) throw await this.denialFor(record);
       return record;
     }
     const allowed =
       ((await this.checkWrite(record)) ||
         (await this.subjectAllows(record.typeId, ['delete-own', 'delete-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['delete-own', 'delete-any']));
-    if (!allowed) throw new StackPermissionError();
+    if (!allowed) throw await this.denialFor(record);
     return record;
   }
 
@@ -3219,11 +3243,16 @@ export class ScopedStack implements StackClient {
     return entityId === this.stack.ownerEntityId || entityId === record.entityId;
   }
 
+  /**
+   * A record this request may read, or null. Never throws
+   * StackPermissionError: an unreadable record answers exactly as a missing
+   * one does, so a caller learns only what it may read.
+   * See docs/spec/access-control.md § Errors and information exposure.
+   */
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.canRead(record))) throw new StackPermissionError();
-    return record;
+    return (await this.canRead(record)) ? record : null;
   }
 
   /**
@@ -3371,11 +3400,10 @@ export class ScopedStack implements StackClient {
    * only: reading a grant Record and its history stays on the ordinary gate.
    * See docs/spec/access-control.md § Type-level grants.
    */
-  private requireOwnerForGrantRecord(typeId: TypeId): void {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return;
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may write a _grant record');
-    }
+  private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
+    if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GRANT) return;
+    if (this.ownerActingAlone) return;
+    throw await this.denialFor(record, 'Only the stack owner may write a _grant record');
   }
 
   async associate(
@@ -3404,22 +3432,22 @@ export class ScopedStack implements StackClient {
   ): Promise<void> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.requireOwnerForGrantRecord(record.typeId);
+    await this.requireOwnerForGrantRecord(record);
 
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       // Group management, not authorship: a creator later demoted from the
       // admin roster shouldn't retain a side door to reassign who can read
       // or write the group record. Same gate as update/associate/delete.
-      if (!this.isGroupManager(record)) throw new StackPermissionError();
+      if (!this.isGroupManager(record)) throw await this.denialFor(record);
     } else {
       // Intersected like every other authority here: the principal must
       // hold the verb, and the subject must be able to reach this record —
       // without which an owner principal would carry its subject to records
       // the subject cannot touch. create() withholds the same reach via
       // mayGrantAccess().
-      if (!this.mayReshare(this.principalEntityId, record)) throw new StackPermissionError();
+      if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
       if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
-        throw new StackPermissionError();
+        throw await this.denialFor(record);
       }
     }
 
