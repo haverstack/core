@@ -12,6 +12,23 @@ import { sanitizeFts5Query } from './fts5.js';
 export { getSortField, getSortColumn };
 export type { SortField };
 
+/**
+ * Reduce `sort.direction` to a keyword this module may interpolate into
+ * SQL. Core's assertValidSort() already rejects anything else at the
+ * invariant layer, but this builder writes the value straight into
+ * `ORDER BY` and the cursor comparison, so it re-checks rather than trust
+ * an upstream that a future refactor could bypass: an unvalidated direction
+ * here is a SQL-injection sink. Anything but "asc" is treated as the
+ * default "desc" only after passing the guard.
+ */
+const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
+  const dir = query.sort?.direction ?? 'desc';
+  if (dir !== 'asc' && dir !== 'desc') {
+    throw new StackQueryError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
+  }
+  return dir === 'asc' ? 'ASC' : 'DESC';
+};
+
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
@@ -149,8 +166,7 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
       );
     }
     const col = getSortColumn(cursorField);
-    const sortDir = query.sort?.direction ?? 'desc';
-    const op = sortDir === 'asc' ? '>' : '<';
+    const op = sqlDirection(query) === 'ASC' ? '>' : '<';
     conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
     params.push(numericValue, numericValue, cursorId);
   }
@@ -163,6 +179,6 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
 
 export const buildOrderClause = (query: StackQuery): string => {
   const field = getSortField(query);
-  const dir = (query.sort?.direction ?? 'desc').toUpperCase();
+  const dir = sqlDirection(query);
   return `ORDER BY r.${getSortColumn(field)} ${dir}, r.id ${dir}`;
 };

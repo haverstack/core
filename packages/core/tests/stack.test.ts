@@ -614,6 +614,49 @@ describe('query — capability fail-loud', () => {
 });
 
 // -------------------------------------------------------
+// query — sort validation
+// -------------------------------------------------------
+//
+// `QuerySort` is typed 'asc' | 'desc', but a type is not a runtime guard:
+// a server mapping ?direction= onto a query, or a delegated app calling
+// query(), supplies a raw string. A SQLite record adapter interpolates the
+// direction straight into ORDER BY, so an unvalidated value there is a
+// SQL-injection sink. The guard belongs in the invariant layer so no
+// adapter can forget it.
+
+describe('query — sort validation', () => {
+  const inject = async (sort: unknown) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stack.query({ sort: sort as any });
+
+  test('a legitimate asc/desc sort is accepted', async () => {
+    await stack.create(NOTE_V1, { text: 'a' });
+    await expect(stack.query({ sort: { field: 'createdAt', direction: 'asc' } })).resolves.toEqual(
+      expect.objectContaining({ records: expect.any(Array) }),
+    );
+    await expect(
+      stack.query({ sort: { field: 'updatedAt', direction: 'desc' } }),
+    ).resolves.toBeDefined();
+  });
+
+  test('a direction outside asc/desc is refused, not interpolated', async () => {
+    await expect(inject({ field: 'createdAt', direction: 'ASC, (SELECT 1)' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a sort field outside the closed set is refused', async () => {
+    await expect(inject({ field: 'content); DROP TABLE records --' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('an omitted direction is allowed (adapter default applies)', async () => {
+    await expect(stack.query({ sort: { field: 'version' } })).resolves.toBeDefined();
+  });
+});
+
+// -------------------------------------------------------
 // update — merge patch
 // -------------------------------------------------------
 

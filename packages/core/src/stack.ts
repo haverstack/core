@@ -46,6 +46,7 @@ import type {
   TypeId,
   StackAdapter,
   StackQuery,
+  QuerySort,
   RecordFilter,
   QueryResult,
   Association,
@@ -508,6 +509,36 @@ export function assertQueryCapabilities(
   if (filter?.content && !capabilities.contentFieldQuery) {
     throw new StackQueryError(
       'Query uses filter.content, but this adapter does not declare the contentFieldQuery capability.',
+    );
+  }
+}
+
+/** The only sort fields any adapter maps; anything else is a caller error. */
+const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'version']);
+/** The only two sort directions; see assertValidSort. */
+const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
+
+/**
+ * Reject a sort whose field or direction is outside the closed set the
+ * types promise. `QuerySort` is typed `'asc' | 'desc'`, but a type is not a
+ * runtime guard: a server mapping `?direction=` onto a query, or a
+ * delegated app calling query(), supplies a raw string. A SQLite record
+ * adapter interpolates the direction straight into `ORDER BY`, so an
+ * unvalidated value there is a SQL-injection sink reachable from every
+ * untrusted caller. Validating in the invariant layer — the same reason
+ * emission and _config protection live here — means no adapter can forget
+ * it. See docs/spec/data-model.md § Sorting and pagination.
+ */
+export function assertValidSort(sort: QuerySort | undefined): void {
+  if (!sort) return;
+  if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
+    throw new StackQueryError(
+      `Invalid sort field "${sort.field}": expected one of createdAt, updatedAt, version.`,
+    );
+  }
+  if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
+    throw new StackQueryError(
+      `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
     );
   }
 }
@@ -1543,6 +1574,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
+    assertValidSort(query.sort);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
@@ -3342,6 +3374,7 @@ export class ScopedStack implements StackClient {
    * Grants are prefetched once, cursor-walked to exhaustion.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
+    assertValidSort(query.sort);
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
     const records: StackRecord[] = [];
     const maxFetched = limit * 10;
