@@ -6,7 +6,7 @@ Thanks for working on this. This document covers how to get set up, what to run 
 
 ## Setup
 
-The repo is a [pnpm workspace](https://pnpm.io/workspaces). CI runs Node 22 and pnpm 10; match those locally.
+The repo is a [pnpm workspace](https://pnpm.io/workspaces). CI runs Node 22 and pnpm 11; match those locally.
 
 ```sh
 pnpm install
@@ -114,11 +114,12 @@ A release is one reviewable PR, and merging it is the act of publishing. Whoever
 | Workflow filename | `release.yml`   |
 | Environment       | _(leave empty)_ |
 
-Three things in `release.yml` are load-bearing:
+Four things in `release.yml` are load-bearing:
 
 - **`id-token: write`** — no OIDC token is minted without it.
 - **No `registry-url` on `actions/setup-node`** — it writes an `.npmrc` referencing `${NODE_AUTH_TOKEN}`, a variable trusted publishing never sets. pnpm reaches the default registry without it.
-- **pnpm 11**, ahead of the 10 `ci.yml` pins — `changeset publish` shells out to `pnpm publish`, and the OIDC exchange is an 11.x feature.
+- **pnpm 11** — `changeset publish` shells out to `pnpm publish`, and the OIDC exchange is an 11.x feature.
+- **`changesets/action@v2`** — it reads which packages published from the `CHANGESETS_OUTPUT` file the CLI writes, and pairs with Changesets CLI v3. It is what pushes the git tags and cuts the GitHub releases after a publish.
 
 Renaming the workflow file breaks every trusted publisher at once; each matches on the filename.
 
