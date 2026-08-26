@@ -20,9 +20,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # pnpm 11, ahead of the 10 the CI workflow pins: `changeset publish`
-      # shells out to `pnpm publish`, and the OIDC exchange that stands in for
-      # a stored token is an 11.x feature.
+      # `changeset publish` shells out to `pnpm publish`, and the OIDC exchange
+      # that stands in for a stored token is an 11.x feature.
       - uses: pnpm/action-setup@v4
         with:
           version: 11
@@ -36,12 +35,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Opens (or refreshes) the version PR while changesets are pending, and
-      # publishes once that PR merges and none are left.
-      - uses: changesets/action@v1
+      # publishes once that PR merges and none are left. v2 reads which
+      # packages published from the CHANGESETS_OUTPUT file the CLI writes, and
+      # is what pushes tags afterwards; GITHUB_TOKEN is for changelog links.
+      - uses: changesets/action@v2
         with:
-          version: pnpm run version:packages
-          publish: pnpm run release
-          title: 'chore: version packages'
-          commit: 'chore: version packages'
+          version-script: pnpm run version:packages
+          publish-script: pnpm run release
+          pr-title: 'chore: version packages'
+          commit-message: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
