@@ -269,6 +269,8 @@ pnpm typecheck
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, comment and commit conventions, and the architecture conventions this codebase follows.
 
+Versions and npm publishes are automated with [Changesets](https://github.com/changesets/changesets): a change that ships to npm carries a `pnpm changeset` file, and CI turns pending changesets into a release PR whose merge publishes. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).
+
 ### Project structure
 
 ```

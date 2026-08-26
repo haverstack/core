@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# A second push while a release is in flight would race the version PR against
+# the publish that consumes it.
+concurrency: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # npm trusted publishing: the OIDC token stands in for a stored NPM_TOKEN.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # pnpm 10 deliberately: 11 regressed OIDC publishing into a 404
+      # (pnpm/pnpm#11513). Confirm that is fixed before moving to 11.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      # v7 or newer, not the v4 the CI workflow pins: earlier majors export a
+      # dummy NODE_AUTH_TOKEN, and the empty .npmrc credential it writes
+      # shadows the OIDC handshake.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # Opens (or refreshes) the version PR while changesets are pending, and
+      # publishes once that PR merges and none are left.
+      - uses: changesets/action@v1
+        with:
+          version: pnpm run version:packages
+          publish: pnpm run release
+          title: 'chore: version packages'
+          commit: 'chore: version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

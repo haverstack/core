@@ -12,7 +12,8 @@
  *      which is private and must be bundled into record-adapter-sqlite
  *      rather than installed.
  *
- * Run before `pnpm run publish:all`. Exits non-zero on the first failure.
+ * Runs as part of `pnpm run release`, before `changeset publish`. Exits
+ * non-zero on the first failure.
  */
 
 import { execFileSync } from 'node:child_process';
