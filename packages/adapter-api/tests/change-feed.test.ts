@@ -4,7 +4,12 @@
  * ends. See docs/spec/wire-format.md § Change feed.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { APIAdapter, APIAdapterCapabilityError } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterCapabilityError,
+  APIAdapterError,
+  APIAdapterAuthError,
+} from '../src/index.js';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { RecordChange } from '@haverstack/core';
 
@@ -129,6 +134,20 @@ describe('the discovery gate', () => {
 
     expect(stop).toBeTypeOf('function');
     stop();
+  });
+});
+
+describe('the resume-cursor gate', () => {
+  test('refuses a since outside the seq charset, without sending a request', async () => {
+    const adapter = await openAdapter();
+    const before = mockFetch.mock.calls.length;
+
+    // A cursor becomes a Last-Event-ID header; one carrying a newline would
+    // span the header line, so it is refused locally, not handed to fetch.
+    await expect(
+      adapter.subscribeChanges({ since: 'AA3f1Q\r\nX-Injected: 1' }, () => {}),
+    ).rejects.toBeInstanceOf(APIAdapterError);
+    expect(mockFetch.mock.calls.length).toBe(before);
   });
 });
 
@@ -310,6 +329,41 @@ describe('frames', () => {
     stop();
   });
 
+  // CRLF is a legal SSE line ending, and a chunk boundary can fall between
+  // the CR and the LF. Normalizing per chunk would split one frame into two
+  // and hand the record half an empty data field; the decoder must hold the
+  // trailing CR until the next chunk resolves it.
+  test('decodes a CRLF frame split between the CR and the LF', async () => {
+    const { stream, seen, stop } = await subscribe();
+    const crlf = `id: AA3f1R\r\nevent: record\r\ndata: ${JSON.stringify(CHANGED)}\r\n\r\n`;
+    const cut = crlf.indexOf('\r\n', crlf.indexOf('event')) + 1; // just after a CR
+
+    stream.write(crlf.slice(0, cut));
+    stream.write(crlf.slice(cut));
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+
+    expect(seen[0]!.recordId).toBe('1hk153x00001');
+    expect(seen[0]!.version).toBe(7);
+    stop();
+  });
+
+  // A single unparseable record frame is a server defect, not a dead
+  // connection: it goes to onError and the reader carries on to the next
+  // frame rather than tearing the stream down and reconnecting into it.
+  test('reports an unparseable record frame and keeps reading', async () => {
+    const onError = vi.fn();
+    const { stream, seen, stop } = await subscribe({ onError });
+
+    stream.write('id: AA3f1R\nevent: record\ndata: {not json\n\n');
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(seen).toHaveLength(0);
+
+    stream.write(recordFrame('AA3f1S', CHANGED));
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]!.recordId).toBe('1hk153x00001');
+    stop();
+  });
+
   test('ignores keepalive comments', async () => {
     const { stream, seen, stop } = await subscribe();
 
@@ -398,6 +452,37 @@ describe('reconnection', () => {
 
     expect(headersOf(1)['Last-Event-ID']).toBe('STALE1');
     expect(headersOf(2)['Last-Event-ID']).toBe('AA3f1Q');
+    stop();
+  });
+
+  // A credential that cannot authenticate fails the reconnect the same way
+  // it failed this one: retrying only spins. The subscriber hears it through
+  // onError, and the loop stops rather than hammering with backoff forever.
+  test('stops reconnecting after a fatal auth failure', async () => {
+    vi.useFakeTimers();
+    const adapter = await openAdapter();
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+
+    const onError = vi.fn();
+    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    first.write(READY);
+    const stop = await subscription;
+
+    // The reconnect comes back 401. With no credential to renew, that is
+    // terminal — APIAdapter has nothing to retry with.
+    mockFetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(APIAdapterAuthError);
+
+    // No further reconnect: the fetch count holds at discovery + first +
+    // the 401 reconnect, even after more time passes.
+    const calls = mockFetch.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockFetch.mock.calls.length).toBe(calls);
     stop();
   });
 

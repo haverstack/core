@@ -16,7 +16,7 @@
  * patchContent()/deleteRecord()/etc.'s expectedVersion option.
  */
 
-import { StackQueryError } from '@haverstack/core';
+import { StackQueryError, StackPermissionError } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
@@ -394,9 +394,34 @@ type SseFrame = { id?: string; event: string; data: string };
  */
 class SseDecoder {
   private buffer = '';
+  /**
+   * A trailing `\r` held back from normalization. SSE line endings are CR,
+   * LF, or CRLF, and a chunk boundary can fall between the CR and the LF of
+   * a CRLF: normalizing per chunk would turn that lone CR into a `\n` and
+   * the next chunk's leading `\n` would complete a spurious `\n\n`, cutting
+   * one frame into two. Holding the CR until the next chunk decides whether
+   * it is half a CRLF (drop the following `\n`) or a lone CR (its own line
+   * separator) makes a frame split anywhere decode as one arriving whole.
+   */
+  private pendingCr = false;
 
   push(chunk: string): SseFrame[] {
-    this.buffer += chunk.replace(/\r\n|\r/g, '\n');
+    let text = this.pendingCr ? '\r' + chunk : chunk;
+    this.pendingCr = false;
+    // A trailing CR might be the first half of a CRLF split across chunks;
+    // hold it until the next push (or the stream's end) resolves it.
+    if (text.endsWith('\r')) {
+      this.pendingCr = true;
+      text = text.slice(0, -1);
+    }
+    this.buffer += text.replace(/\r\n|\r/g, '\n');
+    // A frame with no terminating blank line grows the buffer without
+    // bound; a peer that never closes one would otherwise exhaust memory.
+    if (this.buffer.length > MAX_SSE_BUFFER_BYTES) {
+      throw new APIAdapterError(
+        `Change feed frame exceeded ${MAX_SSE_BUFFER_BYTES} bytes without a frame boundary.`,
+      );
+    }
     const frames: SseFrame[] = [];
     let boundary = this.buffer.indexOf('\n\n');
     while (boundary !== -1) {
@@ -409,6 +434,14 @@ class SseDecoder {
     return frames;
   }
 }
+
+/**
+ * How large a single unterminated SSE frame may grow before the connection
+ * is abandoned. Generous next to any real change frame — a record body is
+ * bounded by the server's own content limit — but finite, so a peer that
+ * streams without ever closing a frame cannot exhaust client memory.
+ */
+const MAX_SSE_BUFFER_BYTES = 8 * 1024 * 1024;
 
 /** Null for a block carrying only comments — a keepalive is not a frame. */
 function decodeFrame(block: string): SseFrame | null {
@@ -449,6 +482,18 @@ const reconnectDelay = (attempt: number): number => {
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Whether a feed error is one reconnecting cannot recover. An
+ * authentication failure (a 401 whose re-auth did not renew, or no
+ * credential to renew with) and an authorization refusal (403) will reject
+ * the next connection identically, so retrying only spins. A connection or
+ * server error is transient and reconnects. The stream is closed by
+ * returning from the pump; the subscriber has already been told via
+ * onError.
+ */
+const isFatalFeedError = (err: unknown): boolean =>
+  err instanceof APIAdapterAuthError || err instanceof StackPermissionError;
 
 // -------------------------------------------------------
 // Challenge–response handshake
@@ -1085,6 +1130,16 @@ export class APIAdapter implements StackAdapter {
       );
     }
 
+    // A resume cursor becomes a Last-Event-ID header, so it must stay
+    // inside the framable charset for the same reason a frame's own id
+    // does: an out-of-charset value would span the header line. Refused
+    // locally rather than handed to fetch, which rejects it opaquely.
+    if (opts.since !== undefined && !isValidSeq(opts.since)) {
+      throw new APIAdapterError(
+        `Resume cursor "${opts.since}" is not a valid seq (unreserved base64url characters only).`,
+      );
+    }
+
     const controller = new AbortController();
     const params = buildChangeParams(opts);
     const query = params.toString();
@@ -1114,9 +1169,20 @@ export class APIAdapter implements StackAdapter {
             onLive();
           }
           return;
-        case CHANGE_FRAME_RECORD:
-          handler(parseChange(JSON.parse(frame.data) as WireRecordChange));
+        case CHANGE_FRAME_RECORD: {
+          // A single unparseable record frame is a server defect, not a
+          // dead connection: report it and read on, rather than tearing the
+          // stream down and reconnecting into the same frame.
+          let change: RecordChange;
+          try {
+            change = parseChange(JSON.parse(frame.data) as WireRecordChange);
+          } catch (err) {
+            opts.onError?.(err);
+            return;
+          }
+          handler(change);
           return;
+        }
         case CHANGE_FRAME_RESET:
           // The cursor is worthless now, so the next reconnect starts from
           // this connection's head rather than replaying against a
@@ -1147,6 +1213,12 @@ export class APIAdapter implements StackAdapter {
             return;
           }
           opts.onError?.(err);
+          // A credential that cannot authenticate or is not authorized will
+          // fail the reconnect the same way: reconnecting only spins. The
+          // caller was told through onError; stop rather than loop until it
+          // unsubscribes. A transient drop (network, 5xx, overflow-close)
+          // is not fatal and reconnects below.
+          if (isFatalFeedError(err)) return;
         }
         if (stopped) return;
         // A connection that stayed up did its job; only a flapping one
@@ -1203,7 +1275,13 @@ export class APIAdapter implements StackAdapter {
         if (done) return;
         for (const frame of decoder.push(value)) {
           if (frame.event === CHANGE_FRAME_READY && head === undefined) {
-            head = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+            // A malformed ready payload costs the reset fallback its head
+            // cursor, not the connection: treat the head as unknown.
+            try {
+              head = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+            } catch {
+              head = undefined;
+            }
           }
           dispatch(frame, headSeq);
         }
