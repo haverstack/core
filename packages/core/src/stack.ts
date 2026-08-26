@@ -29,7 +29,13 @@ import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
 import { firstRecordedAttachment } from './attachment-download.js';
-import { ChangeEmitter, Subscription, buildEmission, matchesFilter } from './changes.js';
+import {
+  ChangeEmitter,
+  RelayDelivery,
+  Subscription,
+  buildEmission,
+  matchesFilter,
+} from './changes.js';
 import type { EmittedChange } from './changes.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import type { ValidationError } from './validate.js';
@@ -608,6 +614,27 @@ export class StackClosedError extends Error {
   constructor(message = 'This Stack has been closed.') {
     super(message);
     this.name = 'StackClosedError';
+  }
+}
+
+/**
+ * Thrown when a scoped view is asked to observe a stack whose adapter
+ * relays a remote feed. Outside the StackError taxonomy for the same
+ * reason StackClosedError is: it reports a topology the caller assembled,
+ * not a state a request can be in.
+ *
+ * A relayed frame is scoped by the authority that opened the feed, and a
+ * narrower scope cannot re-derive that decision — a purge leaves no record
+ * to check `canRead` against. Delivering anyway would break the promise
+ * that a subscriber never sees what it may not read; delivering only local
+ * writes would silently drop every change made elsewhere, which is the
+ * failure that looks fine in testing. So it refuses.
+ * See docs/spec/events.md § Permission scoping.
+ */
+export class StackRelayScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackRelayScopeError';
   }
 }
 
@@ -2258,7 +2285,60 @@ export class Stack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertOpen();
-    return this.changes.subscribe(handler, opts);
+    const unsubscribe = this.changes.subscribe(handler, opts);
+    let stopRelay: Unsubscribe | undefined;
+    try {
+      stopRelay = await this.openRelay(handler, opts);
+    } catch (err) {
+      // The local half is already registered, and a failed subscribe()
+      // must leave nothing behind for the caller to unsubscribe from.
+      unsubscribe();
+      throw err;
+    }
+    return () => {
+      unsubscribe();
+      stopRelay?.();
+    };
+  }
+
+  /**
+   * Ask the adapter to relay changes that originated elsewhere. Absent on
+   * every local adapter, where one process owns the storage and there is
+   * no third party whose writes could have been missed.
+   *
+   * The subscription's own filter goes to the relay rather than being
+   * applied on the way back: the emitter at the far end holds the record,
+   * so it can answer `entityId` and `parentId`, which the envelope
+   * deliberately does not carry. That is also why a relay is opened per
+   * subscription rather than shared.
+   */
+  private async openRelay(
+    handler: (change: RecordChange) => void,
+    opts: SubscribeOptions,
+  ): Promise<Unsubscribe | undefined> {
+    if (!this.adapter.subscribeChanges) return undefined;
+    const delivery = new RelayDelivery(handler, opts);
+    const stop = await this.adapter.subscribeChanges(
+      {
+        ...(opts.filter !== undefined && { filter: opts.filter }),
+        ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
+        ...(opts.onError !== undefined && { onError: opts.onError }),
+        ...(opts.onReset !== undefined && { onReset: opts.onReset }),
+      },
+      (change) => delivery.deliver(change),
+    );
+    return () => {
+      delivery.close();
+      void stop();
+    };
+  }
+
+  /**
+   * Whether changes reach this stack from elsewhere. Public only so
+   * ScopedStack can refuse a scope it cannot honor; not an app-facing API.
+   */
+  get relaysChanges(): boolean {
+    return typeof this.adapter.subscribeChanges === 'function';
   }
 
   async flush(): Promise<void> {
@@ -3665,6 +3745,13 @@ export class ScopedStack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.stack.assertOpen();
+    if (this.stack.relaysChanges) {
+      throw new StackRelayScopeError(
+        'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
+          'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
+          'no record to re-check. Subscribe with a session-scoped stack instead.',
+      );
+    }
     return this.changes.add(
       new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),
     );

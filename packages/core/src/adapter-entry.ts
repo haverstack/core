@@ -13,6 +13,7 @@ export type {
   AdapterCapabilities,
   BlobFileInfo,
   ExpectedVersionOptions,
+  SubscribeChangesOptions,
 } from './types.js';
 export { combineAdapters } from './combine.js';
 export { assertQueryCapabilities } from './stack.js';

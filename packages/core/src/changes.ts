@@ -130,18 +130,62 @@ export abstract class Subscription {
   }
 
   protected reportError(err: unknown): void {
-    if (this.opts.onError) {
-      try {
-        this.opts.onError(err);
-      } catch {
-        // An onError that throws has nowhere left to report to. Losing it
-        // is better than letting it escape into a mutation's call stack.
-      }
-      return;
+    reportError(err, this.opts);
+  }
+}
+
+/**
+ * Where a handler's error goes. Without an onError it is rethrown
+ * asynchronously so that it surfaces as an unhandled error rather than
+ * vanishing — never into the call stack of the mutation that produced the
+ * event, which is already durable. See docs/spec/events.md § Handlers.
+ */
+function reportError(err: unknown, opts: SubscribeOptions): void {
+  if (opts.onError) {
+    try {
+      opts.onError(err);
+    } catch {
+      // An onError that throws has nowhere left to report to. Losing it is
+      // better than letting it escape into a mutation's call stack.
     }
-    queueMicrotask(() => {
-      throw err;
-    });
+    return;
+  }
+  queueMicrotask(() => {
+    throw err;
+  });
+}
+
+/**
+ * Delivery for frames that originate elsewhere. A relayed frame arrives
+ * already projected and already scoped by the authority that opened the
+ * feed, so nothing here filters it again: the emitter that produced it saw
+ * the record, and this one never will — a purge in particular leaves
+ * nothing to decide with. See docs/spec/events.md § Where events come from.
+ *
+ * It is delivered to one subscriber rather than through the emitter,
+ * because a relay is opened per subscription and carries that
+ * subscription's filter. Handing it to the registry would give every other
+ * subscriber a copy of a stream it did not ask for.
+ */
+export class RelayDelivery {
+  private closed = false;
+
+  constructor(
+    private readonly handler: (change: RecordChange) => void,
+    private readonly opts: SubscribeOptions,
+  ) {}
+
+  deliver(change: RecordChange): void {
+    if (this.closed) return;
+    try {
+      this.handler(change);
+    } catch (err) {
+      reportError(err, this.opts);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
   }
 }
 
