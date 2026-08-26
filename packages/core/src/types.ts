@@ -622,6 +622,23 @@ export type SubscribeOptions = {
 };
 
 /**
+ * What a relay is asked for. The subscriber's options minus the ones only
+ * a local emitter answers: a relay reports changes it is told about and
+ * decides nothing, so there is no handler of its own to route errors from.
+ * `onError` here is the relay's own trouble — a connection it could not
+ * restore — and `onReset` the gap that leaves.
+ * See docs/spec/events.md § Where events come from.
+ */
+export type SubscribeChangesOptions = {
+  filter?: ChangeFilter;
+  /** Resume from this cursor. A relay with none starts from the present. */
+  since?: string;
+  includeRecords?: boolean;
+  onError?: (err: unknown) => void;
+  onReset?: () => void;
+};
+
+/**
  * The record-storage half of an adapter: structured data, queries,
  * associations, versioning, type definitions, and stack identity.
  */
@@ -752,7 +769,7 @@ export interface StackRecordAdapter {
    * been missed. See docs/spec/events.md § Where events come from.
    */
   subscribeChanges?(
-    opts: { filter?: ChangeFilter; since?: string },
+    opts: SubscribeChangesOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void>;
 

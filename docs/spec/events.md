@@ -134,12 +134,28 @@ The one adapter-side hook is the inverse direction:
 ```ts
 // StackRecordAdapter, optional
 subscribeChanges?(
-  opts: { filter?: ChangeFilter; since?: string },
+  opts: SubscribeChangesOptions,
   handler: (change: RecordChange) => void,
 ): Promise<() => void>;
+
+type SubscribeChangesOptions = {
+  filter?: ChangeFilter;
+  since?: string;
+  includeRecords?: boolean;
+  onError?: (err: unknown) => void;
+  onReset?: () => void;
+};
 ```
 
 An optional method checked for truthiness at the call site, per [Adapters § Adapter capabilities](./adapters.md#adapter-capabilities) — never a boolean in `capabilities`. A remote adapter implements it; local adapters do not, and their absence is not a gap: [a stack's storage has exactly one owning process](./adapters.md#concurrency--storage-ownership), so locally there is no third party whose writes could have been missed. **Resumption is meaningful only in the multi-writer topology.**
+
+`onError` here is the relay's own trouble — a connection it could not restore — rather than a subscriber's, and `onReset` is the gap that leaves. A relay reports what it is told and decides nothing, so it has no handler of its own to route errors from.
+
+**One relay per subscription, carrying that subscription's filter.** The filter travels rather than being applied to what comes back, because `entityId` and `parentId` are answerable only where the record is: the far end holds it, and this end never will. Sharing one relay across subscriptions would mean either re-deriving those filters locally without the record, or subscribing unfiltered and paying for every change on every subscription.
+
+**A relayed frame is delivered as it arrives.** It was filtered and permission-checked by the emitter that produced it, against the record it held, and nothing here re-derives that decision — a `purged` frame in particular leaves nothing to decide with. It goes to the subscriber that opened the relay, never through the local emitter, which would hand every other subscriber a stream it did not ask for. Errors from a throwing handler route exactly as they do for a local event.
+
+**A subscriber sees both streams, and duplicates are ordinary.** A local write emits here immediately and the far end echoes the same version back a round trip later. That is a duplicate, duplicates are legal, and the consumer's `(recordId, version, kind)` dedupe already absorbs it. Suppressing local emission whenever the adapter has a feed would make a subscriber's own writes invisible whenever the feed is down, which is when a UI most needs to reflect them.
 
 **Every record emits, including the ones a query hides.** `_config` is [addressable only by ID](../spec.md#the-_config-record) and never returned by `query()`, but a change to it is a change like any other and reports as one — it is owner-only by permission and ungrantable, so the exclusion query() makes for addressability reasons is not a permission rule to mirror here. `_grant` and `_group` writes emit as ordinary record events too, which is load-bearing: they are what expires a cached authority decision (see [Permission scoping](#permission-scoping)).
 
@@ -180,6 +196,8 @@ interface StackClient {
 
 **A scoped feed is the events that scope may read, and nothing else.** The predicate is literally `canRead` applied per event — no second vocabulary, no feed-specific ACL. `ScopedStack.subscribe()` filters `Stack`'s stream, so scoping needs no adapter cooperation.
 
+**A scoped view of a stack that relays refuses to subscribe**, with `StackRelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./wire-format.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
+
 - **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that makes `ScopedStack.query()`'s `total` always `null`.
 - **A `purged` record is evaluated at mutation time**, on the record as it stood, because after the write there is nothing left to check.
 - **The check fails closed.** A permission decision that cannot be made is not a yes: the event is dropped and the error goes to `onError`.
@@ -204,7 +222,7 @@ interface StackClient {
 - **Gaining access arrives as `changed`, not `created`.** Hence upsert semantics.
 - **A restart with no feed is a full resync.** Local stacks have no `seq`.
 - **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events. A scoped subscription serializes its permission checks, so a fan-out that outpaces them queues: pending events are held, with the record each describes, until their check runs.
-- **A hard delete relayed over the wire announces nothing.** The verb answers `204` by contract, so an adapter has no destroyed record to hand back and a `Stack` driving one emits no `purged` frame. Locally the record is in hand and the frame is emitted as described above; the wire case is the emitter having nothing to describe, and it resolves with the relay rather than here.
+- **A hard delete over the wire is announced by the far end, not by the caller.** The verb answers `204` by contract, so an adapter has no destroyed record to hand back and a `Stack` driving one emits no `purged` frame of its own. The record was in hand where the delete happened, so the frame is emitted there and reaches the caller through the relay — a round trip later than a local purge, and by the same path as anyone else's.
 - **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.
 - **`actor` can be absent, and absent is not a value.** An unscoped `Stack` write has no requester to name. A consumer must treat absence as "unknown" rather than substituting the record's author, which is a different fact.
 - **A purge is auditable only in outline.** `kind`, `op`, `recordId`, `typeId`, `version` and the actor — never the author or the content. Deliberate: retaining either would defeat the erasure the verb performs.

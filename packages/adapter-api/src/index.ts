@@ -31,9 +31,11 @@ import type {
   RecordId,
   FileId,
   EntityId,
+  ChangeFilter,
+  RecordChange,
 } from '@haverstack/core';
 import { assertQueryCapabilities } from '@haverstack/core/adapter';
-import type { AdapterCapabilities } from '@haverstack/core/adapter';
+import type { AdapterCapabilities, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import type {
@@ -41,6 +43,8 @@ import type {
   WireQueryResponse,
   WireType,
   WireVersion,
+  WireRecordChange,
+  DiscoveryChanges,
   DiscoveryResponse,
   AuthChallengeResponse,
   AuthTokenResponse,
@@ -53,7 +57,12 @@ import {
   isProtocolCompatible,
   isWireAuthError,
   isRetryableAuthError,
+  isValidSeq,
+  supportsChangeFeed,
   supportsDidChallenge,
+  CHANGE_FRAME_READY,
+  CHANGE_FRAME_RECORD,
+  CHANGE_FRAME_RESET,
   WIRE_PROTOCOL_VERSION,
 } from '@haverstack/wire-types';
 
@@ -118,7 +127,8 @@ export class APIAdapterConnectionError extends APIAdapterError {
  */
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
-    public readonly capability: keyof AdapterCapabilities,
+    /** `'changes'` names the feed, which discovery advertises beside `capabilities` rather than in it. */
+    public readonly capability: keyof AdapterCapabilities | 'changes',
     message: string,
   ) {
     super(message);
@@ -328,6 +338,119 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
 };
 
 // -------------------------------------------------------
+// Change feed
+// -------------------------------------------------------
+
+const parseChange = (raw: WireRecordChange): RecordChange => {
+  const change: RecordChange = {
+    kind: raw.kind,
+    op: raw.op,
+    recordId: raw.recordId,
+    typeId: raw.typeId,
+    version: raw.version,
+    updatedAt: new Date(raw.updatedAt),
+  };
+  if (raw.actor != null) {
+    change.actor = {
+      entityId: raw.actor.entityId,
+      ...(raw.actor.principalId != null && { principalId: raw.actor.principalId }),
+      ...(raw.actor.appId != null && { appId: raw.actor.appId }),
+    };
+  }
+  if (raw.seq != null) change.seq = raw.seq;
+  // A purge carries nothing about the record it destroyed. A conformant
+  // server sends neither field on one; dropping them here means a server
+  // that does cannot hand a subscriber the copy the verb exists to erase.
+  if (raw.kind === 'purged') return change;
+  if (raw.parentId != null) change.parentId = raw.parentId;
+  if (raw.record != null) change.record = parseRecord(raw.record);
+  return change;
+};
+
+const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
+  const p = new URLSearchParams();
+  const f: ChangeFilter = opts.filter ?? {};
+
+  if (f.typeId !== undefined) {
+    const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
+    for (const id of ids) p.append('typeId', id);
+  }
+  if (f.parentId !== undefined) p.set('parentId', f.parentId === null ? 'null' : f.parentId);
+  if (f.entityId !== undefined) p.set('entityId', f.entityId);
+  if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
+  if (opts.includeRecords) p.set('include', 'record');
+
+  return p;
+};
+
+/** One decoded SSE frame. `event` defaults to the protocol's own default. */
+type SseFrame = { id?: string; event: string; data: string };
+
+/**
+ * Incremental SSE decoder: text in, whole frames out, holding a partial
+ * frame until the blank line that ends it. Chunk boundaries fall wherever
+ * the network puts them, so a frame arriving in three pieces has to
+ * decode identically to one arriving whole.
+ */
+class SseDecoder {
+  private buffer = '';
+
+  push(chunk: string): SseFrame[] {
+    this.buffer += chunk.replace(/\r\n|\r/g, '\n');
+    const frames: SseFrame[] = [];
+    let boundary = this.buffer.indexOf('\n\n');
+    while (boundary !== -1) {
+      const block = this.buffer.slice(0, boundary);
+      this.buffer = this.buffer.slice(boundary + 2);
+      const frame = decodeFrame(block);
+      if (frame) frames.push(frame);
+      boundary = this.buffer.indexOf('\n\n');
+    }
+    return frames;
+  }
+}
+
+/** Null for a block carrying only comments — a keepalive is not a frame. */
+function decodeFrame(block: string): SseFrame | null {
+  let id: string | undefined;
+  let event: string | undefined;
+  const data: string[] = [];
+
+  for (const line of block.split('\n')) {
+    // A line opening with a colon is a comment. Keepalives arrive as one,
+    // and exist so an idle connection is distinguishable from a dead one.
+    if (line === '' || line.startsWith(':')) continue;
+    const colon = line.indexOf(':');
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (field === 'id') id = value;
+    else if (field === 'event') event = value;
+    else if (field === 'data') data.push(value);
+  }
+
+  if (id === undefined && event === undefined && data.length === 0) return null;
+  return { ...(id !== undefined && { id }), event: event ?? 'message', data: data.join('\n') };
+}
+
+/** Reconnect delay: exponential to a ceiling, then jittered across the whole range. */
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * Full jitter rather than a fixed backoff: a server restart drops every
+ * client at once, and an undithered schedule brings them all back
+ * together — repeatedly, since the stampede that fails reconnects in
+ * lockstep too.
+ */
+const reconnectDelay = (attempt: number): number => {
+  const ceiling = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
+  return Math.random() * ceiling;
+};
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// -------------------------------------------------------
 // Challenge–response handshake
 // -------------------------------------------------------
 
@@ -420,6 +543,8 @@ export class APIAdapter implements StackAdapter {
     ownerEntityId: string,
     timezone: string | undefined,
     capabilities: AdapterCapabilities,
+    /** The feed discovery advertised, if any. Absent means the server offers none. */
+    private readonly changeFeed: DiscoveryChanges | undefined,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
@@ -518,6 +643,10 @@ export class APIAdapter implements StackAdapter {
         // request-size limit is authoritative either way.
         maxContentBytes: discovery.capabilities?.maxContentBytes ?? null,
       },
+      // Kept whole rather than reduced to a flag: `resume` and `records`
+      // are what subscribeChanges() promises its caller, and a client that
+      // forgot them would assume both.
+      supportsChangeFeed(discovery) ? discovery.changes : undefined,
     );
   }
 
@@ -925,6 +1054,163 @@ export class APIAdapter implements StackAdapter {
 
   async deleteAttachment(fileId: FileId): Promise<void> {
     await this.request<void>('DELETE', `/attachments/${fileId}`);
+  }
+
+  // -------------------------------------------------------
+  // Change feed
+  // -------------------------------------------------------
+
+  /**
+   * Relay the server's change feed. Resolves once the stream is live —
+   * after the server's `ready` frame — so that subscribe-then-query is
+   * gap-free: every change from that point on arrives as a frame.
+   *
+   * Reconnection is this adapter's business and the subscriber never hears
+   * about it, so long as the cursor closes the gap. `onReset` is what a gap
+   * it could not close looks like, and reconciling by query is the repair.
+   * See docs/spec/wire-format.md § Change feed.
+   */
+  async subscribeChanges(
+    opts: SubscribeChangesOptions,
+    handler: (change: RecordChange) => void,
+  ): Promise<() => void> {
+    // Refused locally, before any request: a server advertising no feed has
+    // no endpoint to answer, and learning that as a 404 partway through a
+    // connection is the failure discovery exists to prevent.
+    if (!this.changeFeed) {
+      throw new APIAdapterCapabilityError(
+        'changes',
+        `Server at "${this.baseUrl}" advertises no change feed. Poll query() for changes, or ` +
+          'connect to a server that offers one.',
+      );
+    }
+
+    const controller = new AbortController();
+    const params = buildChangeParams(opts);
+    const query = params.toString();
+    const url = `${this.baseUrl}/changes${query ? `?${query}` : ''}`;
+
+    let stopped = false;
+    let settled = false;
+    let cursor = opts.since;
+
+    let onLive: () => void;
+    let onFailed: (err: unknown) => void;
+    const live = new Promise<void>((resolve, reject) => {
+      onLive = resolve;
+      onFailed = reject;
+    });
+
+    const dispatch = (frame: SseFrame, headSeq: () => string | undefined): void => {
+      // A frame id is a stream position whatever the frame says, so an
+      // unrecognized name still advances the cursor. One outside the
+      // framable charset is discarded rather than echoed into a header.
+      if (frame.id !== undefined && isValidSeq(frame.id)) cursor = frame.id;
+
+      switch (frame.event) {
+        case CHANGE_FRAME_READY:
+          if (!settled) {
+            settled = true;
+            onLive();
+          }
+          return;
+        case CHANGE_FRAME_RECORD:
+          handler(parseChange(JSON.parse(frame.data) as WireRecordChange));
+          return;
+        case CHANGE_FRAME_RESET:
+          // The cursor is worthless now, so the next reconnect starts from
+          // this connection's head rather than replaying against a
+          // position the server has already refused.
+          cursor = headSeq();
+          opts.onReset?.();
+          return;
+        default:
+          // A name this client does not know is ignored, never an error:
+          // that is what makes a later frame additive rather than a break.
+          return;
+      }
+    };
+
+    const pump = async (): Promise<void> => {
+      let attempt = 0;
+      while (!stopped) {
+        const openedAt = Date.now();
+        try {
+          await this.readFeed(url, controller, () => cursor, dispatch);
+        } catch (err) {
+          if (stopped) return;
+          // A first connection that never came up is the caller's error to
+          // handle, not a reconnect: subscribeChanges() has not resolved.
+          if (!settled) {
+            settled = true;
+            onFailed(err);
+            return;
+          }
+          opts.onError?.(err);
+        }
+        if (stopped) return;
+        // A connection that stayed up did its job; only a flapping one
+        // escalates. Without this, a server accepting and dropping in
+        // sequence would be reconnected against as fast as it could refuse.
+        if (Date.now() - openedAt >= RECONNECT_BASE_MS) attempt = 0;
+        await sleep(reconnectDelay(attempt++));
+      }
+    };
+
+    void pump();
+    await live;
+
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
+  }
+
+  /**
+   * One connection, read to its end. Returns when the server closes the
+   * stream — an ordinary event that the caller answers by reconnecting,
+   * not a failure.
+   */
+  private async readFeed(
+    url: string,
+    controller: AbortController,
+    cursor: () => string | undefined,
+    dispatch: (frame: SseFrame, headSeq: () => string | undefined) => void,
+  ): Promise<void> {
+    const res = await this.send(url, (token) => {
+      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const since = cursor();
+      if (since !== undefined) headers['Last-Event-ID'] = since;
+      return { headers, signal: controller.signal };
+    });
+
+    if (!res.ok) throw await this.errorForResponse(res, 'GET', '/changes');
+    if (!res.body) {
+      throw new APIAdapterError(`GET /changes at "${this.baseUrl}" answered with no stream body.`);
+    }
+
+    // This connection's own head, as its ready frame reported it — the
+    // position a reset falls back to.
+    let head: string | undefined;
+    const headSeq = () => head;
+
+    const decoder = new SseDecoder();
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        for (const frame of decoder.push(value)) {
+          if (frame.event === CHANGE_FRAME_READY && head === undefined) {
+            head = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+          }
+          dispatch(frame, headSeq);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   // -------------------------------------------------------

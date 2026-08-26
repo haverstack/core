@@ -31,6 +31,7 @@ export {
   StackPayloadTooLargeError,
   StackTimeoutError,
   StackClosedError,
+  StackRelayScopeError,
 } from './stack.js';
 export type {
   StackErrorCode,
