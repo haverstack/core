@@ -547,7 +547,7 @@ data: {"reason":"cursor_expired"}
 
 Two consequences are easy to discover too late:
 
-- **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. The invalidation signal is already in the stream, because `_grant` and `_group` writes emit ordinary record events — see [Change events § Permission scoping](./events.md#permission-scoping).
+- **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. A subscription opened through `ScopedStack.subscribe()` already carries that cache and expires it from the stream itself, so a server that opens one per connection inherits both and has nothing to build — see [Change events § Permission scoping](./events.md#permission-scoping). The cost is a real one to weigh only where a server scopes the feed some other way.
 - **A purged record cannot be permission-checked after the fact.** Readability must be evaluated at mutation time, on the record as it stood, because after the write there is nothing left to check.
 
 ### Auth, and what a stream does not renew
@@ -564,7 +564,7 @@ As with [the auth checklist](#server-implementation-checklist), each of these is
 - **Never accept a bearer token as a query parameter**, on this endpoint or any other, however convenient `EventSource` would make it.
 - **Evaluate readability at mutation time for a purge**, before the record is destroyed.
 - **Never put the purged record, or anything identifying it, into a purged frame.** Holding the record for that readability check makes it easy to serve under `?include=record`, and to fill an author field from it. Both defeat the erasure the verb performs.
-- **Invalidate per-connection grant caches on `_grant` and `_group` events.** Caching authority is necessary for throughput and unsafe without this — a server that caches and ignores them serves a revoked subscriber indefinitely.
+- **Invalidate any authority cache of your own on `_grant` and `_group` events.** Caching authority is necessary for throughput and unsafe without it — a cache that ignores them serves a revoked subscriber indefinitely. The per-subscription cache behind `canRead` already does this, so what remains is any cache a server adds on top, such as one shared across connections.
 - **Close on buffer overflow; never drop a frame silently.**
 - **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
 - **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
