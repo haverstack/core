@@ -539,6 +539,8 @@ data: {"reason":"cursor_expired"}
 
 **Reconnection is the client's job, with exponential backoff and jitter.** A server restart otherwise produces a synchronized reconnect stampede from every client it dropped.
 
+**A client stops reconnecting when the answer was `4xx`, and keeps reconnecting when it was `5xx`.** The reconnect sends the same request, so a status faulting that request — a malformed cursor or filter, an unrenewable credential, an authorization refusal — will be answered identically however long the client waits, and backing off only spins. A `5xx` says the server could not serve a request it did not fault, which is the case backoff exists for; `timeout` is the answer a server gives while [shedding query load](#bounding-query-cost) and a client that gave up on it would turn a busy server into a dead subscription. A client that stops reports the error to its subscriber first; the repair is to subscribe again.
+
 ### Permission scoping
 
 **A connection delivers the events its token's session may read, and nothing else.** The predicate is literally `canRead` applied per event — no second vocabulary, no feed-specific ACL. A server subscribes **unscoped** at the storage owner and fans out per connection, filtering each through the `ScopedStack` its token's session names via `Stack.forSession()`, taking the `(principalId, subjectId)` pair whole. Delegated authority is then the ordinary [intersection](./access-control.md#delegation-principal-and-subject), inherited rather than reimplemented.
