@@ -11,6 +11,7 @@ import {
   APIAdapterAuthError,
 } from '../src/index.js';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
+import { StackQueryError, StackTimeoutError } from '@haverstack/core';
 import type { RecordChange } from '@haverstack/core';
 
 const BASE_URL = 'https://stack.example.com';
@@ -483,6 +484,68 @@ describe('reconnection', () => {
     const calls = mockFetch.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(mockFetch.mock.calls.length).toBe(calls);
+    stop();
+  });
+
+  // A request the server faulted is the same request on the next
+  // connection, so the loop ends rather than spinning against a verdict
+  // that will not change.
+  test('stops reconnecting after a 4xx the reconnect would only repeat', async () => {
+    vi.useFakeTimers();
+    const adapter = await openAdapter();
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+
+    const onError = vi.fn();
+    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    first.write(READY);
+    const stop = await subscription;
+
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'bad_request', message: 'Invalid cursor' } }, 400),
+    );
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(StackQueryError);
+
+    // No further reconnect: the fetch count holds at discovery + first +
+    // the refused reconnect, even after more time passes.
+    const calls = mockFetch.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockFetch.mock.calls.length).toBe(calls);
+    stop();
+  });
+
+  // 503 is a server shedding load, not a verdict on the request — being
+  // reconnected against is the whole point of it.
+  test('keeps reconnecting after a 503 the server may recover from', async () => {
+    vi.useFakeTimers();
+    const adapter = await openAdapter();
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+
+    const onError = vi.fn();
+    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    first.write(READY);
+    const stop = await subscription;
+
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'timeout', message: 'Shedding load' } }, 503),
+    );
+    const recovered = feed();
+    mockFetch.mockResolvedValueOnce(recovered.response);
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(StackTimeoutError);
+
+    // discovery + first + the 503 + the attempt that reaches the server
+    // again: the subscription outlived the refusal.
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.waitFor(() => expect(mockFetch.mock.calls.length).toBe(4));
     stop();
   });
 

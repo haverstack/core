@@ -16,7 +16,7 @@
  * patchContent()/deleteRecord()/etc.'s expectedVersion option.
  */
 
-import { StackQueryError, StackPermissionError } from '@haverstack/core';
+import { StackError, StackQueryError } from '@haverstack/core';
 import type {
   StackAdapter,
   StackRecord,
@@ -59,6 +59,7 @@ import {
   isRetryableAuthError,
   isValidSeq,
   supportsChangeFeed,
+  WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
   CHANGE_FRAME_RECORD,
@@ -484,16 +485,20 @@ const reconnectDelay = (attempt: number): number => {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Whether a feed error is one reconnecting cannot recover. An
- * authentication failure (a 401 whose re-auth did not renew, or no
- * credential to renew with) and an authorization refusal (403) will reject
- * the next connection identically, so retrying only spins. A connection or
- * server error is transient and reconnects. The stream is closed by
- * returning from the pump; the subscriber has already been told via
- * onError.
+ * Whether a feed error is one reconnecting cannot recover. A 4xx faults the
+ * request, and the reconnect sends the same one, so retrying only spins. A
+ * 5xx is the server's own trouble and may clear — a shed-load `timeout`
+ * reconnects. The stream is closed by returning from the pump; the
+ * subscriber has already been told via onError.
  */
-const isFatalFeedError = (err: unknown): boolean =>
-  err instanceof APIAdapterAuthError || err instanceof StackPermissionError;
+const isFatalFeedError = (err: unknown): boolean => {
+  if (err instanceof APIAdapterAuthError) return true;
+  if (err instanceof StackError) {
+    const status = WIRE_ERROR_STATUS[err.code];
+    return status >= 400 && status < 500;
+  }
+  return false;
+};
 
 // -------------------------------------------------------
 // Challenge–response handshake
