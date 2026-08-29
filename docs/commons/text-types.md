@@ -74,8 +74,8 @@ that being read as a finished work is its purpose.
 | Sharing a link into the group ("read this!") | `message` (+ rel.)           | The commentary is speech; the shared bookmark/article stays an artifact, linked.         |
 | Check-in, private location diary             | `note` (+ `location`)        | A journal entry with coordinates — addressed to no one.                                  |
 | "I'm at the café — come join me" (group)     | `message` (+ `location`)     | Speech; the `location` association is the invariant across every check-in contract.      |
-| Foursquare-style public check-in             | _deferred (#15)_             | Broadcast speech — `post` + `location` once the fourth contract lands.                   |
-| Social media post                            | _deferred (#15)_             | A fourth contract — public broadcast — see below.                                        |
+| Foursquare-style public check-in             | _not yet in the commons_     | Broadcast speech — `post` + `location` once the fourth contract lands.                   |
+| Social media post                            | _not yet in the commons_     | A fourth contract — public broadcast — see below.                                        |
 
 ## Comments are messages; marginalia are notes
 
@@ -108,16 +108,17 @@ utterance — _their_ note is our `post`, not our `note`.)
 `post` must be its own type rather than a `message` with `{ access: 'public' }`, for
 four mechanical reasons, not just taxonomy:
 
-1. **Sync blast radius.** Outbound bridges map _types_ to external shapes (#15's
-   `lexiconId` maps a type to an ATProto `$type`), so the type is the sync boundary.
+1. **Sync blast radius.** Outbound bridges map _types_ to external shapes — a bridge's
+   own translation table maps a typeId to an ATProto `$type` — so the type is the sync
+   boundary.
    "Everything of type `post` is meant for the world" is an invariant a bridge can
    enforce; "messages whose permissions happen to be public" puts a group's private
    thread one permission bug away from the public firehose.
 2. **Different threading fabric.** A message thread is `parentId` — within-stack, one
    trust domain, one indexed query. A post's conversation is inherently cross-stack:
    a reply lives in the replier's stack, referencing a record in someone else's, which
-   `parentId` cannot express and #16's `target` union
-   (`{ scope: 'internal', recordId, stackUrl }` / `{ scope: 'external', id, ns }`)
+   `parentId` cannot express and a relationship's `target` union
+   (`{ scope: 'record', recordId, stackUrl }` / `{ scope: 'external', ns, id }`)
    exists to express. Posts-as-messages would hand board apps threads whose parents
    they structurally cannot traverse.
 3. **Different deletion physics.** Inside a stack, recoverability is real: "anything a
@@ -127,24 +128,27 @@ four mechanical reasons, not just taxonomy:
 4. **Different authorship requirements.** In-stack, `entityId` means author because
    the stack is a trust domain. A broadcast utterance travels _without_ its stack, so
    authorship must be self-certifying — the DID identity model used for `entityId`
-   generally, surfaced in #15's revised `externalIds` on `EntityContent`. `message`
-   needs none of it; `post` can't exist without it.
+   generally, plus the `alias` relationships that resolve a foreign identifier back to
+   a known entity. `message` needs none of it; `post` can't exist without it.
 
-The dependency chain is therefore: **#16** (cross-stack/cross-protocol reference
-fabric, plus its `relatedTo`/capability follow-up so external references are
-queryable) → **#15 as revised** (protocol-neutral core hooks, building on the
-self-certifying DID identity model; ATProto-specific machinery in `adapter-atproto`) →
-a `post@1` proposal here, as the _protocol-neutral_ broadcast
-utterance: the canonical copy lives in your stack; bridges syndicate it
-(`adapter-atproto` maps it to `app.bsky.feed.post`, an ActivityPub bridge to a `Note`)
-and replies come home as external-target relationships. That is the IndieWeb's POSSE
-pattern — publish on your own site, syndicate elsewhere — with real primitives
-underneath: Bluesky and Mastodon become views of a record you own.
+**What blocks what.** The reference fabric this rests on — relationship targets that
+can name a record in someone else's stack or an identifier in another protocol, and a
+`relatedTo` filter that can query them — is in core now. What remains outstanding is
+the _bridge_: an `adapter-atproto`, its typeId → `$type` translation table, and the
+machinery for content addressing and tombstones that belongs to a copy rather than to
+the record it was made from. That is a separate track from the content type. A `post`
+with no replies and no bridge is fully expressible today, which is why the type does
+not wait on the bridge.
 
-One forward-compatibility note: `message`'s quote-reply convention uses today's flat
-relationship shape (`recordId`). Commons labels (`reply-to`, `about`, `location`,
-`series`, …) are orthogonal to #16's `target` union and ride on it unchanged — no
-commons redesign is implied by that RFC landing.
+The shape it enables is the IndieWeb's POSSE pattern — publish on your own site,
+syndicate elsewhere — with real primitives underneath: the canonical copy lives in your
+stack, a bridge stamps a `syndicated-to` relationship for each copy it publishes, and
+replies come home as external-target relationships. Bluesky and Mastodon become views
+of a record you own.
+
+Commons labels (`reply-to`, `about`, `location`, `series`, …) are orthogonal to the
+target union and ride on any arm unchanged — a label says what a reference means, a
+target says which identifier space it lives in.
 
 ## On the names
 
@@ -174,7 +178,7 @@ arrives with fediverse reflexes:
   Microformats never put a type name on the wire (post-type is discovered from
   properties), so there is no IndieWeb wire collision at all. The AS2 collision
   surfaces exactly once — a future ActivityPub bridge maps `post` → AS2 `Note` in its
-  translation table, the same mechanism as #15's `lexiconId`.
+  translation table, which is where every such mapping belongs.
 - **The word was never stable anyway.** Facebook "Notes" was a _long-form articles_
   feature — a third, opposite usage. There is no uncontested name to find; the defense
   is precise contracts here and explicit mappings at the bridges.

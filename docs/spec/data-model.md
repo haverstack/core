@@ -73,18 +73,33 @@ Tags, attachments, and relationships are unified under a single **Association** 
 type Association =
   | { kind: 'tag'; label: string }
   | { kind: 'attachment'; label: string; fileId: string }
-  | { kind: 'relationship'; label: string; recordId: string };
+  | { kind: 'relationship'; label: string; target: RelationshipTarget };
+
+type RelationshipTarget =
+  | { scope: 'record'; recordId: string; stackUrl?: string }
+  | { scope: 'entity'; entityId: string }
+  | { scope: 'external'; ns: string; id: string };
 ```
 
 **Examples:**
 
 - A `contact` type uses `{ kind: "attachment", label: "avatar", fileId: "..." }` as a profile picture.
-- A `tweet` type uses `{ kind: "relationship", label: "reply-to", recordId: "..." }` to reference another tweet.
+- A `tweet` type uses `{ kind: "relationship", label: "reply-to", target: { scope: "record", recordId: "..." } }` to reference another tweet.
 - Any record can use `{ kind: "tag", label: "starred" }` for user-defined labels.
 
 `parentId` is a separate native field (not an Association) because hierarchical containment is fundamental enough to warrant indexing at the library level. Associations are for metadata and cross-references.
 
-**Reference creation is gated on `ScopedStack`:** an `attachment` association or file-ref content field requires file access, and a `relationship` association or `parentId` requires read access to the target — see [Reference-creation gating](./access-control.md#reference-creation-gating). Plain `Stack` is unscoped and does not apply this.
+### Relationship targets
+
+A relationship's `scope` names **which identifier space its value belongs to**. The three are not interchangeable: the same string can be a Record ID in one and a DID in another, and matching across them would make a group roster look like a record reference.
+
+- **`record`** — a Record. `recordId` is unique within one stack only, so a reference to a Record in a _different_ stack carries that stack's `stackUrl` alongside it. An absent `stackUrl` means this stack; it is not a wildcard, and a filter that omits it does not match a target that carries one.
+- **`entity`** — a "who", as a DID. This is what [group rosters](./identity.md#group) are made of: membership names identities, which mean the same thing in every stack, rather than the local Records that happen to describe them.
+- **`external`** — something outside the stack entirely. `ns` names the scheme that interprets `id` — `"atproto"`, `"activitypub"`, `"email"`, `"url"`, anything — and is part of the association's identity, so the same `id` under two namespaces is two associations. Haverstack expresses the reference; the app or adapter interprets it. No protocol is privileged, and nothing in core dereferences one.
+
+Association identity is `(kind, label)` plus the payload: `fileId` for an attachment, and the whole target for a relationship. Two relationships differing in any target field are two associations, and `dissociate()` removes only the one it names exactly.
+
+**Reference creation is gated on `ScopedStack`:** an `attachment` association or file-ref content field requires file access, and a `relationship` naming a Record _in this stack_ — plus `parentId` — requires read access to the target. The other target arms are ungated; see [Reference-creation gating](./access-control.md#reference-creation-gating) for why that is safe rather than a hole. Plain `Stack` is unscoped and does not apply this.
 
 ## Types
 
@@ -256,7 +271,13 @@ type Filter = {
   // Association filters
   tags?: string[]; // records that have ALL of these tags
   hasAttachment?: string; // records with an attachment of this label
-  relatedTo?: { recordId: string; label?: string };
+  relatedTo?: {
+    label?: string;
+    target?:
+      | { scope: 'record'; recordId: string; stackUrl?: string }
+      | { scope: 'entity'; entityId: string }
+      | { scope: 'external'; ns: string; id?: string };
+  };
   attachmentFileId?: string; // records that reference a specific attachment file ID, via an `attachment` Association or a top-level `file-ref` content field
 
   // Content fields (exact match on top-level keys)
@@ -271,6 +292,8 @@ type DateRange = {
   after?: Date;
 };
 ```
+
+**Every part of `relatedTo` is an optional pattern.** `{}` matches any Record carrying any relationship; a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a scope and never across scopes.
 
 **A `content` filter value of `null` means "the field is absent or stored as `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, implements `IS NULL` / missing-path semantics for a `null` filter value: it matches a record whose content omits the key entirely and one that stores a literal `null` alike, since from the caller's side both mean "no value here."
 

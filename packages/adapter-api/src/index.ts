@@ -325,8 +325,22 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
   if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
   if (f.relatedTo) {
-    p.set('relatedTo', f.relatedTo.recordId);
-    if (f.relatedTo.label) p.set('relatedToLabel', f.relatedTo.label);
+    // `related` is the switch, so a filter with no qualifiers at all still
+    // reaches the server as "has any relationship" rather than vanishing
+    // and silently widening the query. The scope is implied by which of
+    // the qualifiers appear; the server rejects a mix.
+    p.set('related', 'true');
+    const t = f.relatedTo.target;
+    if (t?.scope === 'record') {
+      p.set('relatedTo', t.recordId);
+      if (t.stackUrl !== undefined) p.set('relatedToStack', t.stackUrl);
+    } else if (t?.scope === 'entity') {
+      p.set('relatedToEntity', t.entityId);
+    } else if (t?.scope === 'external') {
+      p.set('relatedToNs', t.ns);
+      if (t.id !== undefined) p.set('relatedToId', t.id);
+    }
+    if (f.relatedTo.label !== undefined) p.set('relatedToLabel', f.relatedTo.label);
   }
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');

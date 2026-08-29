@@ -95,7 +95,9 @@ describe('ScopedStack — read access', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const record = await adapter.createRecord(
@@ -106,11 +108,33 @@ describe('ScopedStack — read access', () => {
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
 
+  // Membership names an identity, not a record. A roster entry pointing at
+  // a record whose id happens to equal the DID confers nothing — the arms
+  // are what keep the two apart now that both hold plain strings.
+  test('a record-scoped roster entry does not confer membership', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group',
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'record', recordId: MEMBER } },
+        ],
+      }),
+    );
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+      }),
+    );
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+  });
+
   test('non-member cannot read via a group read grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const record = await adapter.createRecord(
@@ -470,8 +494,8 @@ describe('ScopedStack — versions', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', recordId: ADMIN },
-          { kind: 'relationship', label: 'member', recordId: MEMBER },
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -930,7 +954,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
@@ -942,7 +968,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'admin', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
@@ -954,7 +982,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
@@ -966,7 +996,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
@@ -980,7 +1012,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['create'], typeId: COMMENT }]);
@@ -998,7 +1032,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
@@ -1023,7 +1059,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: APP }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: APP } },
+        ],
       }),
     );
     // Both halves of the intersection are otherwise satisfied: the subject
@@ -1058,7 +1096,9 @@ describe('ScopedStack — group-targeted grants', () => {
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group',
-        associations: [{ kind: 'relationship', label: 'member', recordId: MEMBER }],
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     // Only the principal side refuses roster-derived authority; the subject
@@ -1079,7 +1119,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(notAGroup.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
     await stack.grant({ groupId: notAGroup.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
 
@@ -1121,7 +1161,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: COMMENT }]);
     const record = await stack.create(COMMENT, { text: 'secret' });
@@ -1132,7 +1172,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
     expect(await view.get(record.id)).toBeNull();
   });
@@ -1279,7 +1319,7 @@ describe('ScopedStack — write implies read', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
     const record = await recordWithHistory([
       { access: 'group', groupId: group.id, read: false, write: true },
@@ -1945,8 +1985,8 @@ describe('ScopedStack — group role gating', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', recordId: ADMIN },
-          { kind: 'relationship', label: 'member', recordId: MEMBER },
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
         ],
         ...overrides,
       }),
@@ -1962,14 +2002,18 @@ describe('ScopedStack — group role gating', () => {
 
   test('plain member cannot add or remove roster associations', async () => {
     const group = await makeGroup();
-    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    const newMember: Association = {
+      kind: 'relationship',
+      label: 'member',
+      target: { scope: 'entity', entityId: STRANGER },
+    };
     await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
       StackNotFoundError,
     );
     const existingMember: Association = {
       kind: 'relationship',
       label: 'member',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     };
     await expect(stack.asEntity(MEMBER).dissociate(group.id, existingMember)).rejects.toThrow(
       StackNotFoundError,
@@ -1987,7 +2031,11 @@ describe('ScopedStack — group role gating', () => {
     const updated = await stack.asEntity(ADMIN).update(group.id, { name: 'renamed' });
     expect(updated.content.name).toBe('renamed');
 
-    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    const newMember: Association = {
+      kind: 'relationship',
+      label: 'member',
+      target: { scope: 'entity', entityId: STRANGER },
+    };
     await stack.asEntity(ADMIN).associate(group.id, newMember);
     expect((await adapter.getRecord(group.id))?.associations).toContainEqual(newMember);
 
@@ -2022,7 +2070,11 @@ describe('ScopedStack — group role gating', () => {
     await expect(stack.asEntity(STRANGER).update(group.id, { name: 'renamed' })).rejects.toThrow(
       StackPermissionError,
     );
-    const newMember: Association = { kind: 'relationship', label: 'member', recordId: STRANGER };
+    const newMember: Association = {
+      kind: 'relationship',
+      label: 'member',
+      target: { scope: 'entity', entityId: STRANGER },
+    };
     await expect(stack.asEntity(STRANGER).associate(group.id, newMember)).rejects.toThrow(
       StackPermissionError,
     );
@@ -2045,7 +2097,7 @@ describe('ScopedStack — group role gating', () => {
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
 
     const updated = await stack.asEntity(MEMBER).update(group.id, { name: 'renamed' });
@@ -2054,15 +2106,21 @@ describe('ScopedStack — group role gating', () => {
 
   test('create-time bootstrap does not duplicate an explicitly supplied admin association', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_group@1' }]);
-    const group = await stack
-      .asEntity(MEMBER)
-      .create(
-        '_group@1',
-        { name: 'New Group' },
-        { associations: [{ kind: 'relationship', label: 'admin', recordId: MEMBER }] },
-      );
+    const group = await stack.asEntity(MEMBER).create(
+      '_group@1',
+      { name: 'New Group' },
+      {
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+        ],
+      },
+    );
     const adminAssociations = (group.associations ?? []).filter(
-      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === MEMBER,
+      (a) =>
+        a.kind === 'relationship' &&
+        a.label === 'admin' &&
+        a.target.scope === 'entity' &&
+        a.target.entityId === MEMBER,
     );
     expect(adminAssociations).toHaveLength(1);
   });
@@ -2073,7 +2131,11 @@ describe('ScopedStack — group role gating', () => {
     const group = await stack.asEntity(OWNER).create('_group@1', { name: 'New Group' });
     expect(group.entityId).toBe(OWNER);
     const adminAssociations = (group.associations ?? []).filter(
-      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === OWNER,
+      (a) =>
+        a.kind === 'relationship' &&
+        a.label === 'admin' &&
+        a.target.scope === 'entity' &&
+        a.target.entityId === OWNER,
     );
     expect(adminAssociations).toHaveLength(1);
   });
@@ -2089,8 +2151,12 @@ describe('Permission — group role restriction', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', recordId: 'group-admin-2' },
-          { kind: 'relationship', label: 'member', recordId: MEMBER },
+          {
+            kind: 'relationship',
+            label: 'admin',
+            target: { scope: 'entity', entityId: 'group-admin-2' },
+          },
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -2111,8 +2177,8 @@ describe('Permission — group role restriction', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', recordId: admin },
-          { kind: 'relationship', label: 'member', recordId: MEMBER },
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: admin } },
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -2425,10 +2491,78 @@ describe('ScopedStack.create — relationship association and parentId gating', 
         COMMENT,
         { text: 'hi' },
         {
-          associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'related',
+              target: { scope: 'record', recordId: unreadableNote.id },
+            },
+          ],
         },
       ),
     ).rejects.toThrow(StackPermissionError);
+  });
+
+  // The gate refuses a reference that would convey access to, or confirm
+  // the existence of, an unreadable record. The other arms name nothing in
+  // this stack, so there is nothing for it to protect and no check to make.
+  test('a record target in another stack is not gated', async () => {
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'reply-to',
+            target: {
+              scope: 'record',
+              recordId: unreadableNote.id,
+              stackUrl: 'https://alice.example/stack',
+            },
+          },
+        ],
+      },
+    );
+    expect(record.associations).toHaveLength(1);
+  });
+
+  test('an entity target is not gated', async () => {
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'author',
+            target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+          },
+        ],
+      },
+    );
+    expect(record.associations).toHaveLength(1);
+  });
+
+  test('an external target is not gated', async () => {
+    const record = await stack.asEntity(MEMBER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'syndicated-to',
+            target: {
+              scope: 'external',
+              ns: 'atproto',
+              id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+            },
+          },
+        ],
+      },
+    );
+    expect(record.associations).toHaveLength(1);
   });
 
   test('relationship association targeting a readable record is allowed', async () => {
@@ -2436,13 +2570,19 @@ describe('ScopedStack.create — relationship association and parentId gating', 
       COMMENT,
       { text: 'hi' },
       {
-        associations: [{ kind: 'relationship', label: 'related', recordId: readableNote.id }],
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'related',
+            target: { scope: 'record', recordId: readableNote.id },
+          },
+        ],
       },
     );
     expect(record.associations).toContainEqual({
       kind: 'relationship',
       label: 'related',
-      recordId: readableNote.id,
+      target: { scope: 'record', recordId: readableNote.id },
     });
   });
 
@@ -2455,7 +2595,11 @@ describe('ScopedStack.create — relationship association and parentId gating', 
         { text: 'hi' },
         {
           associations: [
-            { kind: 'relationship', label: 'related', recordId: 'nonexistent-record' },
+            {
+              kind: 'relationship',
+              label: 'related',
+              target: { scope: 'record', recordId: 'nonexistent-record' },
+            },
           ],
         },
       );
@@ -2467,7 +2611,13 @@ describe('ScopedStack.create — relationship association and parentId gating', 
         COMMENT,
         { text: 'hi' },
         {
-          associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'related',
+              target: { scope: 'record', recordId: unreadableNote.id },
+            },
+          ],
         },
       );
     } catch (e) {
@@ -2485,7 +2635,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      recordId: MEMBER,
+      target: { scope: 'entity', entityId: MEMBER },
     });
   });
 
@@ -2506,7 +2656,13 @@ describe('ScopedStack.create — relationship association and parentId gating', 
       { text: 'hi' },
       {
         parentId: unreadableNote.id,
-        associations: [{ kind: 'relationship', label: 'related', recordId: unreadableNote.id }],
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'related',
+            target: { scope: 'record', recordId: unreadableNote.id },
+          },
+        ],
       },
     );
     expect(record.parentId).toBe(unreadableNote.id);
@@ -2552,7 +2708,7 @@ describe('ScopedStack.associate — reference-creation gating', () => {
       stack.asEntity(MEMBER).associate(ownedRecord.id, {
         kind: 'relationship',
         label: 'related',
-        recordId: unreadableNote.id,
+        target: { scope: 'record', recordId: unreadableNote.id },
       }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -2929,7 +3085,11 @@ describe('ScopedStack — delegation', () => {
 
   test('an app delegated for a group admin cannot manage the group', async () => {
     const group = await stack.create('_group@1', { name: 'Book Club' });
-    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'admin',
+      target: { scope: 'entity', entityId: MEMBER },
+    });
     expect(await stack.asEntity(MEMBER).update(group.id, { name: 'Renamed' })).toBeTruthy();
     await expect(
       stack.asEntity(APP, { onBehalfOf: MEMBER }).update(group.id, { name: 'Hijacked' }),
@@ -2999,7 +3159,11 @@ describe('ScopedStack — delegation', () => {
     ).rejects.toThrow(StackNotFoundError);
 
     // An admin subject reaches it, since both identities then manage it.
-    await stack.associate(group.id, { kind: 'relationship', label: 'admin', recordId: MEMBER });
+    await stack.associate(group.id, {
+      kind: 'relationship',
+      label: 'admin',
+      target: { scope: 'entity', entityId: MEMBER },
+    });
     expect(
       await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).update(group.id, { name: 'Renamed' }),
     ).toBeTruthy();

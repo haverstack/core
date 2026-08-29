@@ -45,9 +45,13 @@ await stack.defineType('org.haverstack/contact@1', 'Contact', {
 **Labels** (vCard's `TYPE` parameter, humanized): an open vocabulary of user-facing
 words. Well-known values: `"home"`, `"work"`, `"mobile"`. Unknown labels are displayed
 verbatim — they are the user's words ("boat phone" is legal and correct), not a
-machine namespace. Absent means unspecified. This is deliberately the same
-labeled-multi-value shape as #15's revised `externalIds` on `EntityContent`, differing
-only in that `label` is for humans where `ns` is for machines.
+machine namespace. Absent means unspecified.
+
+These are **directory data the user typed**, not machine identifiers. The resemblance
+to a relationship's `{ scope: 'external', ns, id }` target is superficial and the two
+do different jobs: an `alias` relationship is what an app resolves an inbound record's
+author _through_, while `contact.emails` is what a person reads. A contact that is also
+a known principal carries both — see the conventions below.
 
 Note that array fields are opaque to the query engine; apps filter contacts by `name`
 or via associations, not by address.
@@ -56,6 +60,10 @@ or via associations, not by address.
 
 - **Avatar**: attachment association with label `avatar` — the spec's own example of an
   attachment association, honored here.
+- **Alias identifiers**: a machine identifier for someone in another system —
+  `did:plc:…`, an ActivityPub actor URL, an npub — is an `alias` relationship with an
+  external target, on the `_entity` record rather than here. See
+  [Cross-type conventions](./README.md#cross-type-conventions).
 - **Contact ↔ entity linkage**: when a contact _is_ a known principal (they appear in
   grants, groups, or authorship), link the records with
   `{ kind: 'relationship', label: 'entity', recordId: <_entity record id> }` on the

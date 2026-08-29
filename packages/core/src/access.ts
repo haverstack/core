@@ -124,7 +124,11 @@ export function groupRoleFromAssociations(
 ): GroupRole | null {
   let role: GroupRole | null = null;
   for (const a of associations ?? []) {
-    if (a.kind === 'relationship' && a.recordId === entityId) {
+    if (
+      a.kind === 'relationship' &&
+      a.target.scope === 'entity' &&
+      a.target.entityId === entityId
+    ) {
       if (a.label === 'admin') return 'admin';
       if (a.label === 'member') role = 'member';
     }

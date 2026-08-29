@@ -319,6 +319,41 @@ describe('queryRecords fixtures', () => {
     expect(result.total).toBeNull();
   });
 
+  // The scope is implied by which parameters appear, so a client that
+  // dropped one would silently widen the query rather than fail.
+  for (const [name, filter] of [
+    [
+      'query-related-to-record-target',
+      {
+        relatedTo: {
+          label: 'series',
+          target: { scope: 'record' as const, recordId: '1hk153x00001' },
+        },
+      },
+    ],
+    [
+      'query-related-to-entity-target',
+      { relatedTo: { target: { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' } } },
+    ],
+    [
+      'query-related-to-external-namespace',
+      { relatedTo: { target: { scope: 'external' as const, ns: 'atproto' } } },
+    ],
+  ] as const) {
+    test(name, async () => {
+      const fixture = queryRecordsFixtures.find((f) => f.name === name)!;
+      mockFetch.mockResolvedValueOnce(jsonResponse(NATIVE_ONLY_DISCOVERY));
+      const adapter = await APIAdapter.open({ url: BASE_URL });
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      await adapter.queryRecords({ filter });
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe('GET');
+    });
+  }
+
   test('discards a total a non-conforming server populates anyway', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ records: [], cursor: null, total: 142 }, 200));

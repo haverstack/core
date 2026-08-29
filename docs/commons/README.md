@@ -131,9 +131,12 @@ these.
 ## Cross-type conventions
 
 Some semantics belong to no single type. These association labels carry commons
-authority on **any** record, of any type:
+authority on **any** record, of any type. Relationship labels are orthogonal to the
+target arm they ride on: a label says what the reference _means_, a target says which
+identifier space it lives in, and every label below works with any arm that makes
+sense for it.
 
-- **`location`** — `{ kind: 'relationship', label: 'location', recordId: <place> }`
+- **`location`** — `{ kind: 'relationship', label: 'location', target: { scope: 'record', recordId: <place> } }`
   points at a [`place`](./place.md) record: the geotagged photo, the note written at a
   café, the check-in. Apps that understand places understand every located record for
   free, whatever its type.
@@ -141,17 +144,35 @@ authority on **any** record, of any type:
   referenced from a record's body text (`note`, `article`, `page`, `message`). How the
   body refers to the embed is app territory in v1; a commons syntax is an expected
   follow-up proposal.
-- **`series`** — `{ kind: 'relationship', label: 'series', recordId }` groups records
+- **`series`** — `{ kind: 'relationship', label: 'series', target: { scope: 'record', recordId } }` groups records
   that are occurrences of one recurring thing (materialized [`event`](./event.md)
   occurrences are the motivating case). Reserved now so recurrence proposals build on
   it rather than around it.
-- **`author`** — `{ kind: 'relationship', label: 'author', recordId: <contact> }`
-  attributes any record to a person the stack knows, pointing at a
-  [`contact`](./contact.md) (or `_entity`) record. Complements, never replaces, a
-  displayed-byline string like `article.author`: the string is what the work says
-  about itself (a property, faithful to the work as published); the association is
-  what _you_ know about the world. Multiple `author` associations express
-  co-authorship. Prior art: ActivityStreams `attributedTo`.
+- **`author`** — attributes any record to a person the stack knows. Two forms, and the
+  target arm is what distinguishes them: an `entity` target
+  (`{ scope: 'entity', entityId: <DID> }`) names the identity itself, while a `record`
+  target pointing at a [`contact`](./contact.md) or `_entity` record names your card
+  about them. Complements, never replaces, a displayed-byline string like
+  `article.author`: the string is what the work says about itself (a property, faithful
+  to the work as published); the association is what _you_ know about the world.
+  Multiple `author` associations express co-authorship. Prior art: ActivityStreams
+  `attributedTo`.
+- **`alias`** — `{ kind: 'relationship', label: 'alias', target: { scope: 'external', ns, id } }`
+  on an `_entity` record records that this identity is also known by that identifier
+  elsewhere: `{ ns: 'atproto', id: 'did:plc:…' }`, `{ ns: 'activitypub', id: <actor URL> }`,
+  `{ ns: 'email', id: 'alice@example.com' }`. It is the resolution primitive — an
+  inbound record whose author arrives as a foreign identifier is matched back to a
+  known entity with one indexed `relatedTo` query — which is why it is an association
+  and not a content field: array fields are opaque to the query engine, so the same
+  list inside `_entity.content` would force a scan of every entity record. Machine
+  identifiers only; a person's own words about someone belong on a `contact`.
+- **`syndicated-to`** — `{ kind: 'relationship', label: 'syndicated-to', target: { scope: 'external', ns, id } }`
+  records that a copy of this record was published elsewhere. The canonical copy stays
+  in the stack; a bridge publishes and stamps the copy's address here. Asking a
+  namespace without an id ("everything already on ATProto") is the inventory query a
+  syndication tool runs. Where a copy has a lifecycle of its own — retraction state, a
+  remote content address, which account it went out from — that is a record of the
+  bridge's own type, related back to this one; the label alone carries only the link.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.
@@ -233,9 +254,8 @@ concrete intended writer exists — the group cluster graduates when a group-too
 or demo is real, building on the grant/group primitives (`_group`, type-level grants)
 documented in the identity and access-control specs.
 
-Deliberately absent from the initial set: `post` (public social shapes are reconciled
-with the ATProto-compat RFC, #15 — `message` is the group-scoped shape, not the social
-one), recurrence rules (see `event`: occurrences are materialized in @1),
+Deliberately absent from the initial set: `post` (the broadcast contract — `message` is
+the group-scoped shape, not the social one), recurrence rules (see `event`: occurrences are materialized in @1),
 `file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern;
 until a real writer needs it, a record plus attachment covers it), and `checkin`
 (subsumed by the `location` cross-type convention plus any record).

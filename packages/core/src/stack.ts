@@ -50,6 +50,7 @@ import type {
   RecordFilter,
   QueryResult,
   Association,
+  RelationshipTarget,
   Permission,
   Migration,
   MigrationFn,
@@ -2649,13 +2650,26 @@ export class Stack implements StackClient {
 
 /**
  * Matches the SQLite adapter's association primary key (kind, label,
- * file_id, related_id).
+ * file_id, related_scope, related_id, related_ns, related_stack).
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') return a.recordId === b.recordId;
+  if (a.kind === 'relationship' && b.kind === 'relationship') {
+    return targetEqual(a.target, b.target);
+  }
   return true;
+}
+
+/** Structural equality per target arm — what dissociate() matches on. */
+export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
+  if (a.scope !== b.scope) return false;
+  if (a.scope === 'record' && b.scope === 'record') {
+    return a.recordId === b.recordId && (a.stackUrl ?? '') === (b.stackUrl ?? '');
+  }
+  if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
+  if (a.scope === 'external' && b.scope === 'external') return a.ns === b.ns && a.id === b.id;
+  return false;
 }
 
 function permissionEqual(a: Permission, b: Permission): boolean {
@@ -2687,13 +2701,23 @@ const MAX_QUERY_LIMIT = 1000;
  * if it's not already present. Used to bootstrap a `_group` record's first
  * admin at create time.
  */
-function stampGroupAdmin(associations: Association[] | undefined, creator: string): Association[] {
+function stampGroupAdmin(
+  associations: Association[] | undefined,
+  creator: EntityId,
+): Association[] {
   const list = associations ?? [];
   const alreadyAdmin = list.some(
-    (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === creator,
+    (a) =>
+      a.kind === 'relationship' &&
+      a.label === 'admin' &&
+      a.target.scope === 'entity' &&
+      a.target.entityId === creator,
   );
   if (alreadyAdmin) return list;
-  return [...list, { kind: 'relationship', label: 'admin', recordId: creator }];
+  return [
+    ...list,
+    { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: creator } },
+  ];
 }
 
 /**
@@ -3263,16 +3287,23 @@ export class ScopedStack implements StackClient {
 
   /**
    * Reference-creation gate for one association: `attachment` requires
-   * file access, `relationship` read access to its target; `tag` is
-   * unchecked, and `_group` roster associations are gated by the stricter
-   * isGroupManager() instead. See docs/spec/access-control.md
-   * § Reference-creation gating.
+   * file access, and a `relationship` naming a record in this stack
+   * requires read access to it. `tag` is unchecked, and `_group` roster
+   * associations are gated by the stricter isGroupManager() instead.
+   *
+   * The other target arms are ungated because the gate's purpose —
+   * refusing a reference that would convey access to, or confirm the
+   * existence of, an unreadable record — has nothing to bite on: core
+   * never resolves them, so no access flows through one.
+   * See docs/spec/access-control.md § Reference-creation gating.
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
       if (!(await this.canAccessFile(association.fileId))) throw new StackPermissionError();
     } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
-      if (!(await this.canReadReferent(association.recordId))) throw new StackPermissionError();
+      const { target } = association;
+      if (target.scope !== 'record' || target.stackUrl !== undefined) return;
+      if (!(await this.canReadReferent(target.recordId))) throw new StackPermissionError();
     }
   }
 

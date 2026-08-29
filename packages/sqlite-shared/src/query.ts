@@ -116,15 +116,39 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     params.push(f.attachmentFileId, f.attachmentFileId);
   }
 
-  // Relationship filter
+  // Relationship filter — every clause is an optional pattern, so `{}`
+  // matches any relationship and an external target with no `id` matches
+  // its whole namespace (docs/spec/data-model.md § Filter).
   if (f.relatedTo) {
+    const clauses: string[] = [];
+    const target = f.relatedTo.target;
+    if (f.relatedTo.label !== undefined) {
+      clauses.push('a.label = ?');
+      params.push(f.relatedTo.label);
+    }
+    if (target) {
+      clauses.push('a.related_scope = ?');
+      params.push(target.scope);
+      if (target.scope === 'record') {
+        clauses.push('a.related_id = ?', 'a.related_stack = ?');
+        params.push(target.recordId, target.stackUrl ?? '');
+      } else if (target.scope === 'entity') {
+        clauses.push('a.related_id = ?');
+        params.push(target.entityId);
+      } else {
+        clauses.push('a.related_ns = ?');
+        params.push(target.ns);
+        if (target.id !== undefined) {
+          clauses.push('a.related_id = ?');
+          params.push(target.id);
+        }
+      }
+    }
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'relationship' AND a.related_id = ?` +
-        (f.relatedTo.label ? ` AND a.label = ?` : '') +
+      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'relationship'` +
+        clauses.map((c) => ` AND ${c}`).join('') +
         `)`,
     );
-    params.push(f.relatedTo.recordId);
-    if (f.relatedTo.label) params.push(f.relatedTo.label);
   }
 
   // Content field filters (top-level scalar exact match). A `null` value

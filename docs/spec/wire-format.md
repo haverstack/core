@@ -235,8 +235,13 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?tag=                (repeatable: ?tag=starred&tag=important)
 ?hasAttachment=
 ?attachmentFileId=
-?relatedTo=
-?relatedToLabel=   (only meaningful alongside ?relatedTo; narrows to that label)
+?related=true        (turns the relationship filter on; required whenever any relatedTo* param is sent)
+?relatedTo=          (a Record id — the `record` scope)
+?relatedToStack=     (only alongside ?relatedTo; that Record's stack URL)
+?relatedToEntity=    (a DID — the `entity` scope)
+?relatedToNs=        (a namespace — the `external` scope)
+?relatedToId=        (only alongside ?relatedToNs; omit to match the whole namespace)
+?relatedToLabel=     (narrows any of the above to one label; valid alone)
 ?search=
 ?sort=createdAt|updatedAt|version
 ?direction=asc|desc
@@ -244,6 +249,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?cursor=
 ?includeDeleted=
 ```
+
+**The relationship filter's scope is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. `related=true` is what turns the clause on, so `?related=true` alone means "carries any relationship" and a filter with no other qualifier still reaches the server instead of vanishing into an unfiltered query. Omitting `relatedToStack` means the target has no `stackUrl` — the server MUST NOT treat it as a wildcard matching targets that carry one. See [Filter](./data-model.md#filter).
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 
@@ -356,7 +363,25 @@ Both endpoints accept the same optional `If-Match` precondition described under 
   "associations": [
     { "kind": "tag", "label": "starred" },
     { "kind": "attachment", "label": "avatar", "fileId": "abc123" },
-    { "kind": "relationship", "label": "reply-to", "recordId": "xyz789" }
+    {
+      "kind": "relationship",
+      "label": "reply-to",
+      "target": { "scope": "record", "recordId": "xyz789" }
+    },
+    {
+      "kind": "relationship",
+      "label": "author",
+      "target": { "scope": "entity", "entityId": "did:key:z6Mk..." }
+    },
+    {
+      "kind": "relationship",
+      "label": "syndicated-to",
+      "target": {
+        "scope": "external",
+        "ns": "atproto",
+        "id": "at://did:plc:abc/app.bsky.feed.post/3k4"
+      }
+    }
   ]
 }
 ```
