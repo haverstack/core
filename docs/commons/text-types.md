@@ -131,24 +131,23 @@ four mechanical reasons, not just taxonomy:
    generally, plus the `alias` relationships that resolve a foreign identifier back to
    a known entity. `message` needs none of it; `post` can't exist without it.
 
-**What blocks what.** The reference fabric this rests on — relationship targets that
-can name a record in someone else's stack or an identifier in another protocol, and a
-`relatedTo` filter that can query them — is in core now. What remains outstanding is
-the _bridge_: an `adapter-atproto`, its typeId → `$type` translation table, and the
-machinery for content addressing and tombstones that belongs to a copy rather than to
-the record it was made from. That is a separate track from the content type. A `post`
-with no replies and no bridge is fully expressible today, which is why the type does
-not wait on the bridge.
+**Where the work sits.** Core carries the reference fabric a broadcast utterance
+rests on: relationship targets that name a record in someone else's stack or an
+identifier in another protocol, and a `relatedTo` filter that queries them. A
+_bridge_ carries the rest — its typeId → `$type` translation table, and the content
+addressing and tombstone machinery that describes a copy rather than the record it was
+made from. Those are separate tracks from the content type: a `post` with no replies
+and no bridge is fully expressible with what core provides.
 
-The shape it enables is the IndieWeb's POSSE pattern — publish on your own site,
+The shape this enables is the IndieWeb's POSSE pattern — publish on your own site,
 syndicate elsewhere — with real primitives underneath: the canonical copy lives in your
 stack, a bridge stamps a `syndicated-to` relationship for each copy it publishes, and
-replies come home as external-target relationships. Bluesky and Mastodon become views
-of a record you own.
+replies come home as external-target relationships. Bluesky and Mastodon are views of a
+record you own.
 
-Commons labels (`reply-to`, `about`, `location`, `series`, …) are orthogonal to the
-target union and ride on any arm unchanged — a label says what a reference means, a
-target says which identifier space it lives in.
+Commons labels (`reply-to`, `about`, `location`, `series`, …) are orthogonal to a
+target: a label says what a reference means, a target says which identifier space it
+lives in, and any label rides on any arm.
 
 ## On the names
 
