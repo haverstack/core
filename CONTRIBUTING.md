@@ -187,6 +187,23 @@ A change to observable behavior — an API contract, a permission rule, a wire s
 
 When you link to a spec section from a comment, use the `docs/spec/<file>.md § Section` form and make sure the section actually exists. Section names are load-bearing; renaming a heading means updating the references to it.
 
+**Prose describes the system as it is, not how it got there.** The [no-references-to-previous-implementations](#comments) rule is not only about code comments — it is the same rule, and it bites harder in the spec, because a spec is read by people deciding what to build against. "Relationship targets are in core now", "`relatedTo` used to require a `recordId`", "reconciliation is expected when #15 lands" all date the document and describe a system the reader cannot see. They also rot silently: the sentence stays true-sounding long after the change it refers to stopped being news.
+
+```md
+<!-- Don't: -->
+
+The reference fabric this rests on is in core now. What remains outstanding is
+the bridge.
+
+<!-- Do: -->
+
+Core carries the reference fabric: relationship targets that name a record in
+someone else's stack, and a `relatedTo` filter that queries them. A bridge
+carries its own translation table.
+```
+
+This applies to the Schema Commons ([`docs/commons/`](./docs/commons/)) as much as to `docs/spec/` — a design guide describing what a type means, not a record of how the type arrived at that meaning. Issue numbers in prose are usually the same mistake wearing a different hat: `#204` tells a reader nothing they can act on, and a document that sequences itself against open issues stops being true the moment one closes. Where the reasoning matters, state it.
+
 ---
 
 ## No backward compatibility yet
