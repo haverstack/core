@@ -389,6 +389,26 @@ export const SYSTEM_TYPES = {
 // Queries
 // -------------------------------------------------------
 
+/**
+ * A target pattern in `RecordFilter.relatedTo` — the association shape with
+ * the parts a query may leave open: an `external` target without `id`
+ * matches its whole namespace.
+ */
+export type RelationshipTargetPattern =
+  | { scope: 'record'; recordId: RecordId; stackUrl?: string }
+  | { scope: 'entity'; entityId: EntityId }
+  | { scope: 'external'; ns: string; id?: string };
+
+/**
+ * A relationship query names a label, a target, or both — never neither.
+ * "Carries any relationship at all" is deliberately not expressible, in
+ * line with `tags` and `hasAttachment`, which likewise have no match-any
+ * form. See docs/spec/data-model.md § Filter.
+ */
+export type RelatedToFilter =
+  | { label: string; target?: RelationshipTargetPattern }
+  | { label?: string; target: RelationshipTargetPattern };
+
 export type DateRange = {
   before?: Date;
   after?: Date;
@@ -416,19 +436,13 @@ export type RecordFilter = {
   tags?: string[]; // Records that have ALL of these tags
   hasAttachment?: string; // Records with an attachment of this label
   /**
-   * Records carrying a matching relationship association. Both halves are
-   * optional patterns: `{}` matches any relationship, a bare `label`
-   * matches every target under it, and an `external` target with no `id`
-   * matches the whole namespace. An absent `stackUrl` on a `record` target
-   * matches only local targets. See docs/spec/data-model.md § Filter.
+   * Records carrying a matching relationship association. Either half may
+   * be given alone and each is a pattern: a bare `label` matches every
+   * target under it, and an `external` target with no `id` matches the
+   * whole namespace. An absent `stackUrl` on a `record` target matches
+   * only local targets. See docs/spec/data-model.md § Filter.
    */
-  relatedTo?: {
-    label?: string;
-    target?:
-      | { scope: 'record'; recordId: RecordId; stackUrl?: string }
-      | { scope: 'entity'; entityId: EntityId }
-      | { scope: 'external'; ns: string; id?: string };
-  };
+  relatedTo?: RelatedToFilter;
   attachmentFileId?: FileId; // Records that reference this attachment file ID
 
   // Content fields — exact match on top-level keys (POST /query only)

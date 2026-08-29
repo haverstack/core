@@ -271,13 +271,9 @@ type Filter = {
   // Association filters
   tags?: string[]; // records that have ALL of these tags
   hasAttachment?: string; // records with an attachment of this label
-  relatedTo?: {
-    label?: string;
-    target?:
-      | { scope: 'record'; recordId: string; stackUrl?: string }
-      | { scope: 'entity'; entityId: string }
-      | { scope: 'external'; ns: string; id?: string };
-  };
+  relatedTo?:
+    | { label: string; target?: RelationshipTargetPattern }
+    | { label?: string; target: RelationshipTargetPattern };
   attachmentFileId?: string; // records that reference a specific attachment file ID, via an `attachment` Association or a top-level `file-ref` content field
 
   // Content fields (exact match on top-level keys)
@@ -293,7 +289,9 @@ type DateRange = {
 };
 ```
 
-**Every part of `relatedTo` is an optional pattern.** `{}` matches any Record carrying any relationship; a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a scope and never across scopes.
+**`relatedTo` names a label, a target, or both — never neither.** A `RelationshipTargetPattern` is the association's own target shape with the parts a query may leave open. Each half is a pattern: a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a scope and never across scopes.
+
+**"Carries any relationship at all" is deliberately not expressible.** `tags` and `hasAttachment` have no match-any form either, so a relationship one would be the odd exception rather than a missing convenience — and a filter that can encode to nothing is a filter that can silently widen a query when it crosses the wire. The type refuses the empty filter rather than defining it.
 
 **A `content` filter value of `null` means "the field is absent or stored as `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, implements `IS NULL` / missing-path semantics for a `null` filter value: it matches a record whose content omits the key entirely and one that stores a literal `null` alike, since from the caller's side both mean "no value here."
 

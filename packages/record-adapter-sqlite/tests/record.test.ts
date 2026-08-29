@@ -1066,13 +1066,6 @@ describe('records — relatedTo filter', () => {
     expect(ids(result)).toEqual(['rec-authored']);
   });
 
-  test('an empty filter matches every record carrying any relationship', async () => {
-    const adapter = await initAdapter();
-    await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { relatedTo: {} } });
-    expect(ids(result)).toEqual(['rec-authored', 'rec-series', 'rec-syndicated']);
-  });
-
   // An entity target and a record target holding the same string are
   // different references — the distinction group rosters rest on.
   test('a record target does not match an entity target with the same value', async () => {

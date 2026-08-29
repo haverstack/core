@@ -235,7 +235,6 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?tag=                (repeatable: ?tag=starred&tag=important)
 ?hasAttachment=
 ?attachmentFileId=
-?related=true        (turns the relationship filter on; required whenever any relatedTo* param is sent)
 ?relatedTo=          (a Record id — the `record` scope)
 ?relatedToStack=     (only alongside ?relatedTo; that Record's stack URL)
 ?relatedToEntity=    (a DID — the `entity` scope)
@@ -250,7 +249,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?includeDeleted=
 ```
 
-**The relationship filter's scope is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. `related=true` is what turns the clause on, so `?related=true` alone means "carries any relationship", and a filter with no other qualifier reaches the server rather than vanishing into an unfiltered query. Omitting `relatedToStack` means the target has no `stackUrl` — the server MUST NOT treat it as a wildcard matching targets that carry one. See [Filter](./data-model.md#filter).
+**The relationship filter's scope is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. At least one of these parameters is always present when the filter is used — [`relatedTo` names a label, a target, or both](./data-model.md#filter), never neither — so the filter cannot encode to an empty query string and silently widen the query. Omitting `relatedToStack` means the target has no `stackUrl`; the server MUST NOT treat it as a wildcard matching targets that carry one.
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 

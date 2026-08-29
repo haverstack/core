@@ -325,11 +325,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
   if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
   if (f.relatedTo) {
-    // `related` is the switch, so a filter with no qualifiers at all still
-    // reaches the server as "has any relationship" rather than vanishing
-    // and silently widening the query. The scope is implied by which of
-    // the qualifiers appear; the server rejects a mix.
-    p.set('related', 'true');
+    // The scope is implied by which qualifier appears, and the type
+    // guarantees at least one of these branches sets something — so the
+    // filter can never encode to nothing and silently widen the query.
+    // The server rejects a mix of scopes.
     const t = f.relatedTo.target;
     if (t?.scope === 'record') {
       p.set('relatedTo', t.recordId);

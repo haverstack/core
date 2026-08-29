@@ -17,7 +17,13 @@ import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
-import type { AttachmentContent, BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
+import type {
+  AttachmentContent,
+  BlobFileInfo,
+  RecordFilter,
+  StackAdapter,
+  StackRecord,
+} from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -3983,6 +3989,16 @@ describe('query — relatedTo filter', () => {
     await stack.create(NOTE_V1, { text: 'unrelated' });
   });
 
+  // "Carries any relationship at all" is refused by the type, not defined —
+  // the wire encoding has no way to say it, and `tags`/`hasAttachment` have
+  // no match-any form either. @ts-expect-error fails typecheck if this ever
+  // starts compiling.
+  test('a filter naming neither a label nor a target does not typecheck', () => {
+    // @ts-expect-error — relatedTo requires a label, a target, or both
+    const filter: RecordFilter = { relatedTo: {} };
+    expect(filter.relatedTo).toEqual({});
+  });
+
   test('matches a record target', async () => {
     const { records } = await stack.query({
       filter: { relatedTo: { target: { scope: 'record', recordId: subject.id } } },
@@ -4014,15 +4030,6 @@ describe('query — relatedTo filter', () => {
   test('a bare label matches every target under it', async () => {
     const { records } = await stack.query({ filter: { relatedTo: { label: 'series' } } });
     expect(records.map((r) => r.content.text)).toEqual(['in a series']);
-  });
-
-  test('an empty filter matches every record carrying any relationship', async () => {
-    const { records } = await stack.query({ filter: { relatedTo: {} } });
-    expect(records.map((r) => r.content.text).sort()).toEqual([
-      'by someone',
-      'crossposted',
-      'in a series',
-    ]);
   });
 
   // An absent stackUrl is not a wildcard: it names this stack.

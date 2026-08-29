@@ -82,6 +82,8 @@ export type {
   Permission,
   StackQuery,
   RecordFilter,
+  RelatedToFilter,
+  RelationshipTargetPattern,
   QuerySort,
   QueryResult,
   DateRange,

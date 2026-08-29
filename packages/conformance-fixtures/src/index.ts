@@ -506,10 +506,10 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming a Record in this Stack travels as relatedTo, with ' +
       "relatedToStack carrying another Stack's URL when the target has one. An absent " +
       'relatedToStack means this Stack — it is not a wildcard, so a server MUST NOT match a ' +
-      'target that carries a stackUrl. `related=true` is the switch that turns the clause on. ' +
+      'target that carries a stackUrl. ' +
       'See docs/spec/wire-format.md § Query parameters.',
     method: 'GET',
-    path: '/records?related=true&relatedTo=1hk153x00001&relatedToLabel=series',
+    path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
     responseStatus: 200,
     responseBody: { records: [], cursor: null, total: null },
   },
@@ -521,7 +521,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'matched one against the other would report group rosters as record references. ' +
       'See docs/spec/wire-format.md § Query parameters.',
     method: 'GET',
-    path: '/records?related=true&relatedToEntity=did%3Akey%3Az6MkAlice',
+    path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
     responseStatus: 200,
     responseBody: { records: [], cursor: null, total: null },
   },
@@ -531,10 +531,11 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming something outside the Stack travels as relatedToNs plus an ' +
       'optional relatedToId. Omitting relatedToId matches every target in the namespace, which ' +
       'is how a bridge asks what it has already syndicated. A server MUST reject a request ' +
-      'mixing parameters from two scopes with 400. See docs/spec/wire-format.md ' +
-      '§ Query parameters.',
+      'mixing parameters from two scopes with 400, and can rely on at least one relatedTo ' +
+      'parameter being present whenever the filter is used — the filter never encodes to ' +
+      'nothing. See docs/spec/wire-format.md § Query parameters.',
     method: 'GET',
-    path: '/records?related=true&relatedToNs=atproto',
+    path: '/records?relatedToNs=atproto',
     responseStatus: 200,
     responseBody: { records: [], cursor: null, total: null },
   },
