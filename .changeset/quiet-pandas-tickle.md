@@ -30,9 +30,14 @@ have no match-any form either.
 Reference-creation gating now applies only to a relationship naming a Record in this
 stack; the other arms name nothing core can resolve, so there is no access for the
 gate to protect. The SQLite association table gains `related_scope`, `related_ns` and
-`related_stack` columns, all part of the primary key, plus an index on the target —
-so two copies of one record on two networks are two associations rather than a silent
-no-op. Existing stack files predate those columns and must be recreated.
+`related_stack` columns, all part of the primary key — so two copies of one record on
+two networks are two associations rather than a silent no-op. Existing stack files
+predate those columns and must be recreated.
+
+The relationship filter reads through a new index on the target, phrased as a
+semi-join so the query planner drives from the associations side rather than scanning
+every record and probing for each: the work a relationship query costs is proportional
+to how many records match it, not to how many the stack holds.
 
 Over the wire, the relationship filter's scope is implied by which parameters appear
 (`relatedTo`/`relatedToStack`, `relatedToEntity`, or `relatedToNs`/`relatedToId`), and
