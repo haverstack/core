@@ -116,9 +116,16 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     params.push(f.attachmentFileId, f.attachmentFileId);
   }
 
-  // Relationship filter — every clause is an optional pattern, so `{}`
-  // matches any relationship and an external target with no `id` matches
-  // its whole namespace (docs/spec/data-model.md § Filter).
+  // Relationship filter — each clause is an optional pattern, so a bare
+  // label matches every target under it and an external target with no
+  // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
+  //
+  // Phrased as a semi-join rather than a correlated EXISTS so the planner
+  // drives from the associations side: it reads the matching associations
+  // through idx_assoc_related (or idx_assoc_kind_label for a bare label)
+  // and looks up those records, instead of scanning every record and
+  // probing for each. That is the difference between work proportional to
+  // the matches and work proportional to the stack.
   if (f.relatedTo) {
     const clauses: string[] = [];
     const target = f.relatedTo.target;
@@ -145,7 +152,7 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
       }
     }
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'relationship'` +
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'relationship'` +
         clauses.map((c) => ` AND ${c}`).join('') +
         `)`,
     );
