@@ -56,26 +56,26 @@ that being read as a finished work is its purpose.
 
 ## Worked examples
 
-| Case                                         | Type                         | Why                                                                                      |
-| -------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------- |
-| Comment on a blog post                       | `message`                    | Sent into a shared space, anchored to the post (`parentId` → the article), time-indexed. |
-| Private marginalia while reading             | `note` (+ `about` rel.)      | Kept, not sent — your annotation, invisible to the conversation.                         |
-| Draft blog post                              | `article` (no `publishedAt`) | Already a work-in-becoming; drafthood is a lifecycle stage, not a different type.        |
-| Scribbled idea for a post                    | `note`                       | Working material; promote to `article` later (new record, `derived-from` relationship).  |
-| Journal / diary entry                        | `note`                       | Time-indexed but addressed to no one — address, not temporality, makes speech.           |
-| Memoir chapter it becomes                    | `article`                    | Now a named work for readers.                                                            |
-| Newsletter issue                             | `article`                    | Distributed, not conversational; archive-space, not conversation-space.                  |
-| Announcement ("practice canceled tomorrow")  | `message`                    | Addressed and moment-indexed even though one-way; its meaning decays with its moment.    |
-| Meeting minutes                              | `note`                       | The group's own working record; optionally _announced_ with a `message` linking to it.   |
-| Group how-to ("opening the clubhouse")       | `note`                       | Living document, current state matters, collectively maintained.                         |
-| Same how-to on the club's public website     | `page`                       | Same text, different act: now a node in a published site.                                |
-| Recipe in your kitchen file                  | `note`                       | Kept.                                                                                    |
-| Same recipe on your blog                     | `article`                    | Published. The type records the act, not the text.                                       |
-| Sharing a link into the group ("read this!") | `message` (+ rel.)           | The commentary is speech; the shared bookmark/article stays an artifact, linked.         |
-| Check-in, private location diary             | `note` (+ `location`)        | A journal entry with coordinates — addressed to no one.                                  |
-| "I'm at the café — come join me" (group)     | `message` (+ `location`)     | Speech; the `location` association is the invariant across every check-in contract.      |
-| Foursquare-style public check-in             | _not yet in the commons_     | Broadcast speech — `post` + `location` once the fourth contract lands.                   |
-| Social media post                            | _not yet in the commons_     | A fourth contract — public broadcast — see below.                                        |
+| Case                                         | Type                               | Why                                                                                      |
+| -------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| Comment on a blog post                       | `message`                          | Sent into a shared space, anchored to the post (`parentId` → the article), time-indexed. |
+| Private marginalia while reading             | `note` (+ `about` rel.)            | Kept, not sent — your annotation, invisible to the conversation.                         |
+| Draft blog post                              | `article` (no `publishedAt`)       | Already a work-in-becoming; drafthood is a lifecycle stage, not a different type.        |
+| Scribbled idea for a post                    | `note`                             | Working material; promote to `article` later (new record, `derived-from` relationship).  |
+| Journal / diary entry                        | `note`                             | Time-indexed but addressed to no one — address, not temporality, makes speech.           |
+| Memoir chapter it becomes                    | `article`                          | Now a named work for readers.                                                            |
+| Newsletter issue                             | `article`                          | Distributed, not conversational; archive-space, not conversation-space.                  |
+| Announcement ("practice canceled tomorrow")  | `message`                          | Addressed and moment-indexed even though one-way; its meaning decays with its moment.    |
+| Meeting minutes                              | `note`                             | The group's own working record; optionally _announced_ with a `message` linking to it.   |
+| Group how-to ("opening the clubhouse")       | `note`                             | Living document, current state matters, collectively maintained.                         |
+| Same how-to on the club's public website     | `page`                             | Same text, different act: now a node in a published site.                                |
+| Recipe in your kitchen file                  | `note`                             | Kept.                                                                                    |
+| Same recipe on your blog                     | `article`                          | Published. The type records the act, not the text.                                       |
+| Sharing a link into the group ("read this!") | `message` (+ rel.)                 | The commentary is speech; the shared bookmark/article stays an artifact, linked.         |
+| Check-in, private location diary             | `note` (+ `location`)              | A journal entry with coordinates — addressed to no one.                                  |
+| "I'm at the café — come join me" (group)     | `message` (+ `location`)           | Speech; the `location` association is the invariant across every check-in contract.      |
+| Foursquare-style public check-in             | [`post`](./post.md) (+ `location`) | Broadcast speech, geotagged — the fourth contract, below.                                |
+| Social media post                            | [`post`](./post.md)                | A fourth contract — public broadcast — see below.                                        |
 
 ## Comments are messages; marginalia are notes
 
@@ -95,12 +95,12 @@ contracts encode two things, and speech-ness is only one. The other is **audienc
 shape**: a `message`'s audience is defined by a boundary (presence in the stack _is_
 the addressing — the reason `message` has no `to`/`cc`), while a post's audience is
 whoever listens: unbounded and unenumerable. That completes a 2×2, and the fourth cell
-is deliberately outside this guide:
+is [`post`](./post.md):
 
-|              | Bounded audience              | Unbounded audience                 |
-| ------------ | ----------------------------- | ---------------------------------- |
-| **Artifact** | `note` (kept — self or group) | `article` / `page` (published)     |
-| **Speech**   | `message` (sent)              | **`post` (broadcast)** — see below |
+|              | Bounded audience              | Unbounded audience              |
+| ------------ | ----------------------------- | ------------------------------- |
+| **Artifact** | `note` (kept — self or group) | `article` / `page` (published)  |
+| **Speech**   | `message` (sent)              | [`post`](./post.md) (broadcast) |
 
 (Naming trap from prior art: the IndieWeb's "note" post-type is a public short
 utterance — _their_ note is our `post`, not our `note`.)
@@ -136,8 +136,10 @@ rests on: relationship targets that name a record in someone else's stack or an
 identifier in another protocol, and a `relatedTo` filter that queries them. A
 _bridge_ carries the rest — its typeId → `$type` translation table, and the content
 addressing and tombstone machinery that describes a copy rather than the record it was
-made from. Those are separate tracks from the content type: a `post` with no replies
-and no bridge is fully expressible with what core provides.
+made from. Those are separate tracks from the content type: [`post`](./post.md) is
+defined and fully expressible with what core provides today, replies and bridge
+machinery included; only the bridge itself (`adapter-atproto`, the `lexiconId` mapping,
+`externalIds`) remains future work.
 
 The shape this enables is the IndieWeb's POSSE pattern — publish on your own site,
 syndicate elsewhere — with real primitives underneath: the canonical copy lives in your
