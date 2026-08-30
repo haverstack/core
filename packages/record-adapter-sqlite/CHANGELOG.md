@@ -1,5 +1,77 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.6.0
+
+### Minor Changes
+
+- [#207](https://github.com/haverstack/core/pull/207) [`7db6eaf`](https://github.com/haverstack/core/commit/7db6eaff9dd96eccbc9e96e7a104f3529aa708c9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Relationship associations carry a discriminated `target` instead of a bare `recordId`
+
+  A relationship's target now names which identifier space its value belongs to:
+  `{ scope: 'record', recordId, stackUrl? }` for a Record here or in another stack,
+  `{ scope: 'entity', entityId }` for a DID, and `{ scope: 'external', ns, id }` for
+  anything outside the stack — an ATProto post, an ActivityPub actor, an email address,
+  a URL. Core expresses the reference and never dereferences it, so no protocol is
+  privileged.
+
+  The `entity` arm closes a gap in the identity model rather than only enabling external
+  references: group rosters stored member DIDs in a field typed `RecordId`, and the
+  permission path compared the two as plain strings. A roster entry carrying a `record`
+  target now confers nothing, even when its value equals a member's DID.
+
+  `RecordFilter.relatedTo` moves with it. It names a label, a target, or both, and each
+  is a pattern: a bare `label` matches every target under it, and an external target with
+  no `id` matches a whole namespace. A `record` target with no `stackUrl` matches only
+  local targets — absence names this stack rather than acting as a wildcard. Label-only
+  and namespace-wide queries were not expressible before. "Carries any relationship at
+  all" is deliberately not expressible, in line with `tags` and `hasAttachment`, which
+  have no match-any form either.
+
+  Reference-creation gating now applies only to a relationship naming a Record in this
+  stack; the other arms name nothing core can resolve, so there is no access for the
+  gate to protect. The SQLite association table gains `related_scope`, `related_ns` and
+  `related_stack` columns, all part of the primary key — so two copies of one record on
+  two networks are two associations rather than a silent no-op. Existing stack files
+  predate those columns and must be recreated.
+
+  Over the wire, the relationship filter's scope is implied by which parameters appear
+  (`relatedTo`/`relatedToStack`, `relatedToEntity`, or `relatedToNs`/`relatedToId`), and
+  a request mixing scopes is rejected with 400. At least one is always present, so the
+  filter cannot encode to an empty query string and widen the query it meant to narrow.
+
+  A target names exactly one thing, exactly one way, and both halves are enforced at
+  runtime rather than only by the type — a target reaching a server in a request body,
+  or a filter decoded from query parameters, is a plain object the type never saw. A
+  `scope` outside the three, or an empty string where a target names something, is
+  rejected with `StackValidationError`; a `relatedTo` naming neither a label nor a target
+  is rejected with `StackQueryError` instead of matching every Record carrying a
+  relationship. This stack is named by omitting `stackUrl`, never by sending an empty
+  one: storage, association identity and the filter all read absent and empty as this
+  stack, and reference-creation gating now reads them that way too, so both spellings of
+  a local Record require read access to it.
+
+### Patch Changes
+
+- [#207](https://github.com/haverstack/core/pull/207) [`d69e53b`](https://github.com/haverstack/core/commit/d69e53b287394c968b960beafdda27d1123f8386) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Association query filters read through their indexes
+
+  `tags`, `hasAttachment`, `attachmentFileId` and `relatedTo` were correlated
+  `EXISTS` subqueries, which make SQLite scan every record and probe the association
+  primary key for each. Phrased as semi-joins, the planner drives from the association
+  side instead — reading the matching rows through `idx_assoc_kind_label`,
+  `idx_assoc_kind_file_id`, `idx_file_refs_file_id` or `idx_assoc_related`, then looking
+  up those records. The cost of an association filter becomes proportional to how many
+  records match it rather than to how many the stack holds, so the gain grows with
+  selectivity: the more precisely you ask, the more you save.
+
+  Measured on 20k records with 4k associations, none of the four now needs a full table
+  scan. `attachmentFileId` benefits most, at 8.8ms to 0.14ms, because SQLite resolves
+  its two-sided condition as a multi-index OR across both indexes rather than scanning
+  once and probing twice.
+
+  Results are unchanged; this is the same set of records, found a different way.
+
+- Updated dependencies [[`7db6eaf`](https://github.com/haverstack/core/commit/7db6eaff9dd96eccbc9e96e7a104f3529aa708c9)]:
+  - @haverstack/core@0.14.0
+
 ## 0.5.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/conformance-fixtures",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Request/response fixtures for the Stack API wire protocol, shared between adapter-api and server implementations",
   "type": "module",
   "exports": {
