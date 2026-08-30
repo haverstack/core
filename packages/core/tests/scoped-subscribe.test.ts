@@ -194,7 +194,11 @@ describe('a revocation takes effect on the next event, not the next subscription
     const group = await stack.create(
       '_group@1',
       { name: 'Team' },
-      { associations: [{ kind: 'relationship', label: 'member', recordId: READER }] },
+      {
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+        ],
+      },
     );
     // A grant naming the group, not the entity: reachability now depends on
     // the roster, which is the lookup a subscription caches.
@@ -207,7 +211,11 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.dissociate(group.id, { kind: 'relationship', label: 'member', recordId: READER });
+    await stack.dissociate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      target: { scope: 'entity', entityId: READER },
+    });
     await stack.update(note.id, { text: 'after removal' });
     await settle();
 
@@ -251,7 +259,11 @@ describe('a revocation takes effect on the next event, not the next subscription
     const group = await stack.create(
       '_group@1',
       { name: 'Team' },
-      { associations: [{ kind: 'relationship', label: 'member', recordId: READER }] },
+      {
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+        ],
+      },
     );
     const note = await stack.create(
       NOTE,
@@ -265,7 +277,11 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.dissociate(group.id, { kind: 'relationship', label: 'member', recordId: READER });
+    await stack.dissociate(group.id, {
+      kind: 'relationship',
+      label: 'member',
+      target: { scope: 'entity', entityId: READER },
+    });
     await stack.update(note.id, { text: 'after removal' });
     await settle();
 

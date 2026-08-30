@@ -500,6 +500,48 @@ export const queryRecordsFixtures: ConformanceFixture<
       total: null,
     },
   },
+  {
+    name: 'query-related-to-record-target',
+    description:
+      'A relationship filter naming a Record in this Stack travels as relatedTo, with ' +
+      "relatedToStack carrying another Stack's URL when the target has one. An absent " +
+      'relatedToStack means this Stack — it is not a wildcard, so a server MUST NOT match a ' +
+      'target that carries a stackUrl. This Stack is named that one way: a server MUST ' +
+      'reject an empty relatedToStack with 400 rather than read it as local or as a ' +
+      'wildcard, and likewise an empty relatedToId, which omission already expresses as the ' +
+      'whole namespace. ' +
+      'See docs/spec/wire-format.md § Query parameters.',
+    method: 'GET',
+    path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null, total: null },
+  },
+  {
+    name: 'query-related-to-entity-target',
+    description:
+      'A relationship filter naming an identity travels as relatedToEntity, distinct from ' +
+      'relatedTo: a DID and a Record id are different reference spaces, and a server that ' +
+      'matched one against the other would report group rosters as record references. ' +
+      'See docs/spec/wire-format.md § Query parameters.',
+    method: 'GET',
+    path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null, total: null },
+  },
+  {
+    name: 'query-related-to-external-namespace',
+    description:
+      'A relationship filter naming something outside the Stack travels as relatedToNs plus an ' +
+      'optional relatedToId. Omitting relatedToId matches every target in the namespace, which ' +
+      'is how a bridge asks what it has already syndicated. A server MUST reject a request ' +
+      'mixing parameters from two scopes with 400, and can rely on at least one relatedTo ' +
+      'parameter being present whenever the filter is used — the filter never encodes to ' +
+      'nothing. See docs/spec/wire-format.md § Query parameters.',
+    method: 'GET',
+    path: '/records?relatedToNs=atproto',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null, total: null },
+  },
 ];
 
 // -------------------------------------------------------
@@ -645,6 +687,41 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
       content: { title: 'Hello', body: 'World' },
       version: 2,
       associations: [{ kind: 'tag', label: 'starred' }],
+    },
+  },
+  {
+    name: 'associate-relationship-external-target',
+    description:
+      'A relationship association carries its target as a discriminated union — the scope names ' +
+      'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
+      'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
+      '§ Associations.',
+    method: 'POST',
+    path: '/records/1hk153x00001/associations',
+    requestBody: {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      associations: [
+        {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: {
+            scope: 'external',
+            ns: 'atproto',
+            id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+          },
+        },
+      ],
     },
   },
 ];

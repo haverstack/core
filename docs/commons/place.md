@@ -45,7 +45,7 @@ await stack.defineType('org.haverstack/place@1', 'Place', {
   "I was here," addressed to no one — is a (possibly empty-text) `note` with a
   `location` association, its `createdAt` the check-in time; "I'm at the café, come
   join me" sent to a group is a `message` with one; the Foursquare-style public
-  check-in is the future broadcast `post` (#15) with one. The `location` association
+  check-in is the future broadcast `post` with one. The `location` association
   is the invariant; the contract varies with the act.
 - **Deduplication** is app-side: two records with the same coordinates are two records.
   An app importing venues should query by exact coordinates before creating.

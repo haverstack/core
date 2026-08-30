@@ -31,7 +31,14 @@ import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildWhereClause, buildOrderClause, getSortField } from './query.js';
 import { fts5Strategy } from './fts5.js';
-import { rowToRecord, rowToAssociation, rowToType, rowToVersion, toMs } from './mappers.js';
+import {
+  rowToRecord,
+  rowToAssociation,
+  rowToType,
+  rowToVersion,
+  toMs,
+  associationKeyColumns,
+} from './mappers.js';
 import { makeCursor } from './cursor.js';
 
 export type SharedSqlRecordLogicDeps = {
@@ -690,15 +697,12 @@ export class SharedSqlRecordLogic {
        WHERE record_id = ?
          AND kind = ?
          AND label = ?
-         AND file_id    = ?
-         AND related_id = ?`,
-        [
-          recordId,
-          association.kind,
-          association.label,
-          association.kind === 'attachment' ? association.fileId : '',
-          association.kind === 'relationship' ? association.recordId : '',
-        ],
+         AND file_id       = ?
+         AND related_scope = ?
+         AND related_id    = ?
+         AND related_ns    = ?
+         AND related_stack = ?`,
+        [recordId, association.kind, association.label, ...associationKeyColumns(association)],
       );
       this.exec.exec('COMMIT');
     } catch (err) {
@@ -731,15 +735,9 @@ export class SharedSqlRecordLogic {
       try {
         this.exec.run(
           `INSERT OR IGNORE INTO associations
-            (record_id, kind, label, file_id, related_id)
-           VALUES (?, ?, ?, ?, ?)`,
-          [
-            recordId,
-            assoc.kind,
-            assoc.label,
-            assoc.kind === 'attachment' ? assoc.fileId : '',
-            assoc.kind === 'relationship' ? assoc.recordId : '',
-          ],
+            (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [recordId, assoc.kind, assoc.label, ...associationKeyColumns(assoc)],
         );
       } catch (err) {
         if (isForeignKeyViolation(err)) {

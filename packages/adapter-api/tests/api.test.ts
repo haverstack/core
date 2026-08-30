@@ -947,7 +947,9 @@ describe('queryRecords', () => {
     };
     const adapter = await openAdapter(limitedDiscovery);
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ filter: { relatedTo: { recordId: 'rec-1', label: 'author' } } });
+    await adapter.queryRecords({
+      filter: { relatedTo: { label: 'author', target: { scope: 'record', recordId: 'rec-1' } } },
+    });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('relatedTo=rec-1');
     expect(url).toContain('relatedToLabel=author');
@@ -960,10 +962,33 @@ describe('queryRecords', () => {
     };
     const adapter = await openAdapter(limitedDiscovery);
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ filter: { relatedTo: { recordId: 'rec-1' } } });
+    await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1' } } },
+    });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('relatedTo=rec-1');
     expect(url).not.toContain('relatedToLabel');
+  });
+
+  // A malformed relationship filter is a caller error, not a missing
+  // capability, so it travels as StackQueryError — and is refused before a
+  // request the server would only have to reject goes out.
+  test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
+    const adapter = await openAdapter();
+    await expect(adapter.queryRecords({ filter: { relatedTo: {} as never } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('refuses an empty stackUrl rather than encoding relatedToStack=', async () => {
+    const adapter = await openAdapter();
+    await expect(
+      adapter.queryRecords({
+        filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1', stackUrl: '' } } },
+      }),
+    ).rejects.toThrow(StackQueryError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
   test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery', async () => {
@@ -1053,7 +1078,11 @@ describe('dissociate', () => {
 // -------------------------------------------------------
 
 describe('a mutation that bumps a version must answer with a Record', () => {
-  const ASSOC: Association = { kind: 'relationship', label: 'author', recordId: 'rec-other' };
+  const ASSOC: Association = {
+    kind: 'relationship',
+    label: 'author',
+    target: { scope: 'record', recordId: 'rec-other' },
+  };
 
   test('associate reports an empty body as a protocol error', async () => {
     const adapter = await openAdapter();

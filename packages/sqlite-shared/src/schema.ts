@@ -24,13 +24,20 @@ export const RECORD_SCHEMA_SQL = `
     permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
   ) STRICT;
 
+  -- A relationship's target is (related_scope, related_id) plus one
+  -- qualifier: related_stack for a record in another stack, related_ns for
+  -- a foreign namespace. All four are in the primary key, so two targets
+  -- differing only by namespace are two associations.
   CREATE TABLE IF NOT EXISTS associations (
-    record_id  TEXT NOT NULL REFERENCES records(id),
-    kind       TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
-    label      TEXT NOT NULL,
-    file_id    TEXT NOT NULL DEFAULT '',
-    related_id TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (record_id, kind, label, file_id, related_id)
+    record_id     TEXT NOT NULL REFERENCES records(id),
+    kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
+    label         TEXT NOT NULL,
+    file_id       TEXT NOT NULL DEFAULT '',
+    related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external')),
+    related_id    TEXT NOT NULL DEFAULT '',
+    related_ns    TEXT NOT NULL DEFAULT '',
+    related_stack TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS versions (
@@ -81,6 +88,7 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_record_id    ON associations(record_id);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
   CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
+  CREATE INDEX IF NOT EXISTS idx_assoc_related    ON associations(related_scope, related_ns, related_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
   CREATE INDEX IF NOT EXISTS idx_file_refs_file_id  ON file_refs(file_id);
 `;

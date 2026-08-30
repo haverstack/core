@@ -927,6 +927,190 @@ describe('associations', () => {
       adapter.associate('does-not-exist', { kind: 'tag', label: 'starred' }),
     ).rejects.toThrow(StackNotFoundError);
   });
+
+  test('every target arm round-trips through storage', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const targets = [
+      { scope: 'record' as const, recordId: 'rec-other' },
+      { scope: 'record' as const, recordId: 'rec-other', stackUrl: 'https://alice.example/stack' },
+      { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' },
+      { scope: 'external' as const, ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+    ];
+    for (const target of targets) {
+      await adapter.associate(record.id, { kind: 'relationship', label: 'ref', target });
+    }
+
+    const retrieved = await adapter.getRecord(record.id);
+    const stored = (retrieved?.associations ?? []).flatMap((a) =>
+      a.kind === 'relationship' ? [a.target] : [],
+    );
+    expect(stored).toEqual(expect.arrayContaining(targets));
+    expect(stored).toHaveLength(targets.length);
+  });
+
+  // The primary key includes the namespace, so two copies of one utterance
+  // on two networks are two associations rather than a silent no-op.
+  test('targets differing only by namespace are distinct associations', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.associate(record.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+    await adapter.associate(record.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+    });
+
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.associations).toHaveLength(2);
+  });
+
+  test('dissociate removes only the target it names', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.associate(record.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+    await adapter.associate(record.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+    });
+    await adapter.dissociate(record.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.associations).toEqual([
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      },
+    ]);
+  });
+});
+
+// -------------------------------------------------------
+// relatedTo filter
+// -------------------------------------------------------
+
+describe('records — relatedTo filter', () => {
+  const seed = async (adapter: Awaited<ReturnType<typeof initAdapter>>) => {
+    const series = makeRecord({ id: 'rec-series', content: { text: 'in a series' } });
+    const syndicated = makeRecord({ id: 'rec-syndicated', content: { text: 'crossposted' } });
+    const authored = makeRecord({ id: 'rec-authored', content: { text: 'by someone' } });
+    const bare = makeRecord({ id: 'rec-bare', content: { text: 'unrelated' } });
+    for (const r of [series, syndicated, authored, bare]) await adapter.createRecord(r);
+    await adapter.associate(series.id, {
+      kind: 'relationship',
+      label: 'series',
+      target: { scope: 'record', recordId: 'rec-subject' },
+    });
+    await adapter.associate(syndicated.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+    });
+    await adapter.associate(authored.id, {
+      kind: 'relationship',
+      label: 'author',
+      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+    });
+  };
+
+  const ids = (result: { records: StackRecord[] }) => result.records.map((r) => r.id).sort();
+
+  test('matches a record target', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-subject' } } },
+    });
+    expect(ids(result)).toEqual(['rec-series']);
+  });
+
+  test('matches an entity target', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'entity', entityId: 'did:key:z6MkAlice' } } },
+    });
+    expect(ids(result)).toEqual(['rec-authored']);
+  });
+
+  test('an external target without an id matches the whole namespace', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto' } } },
+    });
+    expect(ids(result)).toEqual(['rec-syndicated']);
+  });
+
+  test('a bare label matches every target under it', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({ filter: { relatedTo: { label: 'author' } } });
+    expect(ids(result)).toEqual(['rec-authored']);
+  });
+
+  // An entity target and a record target holding the same string are
+  // different references — the distinction group rosters rest on.
+  test('a record target does not match an entity target with the same value', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'record', recordId: 'did:key:z6MkAlice' } } },
+    });
+    expect(result.records).toHaveLength(0);
+  });
+
+  // An absent stackUrl names this stack rather than acting as a wildcard.
+  test('a local record target does not match the same id in another stack', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const remote = makeRecord({ id: 'rec-remote' });
+    await adapter.createRecord(remote);
+    await adapter.associate(remote.id, {
+      kind: 'relationship',
+      label: 'reply-to',
+      target: {
+        scope: 'record',
+        recordId: 'rec-elsewhere',
+        stackUrl: 'https://alice.example/stack',
+      },
+    });
+
+    const local = await adapter.queryRecords({
+      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-elsewhere' } } },
+    });
+    expect(local.records).toHaveLength(0);
+
+    const scoped = await adapter.queryRecords({
+      filter: {
+        relatedTo: {
+          target: {
+            scope: 'record',
+            recordId: 'rec-elsewhere',
+            stackUrl: 'https://alice.example/stack',
+          },
+        },
+      },
+    });
+    expect(ids(scoped)).toEqual(['rec-remote']);
+  });
 });
 
 // -------------------------------------------------------

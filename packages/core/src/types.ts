@@ -54,10 +54,46 @@ export type AttachmentAssociation = {
   fileId: FileId;
 };
 
+/**
+ * A Record in this stack, or in another one. `stackUrl` is what makes a
+ * RecordId meaningful outside the stack that minted it — absent means this
+ * stack. See docs/spec/data-model.md § Associations.
+ */
+export type RecordTarget = {
+  scope: 'record';
+  recordId: RecordId;
+  stackUrl?: string;
+};
+
+/**
+ * A "who" — a DID, which means the same thing in every stack. Group
+ * rosters are the canonical use: membership names identities, not records.
+ * See docs/spec/identity.md § Group.
+ */
+export type EntityTarget = {
+  scope: 'entity';
+  entityId: EntityId;
+};
+
+/**
+ * Something outside the stack entirely. `ns` names the scheme that
+ * interprets `id` — e.g. "atproto", "activitypub", "email", "url" — so an
+ * app selects on it rather than sniffing the identifier.
+ * See docs/spec/data-model.md § External targets.
+ */
+export type ExternalTarget = {
+  scope: 'external';
+  ns: string;
+  id: string;
+};
+
+/** What a relationship association points at. */
+export type RelationshipTarget = RecordTarget | EntityTarget | ExternalTarget;
+
 export type RelationshipAssociation = {
   kind: 'relationship';
   label: string;
-  recordId: RecordId;
+  target: RelationshipTarget;
 };
 
 export type Association = TagAssociation | AttachmentAssociation | RelationshipAssociation;
@@ -353,6 +389,26 @@ export const SYSTEM_TYPES = {
 // Queries
 // -------------------------------------------------------
 
+/**
+ * A target pattern in `RecordFilter.relatedTo` — the association shape with
+ * the parts a query may leave open: an `external` target without `id`
+ * matches its whole namespace.
+ */
+export type RelationshipTargetPattern =
+  | { scope: 'record'; recordId: RecordId; stackUrl?: string }
+  | { scope: 'entity'; entityId: EntityId }
+  | { scope: 'external'; ns: string; id?: string };
+
+/**
+ * A relationship query names a label, a target, or both — never neither.
+ * "Carries any relationship at all" is deliberately not expressible, in
+ * line with `tags` and `hasAttachment`, which likewise have no match-any
+ * form. See docs/spec/data-model.md § Filter.
+ */
+export type RelatedToFilter =
+  | { label: string; target?: RelationshipTargetPattern }
+  | { label?: string; target: RelationshipTargetPattern };
+
 export type DateRange = {
   before?: Date;
   after?: Date;
@@ -379,10 +435,14 @@ export type RecordFilter = {
   // Association filters
   tags?: string[]; // Records that have ALL of these tags
   hasAttachment?: string; // Records with an attachment of this label
-  relatedTo?: {
-    recordId: RecordId;
-    label?: string;
-  };
+  /**
+   * Records carrying a matching relationship association. Either half may
+   * be given alone and each is a pattern: a bare `label` matches every
+   * target under it, and an `external` target with no `id` matches the
+   * whole namespace. An absent `stackUrl` on a `record` target matches
+   * only local targets. See docs/spec/data-model.md § Filter.
+   */
+  relatedTo?: RelatedToFilter;
   attachmentFileId?: FileId; // Records that reference this attachment file ID
 
   // Content fields — exact match on top-level keys (POST /query only)
