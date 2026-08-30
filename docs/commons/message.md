@@ -83,7 +83,7 @@ discussion.
 
 ## Deliberately excluded
 
-- Social-post semantics — the broadcast contract's territory (see above).
+- Social-post semantics — the broadcast contract's territory; see [`post`](./post.md).
 - Reactions — a future micro-proposal (likely tag associations by non-authors — which
   needs finer-grained association permissions than today's `update-own`/`update-any`
   grant actions provide).
@@ -96,3 +96,5 @@ discussion.
 - **Proposed** — initial definition: `text` (required), `subject`, `format`.
 - **Proposed, amended** — threads may be anchored by any record (comments on articles,
   photos, polls); text-type contract guide cross-referenced.
+- **Proposed, amended** — [`post@1`](./post.md) landed, discharging the broadcast-shape
+  cross-reference this file previously carried as a forward pointer only.

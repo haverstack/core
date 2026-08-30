@@ -33,6 +33,7 @@ org.haverstack/article@1
 org.haverstack/place@1
 org.haverstack/page@1
 org.haverstack/photo@1
+org.haverstack/post@1
 org.haverstack/message@1 (proposed — see below)
 org.haverstack/event@1   (proposed)
 org.haverstack/poll@1    (proposed)
@@ -216,7 +217,8 @@ rewritten by and for them.
 Three clusters. The **personal-data cluster** covers the shapes nearly every personal
 app re-invents first. The **publishing cluster** covers the personal-web shapes (its
 note/article boundary is the IndieWeb's post-type-discovery rule: a note is an entry
-without a name, an article is an entry with one). The **group cluster** covers the
+without a name, an article is an entry with one) plus `post`, the broadcast-speech
+counterpart to `article`'s published-artifact contract. The **group cluster** covers the
 small-group workspace — the Basecamp shape: message board, shared calendar, decisions,
 shared drive — built on collaborative group stacks (`_group` with `stackUrl`), where
 `entityId`-as-author and per-type grants do the heavy lifting. Pairs across the set
@@ -224,10 +226,10 @@ make the interop story demonstrable: notes ↔ flashcards, bookmarks ↔ read-la
 articles and pages ↔ any site generator, polls ↔ calendar (a scheduling poll's winning
 slot becomes an event).
 
-Three types carry free-form text and are distinguished by **social contract, not
-shape** — notes are kept, messages are sent, articles are published.
-[Choosing a text type](./text-types.md) is the decision guide, with worked examples
-(comments on a blog post are messages; private marginalia are notes).
+Four types carry free-form text and are distinguished by **social contract, not
+shape** — notes are kept, messages are sent, articles are published, posts are
+broadcast. [Choosing a text type](./text-types.md) is the decision guide, with worked
+examples (comments on a blog post are messages; private marginalia are notes).
 
 | Type                        | File                           | Status   | Read-compat core          |
 | --------------------------- | ------------------------------ | -------- | ------------------------- |
@@ -239,6 +241,7 @@ shape** — notes are kept, messages are sent, articles are published.
 | `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft    | `{ latitude, longitude }` |
 | `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
 | `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Draft    | `{ image }`               |
+| `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
 | `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
 | `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
@@ -254,11 +257,10 @@ concrete intended writer exists — the group cluster graduates when a group-too
 or demo is real, building on the grant/group primitives (`_group`, type-level grants)
 documented in the identity and access-control specs.
 
-Deliberately absent from the initial set: `post` (the broadcast contract — `message` is
-the group-scoped shape, not the social one), recurrence rules (see `event`: occurrences are materialized in @1),
-`file`/`document` (a first-class `file` type is expected to follow `photo`'s pattern;
-until a real writer needs it, a record plus attachment covers it), and `checkin`
-(subsumed by the `location` cross-type convention plus any record).
+Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are
+materialized in @1), `file`/`document` (a first-class `file` type is expected to follow
+`photo`'s pattern; until a real writer needs it, a record plus attachment covers it), and
+`checkin` (subsumed by the `location` cross-type convention plus any record).
 
 ---
 
