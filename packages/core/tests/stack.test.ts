@@ -21,6 +21,7 @@ import type {
   AttachmentContent,
   BlobFileInfo,
   RecordFilter,
+  RelationshipTarget,
   StackAdapter,
   StackRecord,
 } from '../src/types.js';
@@ -3878,6 +3879,69 @@ describe('ungrantable families are refused at evaluation', () => {
 // -------------------------------------------------------
 
 describe('relationship targets', () => {
+  // Storage, targetEqual() and the filter all read an absent and an empty
+  // stackUrl as this stack, so a target names this stack exactly one way.
+  // Every other part that names something is required for the same reason:
+  // an empty string would claim a name while carrying none.
+  test('a record target names this stack by omitting stackUrl, never by emptying it', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: { scope: 'record', recordId: 'somerecordid', stackUrl: '' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a target outside the three scopes is refused', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: { scope: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a target outside the three scopes is refused at create too', async () => {
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'host' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'series',
+              target: {
+                scope: 'Record',
+                recordId: 'somerecordid',
+              } as unknown as RelationshipTarget,
+            },
+          ],
+        },
+      ),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test.each([
+    ['a record target', { scope: 'record', recordId: '' }],
+    ['an entity target', { scope: 'entity', entityId: '' }],
+    ['an external target namespace', { scope: 'external', ns: '', id: 'x' }],
+    ['an external target id', { scope: 'external', ns: 'atproto', id: '' }],
+  ])('%s requires a non-empty identifier', async (_name, target) => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: target as RelationshipTarget,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
   test('two targets differing only by namespace are two associations', async () => {
     const note = await stack.create(NOTE_V1, { text: 'crossposted' });
     await stack.associate(note.id, {
@@ -3997,6 +4061,37 @@ describe('query — relatedTo filter', () => {
     // @ts-expect-error — relatedTo requires a label, a target, or both
     const filter: RecordFilter = { relatedTo: {} };
     expect(filter.relatedTo).toEqual({});
+  });
+
+  // A type is not a runtime guard: a server maps query params onto a
+  // filter and supplies a plain object. Refusing the empty filter here is
+  // what keeps it from widening to every record carrying a relationship.
+  test('a filter naming neither a label nor a target is refused', async () => {
+    await expect(
+      stack.query({ filter: { relatedTo: {} as NonNullable<RecordFilter['relatedTo']> } }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('a filter target outside the three scopes is refused', async () => {
+    await expect(
+      stack.query({
+        filter: {
+          relatedTo: {
+            target: { scope: 'Record', recordId: subject.id } as unknown as NonNullable<
+              NonNullable<RecordFilter['relatedTo']>['target']
+            >,
+          },
+        },
+      }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('a filter naming this stack omits stackUrl rather than emptying it', async () => {
+    await expect(
+      stack.query({
+        filter: { relatedTo: { target: { scope: 'record', recordId: subject.id, stackUrl: '' } } },
+      }),
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('matches a record target', async () => {

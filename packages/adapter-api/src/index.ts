@@ -34,7 +34,7 @@ import type {
   ChangeFilter,
   RecordChange,
 } from '@haverstack/core';
-import { assertQueryCapabilities } from '@haverstack/core/adapter';
+import { assertQueryCapabilities, assertValidRelatedTo } from '@haverstack/core/adapter';
 import type { AdapterCapabilities, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
@@ -936,6 +936,11 @@ export class APIAdapter implements StackAdapter {
           : 'contentFieldQuery';
       throw new APIAdapterCapabilityError(capability, err.message);
     }
+    // A malformed relationship filter is a caller error, not a missing
+    // capability, so this one travels as the StackQueryError it is —
+    // refused here rather than encoded into query params a server would
+    // have to reject.
+    assertValidRelatedTo(query.filter?.relatedTo);
 
     let raw: WireQueryResponse;
     if (this.capabilities.contentFieldQuery) {

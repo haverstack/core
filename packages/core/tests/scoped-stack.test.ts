@@ -2503,6 +2503,27 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     ).rejects.toThrow(StackPermissionError);
   });
 
+  // An absent and an empty stackUrl are one target everywhere else, so
+  // both spellings of a local Record meet the same gate — the reference is
+  // refused for the access it names, before its shape is judged.
+  test('a record target naming this stack with an empty stackUrl is gated', async () => {
+    await expect(
+      stack.asEntity(MEMBER).create(
+        COMMENT,
+        { text: 'hi' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'related',
+              target: { scope: 'record', recordId: unreadableNote.id, stackUrl: '' },
+            },
+          ],
+        },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
   // The gate refuses a reference that would convey access to, or confirm
   // the existence of, an unreadable record. The other arms name nothing in
   // this stack, so there is nothing for it to protect and no check to make.

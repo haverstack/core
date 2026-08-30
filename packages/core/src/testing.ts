@@ -476,9 +476,9 @@ function associationEqual(a: Association, b: Association): boolean {
 }
 
 /**
- * Mirrors sqlite-shared's relatedTo predicate: every clause is an optional
- * pattern, so `{}` matches any relationship and an external target with no
- * `id` matches its whole namespace.
+ * Mirrors sqlite-shared's relatedTo predicate: a bare label matches every
+ * target under it, and an external target with no `id` matches its whole
+ * namespace.
  */
 function matchesRelatedTo(
   associations: Association[] | undefined,

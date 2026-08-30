@@ -38,3 +38,14 @@ Over the wire, the relationship filter's scope is implied by which parameters ap
 (`relatedTo`/`relatedToStack`, `relatedToEntity`, or `relatedToNs`/`relatedToId`), and
 a request mixing scopes is rejected with 400. At least one is always present, so the
 filter cannot encode to an empty query string and widen the query it meant to narrow.
+
+A target names exactly one thing, exactly one way, and both halves are enforced at
+runtime rather than only by the type — a target reaching a server in a request body,
+or a filter decoded from query parameters, is a plain object the type never saw. A
+`scope` outside the three, or an empty string where a target names something, is
+rejected with `StackValidationError`; a `relatedTo` naming neither a label nor a target
+is rejected with `StackQueryError` instead of matching every Record carrying a
+relationship. This stack is named by omitting `stackUrl`, never by sending an empty
+one: storage, association identity and the filter all read absent and empty as this
+stack, and reference-creation gating now reads them that way too, so both spellings of
+a local Record require read access to it.

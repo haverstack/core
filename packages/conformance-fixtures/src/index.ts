@@ -506,7 +506,10 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming a Record in this Stack travels as relatedTo, with ' +
       "relatedToStack carrying another Stack's URL when the target has one. An absent " +
       'relatedToStack means this Stack — it is not a wildcard, so a server MUST NOT match a ' +
-      'target that carries a stackUrl. ' +
+      'target that carries a stackUrl. This Stack is named that one way: a server MUST ' +
+      'reject an empty relatedToStack with 400 rather than read it as local or as a ' +
+      'wildcard, and likewise an empty relatedToId, which omission already expresses as the ' +
+      'whole namespace. ' +
       'See docs/spec/wire-format.md § Query parameters.',
     method: 'GET',
     path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',

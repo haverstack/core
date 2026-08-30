@@ -970,6 +970,27 @@ describe('queryRecords', () => {
     expect(url).not.toContain('relatedToLabel');
   });
 
+  // A malformed relationship filter is a caller error, not a missing
+  // capability, so it travels as StackQueryError — and is refused before a
+  // request the server would only have to reject goes out.
+  test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
+    const adapter = await openAdapter();
+    await expect(adapter.queryRecords({ filter: { relatedTo: {} as never } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('refuses an empty stackUrl rather than encoding relatedToStack=', async () => {
+    const adapter = await openAdapter();
+    await expect(
+      adapter.queryRecords({
+        filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1', stackUrl: '' } } },
+      }),
+    ).rejects.toThrow(StackQueryError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
   test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
