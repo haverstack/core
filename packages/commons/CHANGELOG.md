@@ -1,5 +1,16 @@
 # @haverstack/commons
 
+## 0.8.0
+
+### Minor Changes
+
+- [#211](https://github.com/haverstack/core/pull/211) [`4fb733c`](https://github.com/haverstack/core/commit/4fb733c0a40d46fd4c192d6e2ac2bdb95458e4c7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `org.haverstack/post@1` — the broadcast utterance, completing the fourth cell
+  (speech / unbounded audience) of the commons' text-type contract 2×2.
+
+  `POST` exports `{ text: required, format, url }`, no date field by design — uttering
+  is creating, and a mirrored `publishedAt` would equal `createdAt` on every record. See
+  `docs/commons/post.md` for the full rationale and conventions.
+
 ## 0.7.0
 
 ### Minor Changes
