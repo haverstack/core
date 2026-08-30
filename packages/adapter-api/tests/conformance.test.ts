@@ -17,6 +17,7 @@ import {
   associateFixtures,
   dissociateFixtures,
   setPermissionsFixtures,
+  setUnlistedFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -255,12 +256,13 @@ describe('createRecord fixtures', () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const { createdAt, updatedAt, deletedAt, ...req } = fixture.requestBody!;
+      const { createdAt, updatedAt, deletedAt, unlistedAt, ...req } = fixture.requestBody!;
       await adapter.createRecord({
         ...req,
         createdAt: new Date(createdAt),
         updatedAt: new Date(updatedAt),
         ...(deletedAt !== undefined && { deletedAt: new Date(deletedAt) }),
+        ...(unlistedAt !== undefined && { unlistedAt: new Date(unlistedAt) }),
       });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -443,6 +445,28 @@ describe('setPermissions fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.permissions).toEqual(fixture.responseBody!.permissions);
+    });
+  }
+});
+
+describe('setUnlisted fixtures', () => {
+  for (const fixture of setUnlistedFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.setUnlisted(
+        idFromPath(fixture.path),
+        fixture.requestBody!.unlisted,
+      );
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.unlistedAt).toEqual(
+        fixture.responseBody!.unlistedAt ? new Date(fixture.responseBody!.unlistedAt) : undefined,
+      );
     });
   }
 });

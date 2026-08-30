@@ -139,6 +139,7 @@ Core runs no server, so every control below lives in the implementer's code — 
 - **Return 401 and 403 for different things.** Anonymous or invalid token is 401; verified-but-ungranted is 403 (see [Error responses](#error-responses)). Collapsing them discards the distinction the whole identity model rests on.
 - **Log the refusal you didn't send.** A 404 covering a record the requester could not read is [deliberately indistinguishable from a missing one](./access-control.md#errors-and-information-exposure) — to the client. The operator is not the adversary, so record which of the two it was, along with the requester DID (as [Identity](./identity.md#authentication-challengeresponse) already asks for denied-but-verified requests), the record ID, and the check that refused. Without it the distinction is lost to everyone: a grant that is subtly wrong looks exactly like a bad ID or a write that never landed, so it sends whoever is debugging it to the write path, which is the one place the bug is not. This is the bullet that makes the anti-oracle rule cheap to live with, and skipping it is how a deployment concludes the rule is not worth keeping. Treat the log as sensitive in its own right — "who asked after what, and was refused" is the sharing graph, written down.
 - **Rate-limit record reads, not just writes.** The remaining ID-guessing attack is online — every candidate costs a request — so a limit sane for a personal Stack is most of the defence. One known millisecond is 32,768 candidates: 33 seconds to exhaust at 1000 req/s, 55 minutes at 10 req/s, and a single second of uncertainty about the timestamp multiplies both by a thousand. A server that answers an unauthenticated 404 with `WWW-Authenticate` keeps the login prompt working without reopening the distinction, since it says the same thing for a missing record.
+- **Strip `includeUnlisted` before it reaches an unscoped `Stack`.** Routing the request through `ScopedStack` makes the owner-only refusal automatic; a server that maps query params or a subscribe request straight onto an unscoped adapter call must refuse or strip the flag itself, exactly as it already must for `entityId`/`principalId` on a create body. See [Unlisted § The one unsafe path](#unlisted).
 - **A duplicate client-minted `id` answers 409, and that is an existence check.** Anyone holding a `create` grant on any type can learn whether an ID is taken by trying to use it (see [Record IDs](./data-model.md#record-ids)). This one cannot be closed in the response — any answer other than "created" confirms the ID — and it is accepted rather than closed, because it is what makes a create safe to retry after a network blip. Unlike a read, it is loud: every probe writes a record stamped with the requester's `entityId` that the owner can see and count, and that the requester cannot hard delete. Rate-limit creates, and narrow `idTimestampSkewMs` if a deployment wants the window tighter than 24 hours.
 
 Two more sit in code this spec doesn't reach but a server does: `entityId` and `principalId` [must be ignored on input](#records), and a session's two identities must reach `ScopedStack` in the right order — `Stack.forSession()` takes the pair whole for that reason.
@@ -216,7 +217,7 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
-**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
@@ -243,6 +244,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?limit=
 ?cursor=
 ?includeDeleted=
+?includeUnlisted=    (owner-only — see Unlisted)
 ```
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
@@ -251,7 +253,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 `PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints.
 
-**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, `POST .../migrate`, and the association/permission endpoints below all accept an optional `If-Match` header:
+**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, `POST .../migrate`, and the association/permission/unlisted endpoints below all accept an optional `If-Match` header:
 
 ```
 PATCH /records/abc123
@@ -315,9 +317,21 @@ PUT  /records/:id/permissions        — replace all permissions (empty array = 
 
 An entry conveying `write` without `read` is refused with `422` (code `validation`), here and wherever else a request body carries `permissions`: the write bit reaches content and history through the mutate surface, so it withholds nothing without read. See [Access control § Write implies read](./access-control.md#write-implies-read).
 
+## Unlisted
+
+```
+PUT  /records/:id/unlisted           — withhold from enumeration, or relist
+```
+
+Request body: `{ "unlisted": boolean }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint. Orthogonal to `PUT .../permissions`: it decides whether the record is enumerable, never who may read it. See [Access control § Unlisted records](./access-control.md#unlisted-records).
+
+**`GET /records` and `POST /records/query` accept `includeUnlisted`** (a query parameter on the former, a `filter` key on the latter), excluded by default like `includeDeleted`. **A server built on `ScopedStack` MUST refuse it with `403` for any requester but the owner acting alone** — enumeration standing rests on nothing but ownership, so no grant or delegation carries it (see [Access control § `includeUnlisted` is owner-only](./access-control.md#includeunlisted-is-owner-only)). `GET /changes` accepts the same parameter, refused on the same terms, for the change feed's own default exclusion — see [Change feed](#change-feed) below.
+
+**The one unsafe path is a server mapping a request body straight onto an unscoped `Stack`.** Unscoped `Stack` honors `includeUnlisted` unconditionally, the same as `includeDeleted` — it is fully trusted by definition — so a server that forwards a request's filter verbatim onto one must strip `includeUnlisted` itself before dispatching, exactly as it already must for `entityId`/`principalId` on a create body (see [Records](#records)). Routing the request through `ScopedStack` instead makes this the library's problem rather than the server's, which is the shape every example in this document assumes.
+
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
@@ -490,6 +504,7 @@ Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 ?entityId=        (the record's author, not the actor)
 ?kind=            (repeatable: created|changed|deleted|purged)
 ?include=record   (ignored for kind=purged)
+?includeUnlisted= (owner-only — see Unlisted)
 ```
 
 Response: `200 text/event-stream`, a stream of frames.

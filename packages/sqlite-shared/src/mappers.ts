@@ -28,6 +28,7 @@ export const rowToRecord = (
   if (row.updated_by) record.updatedBy = row.updated_by as string;
   if (row.updated_via) record.updatedVia = row.updated_via as string;
   if (row.deleted_at) record.deletedAt = fromMs(row.deleted_at as number);
+  if (row.unlisted_at) record.unlistedAt = fromMs(row.unlisted_at as number);
   if (row.permissions) record.permissions = JSON.parse(row.permissions as string);
   if (associations.length) record.associations = associations;
   return record;

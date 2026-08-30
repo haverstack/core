@@ -117,8 +117,8 @@ export class SharedSqlRecordLogic {
         `INSERT INTO records
           (id, type_id, created_at, updated_at, content, version,
            parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
-           deleted_at, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           deleted_at, unlisted_at, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           record.id,
           record.typeId,
@@ -133,6 +133,7 @@ export class SharedSqlRecordLogic {
           record.updatedBy ?? null,
           record.updatedVia ?? null,
           record.deletedAt ? toMs(record.deletedAt) : null,
+          record.unlistedAt ? toMs(record.unlistedAt) : null,
           record.permissions ? JSON.stringify(record.permissions) : null,
         ],
       );
@@ -344,6 +345,39 @@ export class SharedSqlRecordLogic {
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after setPermissions: "${id}"`);
+    return updated;
+  }
+
+  async setUnlisted(
+    id: string,
+    unlisted: boolean,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+  ): Promise<StackRecord> {
+    this.exec.exec('BEGIN');
+    try {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const now = toMs(new Date());
+      const changed = this.exec.run(
+        `UPDATE records SET unlisted_at = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
+        [
+          unlisted ? now : null,
+          now,
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
+          id,
+          ...verParams,
+        ],
+      );
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.exec.exec('COMMIT');
+    } catch (err) {
+      this.exec.exec('ROLLBACK');
+      throw err;
+    }
+
+    const updated = await this.getRecord(id);
+    if (!updated) throw new Error(`Record not found after setUnlisted: "${id}"`);
     return updated;
   }
 

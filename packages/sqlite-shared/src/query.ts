@@ -38,6 +38,10 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     conditions.push('r.deleted_at IS NULL');
   }
 
+  if (!f.includeUnlisted) {
+    conditions.push('r.unlisted_at IS NULL');
+  }
+
   if (f.typeId !== undefined) {
     const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
     conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`);

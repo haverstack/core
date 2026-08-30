@@ -237,6 +237,36 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     },
   },
   {
+    name: 'create-record-unlisted',
+    description:
+      'A create body carrying unlistedAt is honoured verbatim — creating a record already ' +
+      'unlisted, so there is no window where it exists and is enumerable before a later ' +
+      'PUT .../unlisted catches up. Excluded from an unfiltered GET/POST /records/query and the ' +
+      'change feed by default, the same as any other unlisted record. See ' +
+      'docs/spec/access-control.md § Unlisted records.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x00009',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Link-shared draft' },
+      version: 1,
+      unlistedAt: '2024-01-01T00:00:00.000Z',
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00009',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Link-shared draft' },
+      version: 1,
+      unlistedAt: '2024-01-01T00:00:00.000Z',
+    },
+  },
+  {
     name: 'create-record-ignores-client-supplied-entity-and-principal',
     description:
       'entityId and principalId are assigned by the server from the authenticated session, so a ' +
@@ -719,6 +749,53 @@ export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[]
   ];
 
 // -------------------------------------------------------
+// Unlisted
+// -------------------------------------------------------
+
+export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, WireRecord>[] = [
+  {
+    name: 'set-unlisted-true',
+    description:
+      'PUT /records/:id/unlisted withholds a record from enumeration without changing who may ' +
+      'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
+      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/access-control.md ' +
+      '§ Unlisted records.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/unlisted',
+    requestBody: { unlisted: true },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      unlistedAt: '2024-01-02T00:00:00.000Z',
+    },
+  },
+  {
+    name: 'set-unlisted-false-relists',
+    description:
+      'PUT /records/:id/unlisted with { "unlisted": false } reverses it — the record comes back ' +
+      'with unlistedAt absent, and is enumerable again by an unfiltered query() and the change ' +
+      'feed. Idempotent, like undelete: assumes prior state from set-unlisted-true.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/unlisted',
+    requestBody: { unlisted: false },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
+    },
+  },
+];
+
+// -------------------------------------------------------
 // Versions: read
 // -------------------------------------------------------
 //
@@ -945,6 +1022,22 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'GET /records/:id/versions/:version.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-permission-denied-includeUnlisted-non-owner',
+    description:
+      'POST /records/query with filter.includeUnlisted (equally, GET /records?includeUnlisted=true, ' +
+      'or ?includeUnlisted=true on GET /changes) from anyone but the stack owner acting as itself ' +
+      'returns 403 / code "permission" — enumeration standing rests on nothing but ownership, so ' +
+      'no grant or delegation carries it. A server MUST refuse the flag outright rather than ' +
+      'silently drop it: a caller that believes it asked for the full picture and silently got ' +
+      'the filtered one is worse than one that was told no. See docs/spec/access-control.md ' +
+      '§ Unlisted records.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { includeUnlisted: true } },
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -2228,6 +2321,142 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     ],
   },
   {
+    name: 'change-feed-unlist-frame-is-a-deleted-kind',
+    description:
+      'Marking a record unlisted arrives as kind "deleted" / op "unlist" — not "changed" — even ' +
+      'though the record still exists and get() still resolves it. A subscriber without ' +
+      'includeUnlisted already knows this record from before, and the record’s new state ' +
+      '(unlistedAt now set) would otherwise be excluded by the very filter this event announces, ' +
+      'so the transition is delivered on the same terms as an ordinary soft delete: the point is ' +
+      'telling a subscriber to drop its copy, not that the record is gone. See ' +
+      'docs/spec/events.md § The unlisted transition.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-unlist-frame-mutation',
+          description: 'The owner marks the note unlisted.',
+          method: 'PUT',
+          path: '/records/1hk153x00001/unlisted',
+          requestBody: { unlisted: true },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 3,
+            entityId: FEED_OWNER,
+            unlistedAt: '2024-01-03T00:00:00.000Z',
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1U',
+            event: 'record',
+            data: {
+              kind: 'deleted',
+              op: 'unlist',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 3,
+              updatedAt: '2024-01-03T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-list-frame-is-a-changed-kind',
+    description:
+      'Relisting a previously-unlisted record arrives as kind "changed" / op "list" — the ' +
+      'publish moment, mechanically identical to an ordinary upsert. A subscriber applies it the ' +
+      'same way it applies "undelete": it may never have seen this record before (its earlier ' +
+      'create and any edits while unlisted were withheld), and this is the first event that ' +
+      'names it. Assumes prior state from change-feed-unlist-frame-is-a-deleted-kind. See ' +
+      'docs/spec/events.md § The unlisted transition.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-list-frame-mutation',
+          description: 'The owner relists the note.',
+          method: 'PUT',
+          path: '/records/1hk153x00001/unlisted',
+          requestBody: { unlisted: false },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-04T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 4,
+            entityId: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1V',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'list',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 4,
+              updatedAt: '2024-01-04T00:00:00.000Z',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-unlisted-record-produces-no-frame-by-default',
+    description:
+      'An edit to a record that is currently unlisted produces no frame at all for a subscriber ' +
+      'without includeUnlisted — not an empty or redacted one. This is what makes the feed match ' +
+      'an equivalent query(): a record excluded from listings is excluded from the announcement ' +
+      'stream too, on every op except the unlist transition itself (see ' +
+      'change-feed-unlist-frame-is-a-deleted-kind). Assumes the note was already made unlisted. ' +
+      'See docs/spec/events.md § The unlisted transition.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-unlisted-record-edit-mutation',
+          description: 'The owner edits the still-unlisted note.',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
+          requestBody: { title: 'Edited while unlisted' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-04T00:00:00.000Z',
+            content: { title: 'Edited while unlisted' },
+            version: 4,
+            entityId: FEED_OWNER,
+            unlistedAt: '2024-01-03T00:00:00.000Z',
+          },
+        },
+        frames: [],
+      },
+    ],
+  },
+  {
     name: 'change-feed-purged-frame-carries-nothing-about-the-record',
     description:
       'The rule a server is most likely to break, because it is holding the record at exactly ' +
@@ -2689,6 +2918,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...associateFixtures,
   ...dissociateFixtures,
   ...setPermissionsFixtures,
+  ...setUnlistedFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,

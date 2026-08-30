@@ -173,6 +173,7 @@ export class MemoryAdapter implements StackAdapter {
     // generic query — mirroring the real SQL adapters' WHERE exclusion.
     results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);
     if (!f.includeDeleted) results = results.filter((r) => !r.deletedAt);
+    if (!f.includeUnlisted) results = results.filter((r) => !r.unlistedAt);
     if (f.typeId) {
       const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
       results = results.filter((r) => ids.includes(r.typeId));
@@ -291,6 +292,24 @@ export class MemoryAdapter implements StackAdapter {
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, permissions }, opts);
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async setUnlisted(
+    id: string,
+    unlisted: boolean,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+  ) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    const { unlistedAt: _unlistedAt, ...rest } = record;
+    const updated = this.bump(
+      unlisted ? { ...rest, unlistedAt: new Date() } : (rest as StackRecord),
+      opts,
+    );
     this.records.set(id, updated);
     return updated;
   }

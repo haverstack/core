@@ -35,6 +35,7 @@ import {
   Subscription,
   buildEmission,
   matchesFilter,
+  passesUnlistedBoundary,
 } from './changes.js';
 import type { EmittedChange } from './changes.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
@@ -296,6 +297,13 @@ export type CreateRecordOptions = {
   principalId?: EntityId;
   permissions?: Permission[];
   associations?: Association[];
+  /**
+   * Create the record already unlisted, so the create event itself is
+   * withheld from the feed — there is no window where the record exists
+   * and is listed before setUnlisted() catches up. See
+   * docs/spec/access-control.md § Unlisted records.
+   */
+  unlisted?: boolean;
 };
 
 export type ScopedStackOptions = {
@@ -750,6 +758,7 @@ export interface StackClient {
   associate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
   dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
   setPermissions(id: string, permissions: Permission[], opts?: IfVersionOptions): Promise<void>;
+  setUnlisted(id: string, unlisted: boolean, opts?: IfVersionOptions): Promise<void>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -948,7 +957,7 @@ export class Stack implements StackClient {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
     const existing = await findFirstMatch(
       (q) => this.query(q),
-      { filter: { baseId: SYSTEM_TYPES.ENTITY, includeDeleted: true } },
+      { filter: { baseId: SYSTEM_TYPES.ENTITY, includeDeleted: true, includeUnlisted: true } },
       (r) => (r.content as EntityContent).did === this.ownerEntityId,
     );
     if (existing) return;
@@ -1195,7 +1204,7 @@ export class Stack implements StackClient {
       let cursor: string | undefined;
       do {
         const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId, includeDeleted: true },
+          filter: { typeId, includeDeleted: true, includeUnlisted: true },
           limit: 100,
           cursor,
         });
@@ -1280,6 +1289,7 @@ export class Stack implements StackClient {
       ...(opts.principalId && { updatedVia: opts.principalId }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(associations?.length && { associations }),
+      ...(opts.unlisted && { unlistedAt: now }),
     };
 
     const created = await this.adapter.createRecord(record);
@@ -1494,6 +1504,40 @@ export class Stack implements StackClient {
       updatedVia: opts.updatedVia,
     });
     this.emitChange('permissions', updated);
+  }
+
+  /**
+   * Withhold a record from enumeration, or restore it. Orthogonal to
+   * setPermissions(): it says nothing about who may read the record, only
+   * whether `query()` and the change feed enumerate it by default. No-op if
+   * already in the requested state. See docs/spec/access-control.md §
+   * Unlisted records.
+   *
+   * The op passed to emitChange() carries the transition direction —
+   * `unlist` (kind `deleted`, so subscribers already holding the record are
+   * told to drop it) or `list` (kind `changed`, an upsert like `undelete`,
+   * for the record's publish moment).
+   */
+  async setUnlisted(
+    id: string,
+    unlisted: boolean,
+    opts: IfVersionOptions & ActorOptions = {},
+  ): Promise<void> {
+    this.assertOpen();
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    this.checkIfVersion(existing, opts.ifVersion);
+    if (Boolean(existing.unlistedAt) === unlisted) return;
+
+    const updated = await this.adapter.setUnlisted(id, unlisted, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
+    });
+    this.emitChange(unlisted ? 'unlist' : 'list', updated);
   }
 
   /**
@@ -1921,6 +1965,7 @@ export class Stack implements StackClient {
         filter: {
           baseId: family,
           includeDeleted: true,
+          includeUnlisted: true,
           ...(this.features.contentFieldQuery && { content: { [field]: value } }),
         },
       },
@@ -1985,6 +2030,7 @@ export class Stack implements StackClient {
       filter: {
         typeId: metadataTypeId,
         includeDeleted: true,
+        includeUnlisted: true,
         ...(this.features.contentFieldQuery && { content: { fileId } }),
       },
     });
@@ -2180,23 +2226,25 @@ export class Stack implements StackClient {
     metadataTypeId: string,
     opts: ActorOptions = {},
   ): Promise<StackRecord[]> {
-    // A soft-deleted record still counts as a reference — it must find its
-    // attachments intact on undelete. See docs/spec/attachments.md
-    // § Deleting attachments.
+    // A soft-deleted or unlisted record still counts as a reference — it
+    // must find its attachments intact on undelete or relisting. See
+    // docs/spec/attachments.md § Deleting attachments.
     const refResult = await this.query({
-      filter: { attachmentFileId: fileId, includeDeleted: true },
+      filter: { attachmentFileId: fileId, includeDeleted: true, includeUnlisted: true },
       limit: 1,
     });
     if (refResult.records.length > 0) {
       throw new StackConflictError('Attachment is still referenced by one or more records');
     }
 
-    // Cursor-walk with includeDeleted: metadata past page one, or soft-
-    // deleted, must be cleaned up too — not left pointing at deleted bytes.
+    // Cursor-walk with includeDeleted/includeUnlisted: metadata past page
+    // one, soft-deleted, or unlisted must be cleaned up too — not left
+    // pointing at deleted bytes.
     const metaResults = await queryAllPages((q) => this.query(q), {
       filter: {
         typeId: metadataTypeId,
         includeDeleted: true,
+        includeUnlisted: true,
         ...(this.features.contentFieldQuery && { content: { fileId } }),
       },
     });
@@ -2227,7 +2275,7 @@ export class Stack implements StackClient {
 
     const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
     const metaRecords = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: metadataTypeId, includeDeleted: true },
+      filter: { typeId: metadataTypeId, includeDeleted: true, includeUnlisted: true },
     });
 
     // Newest metadata record's createdAt per fileId, and its size (constant
@@ -2259,7 +2307,7 @@ export class Stack implements StackClient {
 
     for (const fileId of candidateFileIds) {
       const refResult = await this.query({
-        filter: { attachmentFileId: fileId, includeDeleted: true },
+        filter: { attachmentFileId: fileId, includeDeleted: true, includeUnlisted: true },
         limit: 1,
       });
       if (refResult.records.length > 0) continue;
@@ -2354,6 +2402,7 @@ export class Stack implements StackClient {
       {
         ...(opts.filter !== undefined && { filter: opts.filter }),
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
+        ...(opts.includeUnlisted !== undefined && { includeUnlisted: opts.includeUnlisted }),
         ...(opts.onError !== undefined && { onError: opts.onError }),
         ...(opts.onReset !== undefined && { onReset: opts.onReset }),
       },
@@ -2820,6 +2869,7 @@ class ScopedSubscription extends Subscription {
 
   private async filterAndDeliver(emission: EmittedChange): Promise<void> {
     if (this.isClosed) return;
+    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     try {
       if (!(await this.canRead(emission.record, this.cache))) return;
     } catch (err) {
@@ -3309,6 +3359,11 @@ export class ScopedStack implements StackClient {
         'A delegated principal cannot set permissions, at create time or after',
       );
     }
+    if (opts.unlisted && !this.mayGrantAccess()) {
+      throw new StackPermissionError(
+        'A delegated principal cannot create an unlisted record, at create time or after',
+      );
+    }
     this.requireOwnerForOwnerDid(typeId, (content as Record<string, unknown>).did);
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
@@ -3375,6 +3430,9 @@ export class ScopedStack implements StackClient {
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
+    if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
+      throw new StackPermissionError('includeUnlisted is owner-only');
+    }
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
     const records: StackRecord[] = [];
     const maxFetched = limit * 10;
@@ -3475,6 +3533,7 @@ export class ScopedStack implements StackClient {
         filter: {
           baseId: SYSTEM_TYPES.APP,
           includeDeleted: true,
+          includeUnlisted: true,
           ...(this.stack.features.contentFieldQuery && {
             content: { did: this.principalEntityId },
           }),
@@ -3565,6 +3624,29 @@ export class ScopedStack implements StackClient {
     }
 
     return this.stack.setPermissions(id, permissions, { ...opts, ...this.actor });
+  }
+
+  /**
+   * Withhold a record from enumeration, or restore it — gated exactly like
+   * setPermissions(), since both decide who or what can discover the
+   * record rather than merely read it once found. See
+   * docs/spec/access-control.md § Unlisted records.
+   */
+  async setUnlisted(id: string, unlisted: boolean, opts: IfVersionOptions = {}): Promise<void> {
+    const record = await this.stack.get(id);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    await this.requireOwnerForGrantRecord(record);
+
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+      if (!this.isGroupManager(record)) throw await this.denialFor(record);
+    } else {
+      if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
+      if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
+        throw await this.denialFor(record);
+      }
+    }
+
+    return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
   }
 
   /**
@@ -3784,6 +3866,9 @@ export class ScopedStack implements StackClient {
           'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
           'no record to re-check. Subscribe with a session-scoped stack instead.',
       );
+    }
+    if (opts.includeUnlisted && !this.ownerActingAlone) {
+      throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(
       new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),

@@ -48,7 +48,7 @@ stack.timezone; // from adapter.timezone — string | undefined
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
+**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `setUnlisted`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 ### The `_config` record
 

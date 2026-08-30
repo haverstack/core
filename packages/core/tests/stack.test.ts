@@ -2677,6 +2677,79 @@ describe('setPermissions', () => {
 });
 
 // -------------------------------------------------------
+// setUnlisted
+// -------------------------------------------------------
+
+describe('setUnlisted', () => {
+  test('bumps version and sets unlistedAt', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setUnlisted(record.id, true);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(2);
+    expect(updated?.unlistedAt).toBeInstanceOf(Date);
+  });
+
+  test('clears unlistedAt on the reverse call', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setUnlisted(record.id, true);
+    await stack.setUnlisted(record.id, false);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.version).toBe(3);
+    expect(updated?.unlistedAt).toBeUndefined();
+  });
+
+  test('is a no-op when already in the requested state — no version bump', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setUnlisted(record.id, false);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
+
+    await stack.setUnlisted(record.id, true);
+    await stack.setUnlisted(record.id, true);
+    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+  });
+
+  test('does not touch permissions', async () => {
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      { permissions: [{ access: 'public' }] },
+    );
+    await stack.setUnlisted(record.id, true);
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(stack.setUnlisted('nonexistent', true)).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('create({ unlisted: true }) stamps unlistedAt from the start', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { unlisted: true });
+    expect(record.unlistedAt).toBeInstanceOf(Date);
+    expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
+  });
+
+  test('an unfiltered query() excludes unlisted records by default', async () => {
+    const listed = await stack.create(NOTE_V1, { text: 'listed' });
+    await stack.create(NOTE_V1, { text: 'unlisted' }, { unlisted: true });
+    const result = await stack.query({ filter: { typeId: NOTE_V1 } });
+    expect(result.records.map((r) => r.id)).toEqual([listed.id]);
+  });
+
+  test('includeUnlisted: true on a plain Stack returns both', async () => {
+    await stack.create(NOTE_V1, { text: 'listed' });
+    await stack.create(NOTE_V1, { text: 'unlisted' }, { unlisted: true });
+    const result = await stack.query({ filter: { typeId: NOTE_V1, includeUnlisted: true } });
+    expect(result.records).toHaveLength(2);
+  });
+
+  test('get() still resolves an unlisted record', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { unlisted: true });
+    expect(await stack.get(record.id)).not.toBeNull();
+  });
+});
+
+// -------------------------------------------------------
 // putAttachment
 // -------------------------------------------------------
 

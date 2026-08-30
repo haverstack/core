@@ -230,6 +230,62 @@ describe('every record emits, including the ones a query hides', () => {
 });
 
 // -------------------------------------------------------
+// Unlisted records — the one exception to "every record emits", because
+// unfiltered query() excludes them too. See docs/spec/events.md
+// § The unlisted transition.
+// -------------------------------------------------------
+
+describe('an unlisted record is invisible to a default subscriber, even unscoped', () => {
+  test('created unlisted produces no event by default', async () => {
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+
+    expect(seen).toEqual([]);
+  });
+
+  test('includeUnlisted: true — even on an unscoped Stack — opts back in', async () => {
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeUnlisted: true });
+
+    await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+
+    expect(seen.map((c) => c.op)).toEqual(['create']);
+  });
+
+  test('the unlist transition emits kind "deleted" despite the post-change state', async () => {
+    const note = await stack.create(NOTE, { text: 'was listed' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.setUnlisted(note.id, true);
+
+    expect(seen.map((c) => [c.kind, c.op])).toEqual([['deleted', 'unlist']]);
+  });
+
+  test('the list transition emits kind "changed", an upsert like undelete', async () => {
+    const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.setUnlisted(note.id, false);
+
+    expect(seen.map((c) => [c.kind, c.op])).toEqual([['changed', 'list']]);
+  });
+
+  test('a hard delete of a still-unlisted record is not announced either', async () => {
+    const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.delete(note.id, { hard: true });
+
+    expect(seen).toEqual([]);
+  });
+});
+
+// -------------------------------------------------------
 // Attribution
 // -------------------------------------------------------
 

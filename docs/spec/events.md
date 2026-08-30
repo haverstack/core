@@ -36,7 +36,9 @@ type ChangeOp =
   | 'restore'
   | 'delete'
   | 'undelete'
-  | 'hard-delete';
+  | 'hard-delete'
+  | 'unlist'
+  | 'list';
 
 type RecordChange = {
   kind: ChangeKind;
@@ -54,12 +56,12 @@ type RecordChange = {
 
 `kind` and `op` map deterministically:
 
-| `kind`    | `op`                                                                                 |
-| --------- | ------------------------------------------------------------------------------------ |
-| `created` | `create`                                                                             |
-| `changed` | `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete` |
-| `deleted` | `delete` (soft)                                                                      |
-| `purged`  | `hard-delete`                                                                        |
+| `kind`    | `op`                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `created` | `create`                                                                                     |
+| `changed` | `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list` |
+| `deleted` | `delete` (soft), `unlist`                                                                    |
+| `purged`  | `hard-delete`                                                                                |
 
 **Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `op` is the precise verb, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
 
@@ -142,6 +144,7 @@ type SubscribeChangesOptions = {
   filter?: ChangeFilter;
   since?: string;
   includeRecords?: boolean;
+  includeUnlisted?: boolean;
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
@@ -169,6 +172,7 @@ type Unsubscribe = () => void;
 type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
+  includeUnlisted?: boolean; // owner-only under ScopedStack — see Access control § Unlisted records
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
@@ -196,6 +200,8 @@ interface StackClient {
 
 **A scoped feed is the events that scope may read, and nothing else.** The predicate is literally `canRead` applied per event — no second vocabulary, no feed-specific ACL. `ScopedStack.subscribe()` filters `Stack`'s stream, so scoping needs no adapter cooperation.
 
+**The unlisted exclusion composes with `canRead` rather than replacing it, and is not a second ACL either.** It is the same boundary an unfiltered `query()` applies, asked again here so the feed can never deliver more than an equivalent `query()` would return — see [The unlisted transition](#the-unlisted-transition) below.
+
 **A scoped view of a stack that relays refuses to subscribe**, with `StackRelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./wire-format.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
 
 - **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that makes `ScopedStack.query()`'s `total` always `null`.
@@ -206,6 +212,24 @@ interface StackClient {
 **Authority is cached per subscription, and expired by the stream itself.** `canRead` resolves grants, and re-resolving them per event would be a `_grant` scan for every change the stack makes. A subscription therefore prefetches grants once and memoizes group-roster roles — and drops both when a `_grant` or `_group` event passes through it, _before_ that event is filtered, so a subscriber that cannot read the revocation still has its cache expired by it.
 
 **This is only sound because every authority-changing write emits.** `_grant` and `_group` writes are ordinary record mutations and reach the emitter like any other. A future change that altered either without emitting would strand every cached decision, so that invariant belongs to this section as much as to [Where events come from](#where-events-come-from).
+
+## The unlisted transition
+
+An unlisted record that emits a change event to a default subscriber is not unlisted, so the feed excludes them the same way `query()` does — `includeUnlisted` opts a subscription back in, gated exactly as [`RecordFilter.includeUnlisted`](./access-control.md#includeunlisted-is-owner-only) is. Since `unlistedAt` deliberately keeps `get()` working, an ID is sufficient to fetch; if `query()` excluded unlisted records but the feed did not, the feed would be a strictly better enumeration channel than the query it is supposed to match.
+
+**Suppression is not total, or a default subscriber would keep a stale copy forever.** Soft delete is the model: `query()` hides a deleted record while the feed still emits `deleted`, because that event is what tells a subscriber to drop its copy. The same reasoning governs every transition here:
+
+| Transition                   | Emits to a default subscriber? | Why                                                                 |
+| ---------------------------- | :----------------------------: | ------------------------------------------------------------------- |
+| Created unlisted             |               No               | Nobody knew it existed; the announcement _is_ the disclosure        |
+| Listed → unlisted (`unlist`) |            **Yes**             | Subscribers already know it and must drop it                        |
+| Any change while unlisted    |               No               | The ongoing case the feature exists for                             |
+| Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
+| Hard delete while unlisted   |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
+
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which op produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated `op` (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `permissions`'s pattern of one op for both directions.
+
+**`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 
 ## Delivery
 

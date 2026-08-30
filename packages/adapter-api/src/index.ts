@@ -241,6 +241,7 @@ const parseRecord = (raw: WireRecord): StackRecord => {
   if (raw.updatedBy != null) record.updatedBy = raw.updatedBy;
   if (raw.updatedVia != null) record.updatedVia = raw.updatedVia;
   if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
+  if (raw.unlistedAt != null) record.unlistedAt = new Date(raw.unlistedAt);
   if (raw.permissions != null) record.permissions = raw.permissions;
   if (raw.associations != null) record.associations = raw.associations;
   return record;
@@ -330,6 +331,7 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   }
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
+  if (f.includeUnlisted) p.set('includeUnlisted', 'true');
   if (query.sort?.field) p.set('sort', query.sort.field);
   if (query.sort?.direction) p.set('direction', query.sort.direction);
   if (query.limit) p.set('limit', String(query.limit));
@@ -380,6 +382,7 @@ const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
   if (f.entityId !== undefined) p.set('entityId', f.entityId);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
+  if (opts.includeUnlisted) p.set('includeUnlisted', 'true');
 
   return p;
 };
@@ -1000,6 +1003,22 @@ export class APIAdapter implements StackAdapter {
       },
     );
     return requireRecordBody(raw, `PUT /records/${id}/permissions`);
+  }
+
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord | undefined>(
+      'PUT',
+      `/records/${id}/unlisted`,
+      { unlisted },
+      {
+        ifMatch: opts.expectedVersion,
+      },
+    );
+    return requireRecordBody(raw, `PUT /records/${id}/unlisted`);
   }
 
   // -------------------------------------------------------
