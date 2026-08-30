@@ -21,6 +21,7 @@ export const RECORD_SCHEMA_SQL = `
     updated_by  TEXT,
     updated_via TEXT,
     deleted_at  INTEGER,
+    unlisted_at INTEGER,
     permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
   ) STRICT;
 
@@ -83,6 +84,7 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_records_app_id     ON records(app_id);
   CREATE INDEX IF NOT EXISTS idx_records_principal_id ON records(principal_id);
   CREATE INDEX IF NOT EXISTS idx_records_deleted_at ON records(deleted_at);
+  CREATE INDEX IF NOT EXISTS idx_records_unlisted_at ON records(unlisted_at);
   CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
   CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at);
   CREATE INDEX IF NOT EXISTS idx_assoc_record_id    ON associations(record_id);

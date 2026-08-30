@@ -194,6 +194,14 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
     return this.record.setPermissions(id, permissions, opts);
   }
 
+  setUnlisted(
+    id: string,
+    unlisted: boolean,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+  ): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
+  }
+
   restoreVersion(
     id: string,
     version: number,

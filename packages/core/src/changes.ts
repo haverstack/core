@@ -71,6 +71,25 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
 }
 
 /**
+ * Whether an emission passes the unlisted-enumeration boundary for one
+ * subscription. Unlisted records are excluded from the feed by default,
+ * exactly as they are from an unfiltered `query()` — with one exception:
+ * the `unlist` transition itself must still reach a subscriber lacking
+ * `includeUnlisted`, despite its post-change record (`unlistedAt` now set)
+ * otherwise failing this very check. Without that exception a subscriber
+ * who already knows the record would never be told to drop it. Every other
+ * transition (create-unlisted, an edit while already unlisted, a purge of
+ * a record that was never listed, the `list` transition itself) needs no
+ * special-casing: it falls out of checking the record's current state.
+ * See docs/spec/events.md § The unlisted transition.
+ */
+export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
+  if (includeUnlisted) return true;
+  if (emitted.change.op === 'unlist') return true;
+  return !emitted.record.unlistedAt;
+}
+
+/**
  * The frame a subscriber receives. A `purged` frame never carries the
  * record, whatever was asked for: hard delete is the erasure primitive,
  * and a frame that shipped the body — or the author — of a record the
@@ -196,6 +215,7 @@ export class RelayDelivery {
 class UnscopedSubscription extends Subscription {
   accept(emission: EmittedChange): void {
     if (!matchesFilter(emission, this.opts.filter)) return;
+    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     this.deliver(emission);
   }
 }
@@ -311,4 +331,6 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   undelete: 'changed',
   delete: 'deleted',
   'hard-delete': 'purged',
+  list: 'changed',
+  unlist: 'deleted',
 };

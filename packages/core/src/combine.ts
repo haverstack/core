@@ -32,6 +32,7 @@ export function combineAdapters(parts: {
     associate: (id, assoc, opts) => parts.record.associate(id, assoc, opts),
     dissociate: (id, assoc, opts) => parts.record.dissociate(id, assoc, opts),
     setPermissions: (id, permissions, opts) => parts.record.setPermissions(id, permissions, opts),
+    setUnlisted: (id, unlisted, opts) => parts.record.setUnlisted(id, unlisted, opts),
 
     getVersions: (id) => parts.record.getVersions(id),
     getVersion: (id, v) => parts.record.getVersion(id, v),

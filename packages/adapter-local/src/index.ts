@@ -267,6 +267,14 @@ export class LocalAdapter implements StackAdapter {
     return this.record.setPermissions(id, permissions, opts);
   }
 
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+  ): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
+  }
+
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
     return this.record.getVersions(id);
   }

@@ -56,6 +56,9 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     setPermissions: async () => {
       throw new Error('not implemented');
     },
+    setUnlisted: async () => {
+      throw new Error('not implemented');
+    },
     getVersions: async () => [],
     getVersion: async () => null,
     saveVersion: async () => {},
@@ -126,6 +129,22 @@ describe('combineAdapters', () => {
     const fileId = await adapter.putAttachment(bytes);
     expect(putBytes).toBe(bytes);
     expect(fileId).toBe('computed-id');
+  });
+
+  test('forwards setUnlisted to the record adapter', async () => {
+    let calledWith: [string, boolean] | undefined;
+    const adapter = combineAdapters({
+      record: makeRecordAdapter({
+        setUnlisted: async (id, unlisted) => {
+          calledWith = [id, unlisted];
+          return { ...purgedRecord, unlistedAt: unlisted ? new Date() : undefined };
+        },
+      }),
+      blob: makeBlobAdapter(),
+    });
+
+    await adapter.setUnlisted('r1', true);
+    expect(calledWith).toEqual(['r1', true]);
   });
 
   // putAttachmentWithMetadata promises bytes + record as one atomic

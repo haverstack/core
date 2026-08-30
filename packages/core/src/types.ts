@@ -158,6 +158,15 @@ export type StackRecord = {
    */
   updatedVia?: EntityId;
   deletedAt?: Date; // Present if soft-deleted
+  /**
+   * Present when the record is withheld from enumeration — absent from
+   * `query()` and the change feed by default, but still reachable by
+   * `get()` for anyone who may read it. Orthogonal to `permissions`: it
+   * says nothing about who may read the record, only whether its
+   * existence is discoverable without already holding its ID. See
+   * docs/spec/access-control.md § Unlisted records.
+   */
+  unlistedAt?: Date;
   permissions?: Permission[];
   associations?: Association[];
 };
@@ -453,6 +462,14 @@ export type RecordFilter = {
 
   // Soft-deleted records are excluded by default
   includeDeleted?: boolean;
+
+  /**
+   * Unlisted records are excluded by default, like soft-deleted ones.
+   * Owner-only under `ScopedStack` — enumeration standing rests on nothing
+   * but ownership, so a grant or delegation never carries it. See
+   * docs/spec/access-control.md § Unlisted records.
+   */
+  includeUnlisted?: boolean;
 };
 
 export type QuerySort = {
@@ -600,7 +617,16 @@ export type ChangeOp =
   | 'restore'
   | 'delete'
   | 'undelete'
-  | 'hard-delete';
+  | 'hard-delete'
+  /**
+   * Emitted even though the record's post-change state (`unlistedAt` now
+   * set) would otherwise be excluded by the same filter it announces —
+   * subscribers who already know the record need telling to drop it. See
+   * docs/spec/events.md § The unlisted transition.
+   */
+  | 'unlist'
+  /** The publish moment — mechanically an upsert, like `undelete`. */
+  | 'list';
 
 /**
  * Who performed a change — never who authored the record. Absent from a
@@ -669,6 +695,14 @@ export type SubscribeOptions = {
   /** Ask the emitter to include `record`. Honored when it can; never assume it. */
   includeRecords?: boolean;
   /**
+   * Receive events for unlisted records too. Owner-only under
+   * `ScopedStack`, same authority as `RecordFilter.includeUnlisted` — the
+   * feed excludes unlisted records by default so it never delivers more
+   * than an equivalent `query()` would return. See
+   * docs/spec/access-control.md § Unlisted records.
+   */
+  includeUnlisted?: boolean;
+  /**
    * Where a throwing handler's error goes. Without one the error is
    * rethrown asynchronously rather than swallowed; either way it never
    * reaches the caller of the mutation that produced the event.
@@ -694,6 +728,8 @@ export type SubscribeChangesOptions = {
   /** Resume from this cursor. A relay with none starts from the present. */
   since?: string;
   includeRecords?: boolean;
+  /** See SubscribeOptions.includeUnlisted. */
+  includeUnlisted?: boolean;
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
@@ -768,6 +804,18 @@ export interface StackRecordAdapter {
   setPermissions(
     id: RecordId,
     permissions: Permission[],
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+  ): Promise<StackRecord>;
+
+  /**
+   * Set or clear `unlistedAt`. Bumps version internally, like
+   * setPermissions(). The caller (Stack.setUnlisted()) is responsible for
+   * picking the `unlist`/`list` change op from the transition, since the
+   * adapter has no opinion on eventing.
+   */
+  setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 

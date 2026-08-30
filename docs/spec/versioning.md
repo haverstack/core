@@ -115,3 +115,5 @@ const record = await stack.undelete(recordId); // clears deletedAt, returns the 
 Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `write` bit or a `delete-own`/`delete-any` grant. Undelete is the inverse of soft delete, so the same capability governs both directions; granting one without the other would be backwards. (Hard delete's owner-only carve-out is unaffected — it has no inverse.)
 
 Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing the next time it's written or `migrateAll()` sweeps it. `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
+
+**`unlistedAt` is a sibling mechanism, not a variant of this one.** It withholds a Record from enumeration rather than from access — the Record stays fully readable and mutable throughout — and its own opt-in flag, ownership rule, and feed behavior differ from soft delete's in ways worth reading directly rather than assuming symmetric. See [Unlisted records](./access-control.md#unlisted-records).

@@ -40,6 +40,7 @@ export type WireRecord = {
   updatedBy?: string;
   updatedVia?: string;
   deletedAt?: string;
+  unlistedAt?: string;
   permissions?: Permission[];
   associations?: Association[];
 };
@@ -102,6 +103,7 @@ export function serializeRecord(r: StackRecord): WireRecord {
   if (r.updatedBy !== undefined) w.updatedBy = r.updatedBy;
   if (r.updatedVia !== undefined) w.updatedVia = r.updatedVia;
   if (r.deletedAt !== undefined) w.deletedAt = r.deletedAt.toISOString();
+  if (r.unlistedAt !== undefined) w.unlistedAt = r.unlistedAt.toISOString();
   if (r.permissions !== undefined) w.permissions = r.permissions;
   if (r.associations !== undefined) w.associations = r.associations;
   return w;

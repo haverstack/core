@@ -561,6 +561,19 @@ describe('records — queries', () => {
     expect(result.records.some((r) => r.id === record.id)).toBe(true);
   });
 
+  test('excludes unlisted records by default, and includeUnlisted returns them', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.setUnlisted(record.id, true);
+
+    const excluded = await adapter.queryRecords({});
+    expect(excluded.records.some((r) => r.id === record.id)).toBe(false);
+
+    const included = await adapter.queryRecords({ filter: { includeUnlisted: true } });
+    expect(included.records.some((r) => r.id === record.id)).toBe(true);
+  });
+
   // The order clause and the cursor comparison interpolate sort.direction
   // straight into SQL. Core's assertValidSort() is the primary guard, but
   // the builder re-checks so a caller reaching the adapter directly cannot
@@ -1126,6 +1139,39 @@ describe('setPermissions', () => {
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.permissions).toEqual([{ access: 'public' }]);
     expect(retrieved?.version).toBe(2);
+  });
+});
+
+describe('setUnlisted', () => {
+  test('sets unlistedAt and bumps version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.setUnlisted(record.id, true);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.unlistedAt).toBeInstanceOf(Date);
+    expect(retrieved?.version).toBe(2);
+  });
+
+  test('clears unlistedAt on the reverse call', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.setUnlisted(record.id, true);
+    await adapter.setUnlisted(record.id, false);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.unlistedAt).toBeUndefined();
+    expect(retrieved?.version).toBe(3);
+  });
+
+  test('enforces expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await expect(
+      adapter.setUnlisted(record.id, true, { expectedVersion: 99 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    await adapter.setUnlisted(record.id, true, { expectedVersion: 1 });
   });
 });
 

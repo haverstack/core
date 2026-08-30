@@ -290,6 +290,76 @@ describe('a revocation takes effect on the next event, not the next subscription
 });
 
 // -------------------------------------------------------
+// Unlisted records — the feed matches query()'s default exclusion, with
+// the `unlist` transition itself as the one exception. See
+// docs/spec/events.md § The unlisted transition.
+// -------------------------------------------------------
+
+describe('the feed excludes unlisted records like an equivalent query() would', () => {
+  test('includeUnlisted is refused to a non-owner at subscribe() time', async () => {
+    await expect(
+      stack.asEntity(READER).subscribe(() => {}, { includeUnlisted: true }),
+    ).rejects.toThrow('includeUnlisted is owner-only');
+  });
+
+  test('a record created unlisted produces no event for a default subscriber', async () => {
+    const owner = collector();
+    await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
+
+    await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    await settle();
+
+    expect(owner.seen).toEqual([]);
+  });
+
+  test('an edit to an already-unlisted record produces no event for a default subscriber', async () => {
+    const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    const owner = collector();
+    await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
+
+    await stack.update(note.id, { text: 'still unlisted' });
+    await settle();
+
+    expect(owner.seen).toEqual([]);
+  });
+
+  test('the unlist transition itself reaches a default subscriber, as kind "deleted"', async () => {
+    const note = await stack.create(NOTE, { text: 'was public' });
+    const owner = collector();
+    await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
+
+    await stack.setUnlisted(note.id, true);
+    await settle();
+
+    expect(owner.seen.map((c) => [c.kind, c.op])).toEqual([['deleted', 'unlist']]);
+  });
+
+  test('the list transition reaches a default subscriber, as an ordinary upsert', async () => {
+    const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    const owner = collector();
+    await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
+
+    await stack.setUnlisted(note.id, false);
+    await settle();
+
+    expect(owner.seen.map((c) => [c.kind, c.op])).toEqual([['changed', 'list']]);
+  });
+
+  test('the owner acting alone with includeUnlisted sees the create and the silent edit', async () => {
+    const owner = collector();
+    await stack
+      .asEntity(OWNER)
+      .subscribe(owner.handler, { filter: { typeId: NOTE }, includeUnlisted: true });
+
+    const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
+    await stack.update(note.id, { text: 'still unlisted' });
+    await settle();
+
+    expect(owner.seen.map((c) => c.op)).toEqual(['create', 'update']);
+  });
+});
+
+// -------------------------------------------------------
 // Ordering and failure
 // -------------------------------------------------------
 

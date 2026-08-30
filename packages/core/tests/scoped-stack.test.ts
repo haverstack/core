@@ -300,6 +300,42 @@ describe('ScopedStack — write access', () => {
 });
 
 // -------------------------------------------------------
+// setUnlisted — gated exactly like setPermissions, since both decide who
+// or what can discover a record rather than merely read one already found.
+// See docs/spec/access-control.md § Unlisted records.
+// -------------------------------------------------------
+
+describe('ScopedStack.setUnlisted', () => {
+  test('rejects write-access holder that is not creator or stack owner', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        entityId: OWNER,
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    await expect(stack.asEntity(MEMBER).setUnlisted(record.id, true)).rejects.toThrow(
+      StackPermissionError,
+    );
+    // Stack owner and record creator can still toggle it.
+    await stack.asEntity(OWNER).setUnlisted(record.id, true);
+    expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
+  });
+
+  test('a stranger with no access gets StackNotFoundError', async () => {
+    const record = await adapter.createRecord(makeRecord());
+    await expect(stack.asEntity(STRANGER).setUnlisted(record.id, true)).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('the record creator (not stack owner) may toggle it', async () => {
+    const record = await adapter.createRecord(makeRecord({ entityId: MEMBER }));
+    await stack.asEntity(MEMBER).setUnlisted(record.id, true);
+    expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
+  });
+});
+
+// -------------------------------------------------------
 // Record-existence disclosure
 // -------------------------------------------------------
 
@@ -681,6 +717,46 @@ describe('ScopedStack.query', () => {
     // The limit is silently clamped — no error thrown, results still returned.
     expect(result.records.length).toBeGreaterThanOrEqual(0);
     expect(result.records.length).toBeLessThanOrEqual(1000);
+  });
+
+  // includeUnlisted is owner-only: enumeration standing rests on nothing
+  // but ownership, so no grant or delegation carries it. See
+  // docs/spec/access-control.md § includeUnlisted is owner-only.
+  describe('includeUnlisted', () => {
+    test('refuses a non-owner requester with StackPermissionError', async () => {
+      await expect(
+        stack.asEntity(MEMBER).query({ filter: { includeUnlisted: true } }),
+      ).rejects.toThrow(StackPermissionError);
+    });
+
+    test('refuses an anonymous requester', async () => {
+      await expect(
+        stack.asEntity(null).query({ filter: { includeUnlisted: true } }),
+      ).rejects.toThrow(StackPermissionError);
+    });
+
+    test('the owner acting alone may pass it', async () => {
+      await adapter.createRecord(
+        makeRecord({ unlistedAt: new Date(), permissions: [{ access: 'public' }] }),
+      );
+      const result = await stack.asEntity(OWNER).query({ filter: { includeUnlisted: true } });
+      expect(result.records).toHaveLength(1);
+    });
+
+    test('an owner-delegated app does not inherit it', async () => {
+      const scoped = stack.asEntity('app-did', { onBehalfOf: OWNER });
+      await expect(scoped.query({ filter: { includeUnlisted: true } })).rejects.toThrow(
+        StackPermissionError,
+      );
+    });
+
+    test('unlisted records are excluded from a scoped query by default', async () => {
+      await adapter.createRecord(
+        makeRecord({ unlistedAt: new Date(), permissions: [{ access: 'public' }] }),
+      );
+      const result = await stack.asEntity(null).query();
+      expect(result.records).toHaveLength(0);
+    });
   });
 });
 
@@ -2089,6 +2165,16 @@ describe('ScopedStack — group role gating', () => {
     );
     await stack.asEntity(ADMIN).setPermissions(group.id, perms);
     expect((await adapter.getRecord(group.id))?.permissions).toEqual(perms);
+  });
+
+  test('setUnlisted on a group requires admin, not just record authorship', async () => {
+    const group = await makeGroup({ entityId: MEMBER });
+    // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
+    await expect(stack.asEntity(MEMBER).setUnlisted(group.id, true)).rejects.toThrow(
+      StackNotFoundError,
+    );
+    await stack.asEntity(ADMIN).setUnlisted(group.id, true);
+    expect((await adapter.getRecord(group.id))?.unlistedAt).toBeInstanceOf(Date);
   });
 
   test('creator is stamped as admin at create time and can manage the group afterward', async () => {
