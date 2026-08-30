@@ -34,11 +34,6 @@ gate to protect. The SQLite association table gains `related_scope`, `related_ns
 two networks are two associations rather than a silent no-op. Existing stack files
 predate those columns and must be recreated.
 
-The relationship filter reads through a new index on the target, phrased as a
-semi-join so the query planner drives from the associations side rather than scanning
-every record and probing for each: the work a relationship query costs is proportional
-to how many records match it, not to how many the stack holds.
-
 Over the wire, the relationship filter's scope is implied by which parameters appear
 (`relatedTo`/`relatedToStack`, `relatedToEntity`, or `relatedToNs`/`relatedToId`), and
 a request mixing scopes is rejected with 400. At least one is always present, so the

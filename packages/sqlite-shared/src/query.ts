@@ -88,11 +88,18 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     params.push(f.updatedAt.before.getTime());
   }
 
+  // Every association filter below is a semi-join rather than a correlated
+  // EXISTS, so the planner drives from the association side — reading the
+  // matching rows through idx_assoc_kind_label / idx_assoc_kind_file_id /
+  // idx_file_refs_file_id and looking up those records — instead of
+  // scanning every record and probing for each. The work is proportional
+  // to how many records match, not to how many the stack holds.
+
   // Tag filter — record must have ALL specified tags
   if (f.tags?.length) {
     for (const tag of f.tags) {
       conditions.push(
-        `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'tag' AND a.label = ?)`,
+        `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND a.label = ?)`,
       );
       params.push(tag);
     }
@@ -101,7 +108,7 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // Attachment label filter
   if (f.hasAttachment) {
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.label = ?)`,
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.label = ?)`,
     );
     params.push(f.hasAttachment);
   }
@@ -110,8 +117,8 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // either via an attachment association or a top-level file-ref content field
   if (f.attachmentFileId) {
     conditions.push(
-      `(EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)
-        OR EXISTS (SELECT 1 FROM file_refs fr WHERE fr.record_id = r.id AND fr.file_id = ?))`,
+      `(r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.file_id = ?)
+        OR r.id IN (SELECT fr.record_id FROM file_refs fr WHERE fr.file_id = ?))`,
     );
     params.push(f.attachmentFileId, f.attachmentFileId);
   }
@@ -119,13 +126,8 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // Relationship filter — each clause is an optional pattern, so a bare
   // label matches every target under it and an external target with no
   // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
-  //
-  // Phrased as a semi-join rather than a correlated EXISTS so the planner
-  // drives from the associations side: it reads the matching associations
-  // through idx_assoc_related (or idx_assoc_kind_label for a bare label)
-  // and looks up those records, instead of scanning every record and
-  // probing for each. That is the difference between work proportional to
-  // the matches and work proportional to the stack.
+  // A target-bearing pattern reads through idx_assoc_related; a bare label
+  // through idx_assoc_kind_label.
   if (f.relatedTo) {
     const clauses: string[] = [];
     const target = f.relatedTo.target;
