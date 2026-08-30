@@ -7,6 +7,7 @@ import type {
   ActorOptions,
   StackQuery,
   QueryResult,
+  RecordFilter,
   Association,
   Permission,
   AdapterCapabilities,
@@ -14,7 +15,12 @@ import type {
 } from './types.js';
 import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
-import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './stack.js';
+import {
+  StackVersionConflictError,
+  StackConflictError,
+  StackNotFoundError,
+  targetEqual,
+} from './stack.js';
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
@@ -222,13 +228,8 @@ export class MemoryAdapter implements StackAdapter {
       );
     }
     if (f.relatedTo) {
-      const { recordId, label } = f.relatedTo;
-      results = results.filter((r) =>
-        (r.associations ?? []).some(
-          (a) =>
-            a.kind === 'relationship' && a.recordId === recordId && (!label || a.label === label),
-        ),
-      );
+      const relatedTo = f.relatedTo;
+      results = results.filter((r) => matchesRelatedTo(r.associations, relatedTo));
     }
     // A `null` filter value means "field absent or null" — not "match
     // nothing". Plain `===` would miss an absent field; treat both as
@@ -482,11 +483,40 @@ function withAssociations(record: StackRecord, associations: Association[]): Sta
 
 /**
  * Mirrors Stack's private associationEqual(): identity is (kind, label) plus
- * fileId for attachments / recordId for relationships.
+ * fileId for attachments / the target for relationships.
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') return a.recordId === b.recordId;
+  if (a.kind === 'relationship' && b.kind === 'relationship') {
+    return targetEqual(a.target, b.target);
+  }
   return true;
+}
+
+/**
+ * Mirrors sqlite-shared's relatedTo predicate: a bare label matches every
+ * target under it, and an external target with no `id` matches its whole
+ * namespace.
+ */
+function matchesRelatedTo(
+  associations: Association[] | undefined,
+  filter: NonNullable<RecordFilter['relatedTo']>,
+): boolean {
+  return (associations ?? []).some((a) => {
+    if (a.kind !== 'relationship') return false;
+    if (filter.label !== undefined && a.label !== filter.label) return false;
+    const want = filter.target;
+    if (!want) return true;
+    const got = a.target;
+    if (got.scope !== want.scope) return false;
+    if (want.scope === 'record' && got.scope === 'record') {
+      return got.recordId === want.recordId && (got.stackUrl ?? '') === (want.stackUrl ?? '');
+    }
+    if (want.scope === 'entity' && got.scope === 'entity') return got.entityId === want.entityId;
+    if (want.scope === 'external' && got.scope === 'external') {
+      return got.ns === want.ns && (want.id === undefined || got.id === want.id);
+    }
+    return false;
+  });
 }

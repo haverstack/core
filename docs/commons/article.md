@@ -51,8 +51,9 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
   the canonical location back to the record). `url` present therefore means "this work
   lives somewhere on the web" — symmetrically for authored and captured articles — and
   any app can render a "view published" link. Syndicated copies elsewhere never
-  overwrite it: canonical means canonical; other locations are sidecar territory (or
-  future syndication relationships, #15).
+  overwrite it: canonical means canonical, and a copy's location is a `syndicated-to`
+  relationship with an external target — see
+  [Cross-type conventions](./README.md#cross-type-conventions).
 - **Cover image**: attachment association with label `cover` (JSON Feed `image`,
   h-entry `u-featured`).
 - **Embedded media** in `text`: attachment associations with label `embed`, per the
@@ -101,9 +102,8 @@ keep the paired bookmark record described above.
 - Layout, theme, rendering hints — presentation is the publishing app's concern.
 - `slug` and site-structure fields — that is [`page`](./page.md) territory; an article
   is a work in a feed, a page is a node in a site tree.
-- Social/microblog `post` semantics (replies, reposts, mentions) — deferred to
-  reconciliation with the ATProto-compat RFC (#15). An article is a work; a post is an
-  utterance.
+- Social/microblog `post` semantics (replies, reposts, mentions) — a separate contract.
+  An article is a work; a post is an utterance.
 - Comments — already covered, no new type: a comment is a [`message`](./message.md)
   whose `parentId` is the article (sent into a shared space, moment-indexed,
   tamper-evident), while a reader's private marginalia is a `note` with an `about`

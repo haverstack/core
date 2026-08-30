@@ -17,7 +17,14 @@ import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
-import type { AttachmentContent, BlobFileInfo, StackAdapter, StackRecord } from '../src/types.js';
+import type {
+  AttachmentContent,
+  BlobFileInfo,
+  RecordFilter,
+  RelationshipTarget,
+  StackAdapter,
+  StackRecord,
+} from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -412,14 +419,14 @@ describe('create — _group admin bootstrap', () => {
   test('owner-created group via plain Stack.create stamps the owner as first admin', async () => {
     const group = await stack.create('_group@1', { name: 'New Group' });
     expect(group.associations).toEqual([
-      { kind: 'relationship', label: 'admin', recordId: 'owner-123' },
+      { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: 'owner-123' } },
     ]);
   });
 
   test('stamps the supplied entityId, not the owner, when one is provided', async () => {
     const group = await stack.create('_group@1', { name: 'New Group' }, { entityId: 'other-456' });
     expect(group.associations).toEqual([
-      { kind: 'relationship', label: 'admin', recordId: 'other-456' },
+      { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: 'other-456' } },
     ]);
   });
 
@@ -427,10 +434,22 @@ describe('create — _group admin bootstrap', () => {
     const group = await stack.create(
       '_group@1',
       { name: 'New Group' },
-      { associations: [{ kind: 'relationship', label: 'admin', recordId: 'owner-123' }] },
+      {
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'admin',
+            target: { scope: 'entity', entityId: 'owner-123' },
+          },
+        ],
+      },
     );
     const adminAssociations = (group.associations ?? []).filter(
-      (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === 'owner-123',
+      (a) =>
+        a.kind === 'relationship' &&
+        a.label === 'admin' &&
+        a.target.scope === 'entity' &&
+        a.target.entityId === 'owner-123',
     );
     expect(adminAssociations).toHaveLength(1);
   });
@@ -2367,7 +2386,7 @@ describe('listGrants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: 'entity-abc',
+      target: { scope: 'entity', entityId: 'entity-abc' },
     });
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
     await stack.grant('entity-xyz', [{ actions: ['read-own', 'delete-own'], typeId: NOTE_V1 }]);
@@ -2386,7 +2405,7 @@ describe('listGrants', () => {
     await stack.associate(notAGroup.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: 'entity-abc',
+      target: { scope: 'entity', entityId: 'entity-abc' },
     });
     await stack.grant({ groupId: notAGroup.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
 
@@ -2403,7 +2422,7 @@ describe('listGrants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      recordId: 'entity-xyz',
+      target: { scope: 'entity', entityId: 'entity-xyz' },
     });
     await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
 
@@ -3925,5 +3944,289 @@ describe('ungrantable families are refused at evaluation', () => {
     await expect(
       stack.asEntity(MALLORY).create('_grant@1', { typeId: NOTE_V1, actions: ['read-any'] }),
     ).rejects.toThrow(StackPermissionError);
+  });
+});
+
+// -------------------------------------------------------
+// Relationship targets
+// -------------------------------------------------------
+
+describe('relationship targets', () => {
+  // Storage, targetEqual() and the filter all read an absent and an empty
+  // stackUrl as this stack, so a target names this stack exactly one way.
+  // Every other part that names something is required for the same reason:
+  // an empty string would claim a name while carrying none.
+  test('a record target names this stack by omitting stackUrl, never by emptying it', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: { scope: 'record', recordId: 'somerecordid', stackUrl: '' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a target outside the three scopes is refused', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: { scope: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a target outside the three scopes is refused at create too', async () => {
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'host' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'series',
+              target: {
+                scope: 'Record',
+                recordId: 'somerecordid',
+              } as unknown as RelationshipTarget,
+            },
+          ],
+        },
+      ),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test.each([
+    ['a record target', { scope: 'record', recordId: '' }],
+    ['an entity target', { scope: 'entity', entityId: '' }],
+    ['an external target namespace', { scope: 'external', ns: '', id: 'x' }],
+    ['an external target id', { scope: 'external', ns: 'atproto', id: '' }],
+  ])('%s requires a non-empty identifier', async (_name, target) => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    await expect(
+      stack.associate(note.id, {
+        kind: 'relationship',
+        label: 'series',
+        target: target as RelationshipTarget,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('two targets differing only by namespace are two associations', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'crossposted' });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+    });
+
+    const stored = await stack.get(note.id);
+    expect(stored?.associations).toHaveLength(2);
+  });
+
+  test('dissociate removes only the target it names', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'crossposted' });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+    });
+    await stack.dissociate(note.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+    });
+
+    const stored = await stack.get(note.id);
+    expect(stored?.associations).toEqual([
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      },
+    ]);
+  });
+
+  // A record target and an entity target carrying the same string are
+  // different references — which is the distinction group rosters rest on.
+  test('a record target does not match an entity target with the same value', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'ambiguous' });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'about',
+      target: { scope: 'record', recordId: 'did:key:z6MkAlice' },
+    });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'about',
+      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+    });
+
+    const stored = await stack.get(note.id);
+    expect(stored?.associations).toHaveLength(2);
+  });
+
+  test('a record target in another stack is stored with its stackUrl', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'reply' });
+    await stack.associate(note.id, {
+      kind: 'relationship',
+      label: 'reply-to',
+      target: { scope: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+    });
+
+    const stored = await stack.get(note.id);
+    expect(stored?.associations?.[0]).toEqual({
+      kind: 'relationship',
+      label: 'reply-to',
+      target: { scope: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+    });
+  });
+});
+
+// -------------------------------------------------------
+// query — relatedTo filter
+// -------------------------------------------------------
+
+describe('query — relatedTo filter', () => {
+  let subject: StackRecord;
+
+  beforeEach(async () => {
+    subject = await stack.create(NOTE_V1, { text: 'target' });
+    const withSeries = await stack.create(NOTE_V1, { text: 'in a series' });
+    await stack.associate(withSeries.id, {
+      kind: 'relationship',
+      label: 'series',
+      target: { scope: 'record', recordId: subject.id },
+    });
+    const syndicated = await stack.create(NOTE_V1, { text: 'crossposted' });
+    await stack.associate(syndicated.id, {
+      kind: 'relationship',
+      label: 'syndicated-to',
+      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+    });
+    const authored = await stack.create(NOTE_V1, { text: 'by someone' });
+    await stack.associate(authored.id, {
+      kind: 'relationship',
+      label: 'author',
+      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+    });
+    await stack.create(NOTE_V1, { text: 'unrelated' });
+  });
+
+  // "Carries any relationship at all" is refused by the type, not defined —
+  // the wire encoding has no way to say it, and `tags`/`hasAttachment` have
+  // no match-any form either. @ts-expect-error fails typecheck if this ever
+  // starts compiling.
+  test('a filter naming neither a label nor a target does not typecheck', () => {
+    // @ts-expect-error — relatedTo requires a label, a target, or both
+    const filter: RecordFilter = { relatedTo: {} };
+    expect(filter.relatedTo).toEqual({});
+  });
+
+  // A type is not a runtime guard: a server maps query params onto a
+  // filter and supplies a plain object. Refusing the empty filter here is
+  // what keeps it from widening to every record carrying a relationship.
+  test('a filter naming neither a label nor a target is refused', async () => {
+    await expect(
+      stack.query({ filter: { relatedTo: {} as NonNullable<RecordFilter['relatedTo']> } }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('a filter target outside the three scopes is refused', async () => {
+    await expect(
+      stack.query({
+        filter: {
+          relatedTo: {
+            target: { scope: 'Record', recordId: subject.id } as unknown as NonNullable<
+              NonNullable<RecordFilter['relatedTo']>['target']
+            >,
+          },
+        },
+      }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('a filter naming this stack omits stackUrl rather than emptying it', async () => {
+    await expect(
+      stack.query({
+        filter: { relatedTo: { target: { scope: 'record', recordId: subject.id, stackUrl: '' } } },
+      }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('matches a record target', async () => {
+    const { records } = await stack.query({
+      filter: { relatedTo: { target: { scope: 'record', recordId: subject.id } } },
+    });
+    expect(records.map((r) => r.content.text)).toEqual(['in a series']);
+  });
+
+  test('matches an entity target', async () => {
+    const { records } = await stack.query({
+      filter: { relatedTo: { target: { scope: 'entity', entityId: 'did:key:z6MkAlice' } } },
+    });
+    expect(records.map((r) => r.content.text)).toEqual(['by someone']);
+  });
+
+  test('an external target without an id matches the whole namespace', async () => {
+    const { records } = await stack.query({
+      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto' } } },
+    });
+    expect(records.map((r) => r.content.text)).toEqual(['crossposted']);
+  });
+
+  test('an external target with an id matches exactly', async () => {
+    const miss = await stack.query({
+      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto', id: 'other' } } },
+    });
+    expect(miss.records).toHaveLength(0);
+  });
+
+  test('a bare label matches every target under it', async () => {
+    const { records } = await stack.query({ filter: { relatedTo: { label: 'series' } } });
+    expect(records.map((r) => r.content.text)).toEqual(['in a series']);
+  });
+
+  // An absent stackUrl is not a wildcard: it names this stack.
+  test('a local record target does not match the same id in another stack', async () => {
+    const remote = await stack.create(NOTE_V1, { text: 'remote reply' });
+    await stack.associate(remote.id, {
+      kind: 'relationship',
+      label: 'reply-to',
+      target: { scope: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
+    });
+
+    const local = await stack.query({
+      filter: {
+        relatedTo: { label: 'reply-to', target: { scope: 'record', recordId: subject.id } },
+      },
+    });
+    expect(local.records).toHaveLength(0);
+
+    const scoped = await stack.query({
+      filter: {
+        relatedTo: {
+          target: {
+            scope: 'record',
+            recordId: subject.id,
+            stackUrl: 'https://alice.example/stack',
+          },
+        },
+      },
+    });
+    expect(scoped.records.map((r) => r.content.text)).toEqual(['remote reply']);
   });
 });

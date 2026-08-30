@@ -51,6 +51,8 @@ import type {
   RecordFilter,
   QueryResult,
   Association,
+  RelationshipTarget,
+  RelationshipTargetPattern,
   Permission,
   Migration,
   MigrationFn,
@@ -549,6 +551,88 @@ export function assertValidSort(sort: QuerySort | undefined): void {
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
     );
   }
+}
+
+/** The identifier spaces a relationship target may name. */
+const TARGET_SCOPES = new Set(['record', 'entity', 'external']);
+
+/**
+ * Collect what makes a relationship target malformed. Absence is
+ * meaningful on `stackUrl` and an external `id` — this stack, and the
+ * whole namespace — so every part that names something must be non-empty:
+ * an empty string stores and matches as though it were absent.
+ * See docs/spec/data-model.md § Relationship targets.
+ */
+function targetErrors(
+  target: RelationshipTarget | RelationshipTargetPattern,
+  path: string,
+  opts: { externalIdOptional?: boolean } = {},
+): ValidationError[] {
+  const fail = (message: string): ValidationError[] => [{ path, message }];
+  if (!target || typeof target !== 'object')
+    return fail('A relationship target must be an object.');
+  if (!TARGET_SCOPES.has(target.scope)) {
+    return fail(
+      `Unknown relationship target scope "${target.scope}": expected "record", "entity" or "external".`,
+    );
+  }
+  if (target.scope === 'record') {
+    if (!target.recordId) return fail('A record target requires a non-empty recordId.');
+    if (target.stackUrl !== undefined && !target.stackUrl) {
+      return fail("A record target's stackUrl must be non-empty; omit it to name this stack.");
+    }
+    return [];
+  }
+  if (target.scope === 'entity') {
+    return target.entityId ? [] : fail('An entity target requires a non-empty entityId.');
+  }
+  if (!target.ns) return fail('An external target requires a non-empty ns.');
+  if (target.id === undefined) {
+    return opts.externalIdOptional ? [] : fail('An external target requires an id.');
+  }
+  return target.id ? [] : fail("An external target's id must be non-empty when present.");
+}
+
+/**
+ * Reject a relationship target outside the closed set the types promise.
+ * A discriminated union is not a runtime guard — a server mapping a
+ * request body onto an association supplies raw JSON — and an
+ * unrecognized scope would otherwise be stored under the one arm that
+ * names a Record in this stack. See docs/spec/data-model.md
+ * § Relationship targets.
+ */
+function validateAssociation(association: Association, path = 'association'): ValidationError[] {
+  if (association?.kind !== 'relationship') return [];
+  return targetErrors(association.target, `${path}.target`);
+}
+
+/** validateAssociation() over a create's `associations` array. */
+function validateAssociations(
+  associations: Association[] | undefined,
+  path = 'associations',
+): ValidationError[] {
+  return (associations ?? []).flatMap((a, i) => validateAssociation(a, `${path}[${i}]`));
+}
+
+/**
+ * Reject a relationship filter that names neither a label nor a target,
+ * or whose target is malformed. `RelatedToFilter` promises one half is
+ * always present; without the runtime check a filter decoded from a
+ * request could arrive empty and match every record carrying any
+ * relationship. See docs/spec/data-model.md § Filter.
+ */
+export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void {
+  if (!relatedTo) return;
+  if (relatedTo.label === undefined && relatedTo.target === undefined) {
+    throw new StackQueryError(
+      'filter.relatedTo must name a label, a target, or both — "any relationship at all" is not a filter.',
+    );
+  }
+  if (relatedTo.target === undefined) return;
+  const errors = targetErrors(relatedTo.target, 'filter.relatedTo.target', {
+    externalIdOptional: true,
+  });
+  if (errors.length > 0) throw new StackQueryError(errors[0].message);
 }
 
 /**
@@ -1250,6 +1334,7 @@ export class Stack implements StackClient {
       ...validateReservedKeys(content),
       ...validateContent(content, type.schema),
       ...validatePermissions(opts.permissions),
+      ...validateAssociations(opts.associations),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -1433,6 +1518,8 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
+    const errors = validateAssociation(association);
+    if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1459,6 +1546,8 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<void> {
     this.assertOpen();
+    const errors = validateAssociation(association);
+    if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -1619,6 +1708,7 @@ export class Stack implements StackClient {
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(query.sort);
+    assertValidRelatedTo(filter?.relatedTo);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
@@ -2698,13 +2788,26 @@ export class Stack implements StackClient {
 
 /**
  * Matches the SQLite adapter's association primary key (kind, label,
- * file_id, related_id).
+ * file_id, related_scope, related_id, related_ns, related_stack).
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') return a.recordId === b.recordId;
+  if (a.kind === 'relationship' && b.kind === 'relationship') {
+    return targetEqual(a.target, b.target);
+  }
   return true;
+}
+
+/** Structural equality per target arm — what dissociate() matches on. */
+export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
+  if (a.scope !== b.scope) return false;
+  if (a.scope === 'record' && b.scope === 'record') {
+    return a.recordId === b.recordId && (a.stackUrl ?? '') === (b.stackUrl ?? '');
+  }
+  if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
+  if (a.scope === 'external' && b.scope === 'external') return a.ns === b.ns && a.id === b.id;
+  return false;
 }
 
 function permissionEqual(a: Permission, b: Permission): boolean {
@@ -2736,13 +2839,23 @@ const MAX_QUERY_LIMIT = 1000;
  * if it's not already present. Used to bootstrap a `_group` record's first
  * admin at create time.
  */
-function stampGroupAdmin(associations: Association[] | undefined, creator: string): Association[] {
+function stampGroupAdmin(
+  associations: Association[] | undefined,
+  creator: EntityId,
+): Association[] {
   const list = associations ?? [];
   const alreadyAdmin = list.some(
-    (a) => a.kind === 'relationship' && a.label === 'admin' && a.recordId === creator,
+    (a) =>
+      a.kind === 'relationship' &&
+      a.label === 'admin' &&
+      a.target.scope === 'entity' &&
+      a.target.entityId === creator,
   );
   if (alreadyAdmin) return list;
-  return [...list, { kind: 'relationship', label: 'admin', recordId: creator }];
+  return [
+    ...list,
+    { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: creator } },
+  ];
 }
 
 /**
@@ -3313,16 +3426,27 @@ export class ScopedStack implements StackClient {
 
   /**
    * Reference-creation gate for one association: `attachment` requires
-   * file access, `relationship` read access to its target; `tag` is
-   * unchecked, and `_group` roster associations are gated by the stricter
-   * isGroupManager() instead. See docs/spec/access-control.md
-   * § Reference-creation gating.
+   * file access, and a `relationship` naming a record in this stack
+   * requires read access to it. `tag` is unchecked, and `_group` roster
+   * associations are gated by the stricter isGroupManager() instead.
+   *
+   * The other target arms are ungated because the gate's purpose —
+   * refusing a reference that would convey access to, or confirm the
+   * existence of, an unreadable record — has nothing to bite on: core
+   * never resolves them, so no access flows through one.
+   * See docs/spec/access-control.md § Reference-creation gating.
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
       if (!(await this.canAccessFile(association.fileId))) throw new StackPermissionError();
     } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
-      if (!(await this.canReadReferent(association.recordId))) throw new StackPermissionError();
+      const { target } = association;
+      // `stackUrl` is tested for a value, not for presence: absent and
+      // empty are one target — storage, targetEqual() and the filter all
+      // read them as this stack — so a check on presence alone would
+      // leave one spelling of a local Record ungated.
+      if (target.scope !== 'record' || target.stackUrl) return;
+      if (!(await this.canReadReferent(target.recordId))) throw new StackPermissionError();
     }
   }
 
@@ -3430,6 +3554,7 @@ export class ScopedStack implements StackClient {
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
+    assertValidRelatedTo(query.filter?.relatedTo);
     if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }

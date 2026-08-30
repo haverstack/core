@@ -150,11 +150,11 @@ A group's `handle` is a label on the same terms as an entity's — unenforced, n
 **Membership** is expressed via associations on the `_group` Record, using the existing Association model:
 
 ```ts
-{ kind: "relationship", label: "member", recordId: "<entity DID>" }
-{ kind: "relationship", label: "admin",  recordId: "<entity DID>" }
+{ kind: "relationship", label: "member", target: { scope: "entity", entityId: "<DID>" } }
+{ kind: "relationship", label: "admin",  target: { scope: "entity", entityId: "<DID>" } }
 ```
 
-(`recordId` here names an Entity by DID, not a Record within the target stack — the field is reused rather than duplicated.)
+The `entity` scope is what makes a roster a roster: membership names an identity, not a Record. A roster entry carrying a `record` target confers nothing, even if its `recordId` happens to equal a member's DID — see [Relationship targets](./data-model.md#relationship-targets).
 
 This gives roles for free via association labels, and membership is queryable and versioned like any other Record data. There is no role hierarchy beyond this single distinction — matching the scale a Group actually serves (a small, cohesive set of Entities), not a general-purpose permissions system:
 

@@ -34,7 +34,7 @@ import type {
   ChangeFilter,
   RecordChange,
 } from '@haverstack/core';
-import { assertQueryCapabilities } from '@haverstack/core/adapter';
+import { assertQueryCapabilities, assertValidRelatedTo } from '@haverstack/core/adapter';
 import type { AdapterCapabilities, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
@@ -326,8 +326,21 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
   if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
   if (f.relatedTo) {
-    p.set('relatedTo', f.relatedTo.recordId);
-    if (f.relatedTo.label) p.set('relatedToLabel', f.relatedTo.label);
+    // The scope is implied by which qualifier appears, and the type
+    // guarantees at least one of these branches sets something — so the
+    // filter can never encode to nothing and silently widen the query.
+    // The server rejects a mix of scopes.
+    const t = f.relatedTo.target;
+    if (t?.scope === 'record') {
+      p.set('relatedTo', t.recordId);
+      if (t.stackUrl !== undefined) p.set('relatedToStack', t.stackUrl);
+    } else if (t?.scope === 'entity') {
+      p.set('relatedToEntity', t.entityId);
+    } else if (t?.scope === 'external') {
+      p.set('relatedToNs', t.ns);
+      if (t.id !== undefined) p.set('relatedToId', t.id);
+    }
+    if (f.relatedTo.label !== undefined) p.set('relatedToLabel', f.relatedTo.label);
   }
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
@@ -926,6 +939,11 @@ export class APIAdapter implements StackAdapter {
           : 'contentFieldQuery';
       throw new APIAdapterCapabilityError(capability, err.message);
     }
+    // A malformed relationship filter is a caller error, not a missing
+    // capability, so this one travels as the StackQueryError it is —
+    // refused here rather than encoded into query params a server would
+    // have to reject.
+    assertValidRelatedTo(query.filter?.relatedTo);
 
     let raw: WireQueryResponse;
     if (this.capabilities.contentFieldQuery) {

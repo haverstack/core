@@ -12,9 +12,8 @@ concerns and have no representation here.
 
 **This is not the social post.** A `message` is addressed to a group by living in that
 group's stack; a social post is broadcast to the world under a public identity. The
-social shape (reposts, mentions, public replies) belongs to the ATProto-compat RFC
-(#15) and is still deferred; this type must not foreclose it, and reconciliation is
-expected when #15 lands.
+broadcast shape is its own type — see [Choosing a text type](./text-types.md) — and
+nothing here forecloses it: the two differ in contract, not in fields.
 
 Messages are **sent** — speech addressed to others, whose meaning is indexed to its
 moment and thread. For the boundary with `note` (kept) and `article` (published), see
@@ -84,7 +83,7 @@ discussion.
 
 ## Deliberately excluded
 
-- Social-post semantics — #15 territory (see above).
+- Social-post semantics — the broadcast contract's territory (see above).
 - Reactions — a future micro-proposal (likely tag associations by non-authors — which
   needs finer-grained association permissions than today's `update-own`/`update-any`
   grant actions provide).

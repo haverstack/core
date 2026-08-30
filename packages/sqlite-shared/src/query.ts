@@ -92,11 +92,18 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     params.push(f.updatedAt.before.getTime());
   }
 
+  // Every association filter below is a semi-join rather than a correlated
+  // EXISTS, so the planner drives from the association side — reading the
+  // matching rows through idx_assoc_kind_label / idx_assoc_kind_file_id /
+  // idx_file_refs_file_id and looking up those records — instead of
+  // scanning every record and probing for each. The work is proportional
+  // to how many records match, not to how many the stack holds.
+
   // Tag filter — record must have ALL specified tags
   if (f.tags?.length) {
     for (const tag of f.tags) {
       conditions.push(
-        `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'tag' AND a.label = ?)`,
+        `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND a.label = ?)`,
       );
       params.push(tag);
     }
@@ -105,7 +112,7 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // Attachment label filter
   if (f.hasAttachment) {
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.label = ?)`,
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.label = ?)`,
     );
     params.push(f.hasAttachment);
   }
@@ -114,21 +121,47 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // either via an attachment association or a top-level file-ref content field
   if (f.attachmentFileId) {
     conditions.push(
-      `(EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'attachment' AND a.file_id = ?)
-        OR EXISTS (SELECT 1 FROM file_refs fr WHERE fr.record_id = r.id AND fr.file_id = ?))`,
+      `(r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.file_id = ?)
+        OR r.id IN (SELECT fr.record_id FROM file_refs fr WHERE fr.file_id = ?))`,
     );
     params.push(f.attachmentFileId, f.attachmentFileId);
   }
 
-  // Relationship filter
+  // Relationship filter — each clause is an optional pattern, so a bare
+  // label matches every target under it and an external target with no
+  // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
+  // A target-bearing pattern reads through idx_assoc_related; a bare label
+  // through idx_assoc_kind_label.
   if (f.relatedTo) {
+    const clauses: string[] = [];
+    const target = f.relatedTo.target;
+    if (f.relatedTo.label !== undefined) {
+      clauses.push('a.label = ?');
+      params.push(f.relatedTo.label);
+    }
+    if (target) {
+      clauses.push('a.related_scope = ?');
+      params.push(target.scope);
+      if (target.scope === 'record') {
+        clauses.push('a.related_id = ?', 'a.related_stack = ?');
+        params.push(target.recordId, target.stackUrl ?? '');
+      } else if (target.scope === 'entity') {
+        clauses.push('a.related_id = ?');
+        params.push(target.entityId);
+      } else {
+        clauses.push('a.related_ns = ?');
+        params.push(target.ns);
+        if (target.id !== undefined) {
+          clauses.push('a.related_id = ?');
+          params.push(target.id);
+        }
+      }
+    }
     conditions.push(
-      `EXISTS (SELECT 1 FROM associations a WHERE a.record_id = r.id AND a.kind = 'relationship' AND a.related_id = ?` +
-        (f.relatedTo.label ? ` AND a.label = ?` : '') +
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'relationship'` +
+        clauses.map((c) => ` AND ${c}`).join('') +
         `)`,
     );
-    params.push(f.relatedTo.recordId);
-    if (f.relatedTo.label) params.push(f.relatedTo.label);
   }
 
   // Content field filters (top-level scalar exact match). A `null` value

@@ -201,7 +201,14 @@ Tags, attachments, and relationships are unified under a single model:
 ```ts
 { kind: 'tag',          label: 'favourite' }
 { kind: 'attachment',   label: 'avatar',   fileId: '...' }
-{ kind: 'relationship', label: 'reply-to', recordId: '...' }
+{ kind: 'relationship', label: 'reply-to', target: { scope: 'record', recordId: '...' } }
+```
+
+A relationship's `target` says which identifier space its value lives in — a Record here or in another stack (`{ scope: 'record', recordId, stackUrl? }`), a "who" as a DID (`{ scope: 'entity', entityId }`), or something outside the stack entirely (`{ scope: 'external', ns, id }`). That last one is how a record points at an ATProto post, an ActivityPub actor, an email address or a plain URL: Haverstack expresses the reference and never dereferences it, so no protocol is privileged.
+
+```ts
+{ kind: 'relationship', label: 'syndicated-to',
+  target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' } }
 ```
 
 ### Migrations

@@ -4,7 +4,13 @@
  * contract; keeping one copy means the adapters can't drift on them.
  */
 
-import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
+import type {
+  StackRecord,
+  StackType,
+  RecordVersion,
+  Association,
+  RelationshipTarget,
+} from '@haverstack/core';
 
 export const toMs = (d: Date): number => d.getTime();
 export const fromMs = (ms: number): Date => new Date(ms);
@@ -49,8 +55,33 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
   return {
     kind: 'relationship',
     label: row.label as string,
-    recordId: row.related_id as string,
+    target: rowToTarget(row),
   };
+};
+
+/**
+ * The five columns that identify an association, in the order every
+ * INSERT and DELETE below binds them. One helper because the two must
+ * agree exactly — a dissociate that bound them differently would delete
+ * nothing and report success.
+ */
+export const associationKeyColumns = (a: Association): [string, string, string, string, string] => {
+  if (a.kind === 'attachment') return [a.fileId, '', '', '', ''];
+  if (a.kind !== 'relationship') return ['', '', '', '', ''];
+  const t = a.target;
+  if (t.scope === 'entity') return ['', 'entity', t.entityId, '', ''];
+  if (t.scope === 'external') return ['', 'external', t.id, t.ns, ''];
+  return ['', 'record', t.recordId, '', t.stackUrl ?? ''];
+};
+
+const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
+  const id = row.related_id as string;
+  if (row.related_scope === 'entity') return { scope: 'entity', entityId: id };
+  if (row.related_scope === 'external') {
+    return { scope: 'external', ns: row.related_ns as string, id };
+  }
+  const stackUrl = row.related_stack as string;
+  return { scope: 'record', recordId: id, ...(stackUrl && { stackUrl }) };
 };
 
 export const rowToType = (row: Record<string, unknown>): StackType => {
