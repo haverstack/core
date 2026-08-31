@@ -45,6 +45,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.0.0",
     "@haverstack/sqlite-shared": "workspace:*",
     "tsup": "^8.5.1",
     "typescript": "^5.5.0",
