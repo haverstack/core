@@ -315,14 +315,19 @@ export type CreateRecordOptions = {
 };
 
 /**
- * Stack.create()-only extension of CreateRecordOptions: backdating a
- * record's clock fields for import (e.g. migrating an existing archive with
- * its original dates). Never accepted by ScopedStack.create() — a grantee
- * could otherwise forge a sort position the same way a raw `id` could — and
- * never over the wire, where the server always assigns both fields. See
- * docs/spec/data-model.md § Record IDs.
+ * CreateRecordOptions extended with createdAt/updatedAt, for backdating a
+ * record's clock fields on import (e.g. migrating an existing archive with
+ * its original dates). Accepted unconditionally by unscoped Stack.create().
+ * ScopedStack.create() accepts the same two fields, but only from the
+ * stack owner acting alone (undelegated, authenticated as themselves) — a
+ * grantee, or a delegated app acting for the owner, is refused, since
+ * either could otherwise forge a sort position the same way a raw `id`
+ * could. A server built on ScopedStack inherits this automatically: an
+ * owner-authenticated `POST /records` may carry both fields; anyone else's
+ * request has them ignored, as before. See docs/spec/data-model.md §
+ * Record IDs and docs/spec/wire-format.md § Records.
  */
-export type UnscopedCreateRecordOptions = CreateRecordOptions & {
+export type BackdatableCreateRecordOptions = CreateRecordOptions & {
   /**
    * The record's creation time. When `id` is also supplied, its embedded
    * timestamp must agree with this within `idTimestampSkewMs` (default 24h;
@@ -358,10 +363,12 @@ export type StackOptions = {
   ownerProfile?: { name: string; handle?: string };
   /**
    * Clock-skew tolerance (ms) for two timestamp-prefix checks: the one
-   * ScopedStack.create() runs on grantee-supplied IDs against the current
-   * time, and the one unscoped Stack.create() runs between an explicit `id`
-   * and an explicit `createdAt` when both are supplied. Default: 24 hours;
-   * null disables both. See docs/spec/data-model.md § Record IDs.
+   * ScopedStack.create() runs on a non-backdated create's client-supplied
+   * `id` against the current time, and the one Stack.create() runs between
+   * an explicit `id` and an explicit `createdAt` when both are supplied —
+   * reached directly when unscoped, or via ScopedStack.create() when the
+   * requester is the owner acting alone. Default: 24 hours; null disables
+   * both. See docs/spec/data-model.md § Record IDs.
    */
   idTimestampSkewMs?: number | null;
 };
@@ -874,13 +881,16 @@ function validateClockField(value: Date | undefined, path: string): ValidationEr
 }
 
 /**
- * Timestamp-prefix plausibility check, shared by two callers that compare
- * an ID's embedded millisecond against a different reference each:
- * ScopedStack.create() against the current time (a grantee is untrusted and
- * could otherwise mint an ID that forges its sort position), and unscoped
- * Stack.create() against an explicit `createdAt` (the two must agree, not
- * silently diverge — see docs/spec/data-model.md § Record IDs). Pass null
- * to disable.
+ * Timestamp-prefix plausibility check, shared by callers that compare an
+ * ID's embedded millisecond against a different reference each:
+ * ScopedStack.create() against the current time for any non-backdated
+ * create (a grantee is untrusted and could otherwise mint an ID that
+ * forges its sort position, and this is the one check standing between a
+ * delegated or grantee caller and doing so), and Stack.create() — reached
+ * directly when unscoped, or via ScopedStack.create() when the requester
+ * is the owner acting alone with an explicit `createdAt` — against that
+ * `createdAt` instead (the two must agree, not silently diverge — see
+ * docs/spec/data-model.md § Record IDs). Pass null to disable.
  */
 function validateIdTimestampSkew(
   id: string,
@@ -1401,15 +1411,17 @@ export class Stack implements StackClient {
    * Create a new record. Validates content against the type's schema.
    * `_group` records get their author stamped as the first `admin` roster
    * association here — the single stamping site for both Stack.create()
-   * and ScopedStack.create(). Full-trust context only: unlike
-   * ScopedStack.create(), `opts.createdAt`/`updatedAt` let a caller backdate
-   * an imported record's clock fields — see UnscopedCreateRecordOptions and
-   * docs/spec/data-model.md § Record IDs.
+   * and ScopedStack.create(). `opts.createdAt`/`updatedAt` let a caller
+   * backdate an imported record's clock fields — unconditionally here;
+   * ScopedStack.create() forwards to this same method, but only reaches
+   * this far with them when the requester is the stack owner acting alone
+   * — see BackdatableCreateRecordOptions and docs/spec/data-model.md §
+   * Record IDs.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
-    opts: UnscopedCreateRecordOptions = {},
+    opts: BackdatableCreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
@@ -3589,28 +3601,34 @@ export class ScopedStack implements StackClient {
    * reference-creating options gated, and non-owner `_attachment@1`
    * creation refused save one carve-out. A scoped create always stamps
    * authorship — an absent entityId means an unscoped `Stack` wrote it.
-   * See docs/spec/access-control.md and docs/spec/attachments.md.
+   * `createdAt`/`updatedAt` are refused to everyone but the owner acting
+   * alone — see the guard below and docs/spec/data-model.md § Record IDs.
+   * See also docs/spec/access-control.md and docs/spec/attachments.md.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
-    opts: CreateRecordOptions = {},
+    opts: BackdatableCreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
-    // CreateRecordOptions carries no createdAt/updatedAt, so a type-checked
-    // caller can't reach this — but opts is forwarded whole to the
-    // unscoped Stack.create() below, which *does* accept them, and this
-    // method's own signature is exactly what stands between a caller that
-    // bypasses the type system (a raw JS caller, an `as any`) and a
-    // grantee backdating its own sort position. Refused rather than
-    // silently dropped, so an app never believes it published something it
-    // didn't. See docs/spec/data-model.md § Record IDs.
-    if ('createdAt' in opts || 'updatedAt' in opts) {
-      throw new StackPermissionError(
-        'createdAt/updatedAt can only be set through an unscoped Stack; a scoped create always stamps the current time.',
-      );
-    }
     const principal = this.principalEntityId;
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
+    // createdAt/updatedAt let a caller backdate a record's clock fields —
+    // and, without `id` also supplied, its sort position too. Refused to
+    // everyone but the owner acting alone (undelegated, authenticated as
+    // themselves): a grantee is exactly the untrusted actor the `id`
+    // skew check below already exists to stop from forging a sort
+    // position, and a delegated app acting for the owner inherits none of
+    // the owner's extra trust — same reasoning as mayGrantAccess() below.
+    // Refused rather than silently dropped, so an app never believes it
+    // published something it didn't. This is also the enforcement a
+    // server built on ScopedStack inherits for `POST /records`: an
+    // owner-authenticated request may carry both fields, anyone else's
+    // has them ignored.
+    if (('createdAt' in opts || 'updatedAt' in opts) && !this.ownerActingAlone) {
+      throw new StackPermissionError(
+        'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
+      );
+    }
     if (!(await this.checkCreateGrant(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
@@ -3638,7 +3656,15 @@ export class ScopedStack implements StackClient {
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
-      validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
+      // Skipped when createdAt is also supplied: only the owner reaches
+      // here with that combination (checked above), and Stack.create()
+      // below checks the id against createdAt instead of "now" — the
+      // check here exists for a live grantee write, and a backdated
+      // owner create is deliberately not one. See
+      // docs/spec/data-model.md § Record IDs.
+      if (opts.createdAt === undefined) {
+        validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
+      }
     }
     if (opts.parentId !== undefined && !(await this.canReadReferent(opts.parentId))) {
       throw new StackPermissionError();

@@ -37,7 +37,7 @@ export type {
   StackErrorCode,
   StackClient,
   CreateRecordOptions,
-  UnscopedCreateRecordOptions,
+  BackdatableCreateRecordOptions,
   StackOptions,
   GetRecordOptions,
   DeleteRecordOptions,
