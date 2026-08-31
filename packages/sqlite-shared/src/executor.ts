@@ -19,6 +19,17 @@ export interface SqlExecutor {
   get<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]): T | undefined;
   /** Run a parameterized statement and return all result rows. */
   all<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]): T[];
+  /**
+   * Run `fn` atomically: every statement it issues commits together, or
+   * none do if it throws. `fn` must be synchronous and call back into
+   * this executor only — not every engine's transaction primitive can
+   * straddle a suspended call. A binding with a real multi-statement
+   * transaction (BEGIN/COMMIT/ROLLBACK) implements this with one; a
+   * binding whose transaction primitive is itself a callback wrapper
+   * (e.g. a Durable Object's storage.transactionSync) can pass `fn`
+   * straight through to it.
+   */
+  transaction<T>(fn: () => T): T;
 }
 
 /** SQLite reports FK violations with this exact message; verify it holds when adding an engine. */

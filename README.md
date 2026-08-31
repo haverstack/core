@@ -77,14 +77,15 @@ The delegation itself — "this app acts for Bob" — is asserted by you when th
 
 This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 
-| Package                                                                 | Description                                                                       |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [`@haverstack/core`](./packages/core)                                   | Stack class, types, schema, validation, ID generation                             |
-| [`@haverstack/adapter-local`](./packages/adapter-local)                 | Local adapter (native SQLite + disk) — single-app/embedded or server use          |
-| [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | Node native SQLite (`node:sqlite`) `StackRecordAdapter` — used by `adapter-local` |
-| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                                                |
-| [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                                             |
-| [`@haverstack/commons`](./packages/commons)                             | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
+| Package                                                                       | Description                                                                       |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [`@haverstack/core`](./packages/core)                                         | Stack class, types, schema, validation, ID generation                             |
+| [`@haverstack/adapter-local`](./packages/adapter-local)                       | Local adapter (native SQLite + disk) — single-app/embedded or server use          |
+| [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite)       | Node native SQLite (`node:sqlite`) `StackRecordAdapter` — used by `adapter-local` |
+| [`@haverstack/record-adapter-do-sqlite`](./packages/record-adapter-do-sqlite) | Cloudflare Durable Objects (SQLite storage) `StackRecordAdapter` — Workers        |
+| [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)               | Disk filesystem `StackBlobAdapter`                                                |
+| [`@haverstack/adapter-api`](./packages/adapter-api)                           | HTTP adapter for remote stack servers                                             |
+| [`@haverstack/commons`](./packages/commons)                                   | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
 
 Planned:
 
@@ -243,13 +244,14 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 - **`record-adapter-*`** — `StackRecordAdapter` only
 - **`blob-adapter-*`** — `StackBlobAdapter` only
 
-| Package                 | Type   | Use case                                                                        |
-| ----------------------- | ------ | ------------------------------------------------------------------------------- |
-| `adapter-local`         | full   | Single-app/embedded or server use — native SQLite records + disk blobs          |
-| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL — used by `adapter-local` |
-| `blob-adapter-disk`     | blob   | Content-addressed blobs on the local filesystem                                 |
-| `adapter-api`           | full   | Hosted/shared stacks via HTTP                                                   |
-| `adapter-json`          | full   | Portable JSON files _(planned)_                                                 |
+| Package                    | Type   | Use case                                                                        |
+| -------------------------- | ------ | ------------------------------------------------------------------------------- |
+| `adapter-local`            | full   | Single-app/embedded or server use — native SQLite records + disk blobs          |
+| `record-adapter-sqlite`    | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL — used by `adapter-local` |
+| `record-adapter-do-sqlite` | record | Cloudflare Durable Objects (SQLite storage) records, FTS5                       |
+| `blob-adapter-disk`        | blob   | Content-addressed blobs on the local filesystem                                 |
+| `adapter-api`              | full   | Hosted/shared stacks via HTTP                                                   |
+| `adapter-json`             | full   | Portable JSON files _(planned)_                                                 |
 
 Use `combineAdapters({ record, blob })` from `@haverstack/core/adapter` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
@@ -311,6 +313,10 @@ packages/
     src/
       index.ts            # NativeSQLiteRecordAdapter (StackRecordAdapter), node:sqlite
       token-store.ts       # NativeTokenStore (StackTokenStore), separate file from records
+    tests/
+  record-adapter-do-sqlite/ # @haverstack/record-adapter-do-sqlite
+    src/
+      index.ts            # DoSQLiteRecordAdapter (StackRecordAdapter), Cloudflare Durable Objects
     tests/
   blob-adapter-disk/      # @haverstack/blob-adapter-disk
     src/

@@ -21,4 +21,16 @@ export class NativeSqliteExecutor implements SqlExecutor {
   all<T = Record<string, unknown>>(sql: string, params: readonly unknown[] = []): T[] {
     return this.db.prepare(sql).all(...(params as (string | number | null)[])) as T[];
   }
+
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
 }

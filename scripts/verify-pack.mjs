@@ -25,7 +25,18 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = join(repoRoot, 'packages');
 
-/** Entry points to import, and a symbol each must export. */
+/**
+ * Entry points to import, and a symbol each must export.
+ *
+ * @haverstack/record-adapter-do-sqlite is deliberately absent: it's a real
+ * publishable package (still packed and installed into the throwaway
+ * consumer below, so a missing `files` entry or an accidentally-unbundled
+ * @haverstack/sqlite-shared would still be caught), but its entry point
+ * imports ambient Durable Object globals that only exist inside the
+ * Workers runtime — `node -e "import(...)"` here would fail on that, not
+ * on anything wrong with the package. Its own vitest suite runs against
+ * the real Workers runtime (@cloudflare/vitest-pool-workers) instead.
+ */
 const EXPECTATIONS = {
   '@haverstack/core': [
     ['.', ['Stack', 'ScopedStack', 'StackError', 'SYSTEM_TYPES']],

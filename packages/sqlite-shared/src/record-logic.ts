@@ -165,12 +165,13 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * The synchronous read behind getRecord(). Callers inside a transaction
-   * use this one: an `await` between BEGIN and COMMIT yields the microtask
-   * queue mid-transaction, and the next operation to run would try to open
-   * one of its own.
+   * The synchronous read behind getRecord(). Callers inside exec.transaction()
+   * use this one: an `await` inside that callback yields the microtask queue
+   * mid-transaction, and the next operation to run would try to open one of
+   * its own — transaction() requires a synchronous callback for exactly this
+   * reason (see SqlExecutor.transaction).
    *
-   * The same synchrony is what lets the post-COMMIT reads below report the
+   * The same synchrony is what lets the post-commit reads below report the
    * version their own mutation produced: `getRecord()` runs its body before
    * the `await` yields, so nothing interleaves between the commit and the
    * read. A backend that made these reads genuinely asynchronous would open
@@ -194,8 +195,7 @@ export class SharedSqlRecordLogic {
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
     const merged = applyMergePatch(existing.content, patch);
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
@@ -210,11 +210,7 @@ export class SharedSqlRecordLogic {
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
       this.syncFileRefs(id, existing.typeId, merged);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
@@ -230,18 +226,9 @@ export class SharedSqlRecordLogic {
     } & ActorOptions = {},
   ): Promise<StackRecord | null> {
     if (opts.hard) {
-      this.exec.exec('BEGIN');
-      try {
-        const purged = this.hardDeleteRecord(id, opts.expectedVersion);
-        this.exec.exec('COMMIT');
-        return purged;
-      } catch (err) {
-        this.exec.exec('ROLLBACK');
-        throw err;
-      }
+      return this.exec.transaction(() => this.hardDeleteRecord(id, opts.expectedVersion));
     } else {
-      this.exec.exec('BEGIN');
-      try {
+      this.exec.transaction(() => {
         if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
         const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
         const changed = this.exec.run(
@@ -256,11 +243,7 @@ export class SharedSqlRecordLogic {
           ],
         );
         if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-        this.exec.exec('COMMIT');
-      } catch (err) {
-        this.exec.exec('ROLLBACK');
-        throw err;
-      }
+      });
     }
 
     const updated = await this.getRecord(id);
@@ -303,8 +286,7 @@ export class SharedSqlRecordLogic {
     id: string,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
       const changed = this.exec.run(
@@ -312,11 +294,7 @@ export class SharedSqlRecordLogic {
         [toMs(new Date()), opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
       );
       if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
@@ -328,8 +306,7 @@ export class SharedSqlRecordLogic {
     permissions: Permission[],
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
       const changed = this.exec.run(
@@ -344,11 +321,7 @@ export class SharedSqlRecordLogic {
         ],
       );
       if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after setPermissions: "${id}"`);
@@ -360,8 +333,7 @@ export class SharedSqlRecordLogic {
     unlisted: boolean,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
       const now = toMs(new Date());
@@ -377,11 +349,7 @@ export class SharedSqlRecordLogic {
         ],
       );
       if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after setUnlisted: "${id}"`);
@@ -400,8 +368,7 @@ export class SharedSqlRecordLogic {
     const target = await this.getVersion(id, version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
 
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
@@ -421,11 +388,7 @@ export class SharedSqlRecordLogic {
       }
       fts5Strategy.insert(this.exec, id, JSON.stringify(target.content));
       this.syncFileRefs(id, target.typeId, target.content);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
@@ -446,8 +409,7 @@ export class SharedSqlRecordLogic {
     if (!existing) throw new Error(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
@@ -463,11 +425,7 @@ export class SharedSqlRecordLogic {
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(content));
       this.syncFileRefs(id, toTypeId, content);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
@@ -515,8 +473,7 @@ export class SharedSqlRecordLogic {
     fileId: FileId,
     metadataTypeId: TypeId,
   ): Promise<StackRecord[]> {
-    this.exec.exec('BEGIN');
-    try {
+    return this.exec.transaction(() => {
       const referenced = this.exec.all<{ found: number }>(
         `SELECT 1 as found FROM associations WHERE kind = 'attachment' AND file_id = ?
          UNION ALL
@@ -538,12 +495,8 @@ export class SharedSqlRecordLogic {
         if (purged) deleted.push(purged);
       }
 
-      this.exec.exec('COMMIT');
       return deleted;
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
   }
 
   // -------------------------------------------------------
@@ -699,18 +652,13 @@ export class SharedSqlRecordLogic {
     association: Association,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
       // Bump (and CAS-check) first, before the associations-table write, so
       // a lost race never partially applies.
       this.bumpVersion(recordId, opts);
       this.insertAssociations(recordId, [association]);
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(recordId);
     if (!updated) throw new Error(`Record not found after associate: "${recordId}"`);
@@ -722,8 +670,7 @@ export class SharedSqlRecordLogic {
     association: Association,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    this.exec.exec('BEGIN');
-    try {
+    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
       this.bumpVersion(recordId, opts);
       this.exec.run(
@@ -738,11 +685,7 @@ export class SharedSqlRecordLogic {
          AND related_stack = ?`,
         [recordId, association.kind, association.label, ...associationKeyColumns(association)],
       );
-      this.exec.exec('COMMIT');
-    } catch (err) {
-      this.exec.exec('ROLLBACK');
-      throw err;
-    }
+    });
 
     const updated = await this.getRecord(recordId);
     if (!updated) throw new Error(`Record not found after dissociate: "${recordId}"`);

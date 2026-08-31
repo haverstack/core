@@ -155,12 +155,12 @@ importers:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.22.0
         version: 0.22.0(@cloudflare/workers-types@5.20260830.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@types/node@22.19.17)(vite@7.3.6(@types/node@22.19.17)(yaml@2.9.0)))
-      '@cloudflare/workers-types':
-        specifier: ^5.0.0
-        version: 5.20260830.1
       '@haverstack/sqlite-shared':
         specifier: workspace:*
         version: link:../sqlite-shared
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.13)(typescript@5.9.3)(yaml@2.9.0)
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -2421,7 +2421,8 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260828.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260830.1': {}
+  '@cloudflare/workers-types@5.20260830.1':
+    optional: true
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
