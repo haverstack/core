@@ -125,7 +125,7 @@ Renaming the workflow file breaks every trusted publisher at once; each matches 
 
 Under **Settings → Actions → General**, _Allow GitHub Actions to create and approve pull requests_ must stay on, or the version PR is never opened.
 
-**A ninth package** needs one manual publish (trusted publishing configures only on a package that exists), then its own trusted publisher and an entry in the `package` dropdown in `.github/workflows/changeset.yml`.
+**A tenth package** needs one manual publish (trusted publishing configures only on a package that exists), then its own trusted publisher and an entry in the `package` dropdown in `.github/workflows/changeset.yml`.
 
 **To gate the publish on a human:** create a GitHub environment with required reviewers, add `environment:` to the release job, and name it in every trusted publisher. All three must agree.
 
@@ -268,6 +268,7 @@ packages/
   sqlite-shared/          # Internal: shared SQL logic, bundled into consumers, not published
   record-adapter-sqlite/  # Node native SQLite (node:sqlite), FTS5, WAL
   blob-adapter-disk/      # Content-addressed blobs on disk
+  blob-adapter-s3/        # Content-addressed blobs on S3 / S3-compatible stores
   adapter-local/          # Convenience: SQLite records + disk blobs
   adapter-api/            # HTTP client for stack servers
   wire-types/             # Wire serialization shapes and error mapping

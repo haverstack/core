@@ -83,6 +83,7 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | [`@haverstack/adapter-local`](./packages/adapter-local)                 | Local adapter (native SQLite + disk) — single-app/embedded or server use          |
 | [`@haverstack/record-adapter-sqlite`](./packages/record-adapter-sqlite) | Node native SQLite (`node:sqlite`) `StackRecordAdapter` — used by `adapter-local` |
 | [`@haverstack/blob-adapter-disk`](./packages/blob-adapter-disk)         | Disk filesystem `StackBlobAdapter`                                                |
+| [`@haverstack/blob-adapter-s3`](./packages/blob-adapter-s3)             | S3 (and S3-compatible, e.g. Cloudflare R2) `StackBlobAdapter`                     |
 | [`@haverstack/adapter-api`](./packages/adapter-api)                     | HTTP adapter for remote stack servers                                             |
 | [`@haverstack/commons`](./packages/commons)                             | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
 
@@ -248,10 +249,11 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 | `adapter-local`         | full   | Single-app/embedded or server use — native SQLite records + disk blobs          |
 | `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL — used by `adapter-local` |
 | `blob-adapter-disk`     | blob   | Content-addressed blobs on the local filesystem                                 |
+| `blob-adapter-s3`       | blob   | Content-addressed blobs on S3 or an S3-compatible store (e.g. Cloudflare R2)    |
 | `adapter-api`           | full   | Hosted/shared stacks via HTTP                                                   |
 | `adapter-json`          | full   | Portable JSON files _(planned)_                                                 |
 
-Use `combineAdapters({ record, blob })` from `@haverstack/core/adapter` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with a future `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
+Use `combineAdapters({ record, blob })` from `@haverstack/core/adapter` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
 ---
 
@@ -315,6 +317,10 @@ packages/
   blob-adapter-disk/      # @haverstack/blob-adapter-disk
     src/
       index.ts            # DiskBlobAdapter (StackBlobAdapter)
+    tests/
+  blob-adapter-s3/        # @haverstack/blob-adapter-s3
+    src/
+      index.ts            # S3BlobAdapter (StackBlobAdapter)
     tests/
   adapter-api/            # @haverstack/adapter-api
     src/

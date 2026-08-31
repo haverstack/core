@@ -36,13 +36,14 @@ Packages follow a naming convention that makes the adapter type discoverable:
 
 ## Adapter backends
 
-| Package                 | Type   | Use case                                              |
-| ----------------------- | ------ | ----------------------------------------------------- |
-| `adapter-local`         | full   | Local app storage — native SQLite + disk blobs        |
-| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL |
-| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk                       |
-| `adapter-api`           | full   | Hosted/shared stacks via HTTP                         |
-| `adapter-json`          | full   | Portable JSON files _(planned)_                       |
+| Package                 | Type   | Use case                                                                     |
+| ----------------------- | ------ | ---------------------------------------------------------------------------- |
+| `adapter-local`         | full   | Local app storage — native SQLite + disk blobs                               |
+| `record-adapter-sqlite` | record | Node native SQLite (`node:sqlite`) records, FTS5, WAL                        |
+| `blob-adapter-disk`     | blob   | Content-addressed blobs on disk                                              |
+| `blob-adapter-s3`       | blob   | Content-addressed blobs on S3 or an S3-compatible store (e.g. Cloudflare R2) |
+| `adapter-api`           | full   | Hosted/shared stacks via HTTP                                                |
+| `adapter-json`          | full   | Portable JSON files _(planned)_                                              |
 
 `adapter-local` is the batteries-included package for the common local case. It wraps `NativeSQLiteRecordAdapter` and `DiskBlobAdapter` and stores attachments in an `attachments/` subdirectory next to the database file. Bearer tokens, when used, live in a separate sibling file (`<path>.tokens`, via `NativeTokenStore`) — never inside the portable stack database.
 
@@ -51,13 +52,15 @@ Use `combineAdapters()` from `@haverstack/core/adapter` when you want different 
 ```ts
 import { combineAdapters } from '@haverstack/core/adapter';
 import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
-import { S3BlobAdapter } from '@haverstack/blob-adapter-s3'; // hypothetical
+import { S3BlobAdapter } from '@haverstack/blob-adapter-s3';
 
 const record = await NativeSQLiteRecordAdapter.initialize({ path, entityId, timezone });
-const blob = new S3BlobAdapter(bucketConfig);
+const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.create(adapter);
 ```
+
+`maxAttachmentBytes` lives on `AdapterCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `maxAttachmentBytes: null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 

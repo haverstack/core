@@ -39,6 +39,7 @@ const EXPECTATIONS = {
   ],
   '@haverstack/wire-types': [['.', ['serializeRecord', 'serializeError', 'WIRE_PROTOCOL_VERSION']]],
   '@haverstack/blob-adapter-disk': [['.', ['DiskBlobAdapter']]],
+  '@haverstack/blob-adapter-s3': [['.', ['S3BlobAdapter']]],
   '@haverstack/record-adapter-sqlite': [['.', ['NativeSQLiteRecordAdapter', 'NativeTokenStore']]],
   '@haverstack/adapter-local': [['.', ['LocalAdapter']]],
   '@haverstack/adapter-api': [['.', ['APIAdapter']]],

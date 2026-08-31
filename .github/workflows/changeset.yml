@@ -17,6 +17,7 @@ on:
           - '@haverstack/commons'
           - '@haverstack/conformance-fixtures'
           - '@haverstack/blob-adapter-disk'
+          - '@haverstack/blob-adapter-s3'
           - '@haverstack/record-adapter-sqlite'
           - '@haverstack/adapter-local'
           - '@haverstack/adapter-api'
