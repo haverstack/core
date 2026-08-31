@@ -14,7 +14,13 @@
  * Apps should never talk to a StackAdapter directly.
  */
 
-import { generateId, generateIdForTimestamp, isValidIdFormat, idTimestamp } from './id.js';
+import {
+  generateId,
+  generateIdForTimestamp,
+  isValidIdFormat,
+  idTimestamp,
+  MAX_ID_TIMESTAMP,
+} from './id.js';
 import {
   hashSchema,
   isCompatible,
@@ -826,6 +832,48 @@ function validateRecordId(id: string): void {
 }
 
 /**
+ * Validity and range check for the backdating options on unscoped
+ * Stack.create(). A Date is only as good as what the caller parsed it
+ * from, and the two failure modes both need catching here rather than
+ * downstream:
+ *
+ * - **Invalid Date** (`new Date('13/45/2020')` off a malformed import row)
+ *   has a NaN getTime(), and every comparison against NaN is false — so an
+ *   unchecked Invalid Date passes the updatedAt/createdAt ordering check
+ *   and the id/createdAt skew check by turning them off, mints the
+ *   epoch-zero ID `000000000xxx`, and persists a record whose
+ *   `createdAt.toISOString()` throws RangeError in serializeRecord() —
+ *   making that record, and any wire response containing it,
+ *   permanently unreadable.
+ * - **Out of encodable range** — before 1970 crockford32Encode() throws a
+ *   bare RangeError from deep inside the ID encoder, and past
+ *   MAX_ID_TIMESTAMP the derived ID silently grows to 13 characters and
+ *   fails isValidIdFormat().
+ *
+ * Checked at the door for both, as a StackValidationError naming the
+ * field. Applies whether or not an `id` is supplied: a clock field outside
+ * this range is unrepresentable regardless of where the ID came from.
+ */
+function validateClockField(value: Date | undefined, path: string): ValidationError[] {
+  if (value === undefined) return [];
+  const ms = value.getTime();
+  if (Number.isNaN(ms)) {
+    return [{ path, message: `${path} is not a valid Date.` }];
+  }
+  if (ms < 0 || ms > MAX_ID_TIMESTAMP) {
+    return [
+      {
+        path,
+        message:
+          `${path} is outside the representable range ` +
+          `(1970-01-01T00:00:00.000Z…${new Date(MAX_ID_TIMESTAMP).toISOString()}).`,
+      },
+    ];
+  }
+  return [];
+}
+
+/**
  * Timestamp-prefix plausibility check, shared by two callers that compare
  * an ID's embedded millisecond against a different reference each:
  * ScopedStack.create() against the current time (a grantee is untrusted and
@@ -1369,17 +1417,31 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
+    // updatedAt defaults to createdAt, not to the actual current time, so a
+    // plain import doesn't fabricate a fake edit.
+    //
+    // Copied, never aliased: the caller keeps its own reference to any Date
+    // it passed, and an import loop that reuses one Date across rows
+    // (`d.setTime(...)` per record — the obvious way to write one) would
+    // otherwise retro-edit every record it had already written, with no
+    // version bump and no change event. createdAt drives updatedAt and
+    // unlistedAt below, so one copy taken here covers all three.
+    const createdAt =
+      opts.createdAt !== undefined ? new Date(opts.createdAt.getTime()) : new Date();
+    const updatedAt = opts.updatedAt !== undefined ? new Date(opts.updatedAt.getTime()) : createdAt;
+
     const errors = [
       ...validateReservedKeys(content),
       ...validateContent(content, type.schema),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
+      ...validateClockField(opts.createdAt, 'createdAt'),
+      ...validateClockField(opts.updatedAt, 'updatedAt'),
     ];
-    if (
-      opts.createdAt !== undefined &&
-      opts.updatedAt !== undefined &&
-      opts.updatedAt.getTime() < opts.createdAt.getTime()
-    ) {
+    // Compared against the *effective* createdAt, so an updatedAt supplied
+    // on its own is caught too: defaulted-createdAt is now, which a
+    // backdated updatedAt alone would still precede.
+    if (opts.updatedAt !== undefined && updatedAt.getTime() < createdAt.getTime()) {
       errors.push({ path: 'updatedAt', message: 'updatedAt cannot precede createdAt.' });
     }
     if (errors.length > 0) {
@@ -1413,13 +1475,10 @@ export class Stack implements StackClient {
         ? stampGroupAdmin(opts.associations, opts.entityId ?? this.ownerEntityId)
         : opts.associations;
 
-    // createdAt drives the ID when the caller doesn't supply one, so the
-    // two agree by construction rather than by coincidence — the same
-    // relationship an explicit `id` is checked against above. updatedAt
-    // defaults to createdAt, not to the actual current time, so a plain
-    // import doesn't fabricate a fake edit.
-    const createdAt = opts.createdAt ?? new Date();
-    const updatedAt = opts.updatedAt ?? createdAt;
+    // createdAt (hoisted above, alongside its validation) drives the ID
+    // when the caller doesn't supply one, so the two agree by construction
+    // rather than by coincidence — the same relationship an explicit `id`
+    // is checked against above.
     // An explicit createdAt mints via generateIdForTimestamp(), which never
     // clamps to "now" — generateId()'s monotonic floor would otherwise
     // silently pull a deliberately historical id forward once this process
