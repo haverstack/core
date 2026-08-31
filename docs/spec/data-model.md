@@ -66,6 +66,15 @@ The same rules are enforced locally, so a client-minted ID behaves identically w
 - `Stack.create(typeId, content, { id })` validates charset, length, and the reserved prefix, and throws `StackConflictError` on a duplicate. This is a full-trust context (an embedded single-app stack, or the server's own code) — no clock-skew check.
 - `ScopedStack.create()` — a grantee minting an ID — applies the same validation **plus** the timestamp-skew check, since a grantee is exactly the untrusted actor who could otherwise forge a sort position. The tolerance is configurable per Stack via `Stack.create(adapter, { idTimestampSkewMs })` (default 24 hours; pass `null` to disable).
 
+### Backdating on import
+
+`Stack.create()` also accepts `createdAt`/`updatedAt` (`UnscopedCreateRecordOptions`) so an app can import an existing corpus with its real dates instead of every record landing stamped with the import moment. Unscoped only, same as the full-trust `id` option above:
+
+- **Never on `ScopedStack.create()`.** The same reasoning as the `id` skew check applies: a grantee could otherwise forge a sort position, this time through `createdAt` rather than `id`. `ScopedStack.create()` refuses both fields outright, even if a caller bypasses the type system to supply them.
+- **Never over the wire.** `POST /records` keeps refusing client-supplied `createdAt`/`updatedAt`, unchanged — see [Wire format § Records](./wire-format.md#records).
+- **`id` and `createdAt` must agree.** Omit `id` and it's derived from `createdAt`'s timestamp, so the two can't diverge. Supply both, and they're checked against each other using the same `idTimestampSkewMs` tolerance the `ScopedStack` grantee check uses (default 24 hours; `null` disables this check too) — disagreement beyond that tolerance throws `StackValidationError` rather than silently diverging. Supplying `id` alone, with no `createdAt`, is unaffected: that stays a pure position choice, exactly as before this option existed.
+- **`updatedAt` defaults to `createdAt`**, not to the actual current time, so a plain import doesn't fabricate a fake edit and inflate version history. Supplying an `updatedAt` earlier than `createdAt` is a validation error.
+
 ## Associations
 
 Tags, attachments, and relationships are unified under a single **Association** model. All three associate a Record with a labeled payload — the label carries semantic meaning (e.g. `"avatar"`, `"parent"`, `"reply-to"`).

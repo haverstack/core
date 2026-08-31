@@ -167,6 +167,25 @@ export const generateId = (timestamp: number = Date.now()): string => {
   return nowId + randChars;
 };
 
+/**
+ * Mint an ID for an arbitrary (typically past) timestamp — used by
+ * Stack.create() to derive an ID from an explicit `createdAt` when
+ * importing historical records. Deliberately bypasses generateId()'s
+ * monotonic `lastTimestamp` floor: that floor exists to protect *live* ID
+ * generation from a backward clock step (NTP correction, suspend/resume),
+ * and would otherwise clamp a deliberately historical timestamp forward to
+ * "now" the moment the process has minted any live ID past it — silently
+ * defeating the backdate it was asked for. Same-millisecond uniqueness for
+ * a historical timestamp is therefore left to a fresh random suffix each
+ * call rather than the live incrementing scheme; a collision surfaces the
+ * same way any client-supplied id collision does, as StackConflictError
+ * from the adapter.
+ */
+export const generateIdForTimestamp = (timestamp: number): string => {
+  const nowId = pad(crockford32Encode(timestamp), MIN_TIMESTAMP_LENGTH);
+  return nowId + generateRandChars();
+};
+
 // -------------------------------------------------------
 // Format validation
 // -------------------------------------------------------

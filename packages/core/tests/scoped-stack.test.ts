@@ -924,6 +924,45 @@ describe('ScopedStack.create — client-supplied id', () => {
 });
 
 // -------------------------------------------------------
+// ScopedStack.create — createdAt/updatedAt refused
+// -------------------------------------------------------
+
+// CreateRecordOptions carries no createdAt/updatedAt, so a type-checked
+// caller can't reach this path — these tests simulate a caller that
+// bypasses the type system (raw JS, an `as any`) to confirm the runtime
+// guard, not just the type, is what stands between a grantee and
+// backdating its own sort position.
+describe('ScopedStack.create — createdAt/updatedAt refused even past the type system', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+  });
+
+  test('rejects a smuggled createdAt with StackPermissionError', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { createdAt: new Date('2020-01-01') };
+    await expect(stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, opts)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('rejects a smuggled updatedAt with StackPermissionError', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { updatedAt: new Date('2020-01-01') };
+    await expect(stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, opts)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('does not create a record when refused', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { createdAt: new Date('2020-01-01') };
+    await expect(stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, opts)).rejects.toThrow();
+    expect((await stack.query({ filter: { typeId: COMMENT } })).records).toHaveLength(0);
+  });
+});
+
+// -------------------------------------------------------
 // ScopedStack — grant-based read
 // -------------------------------------------------------
 
