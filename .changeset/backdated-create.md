@@ -10,9 +10,10 @@ landing stamped with the import moment.
   `ScopedStack.create()` accepts the same two fields, but only from the stack owner acting
   alone (undelegated, authenticated as themselves — the same tier that already gates hard
   delete, `commitMigration()`, and `includeUnlisted`); a grantee, or a delegated app acting for
-  the owner, is refused with `StackPermissionError`. `POST /records` inherits this rule
-  automatically on a server built on `ScopedStack`: an owner-authenticated request may carry
-  both fields, anyone else's has them ignored, as before.
+  the owner, is refused with `StackPermissionError`. Over the wire, an owner-authenticated
+  `POST /records` may carry both fields — but unlike `entityId`/`principalId`, which
+  `ScopedStack` silently overrides, these are refused, and every client sends them on every
+  create. A server must drop them from a non-owner body itself rather than forwarding it.
 - Omit `id` and it is derived from `createdAt`'s timestamp, so the two agree by construction.
   Supply both, and they are checked against each other using the same `idTimestampSkewMs`
   tolerance the ordinary `id`-vs-current-time check already uses (default 24 hours; `null`
