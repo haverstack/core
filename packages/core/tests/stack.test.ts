@@ -676,6 +676,31 @@ describe('create — backdating (createdAt/updatedAt)', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  // JSON has no Date type, so a server forwarding a parsed POST /records
+  // body hands these options the ISO string it deserialized. That has to
+  // come back as a validation error naming the field, not a raw TypeError
+  // out of .getTime() — a 400, not a 500.
+  test('rejects a wire-shaped ISO string createdAt as a validation error', async () => {
+    const opts = { createdAt: '2020-06-15T12:00:00.000Z' } as unknown as { createdAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects a wire-shaped ISO string updatedAt as a validation error', async () => {
+    const opts = { updatedAt: '2020-06-15T12:00:00.000Z' } as unknown as { updatedAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects a numeric epoch createdAt as a validation error', async () => {
+    const opts = { createdAt: 1592222400000 } as unknown as { createdAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
   test('does not alias the caller Date — mutating it after create leaves the record alone', async () => {
     const cursor = new Date('2020-06-15T12:00:00.000Z');
     const record = await stack.create(

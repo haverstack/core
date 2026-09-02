@@ -863,6 +863,15 @@ function validateRecordId(id: string): void {
  */
 function validateClockField(value: Date | undefined, path: string): ValidationError[] {
   if (value === undefined) return [];
+  // Type-checked callers always pass a Date, but this option is now
+  // reachable from the wire: JSON has no Date, so a server that forwards a
+  // parsed `POST /records` body hands us the ISO *string* it deserialized.
+  // Without this the very next line is `"2020-…".getTime()` — an unhandled
+  // TypeError, a 500 where the caller should have got a 400 naming the
+  // field.
+  if (!(value instanceof Date)) {
+    return [{ path, message: `${path} must be a Date.` }];
+  }
   const ms = value.getTime();
   if (Number.isNaN(ms)) {
     return [{ path, message: `${path} is not a valid Date.` }];
@@ -1438,9 +1447,15 @@ export class Stack implements StackClient {
     // otherwise retro-edit every record it had already written, with no
     // version bump and no change event. createdAt drives updatedAt and
     // unlistedAt below, so one copy taken here covers all three.
+    // `instanceof Date`, not `!== undefined`: this runs before the error
+    // block below, so a non-Date reaching here off the wire would throw a
+    // raw TypeError out of .getTime() before validateClockField() could
+    // report it. Falling back keeps this line total; the error it recorded
+    // still throws below, so the fallback value is never actually stored.
     const createdAt =
-      opts.createdAt !== undefined ? new Date(opts.createdAt.getTime()) : new Date();
-    const updatedAt = opts.updatedAt !== undefined ? new Date(opts.updatedAt.getTime()) : createdAt;
+      opts.createdAt instanceof Date ? new Date(opts.createdAt.getTime()) : new Date();
+    const updatedAt =
+      opts.updatedAt instanceof Date ? new Date(opts.updatedAt.getTime()) : createdAt;
 
     const errors = [
       ...validateReservedKeys(content),
