@@ -7,13 +7,19 @@
  * cursor API, FK/unique constraint mapping, FTS5, cursor-codec pagination,
  * and — the one thing the #161 spike found couldn't be assumed — that
  * exec.transaction() reaching ctx.storage.transactionSync() actually
- * rolls back a rejected mutation's partial writes (see the FTS-consistency
- * test below), since DO SQLite has no raw BEGIN/COMMIT/ROLLBACK to fall
- * back on if that wiring were wrong.
+ * rolls back a rejected mutation's partial writes (see the
+ * mid-transaction-failure test below), since DO SQLite has no raw
+ * BEGIN/COMMIT/ROLLBACK to fall back on if that wiring were wrong.
  */
 import { env } from 'cloudflare:test';
 import { describe, test, expect } from 'vitest';
-import type { StackRecord, StackQuery, QueryResult, Association } from '@haverstack/core';
+import type {
+  StackRecord,
+  StackQuery,
+  QueryResult,
+  Association,
+  RecordVersion,
+} from '@haverstack/core';
 import type { AdapterCapabilities } from '@haverstack/core/adapter';
 
 /**
@@ -54,6 +60,7 @@ type TestStub = {
     opts?: { hard?: boolean } & Record<string, unknown>,
   ): Promise<StackRecord | null>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
+  getVersions(id: string): Promise<RecordVersion[]>;
   associate(
     recordId: string,
     association: Association,
@@ -182,15 +189,53 @@ describe('expectedVersion / transactional rollback', () => {
   });
 
   /**
-   * This is the load-bearing test for #161's central finding: patchContent
-   * removes the old FTS entry, then re-inserts it, inside one
-   * exec.transaction() block. If ctx.storage.transactionSync() did not
-   * actually roll back on throw — or if the executor had instead tried
-   * no-op'ing BEGIN/COMMIT/ROLLBACK, which the #161 spike found does NOT
-   * roll back on DO SQLite — a rejected patch here would leave the FTS
-   * index missing the original entry: searchable content would vanish
-   * even though the record's own content never changed.
+   * Guards the FTS index against a rejected patch, but note what it does
+   * NOT prove: patchContent validates expectedVersion *before* opening
+   * exec.transaction(), so this case throws ahead of the first write and
+   * passes even if transaction() provides no atomicity at all. Rollback
+   * itself is covered by the mid-transaction-failure test above, which
+   * reaches a failure inside the callback.
    */
+  /**
+   * The rollback test with a failure that actually occurs *inside* the
+   * transaction callback. patchContent's expectedVersion check runs before
+   * exec.transaction() is ever entered, so a stale-version patch throws
+   * before the first write and proves nothing about atomicity.
+   *
+   * associate({ snapshot, expectedVersion }) is the shape that does reach
+   * it: snapshotBeforeMutation() writes a real row into `versions`, and
+   * bumpVersion()'s CAS then fails on the stale expectedVersion and throws
+   * — both inside the same transaction callback. If transactionSync() did
+   * not roll back, that orphan version row would survive a mutation that
+   * reported failure.
+   */
+  test('a mid-transaction failure rolls back writes already made in the same transaction', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    await stub.createRecord(record);
+    expect(await stub.getVersions(record.id)).toEqual([]);
+
+    const snapshot = {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      updatedAt: new Date(),
+    };
+
+    // snapshotBeforeMutation writes a versions row, then bumpVersion's CAS
+    // rejects the stale expectedVersion and throws inside the transaction.
+    const err = await stub
+      .associate(record.id, { kind: 'tag', label: 'starred' }, { snapshot, expectedVersion: 999 })
+      .catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe('version_conflict');
+
+    // The versions row written before the throw must not have survived.
+    expect(await stub.getVersions(record.id)).toEqual([]);
+    const after = await stub.getRecord(record.id);
+    expect(after?.version).toBe(1);
+    expect(after?.associations).toBeUndefined();
+  });
+
   test('a rejected patchContent leaves the FTS index consistent with stored content', async () => {
     const stub = getStub();
     const record = await stub.createRecord(
