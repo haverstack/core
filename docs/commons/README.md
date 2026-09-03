@@ -34,6 +34,7 @@ org.haverstack/place@1
 org.haverstack/page@1
 org.haverstack/photo@1
 org.haverstack/post@1
+org.haverstack/site@1
 org.haverstack/message@1 (proposed — see below)
 org.haverstack/event@1   (proposed)
 org.haverstack/poll@1    (proposed)
@@ -174,6 +175,15 @@ sense for it.
   syndication tool runs. Where a copy has a lifecycle of its own — retraction state, a
   remote content address, which account it went out from — that is a record of the
   bridge's own type, related back to this one; the label alone carries only the link.
+- **`site`** — `{ kind: 'relationship', label: 'site', target: { scope: 'record', recordId: <site> } }`
+  on an `article`, `photo`, `bookmark`, or `post` means that record is published on the
+  named [`site`](./site.md). Multi-valued: two associations means the record is
+  cross-posted to both sites. Structurally the same shape as `location` — a label
+  pointing from any record at one commons type — and orthogonal to `page`'s own
+  `parentId` containment, which fixes a page's single path rather than a record's
+  publication. A collection root (`page.collection`) scoped under a `site` ancestor
+  composes this into its query rather than storing site membership on the collection
+  itself — see `page.md` and `site.md`.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.
@@ -242,6 +252,7 @@ examples (comments on a blog post are messages; private marginalia are notes).
 | `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
 | `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Draft    | `{ image }`               |
 | `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
+| `org.haverstack/site@1`     | [`site.md`](./site.md)         | Draft    | `{ title, baseUrl }`      |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
 | `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
 | `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
