@@ -18,9 +18,77 @@ describe('sanitizeFts5Query', () => {
     expect(sanitizeFts5Query('foo AND NEAR(bar baz, 3)')).toBe('foo AND bar baz');
   });
 
-  test('strips column-filter colons', () => {
-    expect(sanitizeFts5Query('content:foo')).toBe('content foo');
-    expect(sanitizeFts5Query('bogus:foo')).toBe('bogus foo');
+  // FTS5's column-filter syntax is wider than `colname:term` — `-name` and
+  // `{a b}` filter columns with no colon at all — so everything outside a
+  // phrase is reduced to an allow-list rather than a list of known
+  // metacharacters. See OUTSIDE_PHRASE_DISALLOWED.
+  describe('column filters and other syntax outside a phrase', () => {
+    test('strips column-filter colons', () => {
+      expect(sanitizeFts5Query('content:foo')).toBe('content foo');
+      expect(sanitizeFts5Query('bogus:foo')).toBe('bogus foo');
+    });
+
+    test('strips a leading minus, the exclude idiom', () => {
+      expect(sanitizeFts5Query('-cats')).toBe('cats');
+    });
+
+    test('splits a hyphenated word rather than reading a column name', () => {
+      expect(sanitizeFts5Query('cats-dogs')).toBe('cats dogs');
+      expect(sanitizeFts5Query('mother-in-law')).toBe('mother in law');
+    });
+
+    test('strips column-set braces', () => {
+      expect(sanitizeFts5Query('{cats}')).toBe('cats');
+      expect(sanitizeFts5Query('{a b} cats')).toBe('a b cats');
+    });
+
+    test('strips a leading plus', () => {
+      expect(sanitizeFts5Query('+cats')).toBe('cats');
+    });
+
+    test('leaves the same characters alone inside a phrase', () => {
+      expect(sanitizeFts5Query('"-cats"')).toBe('"-cats"');
+      expect(sanitizeFts5Query('"cats-dogs"')).toBe('"cats-dogs"');
+    });
+
+    test('keeps letters, digits and marks in any script', () => {
+      expect(sanitizeFts5Query('café 日本 test_1')).toBe('café 日本 test_1');
+    });
+
+    test('drops control characters, inside a phrase as well as outside', () => {
+      expect(sanitizeFts5Query('cats\u0000dogs')).toBe('cats dogs');
+      expect(sanitizeFts5Query('"a\u0000b"')).toBe('"a b"');
+    });
+  });
+
+  // FTS5 has no implicit AND across a group: `cats dogs` is fine, but
+  // `cats (dogs)` is a syntax error.
+  describe('groups need an explicit operator beside them', () => {
+    test('inserts AND between a term and a group', () => {
+      expect(sanitizeFts5Query('cats (dogs)')).toBe('cats AND (dogs)');
+      expect(sanitizeFts5Query('(cats) dogs')).toBe('(cats) AND dogs');
+    });
+
+    test('inserts AND between two groups', () => {
+      expect(sanitizeFts5Query('(cats) (dogs)')).toBe('(cats) AND (dogs)');
+    });
+
+    test('does not double an operator that is already there', () => {
+      expect(sanitizeFts5Query('cats AND (dogs)')).toBe('cats AND (dogs)');
+      expect(sanitizeFts5Query('(cats) OR (dogs)')).toBe('(cats) OR (dogs)');
+    });
+
+    test('a word merely starting with an operator is still a term', () => {
+      expect(sanitizeFts5Query('ANDY (cats)')).toBe('ANDY AND (cats)');
+    });
+  });
+
+  test('an unclosed NEAR( keeps the grouping and drops the keyword', () => {
+    expect(sanitizeFts5Query('NEAR(cats')).toBe('(cats)');
+  });
+
+  test('empty phrases are removed', () => {
+    expect(sanitizeFts5Query('cats "" dogs')).toBe('cats dogs');
   });
 
   test('strips bare NOT with no left operand', () => {

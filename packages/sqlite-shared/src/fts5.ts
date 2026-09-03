@@ -7,8 +7,9 @@
  * input, so a search string is rewritten before it reaches the engine:
  *
  *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
- *   removed: wildcards (*), NEAR(...) (terms kept, wrapper dropped), column-filter
- *            colons, bare NOT (no left operand), operators with no right operand
+ *   removed: wildcards (*), NEAR(...) (terms kept, wrapper dropped), every
+ *            character outside the allow-list, bare NOT (no left operand),
+ *            operators with no right operand
  *   capped:  parenthesis nesting depth (default: 2)
  *   closed:  an odd trailing quote
  *
@@ -19,10 +20,13 @@
  *   dangling operator when NEAR(...) sits next to AND/OR (e.g. "x AND
  *   NEAR(a b, 5)" -> "x AND" — a syntax error). So this keeps the terms
  *   and drops only the NEAR(...) wrapper and distance.
- * - FTS5 has real column-filter syntax (`colname:term`) and errors hard
- *   on any name but the table's actual columns — since records_fts has
- *   exactly one column and callers have no business targeting columns
- *   explicitly, colons are stripped outright rather than validated.
+ * - FTS5 has real column-filter syntax and errors hard on any name but
+ *   the table's actual columns. It is wider than `colname:term`: `-name`
+ *   and `{a b}` filter columns with no colon at all, so an ordinary
+ *   hyphenated word is read as one. Since records_fts has exactly one
+ *   column and callers have no business targeting columns explicitly,
+ *   everything outside a phrase is reduced to an allow-list rather than
+ *   validated — see OUTSIDE_PHRASE_DISALLOWED.
  *
  * The rewrite is best-effort and makes no completeness claim against
  * FTS5's grammar — which is why the caller wraps execution as well, so a
@@ -40,17 +44,50 @@
 
 import type { SqlExecutor } from './executor.js';
 
+/**
+ * Outside a phrase, everything but a letter, digit, mark, underscore,
+ * whitespace, paren or quote becomes a separator.
+ *
+ * An allow-list rather than a list of metacharacters to strip, because
+ * FTS5's column-filter syntax is wider than it looks and an enumeration
+ * kept missing parts of it: `-name` and `{a b}` filter columns with no
+ * colon in sight, so `-cats` and even the hyphen inside `cats-dogs` were
+ * read as column names and answered "no such column". `+` is a bare
+ * syntax error. Listing what may pass means the next piece of syntax
+ * nobody here anticipated arrives as a separator instead of as an error.
+ *
+ * Nothing is lost by it: FTS5's default tokenizer already splits terms on
+ * these characters, so `cats-dogs` searches for the same two tokens it was
+ * indexed as.
+ */
+const OUTSIDE_PHRASE_DISALLOWED = /[^\p{L}\p{N}\p{M}_\s()"]/gu;
+
 export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   if (!query) return '';
 
+  // Drop control characters, inside a phrase as well as outside. A NUL in
+  // particular ends the string early for SQLite's C API, so the engine sees
+  // an opening quote whose closing one is past the truncation and reports an
+  // unterminated string; none of them can match an indexed token anyway.
+  let clean = query.replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+
   // Remove wildcards
-  let clean = query.replace(/\*/g, '');
+  clean = clean.replace(/\*/g, '');
 
   // Replace NEAR(terms, distance) with just its terms — see note above.
   clean = clean.replace(/\bNEAR\s*\(\s*([^,)]*)(?:,[^)]*)?\)/gi, '$1');
 
-  // Strip column-filter colons — see note above.
-  clean = clean.replace(/:/g, ' ');
+  // A NEAR( with no closing paren isn't the function-call form the rule
+  // above rewrites, and the paren auto-close below would hand FTS5 a NEAR
+  // call it never meant to write. Keep the grouping, drop the keyword.
+  clean = clean.replace(/\bNEAR\s*\(/gi, '(');
+
+  // Reduce to the characters that carry meaning outside a phrase — see note
+  // above. Everything else becomes a separator, which is what FTS5's own
+  // tokenizer would do with it anyway.
+  clean = clean.replace(/"[^"]*"|[^"]+/g, (span) =>
+    span.startsWith('"') ? span : span.replace(OUTSIDE_PHRASE_DISALLOWED, ' '),
+  );
 
   // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not "NOT term"
   clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
@@ -89,14 +126,21 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // Auto-close any unclosed parens
   if (currentDepth > 0) result += ')'.repeat(currentDepth);
 
-  // Iteratively remove empty paren pairs left behind by NEAR/NOT stripping
+  // Remove empty paren pairs left behind by NEAR/NOT stripping, and drop
+  // operators left without an operand. Looped together because each can
+  // create work for the other: removing an operator can empty a paren pair
+  // ("(a AND)" -> "(a)" -> ...), and removing a pair can strand the
+  // operator that pointed at it ("x AND ()" -> "x AND").
   let prev: string;
   do {
     prev = result;
+    // An empty phrase matches nothing and is the one construct whose
+    // quotes can re-pair differently once a rule inserts text beside it.
+    result = result.replace(/""/g, ' ');
     result = result.replace(/\(\s*\)/g, ' ');
+    result = dropDanglingOperators(result);
+    result = restoreImplicitAnd(result);
   } while (result !== prev);
-
-  result = dropDanglingOperators(result);
 
   return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
 };
@@ -124,27 +168,76 @@ const PHRASE_HOLE = '\u{E000}';
  * Phrases are masked out first: `"cats AND dogs"` is literal text to FTS5,
  * and rewriting inside it would change what the user asked for.
  */
-const dropDanglingOperators = (query: string): string => {
+const dropDanglingOperators = (query: string): string =>
+  withPhrasesMasked(query, (masked) => {
+    let out = masked;
+    let prev: string;
+    do {
+      prev = out;
+      // A run of operators keeps only the first — the rest have no left operand.
+      out = out.replace(
+        new RegExp(String.raw`\b(${OPERATOR})\b(?:\s+\b${OPERATOR}\b)+`, 'gi'),
+        '$1',
+      );
+      // No left operand: at the start of the query or straight after "(".
+      out = out.replace(new RegExp(String.raw`(^|\()\s*\b${OPERATOR}\b\s*`, 'gi'), '$1');
+      // No right operand: at the end of the query or straight before ")".
+      out = out.replace(new RegExp(String.raw`\s*\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
+    } while (out !== prev);
+    return out;
+  });
+
+/**
+ * Run `rewrite` over the query with each phrase swapped for PHRASE_HOLE,
+ * then put the phrases back in order. Every rule that reasons about what
+ * sits beside an operator or a paren needs this: inside a phrase the text
+ * is literal, and from outside one the phrase is a single operand.
+ */
+const withPhrasesMasked = (query: string, rewrite: (masked: string) => string): string => {
   const phrases: string[] = [];
-  let out = query.replace(/"[^"]*"/g, (phrase) => {
+  const masked = query.replace(/"[^"]*"/g, (phrase) => {
     phrases.push(phrase);
     return PHRASE_HOLE;
   });
-
-  let prev: string;
-  do {
-    prev = out;
-    // A run of operators keeps only the first — the rest have no left operand.
-    out = out.replace(new RegExp(String.raw`\b(${OPERATOR})\b(?:\s+\b${OPERATOR}\b)+`, 'gi'), '$1');
-    // No left operand: at the start of the query or straight after "(".
-    out = out.replace(new RegExp(String.raw`(^|\()\s*\b${OPERATOR}\b\s*`, 'gi'), '$1');
-    // No right operand: at the end of the query or straight before ")".
-    out = out.replace(new RegExp(String.raw`\s*\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
-  } while (out !== prev);
-
   let i = 0;
-  return out.replace(new RegExp(PHRASE_HOLE, 'g'), () => phrases[i++]);
+  return rewrite(masked).replace(new RegExp(PHRASE_HOLE, 'g'), () => phrases[i++]);
 };
+
+/**
+ * Put back the operator FTS5 requires around a group. Two terms side by
+ * side are an implicit AND (`cats dogs`), but a group is not: `cats (dogs)`
+ * is a syntax error where `cats AND (dogs)` is fine. Grouping survives a
+ * rewrite that strips the operator which used to sit beside it, so this
+ * names the AND that was always meant rather than dropping the parens.
+ *
+ * Both rules test a *whole* word against the operator list. Matching a
+ * prefix instead reads the `D` of a preceding `AND` as a term and inserts
+ * a second one beside it.
+ *
+ * Phrases are masked for the same reason as elsewhere — a phrase is an
+ * operand, so `"a b" (c)` needs the operator too.
+ */
+const OPERAND_CHAR = String.raw`[\p{L}\p{N}_${PHRASE_HOLE}]`;
+
+const isOperator = (word: string): boolean => /^(?:AND|OR|NOT)$/i.test(word);
+
+const restoreImplicitAnd = (query: string): string =>
+  withPhrasesMasked(query, (masked) =>
+    masked
+      // ")" then an operand — ") cats", ") (", ") <phrase>" — unless that
+      // operand is an operator, which already joins the two sides.
+      .replace(
+        new RegExp(String.raw`\)\s*(?=${OPERAND_CHAR}|\()`, 'gu'),
+        (match, offset: number, whole: string) => {
+          const next = /^\s*([\p{L}\p{N}_]+)/u.exec(whole.slice(offset + match.length));
+          return next && isOperator(next[1]) ? match : ') AND ';
+        },
+      )
+      // An operand then "(", unless the operand is an operator.
+      .replace(new RegExp(String.raw`(${OPERAND_CHAR}+)\s*(?=\()`, 'gu'), (match, word: string) =>
+        isOperator(word) ? match : `${word} AND `,
+      ),
+  );
 
 // -------------------------------------------------------
 // Indexing strategy
