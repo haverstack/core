@@ -152,11 +152,11 @@ type StackType = {
 };
 ```
 
-**Array and object fields** are schema-validated on write but opaque to the query engine in v1 — only top-level scalar fields support exact-match content filtering in queries.
+**Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)).
 
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
 
-**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way (matching the content-filtering limit above); a `file-ref` nested in an array or object is validated but not indexed as a reference.
+**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. Query reach and reference indexing are separate mechanisms, and only the first extends to depth.
 
 **Type identity:** two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
 
@@ -266,6 +266,18 @@ They name JavaScript's object machinery rather than a field, and the two write p
 
 This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter.
 
+### Content field names
+
+A content filter key is a **dot-separated path** (see [Filter](#filter)), so a field named `emails.value` and a path reaching `value` inside `emails` would be the same string asking two different questions. The ambiguity is removed from the field name rather than from the path: **a content field name may not contain `.`, `[`, `]`, `$`, `"`, `*`, or `#`** — rejected with `StackValidationError` (422) on `create()`, in an `update()` patch, and on `commitMigration()`.
+
+**This holds at every depth**, unlike the three reserved keys above: a nested field named `b.c` makes the path `a.b.c` ambiguous exactly as a top-level `a.b` does. The check therefore walks undeclared subtrees too — they are precisely the fields no schema promised anything about — bounded by the same nesting depth validation already applies.
+
+`defineType()` applies the same rule to **declared** field names, recursively through `object` properties and `array` items, with the same error. A schema is a promise that a field is meaningful; declaring one no filter could ever name breaks that promise at definition time rather than at query time.
+
+The reserved set is wider than what SQLite's JSON path grammar treats as syntax today (`.`, `[`, `]`, `$`, `"`). `*` and `#` are held back against a path grammar that later grows a wildcard or a last-element form. Reserving a character costs nothing while no record contains one and costs every stored record afterward, so the choice is deliberately made early and wide.
+
+The escape-convention alternative — a filter key of `emails\.value` meaning the literal field — was rejected because it fails silently in the one case that matters: app code building a key from a variable field name forgets to escape and gets a different question answered, with no error anywhere. A write-time rule fails loudly, at the moment a caller can still choose another name.
+
 ## Queries
 
 Queries are expressed as a `Query` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.
@@ -292,7 +304,7 @@ type Filter = {
     | { label?: string; target: RelationshipTargetPattern };
   attachmentFileId?: string; // records that reference a specific attachment file ID, via an `attachment` Association or a top-level `file-ref` content field
 
-  // Content fields (exact match on top-level keys)
+  // Content fields (exact match; the key is a dot-separated path)
   content?: { [key: string]: unknown };
 
   // Full-text search (capability varies by adapter)
@@ -309,7 +321,19 @@ type DateRange = {
 
 **"Carries any relationship at all" is deliberately not expressible.** `tags` and `hasAttachment` have no match-any form either, so a relationship one would be the odd exception rather than a missing convenience — and a filter that can encode to nothing is a filter that can silently widen a query when it crosses the wire. The type refuses the empty filter rather than defining it, and `Stack.query()` refuses it again at runtime, where a filter decoded from query parameters is a plain object the type never saw.
 
-**A `content` filter value of `null` means "the field is absent or stored as `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, implements `IS NULL` / missing-path semantics for a `null` filter value: it matches a record whose content omits the key entirely and one that stores a literal `null` alike, since from the caller's side both mean "no value here."
+#### Nested content paths
+
+**A content filter key is a path**, its segments separated by `.`: `{ content: { 'emails.value': 'ada@example.com' } }` asks which records hold that value at `value` inside `emails`. Field names cannot contain `.` (see [Content field names](#content-field-names)), so a key never means both a path and a literal name, and no escape convention is needed to tell them apart.
+
+**An array along the path is matched element-wise.** `contact@1` stores `emails` as an array of `{ value, label }`, and the question that motivates paths at all — which contact holds this address — is that shape. Traversal and containment are therefore one feature rather than two: a segment applies to each element of an array it meets, and the final comparison does the same, so `{ content: { tags: 'starred' } }` matches a record whose `tags` array contains `'starred'`. A record storing a scalar where another stores an array is matched by the same filter either way.
+
+A path that descends through a scalar, or through a field that isn't there, reaches no value and matches nothing — it is not an error. A path may be at most 32 segments, the depth content validation itself walks; longer is `StackQueryError` (400), as is an empty segment (`a..b`) or a segment containing a reserved character. Those are structural faults in the request, refused rather than answered with an empty result, on the same reasoning as a malformed cursor.
+
+**Multi-segment keys are gated on `nestedContentQuery`**, separately from `contentFieldQuery` — see [Capability-gated filters](#capability-gated-filters).
+
+**Nested fields are not indexed.** A path filter is an unindexed walk of every candidate record's JSON, in the same bucket as full-text search: the grammar is bounded, the execution time is not. On a personal stack the only session it slows is the caller's own; a server serving many requesters owes the bound described in [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost), with `StackTimeoutError` as the answer.
+
+**A `content` filter value of `null` means "no value at the path, or a value that is `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, matches a record whose path reaches nothing and one that stores a literal `null` alike, since from the caller's side both mean "no value here." A _missing intermediate_ therefore matches too: `{ content: { 'address.city': null } }` matches a record with no `address` at all, one whose `address` has no `city`, and one storing `city: null`. So does an empty array along the path, which reaches no value by the same reading.
 
 `baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what keeps `typeId`-filtered queries from silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set. An unknown `baseId` returns an empty result set rather than throwing.
 
@@ -345,6 +369,8 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 ### Capability-gated filters
 
-`content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically. A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
+`content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically.
+
+**A multi-segment content key needs `nestedContentQuery` on top of `contentFieldQuery`.** Widening `contentFieldQuery` to cover paths would be cheaper and wrong: a foreign server declaring it today matches whole field names, and a client that read the flag as a promise of traversal would receive an unfiltered superset presented as a filtered result — the exact failure this check exists to prevent. A single-segment key is unaffected and needs `contentFieldQuery` alone. A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
 
 **Sanitization bounds a search's grammar, not its cost.** The FTS sanitizers strip the operators that make a query pathological to parse, but a syntactically ordinary search over a large index can still be expensive to execute, and both SQLite engines run synchronously in-process — there is no way to interrupt one from inside the call. Full-text search is therefore best-effort on cost: fine on a personal Stack, where the only session a slow query blocks is the caller's own, and a server-side concern the moment one process serves many requesters. See [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost) for what a server owes here and the `timeout` error it may answer with.

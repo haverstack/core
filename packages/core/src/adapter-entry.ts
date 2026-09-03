@@ -16,4 +16,9 @@ export type {
   SubscribeChangesOptions,
 } from './types.js';
 export { combineAdapters } from './combine.js';
-export { assertQueryCapabilities, assertValidSort, assertValidRelatedTo } from './stack.js';
+export {
+  assertQueryCapabilities,
+  assertValidSort,
+  assertValidRelatedTo,
+  parseContentFilterKey,
+} from './stack.js';

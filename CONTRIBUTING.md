@@ -248,8 +248,8 @@ Tests use [Vitest](https://vitest.dev/) and live in each package's `tests/` dire
 
 `@haverstack/core/testing` exports the shared test doubles:
 
-- **`MemoryAdapter`** — an in-memory `StackAdapter` implementing the full `RecordFilter` shape, so permission logic under test exercises real predicates rather than an adapter that quietly ignores filters. It declares `contentFieldQuery: true`, as every local adapter must.
-- **`IncapableMemoryAdapter`** — declares `contentFieldQuery: false`, simulating the one legitimate case (a wire adapter whose server declined the capability). Use it to exercise capability-gated fallback paths; don't reach for a `false` override on `MemoryAdapter`.
+- **`MemoryAdapter`** — an in-memory `StackAdapter` implementing the full `RecordFilter` shape, so permission logic under test exercises real predicates rather than an adapter that quietly ignores filters. It declares `contentFieldQuery: true` and `nestedContentQuery: true`, as every local adapter must.
+- **`IncapableMemoryAdapter`** — declares both content-query capabilities `false`, simulating the one legitimate case (a wire adapter whose server declined them). Use it to exercise capability-gated fallback paths; don't reach for a `false` override on `MemoryAdapter`.
 
 Name tests after the behavior they pin, not the defect that prompted them. `'a grant beyond the first page (>50 _grant records) is still honored'` survives refactoring; `'regression for #50'` doesn't.
 

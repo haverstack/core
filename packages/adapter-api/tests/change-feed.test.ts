@@ -25,6 +25,7 @@ const DISCOVERY = {
   capabilities: {
     fullTextSearch: true,
     contentFieldQuery: true,
+    nestedContentQuery: true,
     sortableFields: ['createdAt'],
     maxAttachmentBytes: null,
     maxContentBytes: null,

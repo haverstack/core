@@ -645,6 +645,127 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
+  test('content filter matches an element of a top-level array', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'tagged', tags: ['starred', 'todo'] } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'plain', tags: ['todo'] } }),
+    );
+    const result = await adapter.queryRecords({ filter: { content: { tags: 'starred' } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('nested path filter reaches an object property', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'a', address: { city: 'Lisbon' } } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'b', address: { city: 'Porto' } } }),
+    );
+    const result = await adapter.queryRecords({
+      filter: { content: { 'address.city': 'Lisbon' } },
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // The motivating shape: contact@1 stores emails as [{ value, label }],
+  // so "which contact has this address" is one filter rather than a scan.
+  test('nested path filter matches inside an array of objects', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({
+        id: 'r1',
+        content: {
+          text: 'ada',
+          emails: [
+            { value: 'ada@example.com', label: 'home' },
+            { value: 'a@work.example', label: 'work' },
+          ],
+        },
+      }),
+    );
+    await adapter.createRecord(
+      makeRecord({
+        id: 'r2',
+        content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
+      }),
+    );
+    const byValue = await adapter.queryRecords({
+      filter: { content: { 'emails.value': 'a@work.example' } },
+    });
+    expect(byValue.records.map((r) => r.id)).toEqual(['r1']);
+
+    const byLabel = await adapter.queryRecords({ filter: { content: { 'emails.label': 'work' } } });
+    expect(byLabel.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('nested path filter walks more than one object level', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'a', a: { b: { c: 7 } } } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'b', a: { b: { c: 8 } } } }),
+    );
+    const result = await adapter.queryRecords({ filter: { content: { 'a.b.c': 7 } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('a dotted filter key is a path, never a literal field name', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'nested', a: { b: 1 } } }));
+    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 1 } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('a nested path yielding no value matches a null filter', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'no address at all' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'empty', address: {} } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r3', content: { text: 'stored null', address: { city: null } } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r4', content: { text: 'present', address: { city: 'Lisbon' } } }),
+    );
+    const result = await adapter.queryRecords({ filter: { content: { 'address.city': null } } });
+    expect(result.records.map((r) => r.id).sort()).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  test('a filter path descending through a scalar matches nothing', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: 'hello' } }));
+    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 'hello' } } });
+    expect(result.records).toEqual([]);
+  });
+
+  test('a filter path segment carrying a reserved character is refused', async () => {
+    const adapter = await initAdapter();
+    await expect(
+      adapter.queryRecords({ filter: { content: { 'emails[0]': 'x' } } }),
+    ).rejects.toThrow(StackQueryError);
+    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 'x' } } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('two content filters both apply', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'a', a: { b: 1 }, c: 'yes' } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'b', a: { b: 1 }, c: 'no' } }),
+    );
+    const result = await adapter.queryRecords({
+      filter: { content: { 'a.b': 1, c: 'yes' } },
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
   test('full-text search (FTS5)', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));

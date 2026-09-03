@@ -39,6 +39,7 @@ const DISCOVERY = {
   capabilities: {
     fullTextSearch: true,
     contentFieldQuery: true,
+    nestedContentQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: 52428800,
   },
@@ -1001,6 +1002,41 @@ describe('queryRecords', () => {
       APIAdapterCapabilityError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('throws APIAdapterCapabilityError for a nested path without nestedContentQuery', async () => {
+    const limitedDiscovery = {
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, nestedContentQuery: false },
+    };
+    const adapter = await openAdapter(limitedDiscovery);
+    // A single-segment key is still served by contentFieldQuery alone.
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(
+      adapter.queryRecords({ filter: { content: { slug: 'hello' } } }),
+    ).resolves.toBeDefined();
+    await expect(
+      adapter.queryRecords({ filter: { content: { 'emails.value': 'a@b.c' } } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
+  });
+
+  test('a server omitting nestedContentQuery is treated as not having it', async () => {
+    const { nestedContentQuery: _drop, ...capabilities } = DISCOVERY.capabilities;
+    const adapter = await openAdapter({ ...DISCOVERY, capabilities });
+
+    expect(adapter.capabilities.nestedContentQuery).toBe(false);
+  });
+
+  // A malformed path is the caller's error, not the server's missing
+  // reach, so it must not be reported as an absent capability.
+  test('a malformed content path stays a StackQueryError', async () => {
+    const adapter = await openAdapter();
+    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
+      APIAdapterCapabilityError,
+    );
   });
 
   test('throws APIAdapterCapabilityError for filter.search without fullTextSearch', async () => {

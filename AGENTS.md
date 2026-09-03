@@ -74,7 +74,7 @@ This is about _our_ history. Genuinely foreign input — a third-party server's 
 
 ## Tests
 
-Vitest, in each package's `tests/`. `@haverstack/core/testing` provides `MemoryAdapter` (declares `contentFieldQuery: true`, as every local adapter must) and `IncapableMemoryAdapter` (declares `false`, for exercising capability-gated fallbacks).
+Vitest, in each package's `tests/`. `@haverstack/core/testing` provides `MemoryAdapter` (declares `contentFieldQuery: true` and `nestedContentQuery: true`, as every local adapter must) and `IncapableMemoryAdapter` (declares both `false`, for exercising capability-gated fallbacks).
 
 Name tests after the invariant they pin, not the defect that prompted them.
 

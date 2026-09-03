@@ -19,20 +19,51 @@ import {
   StackVersionConflictError,
   StackConflictError,
   StackNotFoundError,
+  parseContentFilterKey,
   targetEqual,
 } from './stack.js';
+
+/** An array stands for its elements; anything else stands for itself. */
+const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+
+/**
+ * Every value reachable by walking `segments`, spreading arrays
+ * element-wise at each step — the same walk sqlite-shared's
+ * contentPathExists() performs in SQL, and the reason a filter answers the
+ * same question against either. An empty result means the path reaches
+ * nothing, which is what a `null` filter value matches.
+ * See docs/spec/data-model.md § Nested content paths.
+ */
+const valuesAtContentPath = (content: Record<string, unknown>, segments: string[]): unknown[] => {
+  let current: unknown[] = [content];
+  for (const segment of segments) {
+    const next: unknown[] = [];
+    for (const value of current) {
+      for (const item of spreadValue(value)) {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
+        if (Object.hasOwn(item, segment)) next.push((item as Record<string, unknown>)[segment]);
+      }
+    }
+    current = next;
+  }
+  // The leaf spreads too, so a filter on `tags` matches a record whose
+  // `tags` array contains the value.
+  return current.flatMap(spreadValue);
+};
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
  * the full RecordFilter shape (mirroring sqlite-shared's buildWhereClause)
  * so permission logic under test exercises real predicates. Declares
- * `contentFieldQuery: true`, as every local adapter must; tests needing
- * the capability-gated paths use IncapableMemoryAdapter below.
+ * `contentFieldQuery` and `nestedContentQuery`, as every local adapter
+ * must; tests needing the capability-gated paths use
+ * IncapableMemoryAdapter below.
  */
 export class MemoryAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities = {
     fullTextSearch: false,
     contentFieldQuery: true,
+    nestedContentQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
     maxContentBytes: null,
@@ -235,11 +266,16 @@ export class MemoryAdapter implements StackAdapter {
     // nothing". Plain `===` would miss an absent field; treat both as
     // satisfying a null filter (docs/spec/data-model.md § Filter).
     if (f.content) {
-      const entries = Object.entries(f.content);
+      const entries = Object.entries(f.content).map(
+        ([key, value]) => [parseContentFilterKey(key), value] as const,
+      );
       results = results.filter((r) =>
-        entries.every(([key, value]) => {
-          const actual = (r.content as Record<string, unknown>)[key];
-          return value === null ? actual === null || actual === undefined : actual === value;
+        entries.every(([segments, value]) => {
+          const found = valuesAtContentPath(r.content as Record<string, unknown>, segments);
+          if (value === null || value === undefined) {
+            return found.length === 0 || found.some((v) => v === null || v === undefined);
+          }
+          return found.some((v) => v === value);
         }),
       );
     }
@@ -455,8 +491,9 @@ export class MemoryAdapter implements StackAdapter {
 }
 
 /**
- * A MemoryAdapter that declares `contentFieldQuery: false`, simulating the
- * one legitimate case: a wire adapter whose server declined the capability
+ * A MemoryAdapter that declares both content-query capabilities false,
+ * simulating the one legitimate case: a wire adapter whose server
+ * declined them
  * (docs/spec/adapters.md § Adapter capabilities). For exercising Stack's
  * capability-gated fallbacks and the fail-loud assertQueryCapabilities
  * check in tests; not a stand-in for a real local adapter.
@@ -465,6 +502,7 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   override readonly capabilities: AdapterCapabilities = {
     fullTextSearch: false,
     contentFieldQuery: false,
+    nestedContentQuery: false,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
     maxContentBytes: null,

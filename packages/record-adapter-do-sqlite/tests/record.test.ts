@@ -103,6 +103,7 @@ describe('construction', () => {
     expect(capabilities).toEqual({
       fullTextSearch: true,
       contentFieldQuery: true,
+      nestedContentQuery: true,
       sortableFields: ['createdAt', 'updatedAt', 'version'],
       maxAttachmentBytes: null,
       maxContentBytes: null,
@@ -258,6 +259,39 @@ describe('records — queries', () => {
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'alpha', priority: 1 } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
     const result = await stub.queryRecords({ filter: { content: { priority: 1 } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // json_each / json_array traversal against the real DO SQLite build,
+  // which is where an engine difference would show up rather than in
+  // sqlite-shared's own tests.
+  test('filters by a nested content path, through an array of objects', async () => {
+    const stub = getStub();
+    await stub.createRecord(
+      makeRecord({
+        id: 'r1',
+        content: { text: 'ada', emails: [{ value: 'ada@example.com', label: 'home' }] },
+      }),
+    );
+    await stub.createRecord(
+      makeRecord({
+        id: 'r2',
+        content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
+      }),
+    );
+    const result = await stub.queryRecords({
+      filter: { content: { 'emails.value': 'grace@example.com' } },
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r2']);
+  });
+
+  test('a nested path reaching no value matches a null filter', async () => {
+    const stub = getStub();
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'no address' } }));
+    await stub.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'has one', address: { city: 'Porto' } } }),
+    );
+    const result = await stub.queryRecords({ filter: { content: { 'address.city': null } } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 

@@ -294,6 +294,25 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 };
 
 // -------------------------------------------------------
+/**
+ * Which declared capability a filter needs and this server lacks, or
+ * undefined when every filter it uses is supported — in which case a
+ * StackQueryError from assertQueryCapabilities was about the filter's own
+ * shape, not the server's reach.
+ */
+const missingQueryCapability = (
+  filter: StackQuery['filter'],
+  capabilities: AdapterCapabilities,
+): keyof AdapterCapabilities | undefined => {
+  if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
+  if (!filter?.content) return undefined;
+  if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
+  if (capabilities.nestedContentQuery) return undefined;
+  return Object.keys(filter.content).some((key) => key.includes('.'))
+    ? 'nestedContentQuery'
+    : undefined;
+};
+
 // Query parameter builder (used when contentFieldQuery is false)
 // -------------------------------------------------------
 
@@ -708,6 +727,11 @@ export class APIAdapter implements StackAdapter {
         // undefined leaking into a numeric comparison. Its own
         // request-size limit is authoritative either way.
         maxContentBytes: discovery.capabilities?.maxContentBytes ?? null,
+        // An absent flag is a server that does not traverse content paths.
+        // Reading it as `true` would send a nested filter to a server that
+        // matches only whole field names, and present what came back as
+        // though the path had been applied.
+        nestedContentQuery: discovery.capabilities?.nestedContentQuery ?? false,
       },
       // Kept whole rather than reduced to a flag: `resume` and `records`
       // are what subscribeChanges() promises its caller, and a client that
@@ -933,10 +957,12 @@ export class APIAdapter implements StackAdapter {
       assertQueryCapabilities(query.filter, this.capabilities);
     } catch (err) {
       if (!(err instanceof StackQueryError)) throw err;
-      const capability: keyof AdapterCapabilities =
-        query.filter?.search && !this.capabilities.fullTextSearch
-          ? 'fullTextSearch'
-          : 'contentFieldQuery';
+      // assertQueryCapabilities also rejects a malformed content path,
+      // which is a caller error rather than a missing capability. Name the
+      // capability only when one is actually absent, and let anything else
+      // travel as the StackQueryError it is.
+      const capability = missingQueryCapability(query.filter, this.capabilities);
+      if (!capability) throw err;
       throw new APIAdapterCapabilityError(capability, err.message);
     }
     // A malformed relationship filter is a caller error, not a missing

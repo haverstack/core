@@ -26,6 +26,7 @@ const purgedRecord: StackRecord = {
 const capabilities: AdapterCapabilities = {
   fullTextSearch: false,
   contentFieldQuery: false,
+  nestedContentQuery: false,
   sortableFields: ['createdAt', 'updatedAt', 'version'],
   maxAttachmentBytes: null,
   maxContentBytes: null,

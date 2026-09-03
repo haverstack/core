@@ -60,6 +60,7 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
   readonly capabilities: AdapterCapabilities = {
     fullTextSearch: true,
     contentFieldQuery: true,
+    nestedContentQuery: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
     maxContentBytes: null,

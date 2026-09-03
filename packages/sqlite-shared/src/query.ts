@@ -6,6 +6,7 @@
  */
 
 import { StackQueryError, type StackQuery } from '@haverstack/core';
+import { parseContentFilterKey } from '@haverstack/core/adapter';
 import { decodeCursor, getSortColumn, getSortField, type SortField } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
@@ -27,6 +28,66 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
     throw new StackQueryError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
   }
   return dir === 'asc' ? 'ASC' : 'DESC';
+};
+
+/**
+ * Normalize a json_each row's value to something json_each can iterate, so
+ * one array element and one bare value are walked by the same clause: an
+ * array stands for its elements, anything else for itself. This is what
+ * makes `emails.value` reach into an array of objects without the caller
+ * saying so. See docs/spec/data-model.md § Nested content paths.
+ */
+const spread = (alias: string): string =>
+  `CASE WHEN ${alias}.type = 'array' THEN ${alias}.value ` +
+  `WHEN ${alias}.type = 'object' THEN json_array(json(${alias}.value)) ` +
+  `ELSE json_array(${alias}.value) END`;
+
+/**
+ * True when some value reached by `segments` satisfies `leaf` (an operator
+ * fragment such as `= ?` or `IS NULL`, applied to the value found there).
+ *
+ * Segments are matched against json_each's `key` column rather than
+ * interpolated into a JSON path expression: a path string would have to be
+ * repeated inside the CASE above, and a repeated `?` needs its parameter
+ * bound once per occurrence — the kind of bookkeeping that silently
+ * mismatches. Matching on `key` binds each segment exactly once, in the
+ * order it appears, and `leaf`'s own parameter (when it has one) is the
+ * last placeholder in the fragment, so the caller pushes it immediately
+ * after this returns.
+ *
+ * Cost is an unindexed walk of every candidate row's JSON, in the same
+ * bucket as full-text search — see docs/spec/wire-format.md
+ * § Bounding query cost.
+ */
+const contentPathExists = (
+  segments: string[],
+  leaf: string,
+  params: unknown[],
+  nextAlias: () => string,
+): string => {
+  const descend = (alias: string, rest: string[]): string => {
+    const child = nextAlias();
+    const source = `json_each(${spread(alias)}) AS ${child}`;
+    if (rest.length === 0) {
+      return `EXISTS (SELECT 1 FROM ${source} WHERE ${child}.value ${leaf})`;
+    }
+    const member = nextAlias();
+    params.push(rest[0]);
+    return (
+      `EXISTS (SELECT 1 FROM ${source} WHERE ${child}.type = 'object' AND EXISTS (` +
+      `SELECT 1 FROM json_each(${child}.value) AS ${member} ` +
+      `WHERE ${member}.key = ? AND ${descend(member, rest.slice(1))}))`
+    );
+  };
+
+  // Content is always a JSON object, so the first segment is a plain
+  // member lookup — no array to spread above it.
+  const root = nextAlias();
+  params.push(segments[0]);
+  return (
+    `EXISTS (SELECT 1 FROM json_each(r.content) AS ${root} ` +
+    `WHERE ${root}.key = ? AND ${descend(root, segments.slice(1))})`
+  );
 };
 
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
@@ -164,18 +225,26 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     );
   }
 
-  // Content field filters (top-level scalar exact match). A `null` value
-  // means "field absent or null", not "match nothing"
-  // (docs/spec/data-model.md § Filter) — json_extract() returns SQL NULL
-  // for both a missing path and a stored JSON null, so IS NULL captures both.
+  // Content field filters — a dot-separated path, matched element-wise
+  // through arrays. A `null` value means "no value at the path, or a value
+  // that is null" (docs/spec/data-model.md § Filter), which is the second
+  // arm below: "some value there is null" OR "nothing is there at all".
   if (f.content) {
+    let aliasSeq = 0;
+    const nextAlias = () => `cp${aliasSeq++}`;
     for (const [key, value] of Object.entries(f.content)) {
-      if (value === null) {
-        conditions.push(`json_extract(r.content, ?) IS NULL`);
-        params.push(`$.${key}`);
+      const segments = parseContentFilterKey(key);
+      // undefined is the same absence null names — JSON drops it on the
+      // way over the wire, so treating it as a value would make an
+      // in-process query and its wire equivalent disagree.
+      if (value === null || value === undefined) {
+        const isNull = contentPathExists(segments, 'IS NULL', params, nextAlias);
+        const anyValue = contentPathExists(segments, 'IS NOT NULL', params, nextAlias);
+        conditions.push(`(${isNull} OR NOT ${anyValue})`);
       } else {
-        conditions.push(`json_extract(r.content, ?) = ?`);
-        params.push(`$.${key}`, value);
+        const match = contentPathExists(segments, '= ?', params, nextAlias);
+        params.push(value);
+        conditions.push(match);
       }
     }
   }
