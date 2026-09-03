@@ -23,6 +23,8 @@ Group permissions reference a `_group` Record by ID. The group may be a simple p
 - `entity` — check the requester's entityId directly
 - `group` — fetch the referenced `_group` Record, walk its `relationship` associations to determine the requester's role; the entry is satisfied if `role: 'admin'` is set and the requester is an admin, or if `role` is absent and the requester is a member or admin
 
+**Only a `_group` Record carries a roster.** A `groupId` naming a Record outside the `_group` family resolves to no role and the entry confers nothing — the same rule [type-level grants](#type-level-grants) apply to `granteeGroupId`. Rosters are read from ordinary `relationship` associations, which any Record may carry: without the family check, an app modelling its own `member` or `admin` links (a project and the people on it, say) would turn every Record a permission was pointed at into an ACL, and a Record migrated out of `_group` would keep resolving after it stopped being a group. The `groupId` is still not format-checked — like `parentId`, it is a reference, and one that resolves to nothing simply denies.
+
 Cross-stack group resolution (where the `_group` Record lives in a different stack than the Record being accessed) requires the server to have read access to that stack.
 
 ### The `write` bit: a recoverability trust model

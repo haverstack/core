@@ -32,17 +32,36 @@ const isProcessAlive = (pid: number): boolean => {
  */
 export const acquireLock = (dbPath: string, force?: boolean): void => {
   const lockPath = lockPathFor(dbPath);
-  if (existsSync(lockPath)) {
-    const info = JSON.parse(readFileSync(lockPath, 'utf-8')) as LockInfo;
+  const info = existsSync(lockPath) ? readLock(lockPath) : null;
+  if (info) {
     const ownedBySelf = info.pid === process.pid;
     if (!ownedBySelf && !force && isProcessAlive(info.pid)) {
       throw new Error(
         `Stack database at "${dbPath}" is in use by another process (pid ${info.pid}). ` +
-          `Connect via its server instead, or pass { force: true } to override.`,
+          `Connect via its server instead, or pass { force: true } to override. ` +
+          `If no such process is running, remove "${lockPath}".`,
       );
     }
   }
   writeFileSync(lockPath, JSON.stringify({ pid: process.pid } satisfies LockInfo));
+};
+
+/**
+ * Read the lock, treating an unreadable one as absent. A lock file is
+ * written non-atomically, so a crash mid-write leaves a torn one — and a
+ * lock naming no live process is exactly what acquireLock() reclaims. The
+ * alternative is a database that cannot be opened again by any means the
+ * error message mentions, which is the worse failure: the lock exists to
+ * prevent a second writer, not to outrank the data it guards.
+ * releaseLock() takes the same view.
+ */
+const readLock = (lockPath: string): LockInfo | null => {
+  try {
+    const info = JSON.parse(readFileSync(lockPath, 'utf-8')) as LockInfo;
+    return typeof info?.pid === 'number' ? info : null;
+  } catch {
+    return null;
+  }
 };
 
 /** Release the lock, if it's still owned by this process. */

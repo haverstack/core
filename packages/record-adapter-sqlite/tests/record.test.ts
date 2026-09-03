@@ -856,6 +856,65 @@ describe('records — queries', () => {
     expect(result.records).toEqual([]);
   });
 
+  /**
+   * The SqlExecutor the adapter's shared logic runs statements through —
+   * the seam for standing in an engine failure that no input reliably
+   * produces once the sanitizer has run.
+   */
+  const execOf = (adapter: NativeSQLiteRecordAdapter) =>
+    (adapter as unknown as { record: { exec: { all: (...args: unknown[]) => unknown } } }).record
+      .exec;
+
+  // Search text is what a person typed into a box. These shapes are
+  // ordinary input that FTS5 rejects outright, and the sanitizer repairs
+  // them into a query the engine will run.
+  test.each([
+    ['an unbalanced quote', '5" nails'],
+    ['a trailing operator', 'SQLite AND'],
+    ['a leading operator', 'AND SQLite'],
+    ['stacked operators', 'SQLite AND OR Postgres'],
+    ['an operator dangling in parens', '(SQLite AND)'],
+  ])('search survives %s', async (_label, search) => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
+    await expect(adapter.queryRecords({ filter: { search } })).resolves.toBeDefined();
+  });
+
+  test('a repaired search still finds its terms', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
+    );
+    const result = await adapter.queryRecords({ filter: { search: 'SQLite AND' } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // The backstop behind the sanitizer, which claims no completeness
+  // against FTS5's grammar: whatever reaches the engine and fails to parse
+  // is a bad_request, never a raw engine error a server has no code to map.
+  test('search text the engine cannot parse raises StackQueryError', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
+    // Reach past the sanitizer to stand in for a grammar case it misses.
+    vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
+      throw new Error('fts5: syntax error near ""');
+    });
+    await expect(adapter.queryRecords({ filter: { search: 'anything' } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a non-search query failure is not relabelled as a bad request', async () => {
+    const adapter = await initAdapter();
+    vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
+      throw new Error('database disk image is malformed');
+    });
+    await expect(adapter.queryRecords({ filter: { typeId: 'x/y@1' } })).rejects.toThrow(
+      'database disk image is malformed',
+    );
+  });
+
   test('full-text search reflects patchContent updates (not stale index entries)', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ content: { text: 'original content here' } });

@@ -58,6 +58,8 @@ const adapter = await APIAdapter.open({
 });
 ```
 
+A plaintext `http://` URL to anything but loopback is refused: the token, the handshake signature and every record would travel in the clear. `localhost` and `127.0.0.1` need no flag, so a local server is unaffected; pass `allowInsecure: true` if the transport is already private (a tunnel, a private network you control).
+
 `credential` is a **signing callback, not a private key** — key custody stays with the app, so it can be backed by a hardware key or a keychain prompt just as easily as by a keypair in memory.
 
 Server-side, a token resolves to two identities, and when an app acts for a person rather than for itself the server names them both — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
@@ -87,6 +89,8 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | [`@haverstack/blob-adapter-s3`](./packages/blob-adapter-s3)                   | S3 (and S3-compatible, e.g. Cloudflare R2) `StackBlobAdapter`                     |
 | [`@haverstack/adapter-api`](./packages/adapter-api)                           | HTTP adapter for remote stack servers                                             |
 | [`@haverstack/commons`](./packages/commons)                                   | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
+| [`@haverstack/wire-types`](./packages/wire-types)                             | HTTP wire types, error mapping and serialization — for server implementers        |
+| [`@haverstack/conformance-fixtures`](./packages/conformance-fixtures)         | Request/response fixtures a server can test its wire implementation against       |
 
 Planned:
 
@@ -345,6 +349,12 @@ packages/
 The design spec lives in [`docs/spec.md`](./docs/spec.md), which indexes focused sub-documents under [`docs/spec/`](./docs/spec). Together they cover the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
 
 Shared, app-neutral record types (note, bookmark, task, contact) live in the [Schema Commons](./docs/commons/README.md) — start there if you want your app's data to interoperate with other Haverstack apps.
+
+---
+
+## Security
+
+Found a weakness? Report it privately through [GitHub Security Advisories](https://github.com/haverstack/core/security/advisories/new). [SECURITY.md](./SECURITY.md) says what's in scope, and which properties are documented decisions rather than bugs.
 
 ---
 

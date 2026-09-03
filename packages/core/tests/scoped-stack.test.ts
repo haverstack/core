@@ -128,6 +128,43 @@ describe('ScopedStack — read access', () => {
     expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
   });
 
+  // Only a `_group` Record carries a roster. An app modelling its own
+  // "member" links would otherwise turn every record a permission points
+  // at into an ACL — the rule the grant path already applies.
+  test('a non-_group record’s roster confers nothing', async () => {
+    const notAGroup = await adapter.createRecord(
+      makeRecord({
+        typeId: 'com.example.app/project@1',
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'group', groupId: notAGroup.id, read: true, write: false }],
+      }),
+    );
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+  });
+
+  test('a group read grant survives a version bump of the _group type', async () => {
+    const group = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group@2',
+        associations: [
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+      }),
+    );
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+  });
+
   test('non-member cannot read via a group read grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({

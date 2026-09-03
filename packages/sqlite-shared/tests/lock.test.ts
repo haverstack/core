@@ -22,6 +22,28 @@ afterEach(() => {
 });
 
 describe('acquireLock / releaseLock', () => {
+  // A lock file is written non-atomically, so a crash mid-write leaves a
+  // torn one. Refusing to parse it would make the database unopenable by
+  // any means the error message names — the worse failure, since the lock
+  // exists to prevent a second writer, not to outrank the data it guards.
+  test('acquireLock reclaims a lock file that is not parseable JSON', () => {
+    writeFileSync(`${dbPath}.lock`, '{"pid":');
+    expect(() => acquireLock(dbPath)).not.toThrow();
+    expect(JSON.parse(readFileSync(`${dbPath}.lock`, 'utf-8')).pid).toBe(process.pid);
+  });
+
+  test('acquireLock reclaims a lock file with no pid in it', () => {
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ owner: 'someone else' }));
+    expect(() => acquireLock(dbPath)).not.toThrow();
+    expect(JSON.parse(readFileSync(`${dbPath}.lock`, 'utf-8')).pid).toBe(process.pid);
+  });
+
+  test('the in-use error names the lock file to remove', () => {
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: 999999 }));
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    expect(() => acquireLock(dbPath)).toThrow(`${dbPath}.lock`);
+  });
+
   test('acquireLock creates a lock file stamped with the current pid', () => {
     acquireLock(dbPath);
     expect(existsSync(`${dbPath}.lock`)).toBe(true);
