@@ -1,0 +1,26 @@
+# @haverstack/record-adapter-do-sqlite
+
+## 0.1.1
+
+### Patch Changes
+
+- [#215](https://github.com/haverstack/core/pull/215) [`c01f8de`](https://github.com/haverstack/core/commit/c01f8de8c3ddaa931e7de8b428d18fbe1eb4f38c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `@haverstack/record-adapter-do-sqlite` — a `StackRecordAdapter` over Cloudflare
+  Durable Objects' SQLite storage, for Workers deployments with no Node runtime
+  available. Reuses `SharedSqlRecordLogic`, the FTS5 schema and strategy, the query
+  builder, cursor codec, and row mappers from `@haverstack/sqlite-shared` — the same
+  shared layer `record-adapter-sqlite` is built on, now via its `./record` subpath
+  (the token-store and file-lock pieces stay Node-only and unreachable from this
+  adapter's bundle). No lock file: a Durable Object id maps to exactly one running
+  instance, so the platform itself is the single-writer guarantee. No persist/flush
+  step: every write through `ctx.storage.sql` is durable by the time the call returns.
+
+  `@haverstack/sqlite-shared`'s `SqlExecutor` gained a `transaction<T>(fn: () => T): T`
+  primitive, replacing the raw `BEGIN`/`COMMIT`/`ROLLBACK` statements `record-logic.ts`
+  used to issue directly. Durable Object SQLite storage rejects those statements
+  outright and does not roll back a write on a later exception the way an open SQL
+  transaction would (verified against the real Workers runtime) — its real primitive
+  is `ctx.storage.transactionSync(fn)`, a callback boundary that three independent
+  string-based `exec()` calls can't reach. `record-adapter-sqlite`'s executor
+  implements `transaction()` as literal `BEGIN`/`COMMIT`/`ROLLBACK` around `fn()`,
+  behavior-identical to what the inline code did before — its full test suite passes
+  unchanged.
