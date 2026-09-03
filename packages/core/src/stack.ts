@@ -3030,6 +3030,42 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 }
 
 /**
+ * The tombstone a soft-deleted Record is presented as: identity, clock,
+ * `deletedAt`, and `permissions` — with `content`, `associations`,
+ * `parentId` and authorship gone. Its current state is what a soft delete
+ * removes; its history is not, which is why `getVersions()` still serves
+ * the content this withholds.
+ *
+ * `permissions` stays because it is what decides whether the caller may
+ * undelete: a write-holder who could not see the bit would have to attempt
+ * the verb to discover it. It discloses nothing further — a tombstone only
+ * reaches a requester who passed the same read check the live Record
+ * required.
+ *
+ * Applied to every requester, the owner included: a Record's state is a
+ * property of the Record, not of who is asking. An owner wanting the
+ * content back reads history, or holds the unscoped `Stack`.
+ * See docs/spec/versioning.md § Deletion.
+ */
+function tombstoneOf(record: StackRecord): StackRecord {
+  return {
+    id: record.id,
+    typeId: record.typeId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    version: record.version,
+    content: {},
+    ...(record.deletedAt !== undefined && { deletedAt: record.deletedAt }),
+    ...(record.unlistedAt !== undefined && { unlistedAt: record.unlistedAt }),
+    ...(record.permissions !== undefined && { permissions: record.permissions }),
+  };
+}
+
+/** A soft-deleted Record presented as its tombstone; anything else untouched. */
+const presentDeleted = (record: StackRecord): StackRecord =>
+  record.deletedAt ? tombstoneOf(record) : record;
+
+/**
  * A permission-enforcing view of a Stack for a single (principal, subject)
  * pair, obtained via `stack.asEntity(entityId)`. A record the request
  * cannot read answers exactly as a missing one does — null on reads,
@@ -3150,7 +3186,17 @@ class ScopedSubscription extends Subscription {
       this.reportError(err);
       return;
     }
-    this.deliver(emission);
+    // Projected after the permission decision, which needs the whole
+    // record. A frame carrying the body of a soft-deleted record would be
+    // a read channel around the tombstone get() and query() now answer
+    // with — the same reasoning that keeps the feed's unlisted exclusion
+    // matching query()'s. See docs/spec/events.md § Soft-deleted records.
+    this.deliver(this.project(emission));
+  }
+
+  private project(emission: EmittedChange): EmittedChange {
+    const record = presentDeleted(emission.record);
+    return record === emission.record ? emission : { ...emission, record };
   }
 }
 
@@ -3447,16 +3493,42 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (opts.mutating ?? true) await this.requireOwnerForGrantRecord(record);
+    const mutating = opts.mutating ?? true;
+    if (mutating) await this.requireOwnerForGrantRecord(record);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return record;
+      return this.refuseIfDeleted(record, mutating);
     }
     const allowed =
       ((await this.checkWrite(record)) ||
         (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
     if (!allowed) throw await this.denialFor(record);
+    return this.refuseIfDeleted(record, mutating);
+  }
+
+  /**
+   * Refuse a mutation aimed at a soft-deleted Record. It has no current
+   * state to edit — get() answers with a tombstone, and a write that landed
+   * on one would edit content the same requester cannot read. `undelete()`
+   * is the way back, and it goes through requireDeletable(), which carries
+   * no such check.
+   *
+   * Asked only of a mutating caller, so the history readers borrowing this
+   * gate are unaffected: version history survives a soft delete by design,
+   * and it is what a caller reviews before deciding to restore.
+   *
+   * Last, after the authority decision, and never before it: a requester
+   * who may not read the Record must still be told what a missing ID is
+   * told, or "exists but deleted" becomes a probe a stranger can run.
+   * See docs/spec/versioning.md § Deletion.
+   */
+  private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
+    if (mutating && record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
+      );
+    }
     return record;
   }
 
@@ -3736,7 +3808,8 @@ export class ScopedStack implements StackClient {
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    return (await this.canRead(record)) ? record : null;
+    if (!(await this.canRead(record))) return null;
+    return presentDeleted(record);
   }
 
   /**
@@ -3771,7 +3844,12 @@ export class ScopedStack implements StackClient {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       totalFetched += page.records.length;
       for (const record of page.records) {
-        if (await this.canRead(record, prefetchedGrants, groupRoles)) records.push(record);
+        // Projected here as well as in get(), or `includeDeleted` would be
+        // a strictly better read channel than the fetch-by-ID it is
+        // supposed to match.
+        if (await this.canRead(record, prefetchedGrants, groupRoles)) {
+          records.push(presentDeleted(record));
+        }
       }
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
@@ -3940,6 +4018,10 @@ export class ScopedStack implements StackClient {
         throw await this.denialFor(record);
       }
     }
+    // Reached through its own gate rather than requireUpdatable(), so the
+    // soft-delete refusal has to be asked here too — after the authority
+    // decision above, for the reason refuseIfDeleted() gives.
+    this.refuseIfDeleted(record, true);
 
     return this.stack.setPermissions(id, permissions, { ...opts, ...this.actor });
   }
@@ -3963,6 +4045,8 @@ export class ScopedStack implements StackClient {
         throw await this.denialFor(record);
       }
     }
+    // See setPermissions() above — same gate, same reason.
+    this.refuseIfDeleted(record, true);
 
     return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
   }

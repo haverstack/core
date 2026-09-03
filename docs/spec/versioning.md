@@ -91,6 +91,35 @@ Records are never hard-deleted by default. Two levels of deletion are supported:
 
 **Soft delete** — the default. A deleted Record is flagged with a `deletedAt` timestamp and excluded from normal queries, but remains recoverable. Version history is preserved. A soft-deleted Record is a tombstone — its current state is gone but its history is not.
 
+### The tombstone is literal
+
+Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get()` and `query({ includeDeleted: true })` return:
+
+```ts
+{
+  id, typeId, createdAt, updatedAt, version,
+  deletedAt,        // what makes it a tombstone
+  permissions,      // retained — see below
+  content: {},      // empty: the current state is what a soft delete removes
+}
+```
+
+`associations`, `parentId` and the authorship fields (`entityId`, `appId`, `principalId`, `updatedBy`, `updatedVia`) are absent. The [change feed carries the same projection](./events.md#soft-deleted-records-reach-the-feed-as-tombstones), so no channel serves more of a deleted Record than a fetch by ID does.
+
+**`permissions` is retained** because it is what decides whether the caller may `undelete()`. A write-holder who could not see the bit would have to attempt the verb to discover it. It discloses nothing further: a tombstone only ever reaches a requester who passed the same read check the live Record required, and one who fails it gets `null`, exactly as a missing ID gives.
+
+**It applies to every requester, the owner included.** A Record's state is a property of the Record, not of who is asking — the owner wanting the content back reads history, or holds the unscoped `Stack`, which is trusted by definition and projects nothing.
+
+**History is deliberately exempt.** `getVersions()` still serves the content the tombstone withholds, because reviewing what a Record held is how a caller decides whether to restore it. "Its current state is gone" is the whole of the claim; the history sentence beside it is the other half of the same rule, not an oversight.
+
+### Mutations are refused, not applied to a tombstone
+
+A soft-deleted Record has no current state to edit, so `update()`, `associate()`, `dissociate()`, `setPermissions()`, `setUnlisted()` and `restoreVersion()` throw `StackConflictError` (`409`) under `ScopedStack`. `undelete()` is the way back, and it is deliberately not gated this way.
+
+The refusal is asked **after** the authority decision, never before. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./access-control.md#errors-and-information-exposure) that governs every other refusal.
+
+`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see `migrateAll()` below), and it is owner-acting-alone only.
+
 **Hard delete** — permanent and explicit. Removes the Record and all its version history. Requires deliberate intent via a flag. The escape hatch for sensitive, secret, or harmful content.
 
 ```ts

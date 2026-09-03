@@ -221,6 +221,10 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
+**A soft-deleted Record is served as a tombstone.** `GET /records/:id` on one answers `200` with identity, clock, `version`, `deletedAt` and `permissions`, an empty `content` object, and no `associations`, `parentId` or authorship fields — the shape [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines. The same projection applies to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It is not a `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
+
+**Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints, `PUT .../permissions` and `PUT .../unlisted`, and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
+
 **`GET /records` query params:**
 
 ```
