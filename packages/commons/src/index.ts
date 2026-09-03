@@ -142,6 +142,17 @@ export const POST: CommonsType = {
   },
 };
 
+export const SITE: CommonsType = {
+  id: 'org.haverstack/site@1',
+  name: 'Site',
+  schema: {
+    title: { kind: 'string', required: true },
+    baseUrl: { kind: 'string', required: true },
+    description: { kind: 'text' },
+    handle: { kind: 'string' },
+  },
+};
+
 /**
  * Registers each given commons type on `stack` via `defineType()`, exactly
  * as written here. Sequential, matching `Stack`'s own system-type seeding —

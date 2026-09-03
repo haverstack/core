@@ -12,10 +12,11 @@ import {
   PAGE,
   PHOTO,
   POST,
+  SITE,
   defineCommonsTypes,
 } from '../src/index.js';
 
-const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO, POST];
+const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO, POST, SITE];
 
 let adapter: MemoryAdapter;
 let stack: Stack;
@@ -77,6 +78,10 @@ describe('read-compat cores', () => {
     },
     [PHOTO.id]: { image: { kind: 'file-ref', required: true } },
     [POST.id]: { text: { kind: 'text', required: true } },
+    [SITE.id]: {
+      title: { kind: 'string', required: true },
+      baseUrl: { kind: 'string', required: true },
+    },
   };
 
   test('every schema satisfies its documented read-compat core', () => {

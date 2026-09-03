@@ -57,9 +57,11 @@ await stack.defineType('org.haverstack/page@1', 'Page', {
   `slug: "history"` under a page with `slug: "about"` builds at `/about/history/`. A
   page with no page ancestor is at the site root. Homepages use slug `index` by
   convention, mapping to the tree position's own path.
-- **The site container is app territory** — same posture as task lists and photo
-  albums. An app managing multiple sites parents each site's root pages to its own
-  site record; single-site setups need no container at all. What interops is the pages.
+- **The site container is [`site`](./site.md).** A page whose `parentId` names a
+  `site@1` record is a root page of that site — a multi-site stack parents each site's
+  root pages to its own site record. A page with no `site` ancestor (and no page
+  ancestor) is at a single, implicit site's root: single-site setups need no container
+  at all, and adding one later is purely additive re-parenting.
 - **Uniqueness of paths** (no two siblings sharing a slug) is a writer obligation, not
   schema-enforceable; generators should fail loudly on collision rather than pick one.
 - **Layout, template, navigation order, front-matter extras** — the fields generators
@@ -89,6 +91,12 @@ await stack.defineType('org.haverstack/page@1', 'Page', {
   territory. A stored "on this site" membership flag remains banned as a stale-able
   cache. The generator stamps each member article's canonical `url` at first publish
   (see `article.md`).
+- **Collection scoping by site is derived, not stored.** A collection root with a
+  `site` ancestor (see `site.md`) selects only members carrying that site's `site`
+  membership association — one additional `relatedTo` clause composed into the same
+  indexed query, never a field on `collection` itself. A collection root with no `site`
+  ancestor selects members without regard to site membership, which is exactly current
+  behavior in a single-site stack.
 
 ## Read-compat core
 
@@ -118,3 +126,6 @@ your site's about page in your notes app is a legitimate and intended consequenc
 - **Draft, amended** — optional `collection` field added (additive, in place):
   collection roots carry their selection rule so site structure survives switching
   generators.
+- **Draft, amended** — convention text only, no schema change: the site container is
+  now [`site@1`](./site.md) rather than unspecified app territory, and collection
+  scoping by site is documented as a derived `relatedTo` clause.
