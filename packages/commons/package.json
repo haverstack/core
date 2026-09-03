@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/commons",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Canonical Schema Commons type definitions for Haverstack — register commons types exactly as written",
   "type": "module",
   "exports": {

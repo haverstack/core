@@ -1,5 +1,16 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.10.0
+
+### Minor Changes
+
+- [#220](https://github.com/haverstack/core/pull/220) [`f568011`](https://github.com/haverstack/core/commit/f568011af1f3ba41ea4671cd879b845285574eba) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Match a `content` filter key as a literal top-level field name. The key is quoted and escaped into the JSON path rather than interpolated, so `{ 'a.b': 1 }` now selects the field called `a.b` instead of `b` nested inside `a`, a key like `arr[0]` selects that field instead of an array element, and a key that is not path-shaped (`$.`, a stray bracket) is an ordinary zero-match filter instead of a raw SQLite "bad JSON path" error. Brings both SQLite adapters in line with the literal lookup every other adapter performs.
+
+### Patch Changes
+
+- Updated dependencies [[`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b), [`d0c0bb2`](https://github.com/haverstack/core/commit/d0c0bb25bae95f1285e2b2a0db980d0c4d215ac2), [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b)]:
+  - @haverstack/core@0.18.0
+
 ## 0.9.0
 
 ### Minor Changes

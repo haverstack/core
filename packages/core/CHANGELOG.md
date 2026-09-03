@@ -1,5 +1,21 @@
 # @haverstack/core
 
+## 0.18.0
+
+### Minor Changes
+
+- [#220](https://github.com/haverstack/core/pull/220) [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Apply the attachment download safe-list to the whole `Content-Type` candidate, not a prefix of it. `isSafeAttachmentContentType()` now requires a single well-formed MIME type (`type/subtype` plus optional parameters), so a multi-type value such as `image/png,text/html` — which a browser resolves to its last type while a check stopping at the first `;` reads the first — is forced to `application/octet-stream` rather than served as-is.
+
+- [#220](https://github.com/haverstack/core/pull/220) [`d0c0bb2`](https://github.com/haverstack/core/commit/d0c0bb25bae95f1285e2b2a0db980d0c4d215ac2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Present a soft-deleted Record as a tombstone under `ScopedStack`, and refuse mutations aimed at one.
+
+  `get()` and `query({ includeDeleted: true })` return identity, clock, `version`, `deletedAt` and `permissions` with an empty `content` and no associations, `parentId` or authorship; the change feed carries the same projection, so no channel serves more of a deleted Record than a fetch by ID does. `permissions` is retained because it decides whether the caller may `undelete()`; history is deliberately exempt and still serves the content, since reviewing a Record is how a caller decides to restore it.
+
+  `update()`, `associate()`, `dissociate()`, `setPermissions()`, `setUnlisted()` and `restoreVersion()` now throw `StackConflictError` on a soft-deleted Record — asked after the authority decision, so a requester who cannot read it still gets `StackNotFoundError` rather than learning the ID names something. `undelete()` and `commitMigration()` are unaffected.
+
+  This resolves a contradiction between the spec's two accounts of soft delete: `versioning.md` called a soft-deleted Record a tombstone whose "current state is gone" while the implementation served it whole.
+
+- [#220](https://github.com/haverstack/core/pull/220) [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Let a readable unlisted record convey access to the file it references. `ScopedStack.getAttachment()` and the reference-creation gate scan referencing records with `includeUnlisted`, so a requester the record's own permissions admit reaches its attachment on the same terms as a listed record — unlisted governs enumeration, not reach.
+
 ## 0.17.0
 
 ### Minor Changes
