@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/wire-types",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "HTTP wire types and serialization for Haverstack",
   "type": "module",
   "exports": {
