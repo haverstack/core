@@ -1,5 +1,18 @@
 # @haverstack/adapter-api
 
+## 0.17.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`, `@haverstack/wire-types`.
+
+### Patch Changes
+
+- [#220](https://github.com/haverstack/core/pull/220) [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Discard a `ready` frame `seq` that falls outside the framable base64url charset, as frame ids already are. Echoing one into `Last-Event-ID` on the reconnect after a `reset` had `fetch` refuse every attempt, wedging a feed that could have resumed from the present.
+- Updated dependencies [[`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b), [`d0c0bb2`](https://github.com/haverstack/core/commit/d0c0bb25bae95f1285e2b2a0db980d0c4d215ac2), [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b)]:
+  - @haverstack/core@0.18.0
+  - @haverstack/wire-types@0.17.0
+
 ## 0.16.0
 
 ### Minor Changes
