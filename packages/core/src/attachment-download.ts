@@ -44,15 +44,11 @@ export const NOSNIFF_HEADER_VALUE = 'nosniff';
 const TOKEN = String.raw`[!#$%&'*+.^_\`|~0-9A-Za-z-]+`;
 
 /**
- * One whole MIME type and nothing else: `type/subtype`, then zero or more
- * `; name=value` parameters whose value is a token or a quoted string.
- *
- * Anchored, and deliberately admitting no comma outside a quoted string,
- * because a `Content-Type` header carrying two types is not read
- * left-to-right the way the safe-list check reads it: per Fetch's "extract
- * a MIME type", a header list is split on commas and the *last* parsable
- * type wins. Matching only a single type is what keeps the value the check
- * passed and the value a browser resolves the same string.
+ * One whole MIME type and nothing else: `type/subtype`, then optional
+ * `; name=value` parameters. Admits no comma outside a quoted string,
+ * because a header carrying two types resolves to its *last* one while a
+ * check stopping at the first `;` reads the first.
+ * See docs/spec/wire-format.md § Download.
  */
 const SINGLE_MIME_TYPE_RE = new RegExp(
   `^${TOKEN}/${TOKEN}(?:\\s*;\\s*${TOKEN}=(?:${TOKEN}|"(?:[^"\\\\\\r\\n]|\\\\.)*"))*$`,

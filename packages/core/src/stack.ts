@@ -3071,22 +3071,10 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 }
 
 /**
- * The tombstone a soft-deleted Record is presented as: identity, clock,
- * `deletedAt`, and `permissions` — with `content`, `associations`,
- * `parentId` and authorship gone. Its current state is what a soft delete
- * removes; its history is not, which is why `getVersions()` still serves
- * the content this withholds.
- *
- * `permissions` stays because it is what decides whether the caller may
- * undelete: a write-holder who could not see the bit would have to attempt
- * the verb to discover it. It discloses nothing further — a tombstone only
- * reaches a requester who passed the same read check the live Record
- * required.
- *
- * Applied to every requester, the owner included: a Record's state is a
- * property of the Record, not of who is asking. An owner wanting the
- * content back reads history, or holds the unscoped `Stack`.
- * See docs/spec/versioning.md § Deletion.
+ * The tombstone a soft-deleted Record is presented as. `permissions` is
+ * retained because it decides whether the caller may undelete; history is
+ * exempt, which is why getVersions() still serves the content this
+ * withholds. See docs/spec/versioning.md § The tombstone is literal.
  */
 function tombstoneOf(record: StackRecord): StackRecord {
   return {
@@ -3227,11 +3215,10 @@ class ScopedSubscription extends Subscription {
       this.reportError(err);
       return;
     }
-    // Projected after the permission decision, which needs the whole
-    // record. A frame carrying the body of a soft-deleted record would be
-    // a read channel around the tombstone get() and query() now answer
-    // with — the same reasoning that keeps the feed's unlisted exclusion
-    // matching query()'s. See docs/spec/events.md § Soft-deleted records.
+    // After the permission decision, which needs the whole record: a frame
+    // carrying a deleted record's body would be a read channel around the
+    // tombstone. See docs/spec/events.md § Soft-deleted records reach the
+    // feed as tombstones.
     this.deliver(this.project(emission));
   }
 
@@ -3549,20 +3536,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Refuse a mutation aimed at a soft-deleted Record. It has no current
-   * state to edit — get() answers with a tombstone, and a write that landed
-   * on one would edit content the same requester cannot read. `undelete()`
-   * is the way back, and it goes through requireDeletable(), which carries
-   * no such check.
-   *
-   * Asked only of a mutating caller, so the history readers borrowing this
-   * gate are unaffected: version history survives a soft delete by design,
-   * and it is what a caller reviews before deciding to restore.
-   *
-   * Last, after the authority decision, and never before it: a requester
-   * who may not read the Record must still be told what a missing ID is
-   * told, or "exists but deleted" becomes a probe a stranger can run.
-   * See docs/spec/versioning.md § Deletion.
+   * Refuse a mutation aimed at a soft-deleted Record. Asked only of a
+   * mutating caller, so the history readers borrowing this gate still work,
+   * and only after the authority decision, so "exists but deleted" is never
+   * a probe a stranger can run. See docs/spec/versioning.md § Mutations are
+   * refused, not applied to a tombstone.
    */
   private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
     if (mutating && record.deletedAt) {
@@ -3621,12 +3599,8 @@ export class ScopedStack implements StackClient {
 
     const match = await findFirstMatch(
       (q) => this.stack.query(q),
-      // includeUnlisted: reach, not enumeration. An unlisted record is
-      // readable by anyone who may read it and holds its ID, so the
-      // attachment it references is too — excluding it here would make a
-      // file conveyed by a record unreachable to a requester the same
-      // record's own permissions admit.
-      // See docs/spec/access-control.md § Unlisted records.
+      // Reach, not enumeration: a record readable by ID conveys the file it
+      // references. See docs/spec/access-control.md § Unlisted records.
       { filter: { attachmentFileId: fileId, includeUnlisted: true } },
       (record) => this.canRead(record, prefetchedGrants, groupRoles),
     );
