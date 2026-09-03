@@ -2005,6 +2005,41 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
+  // Unlisted governs enumeration, not reach: a requester who may read the
+  // record and holds its ID gets it, so the file it references is theirs
+  // to download on exactly the same terms as a listed one.
+  test('a readable unlisted record conveys access to the file it references', async () => {
+    const fileId = 'file-on-unlisted-record';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const record = await stack.create(
+      NOTE,
+      { text: 'unlisted' },
+      {
+        unlisted: true,
+        associations: [{ kind: 'attachment', label: 'cover', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+    expect(await stack.asEntity(MEMBER).get(record.id)).not.toBeNull();
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('an unlisted record the requester cannot read conveys nothing', async () => {
+    const fileId = 'file-on-private-unlisted-record';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    await stack.create(
+      NOTE,
+      { text: 'unlisted and private' },
+      { unlisted: true, associations: [{ kind: 'attachment', label: 'cover', fileId }] },
+    );
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
   // hasReadableReference() cursor-walks every referencing record rather
   // than a bounded page, so a file referenced by many unreadable records
   // plus one readable one further down still grants access. MemoryAdapter

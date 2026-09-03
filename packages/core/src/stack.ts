@@ -3508,7 +3508,13 @@ export class ScopedStack implements StackClient {
 
     const match = await findFirstMatch(
       (q) => this.stack.query(q),
-      { filter: { attachmentFileId: fileId } },
+      // includeUnlisted: reach, not enumeration. An unlisted record is
+      // readable by anyone who may read it and holds its ID, so the
+      // attachment it references is too — excluding it here would make a
+      // file conveyed by a record unreachable to a requester the same
+      // record's own permissions admit.
+      // See docs/spec/access-control.md § Unlisted records.
+      { filter: { attachmentFileId: fileId, includeUnlisted: true } },
       (record) => this.canRead(record, prefetchedGrants, groupRoles),
     );
     return match !== undefined;

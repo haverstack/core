@@ -50,6 +50,35 @@ describe('isSafeAttachmentContentType', () => {
     expect(isSafeAttachmentContentType('text/plain; charset=utf-8')).toBe(true);
     expect(isSafeAttachmentContentType('text/html; charset=utf-7')).toBe(false);
   });
+
+  // A Content-Type header carrying several types is split on commas and
+  // resolved to the *last* parsable one, so reading only up to the first
+  // `;` would clear a value a browser then resolves as text/html.
+  test.each([
+    'image/png,text/html',
+    'image/png, text/html',
+    'audio/mpeg,image/svg+xml',
+    'image/png;charset=utf-8,text/html',
+  ])('%s is not safe — a multi-type header resolves to its last type', (mimeType) => {
+    expect(isSafeAttachmentContentType(mimeType)).toBe(false);
+  });
+
+  test.each([
+    'image/png\r\nX-Injected: 1',
+    'image/png<script>',
+    'image/png text/html',
+    'image/',
+    '/png',
+    'image',
+    '',
+  ])('%j is not a single well-formed MIME type, so it is not safe', (mimeType) => {
+    expect(isSafeAttachmentContentType(mimeType)).toBe(false);
+  });
+
+  test('well-formed parameters still pass, including a quoted value', () => {
+    expect(isSafeAttachmentContentType('image/png; foo="bar;baz"')).toBe(true);
+    expect(isSafeAttachmentContentType('  image/png  ')).toBe(true);
+  });
 });
 
 // -------------------------------------------------------
@@ -138,6 +167,15 @@ describe('resolveAttachmentDownloadContentType — forcing applies to the result
   test('forces a dangerous stored mimeType (e.g. a lying _attachment@1 record)', () => {
     const result = resolveAttachmentDownloadContentType({ storedMimeType: 'text/html' });
     expect(result).toEqual({ contentType: FORCED_CONTENT_TYPE, forced: true });
+  });
+
+  test('forces a multi-type candidate from any source', () => {
+    expect(
+      resolveAttachmentDownloadContentType({ contentTypeParam: 'image/png,text/html' }),
+    ).toEqual({ contentType: FORCED_CONTENT_TYPE, forced: true });
+    expect(resolveAttachmentDownloadContentType({ storedMimeType: 'image/png,text/html' })).toEqual(
+      { contentType: FORCED_CONTENT_TYPE, forced: true },
+    );
   });
 
   test('a safe type from any source passes through unforced', () => {

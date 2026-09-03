@@ -15,6 +15,11 @@
  * application/octet-stream) and applies the safe-list to *that value* —
  * never to the source that produced it, so no source can route a
  * dangerous type past the check.
+ *
+ * The check is also applied to the *whole* candidate rather than to a
+ * prefix of it: a value that is not a single well-formed MIME type is
+ * unsafe by definition, because the string a browser resolves and the
+ * string the safe-list read would otherwise differ.
  */
 
 /** MIME types that pass through unforced, regardless of source. */
@@ -35,6 +40,24 @@ export const FORCED_CONTENT_TYPE = 'application/octet-stream';
 export const NOSNIFF_HEADER_NAME = 'X-Content-Type-Options';
 export const NOSNIFF_HEADER_VALUE = 'nosniff';
 
+/** RFC 9110 token, the character set both halves of `type/subtype` and every parameter name are drawn from. */
+const TOKEN = String.raw`[!#$%&'*+.^_\`|~0-9A-Za-z-]+`;
+
+/**
+ * One whole MIME type and nothing else: `type/subtype`, then zero or more
+ * `; name=value` parameters whose value is a token or a quoted string.
+ *
+ * Anchored, and deliberately admitting no comma outside a quoted string,
+ * because a `Content-Type` header carrying two types is not read
+ * left-to-right the way the safe-list check reads it: per Fetch's "extract
+ * a MIME type", a header list is split on commas and the *last* parsable
+ * type wins. Matching only a single type is what keeps the value the check
+ * passed and the value a browser resolves the same string.
+ */
+const SINGLE_MIME_TYPE_RE = new RegExp(
+  `^${TOKEN}/${TOKEN}(?:\\s*;\\s*${TOKEN}=(?:${TOKEN}|"(?:[^"\\\\\\r\\n]|\\\\.)*"))*$`,
+);
+
 /** Strips MIME parameters ("text/html; charset=utf-8" -> "text/html") and lowercases, so parameter tricks and casing can't bypass the safe-list check. */
 function normalizeMimeType(mimeType: string): string {
   return mimeType.split(';')[0].trim().toLowerCase();
@@ -42,10 +65,12 @@ function normalizeMimeType(mimeType: string): string {
 
 /**
  * Whether a MIME type may be served as-is (Content-Type set to it, no
- * forced download). Checked against the normalized base type — any
- * parameters or casing on the input don't affect the result.
+ * forced download). The value must first be a single well-formed MIME type
+ * — see SINGLE_MIME_TYPE_RE — after which the safe-list is checked against
+ * its base, so neither parameters nor casing affect the result.
  */
 export function isSafeAttachmentContentType(mimeType: string): boolean {
+  if (!SINGLE_MIME_TYPE_RE.test(mimeType.trim())) return false;
   const normalized = normalizeMimeType(mimeType);
   if (UNSAFE_OVERRIDES.has(normalized)) return false;
   if (SAFE_EXACT_TYPES.has(normalized)) return true;
