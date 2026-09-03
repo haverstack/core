@@ -2,3 +2,23 @@ packages:
   - 'packages/*'
 allowBuilds:
   esbuild: true
+  workerd: true
+# @cloudflare/workers-types publishes a new calendar-versioned release
+# roughly every 24h, so resolving to "latest" almost always lands inside a
+# minimumReleaseAge supply-chain policy window. Pinned to a safely-aged
+# version — applies repo-wide since it's only a transitive dependency of
+# wrangler / @cloudflare/vitest-pool-workers, nothing here depends on it
+# directly for anything version-sensitive.
+overrides:
+  '@cloudflare/workers-types': 5.20260817.1
+# @types/chai@5.2.3 (pulled in only by record-adapter-do-sqlite's vitest 4 /
+# @cloudflare/vitest-pool-workers) collides with the chai types vendored
+# inside @vitest/expect@2.1.9 (used by the rest of the repo on vitest 2) once
+# both land in pnpm's shared @types hoist folder — "Duplicate identifier"
+# across every package's typecheck, not just the new one. Keeping it
+# unhoisted confines it to record-adapter-do-sqlite's own resolution chain,
+# where it's actually needed. (Must live here, not .npmrc — pnpm 11 silently
+# stops reading hoist-pattern from .npmrc.)
+hoistPattern:
+  - '*'
+  - '!@types/chai'

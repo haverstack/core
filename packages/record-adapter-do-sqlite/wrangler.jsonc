@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "record-adapter-do-sqlite-tests",
+  "main": "tests/support/test-worker.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TEST_DO",
+        "class_name": "TestRecordAdapterDO",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TestRecordAdapterDO"],
+    },
+  ],
+}
