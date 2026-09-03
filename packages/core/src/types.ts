@@ -703,6 +703,17 @@ export type SubscribeOptions = {
    */
   includeUnlisted?: boolean;
   /**
+   * Resume from this cursor rather than the present — the `seq` off a
+   * previously delivered `RecordChange`. Forwarded to the adapter as
+   * `SubscribeChangesOptions.since`, so it only means something where a
+   * relay exists: a stack with none has no third-party writes to have
+   * missed, and therefore no cursor it could ever have minted. Passing
+   * `since` there throws `StackQueryError` rather than silently starting
+   * from the present, which would let the caller believe it resumed when
+   * it did not. See docs/spec/events.md § Subscribing.
+   */
+  since?: string;
+  /**
    * Where a throwing handler's error goes. Without one the error is
    * rethrown asynchronously rather than swallowed; either way it never
    * reaches the caller of the mutation that produced the event.
@@ -710,7 +721,10 @@ export type SubscribeOptions = {
   onError?: (err: unknown) => void;
   /**
    * A gap opened that resumption could not close: reconcile by query.
-   * Never fires on a local stack, which has no gap to open.
+   * Never fires on a local stack, which has no gap to open. Can fire on
+   * the very first connection when `since` names a cursor the far end
+   * will not honor — that is a gap too, and the one an app most needs to
+   * hear about.
    */
   onReset?: () => void;
 };

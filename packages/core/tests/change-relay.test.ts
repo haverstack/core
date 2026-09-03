@@ -5,7 +5,7 @@
  * the other. See docs/spec/events.md § Where events come from.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack, StackRelayScopeError } from '../src/stack.js';
+import { Stack, StackQueryError, StackRelayScopeError } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
 
@@ -166,6 +166,25 @@ describe('a stack whose adapter relays', () => {
 
     expect(seen).toHaveLength(0);
   });
+
+  test('forwards `since` to the relay, so a consumer can resume where it left off', async () => {
+    await stack.subscribe(() => {}, { since: 'AA3f1R' });
+
+    expect(adapter.relays[0]!.opts.since).toBe('AA3f1R');
+  });
+});
+
+describe('a stack whose adapter does not relay', () => {
+  test('refuses `since`, which names a cursor it never minted', async () => {
+    const local = await Stack.create(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+
+    await expect(local.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
+      StackQueryError,
+    );
+
+    await local.close();
+  });
 });
 
 describe('a scoped view of a stack that relays', () => {
@@ -182,6 +201,18 @@ describe('a scoped view of a stack that relays', () => {
     const unsubscribe = await scoped.subscribe(() => {});
 
     expect(unsubscribe).toBeTypeOf('function');
+    await local.close();
+  });
+
+  test('refuses `since` even when the adapter relays nothing', async () => {
+    const local = await Stack.create(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+
+    const scoped = local.asEntity(OWNER);
+    await expect(scoped.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
+      StackQueryError,
+    );
+
     await local.close();
   });
 });

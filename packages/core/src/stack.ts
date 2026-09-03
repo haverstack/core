@@ -801,6 +801,24 @@ export class StackRelayScopeError extends Error {
   }
 }
 
+/**
+ * `since` only means something where a relay exists: a stack with no
+ * third party whose writes could have been missed has no cursor it could
+ * ever have minted. Silently starting from the present would let the
+ * caller believe it resumed when it did not, so a stack that cannot honor
+ * `since` refuses it rather than ignoring it. See
+ * docs/spec/events.md § Subscribing.
+ */
+function assertSinceSupported(since: string | undefined, relaysChanges: boolean): void {
+  if (since !== undefined && !relaysChanges) {
+    throw new StackQueryError(
+      'subscribe() was passed `since`, but this stack relays no changes from elsewhere and so ' +
+        'has no cursor it could ever have minted. Omit `since` — or, for a stack that relays ' +
+        'from a server, use the seq off a previously delivered RecordChange.',
+    );
+  }
+}
+
 // -------------------------------------------------------
 // Record ID validation
 // -------------------------------------------------------
@@ -2615,6 +2633,7 @@ export class Stack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertOpen();
+    assertSinceSupported(opts.since, this.relaysChanges);
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {
@@ -2651,6 +2670,7 @@ export class Stack implements StackClient {
     const stop = await this.adapter.subscribeChanges(
       {
         ...(opts.filter !== undefined && { filter: opts.filter }),
+        ...(opts.since !== undefined && { since: opts.since }),
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
         ...(opts.includeUnlisted !== undefined && { includeUnlisted: opts.includeUnlisted }),
         ...(opts.onError !== undefined && { onError: opts.onError }),
@@ -4179,6 +4199,9 @@ export class ScopedStack implements StackClient {
           'no record to re-check. Subscribe with a session-scoped stack instead.',
       );
     }
+    // A relaying stack was already refused above, so relaysChanges is
+    // always false here — `since` never has a cursor to mean anything by.
+    assertSinceSupported(opts.since, false);
     if (opts.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
