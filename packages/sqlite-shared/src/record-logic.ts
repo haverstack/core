@@ -12,6 +12,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackNotFoundError,
+  StackQueryError,
   applyMergePatch,
 } from '@haverstack/core';
 import type {
@@ -40,6 +41,28 @@ import {
   associationKeyColumns,
 } from './mappers.js';
 import { makeCursor } from './cursor.js';
+
+/**
+ * Run a query statement, restating an engine parse error as the wire
+ * taxonomy's `bad_request` rather than letting it escape as a raw engine
+ * error (which a server has no code to map, so it becomes a 500).
+ *
+ * Scoped to the one filter that carries a query language: `filter.search`
+ * is FTS5 source text, and sanitizeFts5Query() repairs the common shapes
+ * but claims no completeness against the grammar. Every other clause here
+ * is built from parameters, so a parse error in one is this module's bug —
+ * rethrown untouched, where it belongs.
+ */
+const asStackQueryError = <T>(query: StackQuery, run: () => T): T => {
+  try {
+    return run();
+  } catch (err) {
+    if (!query.filter?.search) throw err;
+    throw new StackQueryError(
+      `Search text could not be parsed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+};
 
 export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
@@ -438,9 +461,11 @@ export class SharedSqlRecordLogic {
     const limit = query.limit ?? 50;
 
     // Fetch one extra to determine if there's a next page
-    const rows = this.exec.all<Record<string, unknown>>(
-      `SELECT r.* FROM records r ${where} ${order} LIMIT ?`,
-      [...params, limit + 1],
+    const rows = asStackQueryError(query, () =>
+      this.exec.all<Record<string, unknown>>(
+        `SELECT r.* FROM records r ${where} ${order} LIMIT ?`,
+        [...params, limit + 1],
+      ),
     );
 
     const hasMore = rows.length > limit;
@@ -451,9 +476,8 @@ export class SharedSqlRecordLogic {
       return rowToRecord(row, associations);
     });
 
-    const countRows = this.exec.all<{ total: number }>(
-      `SELECT COUNT(*) as total FROM records r ${where}`,
-      params,
+    const countRows = asStackQueryError(query, () =>
+      this.exec.all<{ total: number }>(`SELECT COUNT(*) as total FROM records r ${where}`, params),
     );
     const total = countRows[0]?.total ?? 0;
 

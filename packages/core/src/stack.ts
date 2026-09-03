@@ -535,8 +535,14 @@ export class StackVersionConflictError extends StackError {
 /**
  * Thrown when a request is structurally malformed — not a content-validation
  * failure, but input the adapter/server can't even interpret (e.g. an
- * undecodable pagination cursor). Distinct from StackValidationError, which
- * means the request was well-formed but content failed schema validation.
+ * undecodable pagination cursor, a malformed TypeId, search text the engine
+ * cannot parse, or a typeId no definition exists for). Distinct from
+ * StackValidationError, which means the request was well-formed but content
+ * failed schema validation.
+ *
+ * Naming something absent belongs here rather than under `not_found`: a
+ * request whose *type* is undefined never addressed a record, so answering
+ * 404 would say a record was missing when none was asked for.
  */
 export class StackQueryError extends StackError {
   static readonly code = 'bad_request' as const;
@@ -1321,7 +1327,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const parsed = parseTypeId(id);
     if (!parsed) {
-      throw new Error(
+      throw new StackQueryError(
         `Invalid TypeId format: "${id}". Expected "namespace/name@version", e.g. "com.example.myapp/note@1".`,
       );
     }
@@ -1530,7 +1536,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
-      throw new Error(`Unknown type: "${typeId}". Call defineType() first.`);
+      throw new StackQueryError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
     // updatedAt defaults to createdAt, not to the actual current time, so a
@@ -1706,7 +1712,7 @@ export class Stack implements StackClient {
 
     const type = await this.getTypeCached(existing.typeId);
     if (!type) {
-      throw new Error(`Unknown type: "${existing.typeId}"`);
+      throw new StackQueryError(`Unknown type: "${existing.typeId}"`);
     }
 
     // Checked on the raw patch, before the merge: a reserved key in a
@@ -2049,7 +2055,7 @@ export class Stack implements StackClient {
 
     const type = await this.getTypeCached(target.typeId);
     if (!type) {
-      throw new Error(`Unknown type: "${target.typeId}"`);
+      throw new StackQueryError(`Unknown type: "${target.typeId}"`);
     }
 
     const errors = validateContent(target.content, type.schema);
@@ -2148,7 +2154,7 @@ export class Stack implements StackClient {
 
     const type = await this.getTypeCached(toTypeId);
     if (!type) {
-      throw new Error(`Unknown type: "${toTypeId}". Call defineType() first.`);
+      throw new StackQueryError(`Unknown type: "${toTypeId}". Call defineType() first.`);
     }
 
     const errors = [

@@ -8,8 +8,9 @@
  *
  *   kept:    AND/OR/NOT (with a left operand), phrase queries ("…"), implicit AND
  *   removed: wildcards (*), NEAR(...) (terms kept, wrapper dropped), column-filter
- *            colons, bare NOT (no left operand)
+ *            colons, bare NOT (no left operand), operators with no right operand
  *   capped:  parenthesis nesting depth (default: 2)
+ *   closed:  an odd trailing quote
  *
  * Two FTS5 grammar details drive the less obvious rules:
  *
@@ -22,6 +23,12 @@
  *   on any name but the table's actual columns — since records_fts has
  *   exactly one column and callers have no business targeting columns
  *   explicitly, colons are stripped outright rather than validated.
+ *
+ * The rewrite is best-effort and makes no completeness claim against
+ * FTS5's grammar — which is why the caller wraps execution as well, so a
+ * case this misses surfaces as a StackQueryError rather than a raw engine
+ * error. Search text is what a person typed into a box: an unbalanced
+ * quote or a trailing "AND" is ordinary input, not a malformed request.
  *
  * What this bounds is the grammar, not the cost: a syntactically modest
  * search over a large index can still be expensive, and node:sqlite blocks
@@ -48,11 +55,19 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not "NOT term"
   clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
 
-  // Enforce max nesting depth; replace excess ( with a space and discard unmatched )
+  // Enforce max nesting depth; replace excess ( with a space and discard
+  // unmatched ). Parens inside a phrase are literal text to FTS5, so the
+  // depth count steps over quoted spans rather than reading them as syntax.
   let currentDepth = 0;
+  let inPhrase = false;
   let result = '';
   for (const char of clean) {
-    if (char === '(') {
+    if (char === '"') {
+      inPhrase = !inPhrase;
+      result += char;
+    } else if (inPhrase) {
+      result += char;
+    } else if (char === '(') {
       if (currentDepth < maxDepth) {
         currentDepth++;
         result += char;
@@ -67,6 +82,10 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
     }
   }
 
+  // Close an odd trailing quote before the parens, so the added ) lands
+  // outside the phrase rather than becoming a literal character in it.
+  if (inPhrase) result += '"';
+
   // Auto-close any unclosed parens
   if (currentDepth > 0) result += ')'.repeat(currentDepth);
 
@@ -77,7 +96,54 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
     result = result.replace(/\(\s*\)/g, ' ');
   } while (result !== prev);
 
+  result = dropDanglingOperators(result);
+
   return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+};
+
+/** An operator FTS5 requires a term on both sides of. */
+const OPERATOR = String.raw`(?:AND|OR|NOT)`;
+
+/**
+ * Stands in for a phrase while operators are rewritten. A private-use
+ * character is not a word character, so `\b` still sees the operator
+ * beside it, while `^`, `$` and the paren anchors see an operand — which
+ * is what a phrase is. Nothing reaches here holding one: `clean` is
+ * rewritten from the caller's string, and a literal U+E000 in it would be
+ * a term character FTS5 tokenizes away regardless.
+ */
+const PHRASE_HOLE = '\u{E000}';
+
+/**
+ * Drop operators left without an operand — the shape a person types on
+ * their way to a longer query ("cats AND") or lands on once the rules
+ * above have removed a term. FTS5 rejects each of them outright, so what
+ * would otherwise be a syntax error becomes the search for the terms that
+ * are actually there.
+ *
+ * Phrases are masked out first: `"cats AND dogs"` is literal text to FTS5,
+ * and rewriting inside it would change what the user asked for.
+ */
+const dropDanglingOperators = (query: string): string => {
+  const phrases: string[] = [];
+  let out = query.replace(/"[^"]*"/g, (phrase) => {
+    phrases.push(phrase);
+    return PHRASE_HOLE;
+  });
+
+  let prev: string;
+  do {
+    prev = out;
+    // A run of operators keeps only the first — the rest have no left operand.
+    out = out.replace(new RegExp(String.raw`\b(${OPERATOR})\b(?:\s+\b${OPERATOR}\b)+`, 'gi'), '$1');
+    // No left operand: at the start of the query or straight after "(".
+    out = out.replace(new RegExp(String.raw`(^|\()\s*\b${OPERATOR}\b\s*`, 'gi'), '$1');
+    // No right operand: at the end of the query or straight before ")".
+    out = out.replace(new RegExp(String.raw`\s*\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
+  } while (out !== prev);
+
+  let i = 0;
+  return out.replace(new RegExp(PHRASE_HOLE, 'g'), () => phrases[i++]);
 };
 
 // -------------------------------------------------------

@@ -48,6 +48,20 @@ stack.timezone; // from adapter.timezone — string | undefined
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
+`LocalAdapter.openOrInitialize()` covers the common case where an app doesn't know which run it is on. It takes the same options, except that `entityId` also accepts a function — called **only** when the database has to be created, so a returning run neither mints a throwaway keypair nor needs one to hand:
+
+```ts
+const adapter = await LocalAdapter.openOrInitialize({
+  path: './my-stack.db',
+  timezone: 'America/New_York',
+  entityId: async () => {
+    const { did, privateKey } = await generateDidKeypair();
+    await persistSomewhereSafe(privateKey); // see Identity § Key custody
+    return did;
+  },
+});
+```
+
 **`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `update`, `delete`, `undelete`, `associate`, `dissociate`, `setPermissions`, `setUnlisted`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it.
 
 ### The `_config` record

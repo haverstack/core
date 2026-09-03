@@ -1447,7 +1447,7 @@ describe('Stack.commitMigration', () => {
 
     await expect(
       stack.commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' }),
-    ).rejects.toThrow('Unknown type');
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
@@ -4649,5 +4649,40 @@ describe('query — relatedTo filter', () => {
       },
     });
     expect(scoped.records.map((r) => r.content.text)).toEqual(['remote reply']);
+  });
+});
+
+// Membership in the StackError hierarchy is what gives a server a wire
+// code to answer with; anything outside it has no mapping and becomes a
+// 500. Naming a type that isn't defined is a client-reachable request, so
+// it has to land inside the taxonomy.
+describe('undefined types stay inside the error taxonomy', () => {
+  let typeStack: Stack;
+
+  beforeEach(async () => {
+    typeStack = await Stack.create(new MemoryAdapter({ ownerEntityId: 'owner-123' }));
+  });
+
+  test('create() with an unknown typeId raises a bad_request', async () => {
+    const err = await typeStack.create('com.example.test/nope@1', { text: 'x' }).catch((e) => e);
+    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err.code).toBe('bad_request');
+    expect(err.message).toContain('defineType');
+  });
+
+  test('defineType() with a malformed typeId raises a bad_request', async () => {
+    const err = await typeStack.defineType('not-a-type-id', 'Nope', {}).catch((e) => e);
+    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err.code).toBe('bad_request');
+  });
+
+  test('commitMigration() to an unknown typeId raises a bad_request', async () => {
+    await typeStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    const record = await typeStack.create(NOTE_V1, { text: 'hello' });
+    const err = await typeStack
+      .commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err.code).toBe('bad_request');
   });
 });

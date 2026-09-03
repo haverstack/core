@@ -93,6 +93,14 @@ export type APIAdapterOpenOptions = {
    * Mutually exclusive with `token`.
    */
   credential?: DidCredential;
+  /**
+   * Permit a plaintext `http://` URL to a host that isn't loopback. Off by
+   * default: everything this adapter carries — a bearer token, a signed
+   * handshake, and the stack's contents — is readable and rewritable by
+   * anything on the path. Loopback needs no flag, so local development and
+   * a sidecar server are unaffected.
+   */
+  allowInsecure?: boolean;
 };
 
 // -------------------------------------------------------
@@ -212,6 +220,38 @@ export class APIAdapterReauthError extends APIAdapterAuthError {
  * /auth/challenge: nothing this client can do will authenticate it, and
  * discovery already said so.
  */
+/**
+ * Thrown by open() for a plaintext `http://` URL to a non-loopback host
+ * without `allowInsecure`. See APIAdapterOpenOptions.allowInsecure.
+ */
+export class APIAdapterInsecureUrlError extends APIAdapterError {
+  constructor(public readonly url: string) {
+    super(
+      `Refusing to open a plaintext connection to "${url}": the bearer token, the ` +
+        `handshake signature and every record would travel in the clear. Use https://, ` +
+        `or pass { allowInsecure: true } if the transport is already private.`,
+    );
+    this.name = 'APIAdapterInsecureUrlError';
+  }
+}
+
+/**
+ * Whether a URL's host is the local machine, where plaintext has no
+ * network to be observed on. Matched by host rather than by name
+ * resolution: a name that merely resolves to a loopback address today is
+ * not a promise about where the next request goes.
+ */
+const isLoopbackUrl = (url: string): boolean => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+};
+
 export class APIAdapterAuthUnsupportedError extends APIAdapterError {
   constructor(message: string) {
     super(message);
@@ -660,6 +700,12 @@ export class APIAdapter implements StackAdapter {
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
     const baseUrl = opts.url.replace(/\/$/, '');
+    // Before the credential is spent and before anything is sent, for the
+    // same reason the owner check comes early: a signature made over a
+    // plaintext connection is already compromised by the time it fails.
+    if (baseUrl.startsWith('http://') && !opts.allowInsecure && !isLoopbackUrl(baseUrl)) {
+      throw new APIAdapterInsecureUrlError(baseUrl);
+    }
     // Refused rather than resolved by precedence: one of the two would be
     // silently ignored, and which one is not obvious from either name.
     if (opts.token !== undefined && opts.credential !== undefined) {

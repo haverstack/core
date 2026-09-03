@@ -10,6 +10,7 @@ import {
   APIAdapterAuthUnsupportedError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,
+  APIAdapterInsecureUrlError,
 } from '../src/index.js';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
@@ -121,6 +122,48 @@ describe('open', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
     await APIAdapter.open({ url: `${BASE_URL}/`, token: TOKEN });
     expect(mockFetch).toHaveBeenCalledWith(`${BASE_URL}/.well-known/stack`, expect.anything());
+  });
+
+  // Everything this adapter carries over the wire — a bearer token, a
+  // handshake signature, the records themselves — is readable and
+  // rewritable by anything on the path of a plaintext connection.
+  describe('plaintext URLs', () => {
+    test('refuses http:// to a remote host, before sending anything', async () => {
+      await expect(
+        APIAdapter.open({ url: 'http://stack.example.com', token: TOKEN }),
+      ).rejects.toBeInstanceOf(APIAdapterInsecureUrlError);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test.each(['http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787'])(
+      'allows %s without a flag',
+      async (url) => {
+        mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
+        await expect(APIAdapter.open({ url, token: TOKEN })).resolves.toBeInstanceOf(APIAdapter);
+      },
+    );
+
+    test('allows a remote http:// host with allowInsecure', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
+      await expect(
+        APIAdapter.open({ url: 'http://stack.example.com', token: TOKEN, allowInsecure: true }),
+      ).resolves.toBeInstanceOf(APIAdapter);
+    });
+
+    // A name is matched, never resolved: that a host resolves to loopback
+    // now is not a promise about where the next request goes.
+    test('a non-loopback name is refused however it resolves', async () => {
+      await expect(
+        APIAdapter.open({ url: 'http://localhost.example.com', token: TOKEN }),
+      ).rejects.toBeInstanceOf(APIAdapterInsecureUrlError);
+    });
+
+    test('https:// needs no flag', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
+      await expect(
+        APIAdapter.open({ url: 'https://stack.example.com', token: TOKEN }),
+      ).resolves.toBeInstanceOf(APIAdapter);
+    });
   });
 
   test('populates capabilities from discovery response', async () => {

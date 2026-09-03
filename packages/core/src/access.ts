@@ -7,7 +7,9 @@
  * control; exported standalone for callers that want the raw predicate.
  */
 
+import { SYSTEM_TYPES } from './types.js';
 import type { Association, EntityId, Permission, RecordId, StackRecord } from './types.js';
+import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
 export type AccessMode = 'read' | 'write';
@@ -102,13 +104,22 @@ export function validatePermissions(
   return errors;
 }
 
+/**
+ * Resolve a role from the `_group` Record a permission's `groupId` names.
+ * Only a real `_group` Record carries a roster: without the family check
+ * any Record's relationship associations would serve as one, so an app
+ * modelling its own `member` links would silently turn every record it
+ * points a permission at into an ACL. The same rule the grant path applies
+ * (see resolveGroupRoleMemoized in stack.ts). See
+ * docs/spec/access-control.md § Record-level permissions.
+ */
 async function resolveGroupRole(
   groupRecordId: RecordId,
   entityId: EntityId,
   resolveRecord: RecordResolver,
 ): Promise<GroupRole | null> {
   const group = await resolveRecord(groupRecordId);
-  if (!group) return null;
+  if (!group || baseIdOf(group.typeId) !== SYSTEM_TYPES.GROUP) return null;
   return groupRoleFromAssociations(group.associations, entityId);
 }
 
@@ -117,6 +128,10 @@ async function resolveGroupRole(
  * relationship associations. `admin` short-circuits — it's strictly more
  * privileged than `member`, so a matching admin association wins regardless
  * of association order.
+ *
+ * Reads associations alone and cannot tell whose they are: every caller
+ * must first establish that the Record is in the `_group` family, or an
+ * app's own `member` relationships become a roster.
  */
 export function groupRoleFromAssociations(
   associations: Association[] | undefined,
