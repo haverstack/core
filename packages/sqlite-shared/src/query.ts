@@ -29,6 +29,30 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
   return dir === 'asc' ? 'ASC' : 'DESC';
 };
 
+/**
+ * A content field name as a JSON path selecting that **top-level** key.
+ *
+ * The label is always quoted, because a content key is an arbitrary string
+ * — undeclared fields are permitted by design — while a bare `$.key` is
+ * path syntax. Unquoted, a key of `a.b` selects the nested `a` → `b`
+ * rather than the top-level field literally named `a.b`, and `a[0]`
+ * selects an array element; both are the wrong record, silently. Keys that
+ * are not path-shaped at all (`$.`, a stray `[`) make SQLite raise a "bad
+ * JSON path" error, which is an engine exception escaping as a 500 where
+ * the caller asked a well-formed question.
+ *
+ * Quoting settles all three: `$."a.b"` is the literal key, and no input
+ * can leave the quoted label, so the path is always well-formed. Escaping
+ * is JSON's — backslash before `\` and `"` — not SQL's doubled quote,
+ * which SQLite's path parser reads as two characters rather than one.
+ *
+ * Matches the literal `content[key]` lookup every non-SQL adapter performs,
+ * so a `content` filter means the same thing on every backend. See
+ * docs/spec/data-model.md § Filter.
+ */
+export const jsonPathForKey = (key: string): string =>
+  `$."${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
@@ -172,10 +196,10 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     for (const [key, value] of Object.entries(f.content)) {
       if (value === null) {
         conditions.push(`json_extract(r.content, ?) IS NULL`);
-        params.push(`$.${key}`);
+        params.push(jsonPathForKey(key));
       } else {
         conditions.push(`json_extract(r.content, ?) = ?`);
-        params.push(`$.${key}`, value);
+        params.push(jsonPathForKey(key), value);
       }
     }
   }

@@ -645,6 +645,48 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
+  // A content key is an arbitrary string — undeclared fields are permitted
+  // by design — so it is a label to match literally, never path syntax to
+  // interpret. Unquoted, each of these would select a different value than
+  // the caller named, or fail the query outright.
+  test('a dotted key matches the top-level field of that name, not a nested one', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { 'a.b': 'literal' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { a: { b: 'literal' } } }));
+
+    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 'literal' } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test.each([
+    ['bracketed', 'arr[0]'],
+    ['quoted', 'q"x'],
+    ['backslashed', 'back\\slash'],
+    ['spaced', 'sp ace'],
+    ['dollared', '$dollar'],
+    ['empty', ''],
+  ])('a %s key is matched literally', async (_label, key) => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { [key]: 'hit' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { other: 'miss' } }));
+
+    const result = await adapter.queryRecords({ filter: { content: { [key]: 'hit' } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // Unquoted, "$." and a stray bracket reach SQLite as malformed paths and
+  // raise a raw engine error — a 500 for a question the caller asked
+  // correctly. Quoted, they are ordinary keys that simply match nothing.
+  test('a key that is not path-shaped is a zero-match filter, not an engine error', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'present' } }));
+
+    for (const key of ['$.', '[', '"', 'a[0', '\\']) {
+      const result = await adapter.queryRecords({ filter: { content: { [key]: 'x' } } });
+      expect(result.records).toEqual([]);
+    }
+  });
+
   test('full-text search (FTS5)', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
