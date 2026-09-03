@@ -213,7 +213,21 @@ export const validateReservedKeys = (content: Record<string, unknown>): Validati
  */
 export const CONTENT_KEY_PATH_METACHARACTERS = ['.', '[', ']', '$', '"', '*', '#'] as const;
 
-const PATH_METACHARACTER_RE = /[.[\]$"*#]/;
+/**
+ * A filter key is split on `.` before its segments are checked, so a
+ * segment is the only place the separator itself cannot appear.
+ */
+export const CONTENT_SEGMENT_METACHARACTERS = CONTENT_KEY_PATH_METACHARACTERS.filter(
+  (char) => char !== '.',
+);
+
+/** Derived so the reserved set has one definition, not two that drift. */
+const characterClass = (chars: readonly string[]): RegExp =>
+  new RegExp(`[${chars.map((char) => char.replace(/[\\\]^-]/g, '\\$&')).join('')}]`);
+
+const PATH_METACHARACTER_RE = characterClass(CONTENT_KEY_PATH_METACHARACTERS);
+
+export const SEGMENT_METACHARACTER_RE = characterClass(CONTENT_SEGMENT_METACHARACTERS);
 
 /**
  * Unlike the reserved keys above, this holds at every depth: a filter path

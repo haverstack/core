@@ -31,7 +31,8 @@ import {
 } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import {
-  CONTENT_KEY_PATH_METACHARACTERS,
+  CONTENT_SEGMENT_METACHARACTERS,
+  SEGMENT_METACHARACTER_RE,
   validateContent,
   validateContentKeys,
   validateReservedKeys,
@@ -603,10 +604,10 @@ export function parseContentFilterKey(key: string): string[] {
         `Invalid content filter path "${key}": a path segment cannot be empty.`,
       );
     }
-    if (/[[\]$"*#]/.test(segment)) {
+    if (SEGMENT_METACHARACTER_RE.test(segment)) {
       throw new StackQueryError(
         `Invalid content filter path "${key}": a segment cannot contain any of ` +
-          `${CONTENT_KEY_PATH_METACHARACTERS.join(' ')}.`,
+          `${CONTENT_SEGMENT_METACHARACTERS.join(' ')}.`,
       );
     }
   }
