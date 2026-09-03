@@ -1,7 +1,7 @@
 # `org.haverstack/site@1` — Site
 
-> **Status:** Draft. Intended writer: `@haverstack/eleventy` (see haverstack/core#205),
-> which builds several sites from one personal stack.
+> **Status:** Draft. Intended writer: a static-site-generator integration reading a
+> stack, which builds several sites from one personal stack.
 
 A published website: a personal site, a professional site, a project microsite — one of
 possibly several built from the same stack. The gap this closes: the page tree already
