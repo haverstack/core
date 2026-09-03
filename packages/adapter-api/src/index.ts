@@ -1318,9 +1318,12 @@ export class APIAdapter implements StackAdapter {
         for (const frame of decoder.push(value)) {
           if (frame.event === CHANGE_FRAME_READY && head === undefined) {
             // A malformed ready payload costs the reset fallback its head
-            // cursor, not the connection: treat the head as unknown.
+            // cursor, not the connection: treat the head as unknown. The
+            // seq is charset-checked like a frame id, since it becomes the
+            // Last-Event-ID fetch would refuse on every reconnect.
             try {
-              head = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+              const seq = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+              head = seq !== undefined && isValidSeq(seq) ? seq : undefined;
             } catch {
               head = undefined;
             }

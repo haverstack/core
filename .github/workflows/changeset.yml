@@ -19,6 +19,7 @@ on:
           - '@haverstack/blob-adapter-disk'
           - '@haverstack/blob-adapter-s3'
           - '@haverstack/record-adapter-sqlite'
+          - '@haverstack/record-adapter-do-sqlite'
           - '@haverstack/adapter-local'
           - '@haverstack/adapter-api'
       bump:

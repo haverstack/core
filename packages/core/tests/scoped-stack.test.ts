@@ -2005,6 +2005,41 @@ describe('ScopedStack.getAttachment', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
+  // Unlisted governs enumeration, not reach: a requester who may read the
+  // record and holds its ID gets it, so the file it references is theirs
+  // to download on exactly the same terms as a listed one.
+  test('a readable unlisted record conveys access to the file it references', async () => {
+    const fileId = 'file-on-unlisted-record';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const record = await stack.create(
+      NOTE,
+      { text: 'unlisted' },
+      {
+        unlisted: true,
+        associations: [{ kind: 'attachment', label: 'cover', fileId }],
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      },
+    );
+    expect(await stack.asEntity(MEMBER).get(record.id)).not.toBeNull();
+
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  test('an unlisted record the requester cannot read conveys nothing', async () => {
+    const fileId = 'file-on-private-unlisted-record';
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    await stack.create(
+      NOTE,
+      { text: 'unlisted and private' },
+      { unlisted: true, associations: [{ kind: 'attachment', label: 'cover', fileId }] },
+    );
+
+    await expect(stack.asEntity(MEMBER).getAttachment(fileId)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
   // hasReadableReference() cursor-walks every referencing record rather
   // than a bounded page, so a file referenced by many unreadable records
   // plus one readable one further down still grants access. MemoryAdapter
@@ -3761,5 +3796,140 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
       'com.example.notes',
     );
     expect(ok.appId).toBe('com.example.notes');
+  });
+});
+
+// -------------------------------------------------------
+// ScopedStack — soft-deleted records are tombstones
+// -------------------------------------------------------
+
+describe('ScopedStack — soft delete presents a tombstone', () => {
+  const writeBit = [{ access: 'entity' as const, entityId: MEMBER, read: true, write: true }];
+
+  const deletedRecord = async () => {
+    const record = await stack.create(
+      NOTE,
+      { text: 'secret text' },
+      {
+        permissions: writeBit,
+        parentId: undefined,
+        associations: [{ kind: 'tag', label: 'confidential' }],
+        entityId: OWNER,
+      },
+    );
+    await stack.delete(record.id);
+    return record;
+  };
+
+  test('get() withholds content, associations and authorship', async () => {
+    const record = await deletedRecord();
+
+    const got = await stack.asEntity(MEMBER).get(record.id);
+    expect(got).not.toBeNull();
+    expect(got!.id).toBe(record.id);
+    expect(got!.typeId).toBe(NOTE);
+    expect(got!.deletedAt).toBeInstanceOf(Date);
+    expect(got!.content).toEqual({});
+    expect(got!.associations).toBeUndefined();
+    expect(got!.entityId).toBeUndefined();
+    expect(got!.updatedBy).toBeUndefined();
+  });
+
+  test('get() keeps permissions — the bit that decides whether undelete will work', async () => {
+    const record = await deletedRecord();
+    const got = await stack.asEntity(MEMBER).get(record.id);
+    expect(got!.permissions).toEqual(writeBit);
+  });
+
+  test('the owner acting alone sees a tombstone too — state is the record’s, not the asker’s', async () => {
+    const record = await deletedRecord();
+    const got = await stack.asEntity(OWNER).get(record.id);
+    expect(got!.content).toEqual({});
+    expect(got!.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('an unreadable soft-deleted record is still null, not a tombstone', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await stack.delete(record.id);
+    expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
+  });
+
+  test('query(includeDeleted) returns tombstones, so it is no better a channel than get()', async () => {
+    const record = await deletedRecord();
+    const result = await stack.asEntity(MEMBER).query({ filter: { includeDeleted: true } });
+    const found = result.records.find((r) => r.id === record.id);
+    expect(found).toBeDefined();
+    expect(found!.content).toEqual({});
+    expect(found!.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('a live record is untouched by the projection', async () => {
+    const record = await stack.create(NOTE, { text: 'still here' }, { permissions: writeBit });
+    const got = await stack.asEntity(MEMBER).get(record.id);
+    expect(got!.content).toEqual({ text: 'still here' });
+  });
+
+  test('the unscoped Stack still reads the whole record', async () => {
+    const record = await deletedRecord();
+    const got = await stack.get(record.id);
+    expect(got!.content).toEqual({ text: 'secret text' });
+  });
+});
+
+describe('ScopedStack — mutating a soft-deleted record', () => {
+  const writeBit = [{ access: 'entity' as const, entityId: MEMBER, read: true, write: true }];
+
+  const deleted = async () => {
+    const record = await stack.create(NOTE, { text: 'gone' }, { permissions: writeBit });
+    await stack.delete(record.id);
+    return record;
+  };
+
+  test('update() is refused — undelete first', async () => {
+    const record = await deleted();
+    await expect(stack.asEntity(MEMBER).update(record.id, { text: 'edited' })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('associate() is refused the same way', async () => {
+    const record = await deleted();
+    await expect(
+      stack.asEntity(MEMBER).associate(record.id, { kind: 'tag', label: 'late' }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // setPermissions() and setUnlisted() reach their own gate rather than
+  // requireUpdatable()'s, so they are asked of a requester who clears that
+  // gate — the owner — or the refusal under test never gets reached.
+  test('setPermissions() and setUnlisted() are refused for a resharer too', async () => {
+    const record = await deleted();
+    const owner = stack.asEntity(OWNER);
+    await expect(owner.setPermissions(record.id, [])).rejects.toThrow(StackConflictError);
+    await expect(owner.setUnlisted(record.id, true)).rejects.toThrow(StackConflictError);
+  });
+
+  // The refusal names a state, so it must come after the authority
+  // decision: a requester who cannot read the record hears what a missing
+  // ID sounds like, never "it exists and is deleted".
+  test('a stranger gets not-found, not the deleted-state conflict', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await stack.delete(record.id);
+    await expect(stack.asEntity(STRANGER).update(record.id, { text: 'x' })).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('undelete() still works on the write bit alone — the way back is unaffected', async () => {
+    const record = await deleted();
+    const back = await stack.asEntity(MEMBER).undelete(record.id);
+    expect(back.deletedAt).toBeUndefined();
+    expect((await stack.asEntity(MEMBER).get(record.id))!.content).toEqual({ text: 'gone' });
+  });
+
+  test('history survives and still serves the content the tombstone withholds', async () => {
+    const record = await deleted();
+    const versions = await stack.asEntity(MEMBER).getVersions(record.id);
+    expect(versions.some((v) => (v.content as { text?: string }).text === 'gone')).toBe(true);
   });
 });

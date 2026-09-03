@@ -793,6 +793,16 @@ describe('query — content filter null semantics', () => {
     expect(result.records).toHaveLength(1);
     expect(result.records[0].content.text).toBe('explicit null');
   });
+
+  // The same contract the SQL adapters honor by quoting the key into a JSON
+  // path: a content key is a field name, never a path expression, so both
+  // sides of the wire agree on what a dotted key asks for.
+  test('a dotted key names the top-level field of that name, not a nested one', async () => {
+    await stack.create(NOTE_V1, { text: 'literal', 'a.b': 'x' });
+    await stack.create(NOTE_V1, { text: 'nested', a: { b: 'x' } });
+    const result = await stack.query({ filter: { content: { 'a.b': 'x' } } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['literal']);
+  });
 });
 
 // -------------------------------------------------------

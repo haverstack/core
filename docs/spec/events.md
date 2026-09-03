@@ -107,6 +107,14 @@ What follows is worth keeping deliberately: **a purge event tells you to forget 
 
 Filtering is unaffected: the emitter holds the record it destroyed, so a subscription filtered by `parentId` or `entityId` still receives exactly the purges that match. Those fields decide delivery without appearing in what is delivered.
 
+## Soft-deleted records reach the feed as tombstones
+
+A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers [the same tombstone `get()` returns](./versioning.md#the-tombstone-is-literal) — identity, clock, `deletedAt`, `permissions`, and an empty `content` — rather than the body.
+
+The reason is the one that governs the [unlisted exclusion](#the-unlisted-transition): a feed that served what `query()` and `get()` withhold would be a strictly better read channel than either, and the withholding would be decoration. A subscriber still learns everything the event exists to tell it — this record is deleted, drop your copy — which needs no body at all.
+
+The projection keys on the record's `deletedAt`, not on the op, so it covers the `delete` transition and any later frame about a record that is still deleted, while an `unlist` frame — whose record stays fully readable — is untouched. Unscoped `Stack` subscribers receive the whole record: that layer is trusted by definition and reaches every record by other means.
+
 ## Prior state is not in the envelope
 
 There is no `previous`. Prior state is already a first-class, addressable thing: `getVersion(id, version - 1)`. Shipping it inside an event would route around [History access](./versioning.md#history-access), which gates history on the **mutate surface** precisely so that sharing a record after editing something out does not hand every current reader the pre-edit revision. A feed's gate is plain `canRead`, so putting `previous` in the envelope would make every reader a history reader, in the one code path nobody would think to audit. A consumer needing a diff holds the mutate surface, and fetches the version.

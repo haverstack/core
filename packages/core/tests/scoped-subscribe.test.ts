@@ -426,3 +426,62 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
     expect(anon.seen).toEqual([]);
   });
 });
+
+// -------------------------------------------------------
+// Soft-deleted records reach the feed as tombstones
+// -------------------------------------------------------
+
+describe('the feed carries no more of a soft-deleted record than get() does', () => {
+  const publicRead = [{ access: 'public' as const }];
+
+  test('a soft-delete frame carries a tombstone, not the body', async () => {
+    const note = await stack.create(NOTE, { text: 'secret' }, { permissions: publicRead });
+    const reader = collector();
+    await stack.asEntity(READER).subscribe(reader.handler, { includeRecords: true });
+
+    await stack.delete(note.id);
+    await settle();
+
+    const frame = reader.seen.find((c) => c.recordId === note.id);
+    expect(frame?.kind).toBe('deleted');
+    expect(frame?.record).toBeDefined();
+    expect(frame!.record!.content).toEqual({});
+    expect(frame!.record!.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('an ordinary change still carries its body', async () => {
+    const note = await stack.create(NOTE, { text: 'before' }, { permissions: publicRead });
+    const reader = collector();
+    await stack.asEntity(READER).subscribe(reader.handler, { includeRecords: true });
+
+    await stack.update(note.id, { text: 'after' });
+    await settle();
+
+    expect(reader.seen.at(-1)!.record!.content).toEqual({ text: 'after' });
+  });
+
+  // An unlist frame announces a record that stays fully readable — the
+  // projection keys on deletedAt, so the two transitions can't be confused.
+  test('an unlist frame is unaffected', async () => {
+    const note = await stack.create(NOTE, { text: 'still here' }, { permissions: publicRead });
+    const reader = collector();
+    await stack.asEntity(READER).subscribe(reader.handler, { includeRecords: true });
+
+    await stack.setUnlisted(note.id, true);
+    await settle();
+
+    const frame = reader.seen.find((c) => c.op === 'unlist');
+    expect(frame?.record?.content).toEqual({ text: 'still here' });
+  });
+
+  test('an unscoped subscriber is untouched — Stack is the trusted layer', async () => {
+    const note = await stack.create(NOTE, { text: 'secret' }, { permissions: publicRead });
+    const seen = collector();
+    await stack.subscribe(seen.handler, { includeRecords: true });
+
+    await stack.delete(note.id);
+    await settle();
+
+    expect(seen.seen.at(-1)!.record!.content).toEqual({ text: 'secret' });
+  });
+});

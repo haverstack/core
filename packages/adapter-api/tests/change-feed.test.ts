@@ -456,6 +456,31 @@ describe('reconnection', () => {
     stop();
   });
 
+  // A head outside the framable charset is no cursor at all: echoing one
+  // into Last-Event-ID would have fetch refuse every reconnect, wedging a
+  // feed that could have resumed from the present instead.
+  test('discards a ready seq outside the framable charset', async () => {
+    vi.useFakeTimers();
+    const adapter = await openAdapter();
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+
+    const subscription = adapter.subscribeChanges({ since: 'STALE1' }, () => {});
+    first.write('event: ready\ndata: {"seq":"AA\\r\\nX-Injected: 1"}\n\n');
+    const stop = await subscription;
+
+    first.write('event: reset\ndata: {"reason":"cursor_expired"}\n\n');
+    const second = feed();
+    mockFetch.mockResolvedValueOnce(second.response);
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(mockFetch.mock.calls.length).toBe(3));
+
+    expect(headersOf(2)['Last-Event-ID']).toBeUndefined();
+    stop();
+  });
+
   // A credential that cannot authenticate fails the reconnect the same way
   // it failed this one: retrying only spins. The subscriber hears it through
   // onError, and the loop stops rather than hammering with backoff forever.

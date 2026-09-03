@@ -29,6 +29,16 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
   return dir === 'asc' ? 'ASC' : 'DESC';
 };
 
+/**
+ * A content field name as the JSON path selecting that top-level key.
+ * Quoted because a key is an arbitrary string while `$.key` is path syntax:
+ * unquoted, `a.b` selects nested `b`. Escaping is JSON's, not SQL's doubled
+ * quote, which the path parser reads as two characters.
+ * See docs/spec/data-model.md § Filter.
+ */
+export const jsonPathForKey = (key: string): string =>
+  `$."${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
@@ -172,10 +182,10 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     for (const [key, value] of Object.entries(f.content)) {
       if (value === null) {
         conditions.push(`json_extract(r.content, ?) IS NULL`);
-        params.push(`$.${key}`);
+        params.push(jsonPathForKey(key));
       } else {
         conditions.push(`json_extract(r.content, ?) = ?`);
-        params.push(`$.${key}`, value);
+        params.push(jsonPathForKey(key), value);
       }
     }
   }
