@@ -85,6 +85,7 @@ Adapters expose a capabilities object so apps can check what's supported before 
 type AdapterCapabilities = {
   fullTextSearch: boolean;
   contentFieldQuery: boolean;
+  nestedContentQuery: boolean; // content filter keys may be multi-segment paths
   sortableFields: string[];
   maxAttachmentBytes: number | null; // upload size ceiling, or null = unbounded
   maxContentBytes: number | null; // record content/patch size ceiling, or null = unbounded
@@ -97,12 +98,14 @@ type AdapterCapabilities = {
 
 `Stack.query()` enforces this before dispatching — see [Capability-gated filters](./data-model.md#capability-gated-filters). That check is a backstop for the rule above, not a substitute for it: a local adapter that (incorrectly) declared `false` would otherwise return an unfiltered superset for every `content` query.
 
+**`nestedContentQuery` is a second flag rather than a widening of `contentFieldQuery`**, and gates only multi-segment filter keys — a single-segment key needs `contentFieldQuery` alone. The two are separate because a foreign server declaring `contentFieldQuery` is promising to match a field name, and reading that as a promise to walk a path would hand its client an unfiltered superset presented as a filtered result. It is required-`true` for local adapters on the same reasoning as `contentFieldQuery`: a local adapter already walks resident data, and traversal is the same scan with a deeper predicate. A remote server is again the one legitimate `false`, and a discovery response that omits the field means `false` — a client never infers the capability from silence.
+
 **Per-adapter notes:**
 
 - **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1 (local adapters may decline `fullTextSearch`; only `contentFieldQuery` is required-`true`)
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
 - **Durable Object SQLite adapter** (`record-adapter-do-sqlite`) — same capabilities as the native SQLite adapter (shares `SharedSqlRecordLogic`); DO's SQLite storage ships FTS5
-- **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false`
+- **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false` or `nestedContentQuery: false`
 
 Local, embedded adapters (JSON, native SQLite, Durable Object SQLite) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
 

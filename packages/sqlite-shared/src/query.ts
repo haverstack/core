@@ -6,6 +6,7 @@
  */
 
 import { StackQueryError, type StackQuery } from '@haverstack/core';
+import { parseContentFilterKey } from '@haverstack/core/adapter';
 import { decodeCursor, getSortColumn, getSortField, type SortField } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
@@ -30,14 +31,67 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
 };
 
 /**
- * A content field name as the JSON path selecting that top-level key.
- * Quoted because a key is an arbitrary string while `$.key` is path syntax:
- * unquoted, `a.b` selects nested `b`. Escaping is JSON's, not SQL's doubled
- * quote, which the path parser reads as two characters.
- * See docs/spec/data-model.md § Filter.
+ * Normalize a json_each row's value so one array element and one bare
+ * value are walked by the same clause: an array stands for its elements,
+ * anything else for itself. See docs/spec/data-model.md § Nested content
+ * paths.
  */
-export const jsonPathForKey = (key: string): string =>
-  `$."${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+const spread = (alias: string): string =>
+  `CASE WHEN ${alias}.type = 'array' THEN ${alias}.value ` +
+  `WHEN ${alias}.type = 'object' THEN json_array(json(${alias}.value)) ` +
+  `ELSE json_array(${alias}.value) END`;
+
+/**
+ * The members of a json_each row that is an object, and none for a row
+ * that is not — a path descending through a scalar reaches no value rather
+ * than reaching an error.
+ */
+const members = (alias: string): string =>
+  `CASE WHEN ${alias}.type = 'object' THEN ${alias}.value ELSE '{}' END`;
+
+/**
+ * True when some value reached by `segments` satisfies `leaf`, applied to
+ * the alias holding that value. Each segment is a bound parameter matched
+ * against json_each's `key`, never interpolated into a path expression, so
+ * no key can be read as syntax. See docs/spec/data-model.md § Filter.
+ */
+const contentPathExists = (
+  segments: string[],
+  leaf: (alias: string) => string,
+  params: unknown[],
+  nextAlias: () => string,
+): string => {
+  // The walk is a flat join list, not a subquery per segment: both SQLite
+  // builds cap expression-tree depth far below the segment cap, and
+  // nesting spends that budget while a join list spends the join budget
+  // the cap is actually sized against.
+  let key = nextAlias();
+  let value = nextAlias();
+  const from = [`json_each(r.content) AS ${key}`, `json_each(${spread(key)}) AS ${value}`];
+  const where = [`${key}.key = ?`];
+  params.push(segments[0]);
+
+  for (const segment of segments.slice(1)) {
+    key = nextAlias();
+    from.push(`json_each(${members(value)}) AS ${key}`);
+    value = nextAlias();
+    from.push(`json_each(${spread(key)}) AS ${value}`);
+    where.push(`${key}.key = ?`);
+    params.push(segment);
+  }
+
+  where.push(leaf(value));
+  return `EXISTS (SELECT 1 FROM ${from.join(', ')} WHERE ${where.join(' AND ')})`;
+};
+
+/**
+ * A scalar filter value never matches an object or array stored at the
+ * path: json_each exposes those as their JSON text, which would compare
+ * equal to a string spelling the same document while every non-SQL adapter
+ * compares the value itself.
+ */
+const equalsLeaf = (alias: string): string =>
+  `${alias}.type NOT IN ('object', 'array') AND ${alias}.value = ?`;
 
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
@@ -174,18 +228,31 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     );
   }
 
-  // Content field filters (top-level scalar exact match). A `null` value
-  // means "field absent or null", not "match nothing"
-  // (docs/spec/data-model.md § Filter) — json_extract() returns SQL NULL
-  // for both a missing path and a stored JSON null, so IS NULL captures both.
+  // Content field filters — a dot-separated path, matched element-wise
+  // through arrays. A `null` value means "no value at the path, or a value
+  // that is null" (docs/spec/data-model.md § Filter), which is the second
+  // arm below: "some value there is null" OR "nothing is there at all".
   if (f.content) {
+    let aliasSeq = 0;
+    const nextAlias = () => `cp${aliasSeq++}`;
     for (const [key, value] of Object.entries(f.content)) {
-      if (value === null) {
-        conditions.push(`json_extract(r.content, ?) IS NULL`);
-        params.push(jsonPathForKey(key));
+      const segments = parseContentFilterKey(key);
+      // undefined is the same absence null names — JSON drops it on the
+      // way over the wire, so treating it as a value would make an
+      // in-process query and its wire equivalent disagree.
+      if (value === null || value === undefined) {
+        const isNull = contentPathExists(segments, (a) => `${a}.value IS NULL`, params, nextAlias);
+        const anyValue = contentPathExists(
+          segments,
+          (a) => `${a}.value IS NOT NULL`,
+          params,
+          nextAlias,
+        );
+        conditions.push(`(${isNull} OR NOT ${anyValue})`);
       } else {
-        conditions.push(`json_extract(r.content, ?) = ?`);
-        params.push(jsonPathForKey(key), value);
+        const match = contentPathExists(segments, equalsLeaf, params, nextAlias);
+        params.push(value);
+        conditions.push(match);
       }
     }
   }

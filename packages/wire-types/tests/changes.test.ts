@@ -41,6 +41,7 @@ const discovery = (overrides: Partial<DiscoveryResponse> = {}): DiscoveryRespons
   capabilities: {
     fullTextSearch: true,
     contentFieldQuery: true,
+    nestedContentQuery: true,
     sortableFields: ['createdAt'],
     maxAttachmentBytes: null,
     maxContentBytes: null,

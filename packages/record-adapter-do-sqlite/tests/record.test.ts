@@ -103,6 +103,7 @@ describe('construction', () => {
     expect(capabilities).toEqual({
       fullTextSearch: true,
       contentFieldQuery: true,
+      nestedContentQuery: true,
       sortableFields: ['createdAt', 'updatedAt', 'version'],
       maxAttachmentBytes: null,
       maxContentBytes: null,
@@ -259,6 +260,65 @@ describe('records — queries', () => {
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
     const result = await stub.queryRecords({ filter: { content: { priority: 1 } } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // json_each / json_array traversal against the real DO SQLite build,
+  // which is where an engine difference would show up rather than in
+  // sqlite-shared's own tests.
+  test('filters by a nested content path, through an array of objects', async () => {
+    const stub = getStub();
+    await stub.createRecord(
+      makeRecord({
+        id: 'r1',
+        content: { text: 'ada', emails: [{ value: 'ada@example.com', label: 'home' }] },
+      }),
+    );
+    await stub.createRecord(
+      makeRecord({
+        id: 'r2',
+        content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
+      }),
+    );
+    const result = await stub.queryRecords({
+      filter: { content: { 'emails.value': 'grace@example.com' } },
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r2']);
+  });
+
+  test('a nested path reaching no value matches a null filter', async () => {
+    const stub = getStub();
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'no address' } }));
+    await stub.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'has one', address: { city: 'Porto' } } }),
+    );
+    const result = await stub.queryRecords({ filter: { content: { 'address.city': null } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // The segment cap is sized against SQLite's join limit, and this build
+  // is where a difference in that limit would surface. The longest legal
+  // path has to execute, not merely be accepted.
+  test('a path at the segment cap executes; one past it is refused', async () => {
+    const stub = getStub();
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
+    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+
+    const miss = await stub.queryRecords({ filter: { content: { [deepest]: 'x' } } });
+    expect(miss.records).toEqual([]);
+    const absent = await stub.queryRecords({ filter: { content: { [deepest]: null } } });
+    expect(absent.records.map((r) => r.id)).toEqual(['r1']);
+    const err = await stub
+      .queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } })
+      .catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe('bad_request');
+  });
+
+  test('a scalar filter value never matches an object at the path', async () => {
+    const stub = getStub();
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: { b: { k: 'v' } } } }));
+
+    const result = await stub.queryRecords({ filter: { content: { 'a.b': '{"k":"v"}' } } });
+    expect(result.records).toEqual([]);
   });
 
   test('full-text search (FTS5)', async () => {

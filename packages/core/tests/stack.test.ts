@@ -797,11 +797,33 @@ describe('query — content filter null semantics', () => {
   // The same contract the SQL adapters honor by quoting the key into a JSON
   // path: a content key is a field name, never a path expression, so both
   // sides of the wire agree on what a dotted key asks for.
-  test('a dotted key names the top-level field of that name, not a nested one', async () => {
-    await stack.create(NOTE_V1, { text: 'literal', 'a.b': 'x' });
+  // The field-name walk and the filter-path cap are sized together: a name
+  // the walk stops short of is one no path can address.
+  test('a name the field-name walk cannot reach is a name no path can address', async () => {
+    const deep = (d: number): Record<string, unknown> =>
+      d === 0 ? { 'bad.name': 1 } : { n: deep(d - 1) };
+
+    await expect(stack.create(NOTE_V1, { text: 'a', ...deep(31) })).rejects.toThrow(
+      StackValidationError,
+    );
+    const beyond = await stack.create(NOTE_V1, { text: 'b', ...deep(33) });
+    const path = [...Array(33).fill('n'), 'bad', 'name'].join('.');
+    await expect(stack.query({ filter: { content: { [path]: 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(beyond.id).toBeDefined();
+  });
+
+  // A dotted key is a path, and a field literally named `a.b` is refused
+  // at write time, so the two readings can never both be available.
+  test('a dotted key is a path, and the colliding field name is unwritable', async () => {
     await stack.create(NOTE_V1, { text: 'nested', a: { b: 'x' } });
     const result = await stack.query({ filter: { content: { 'a.b': 'x' } } });
-    expect(result.records.map((r) => r.content.text)).toEqual(['literal']);
+    expect(result.records.map((r) => r.content.text)).toEqual(['nested']);
+
+    await expect(stack.create(NOTE_V1, { text: 'literal', 'a.b': 'x' })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 });
 
@@ -3068,6 +3090,194 @@ describe('reserved content keys', () => {
 });
 
 // -------------------------------------------------------
+// Content field names: a filter key is a dot-separated path, so a stored
+// field name may not contain the characters that make a path.
+// -------------------------------------------------------
+
+describe('content field names', () => {
+  const withKey = (key: string, value: unknown): Record<string, unknown> =>
+    JSON.parse(`{"text": "hi", ${JSON.stringify(key)}: ${JSON.stringify(value)}}`) as Record<
+      string,
+      unknown
+    >;
+
+  test.each(['a.b', 'a[0]', 'a]', 'a$b', 'a"b', 'a*b', 'a#b'])(
+    'create() rejects the field name %s',
+    async (key) => {
+      await expect(stack.create(NOTE_V1, withKey(key, 'x'))).rejects.toThrow(StackValidationError);
+    },
+  );
+
+  test('the check holds at every depth, undeclared subtrees included', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'hi', meta: { 'b.c': 1 } })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(
+      stack.create(NOTE_V1, { text: 'hi', items: [{ ok: 1 }, { 'b.c': 1 }] }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('update() rejects a patch introducing one, and lands nothing', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+    await expect(stack.update(record.id, { 'a.b': 1 })).rejects.toThrow(StackValidationError);
+    expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
+  });
+
+  test('commitMigration() rejects one too', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+    await expect(stack.commitMigration(record.id, NOTE_V1, withKey('a.b', 1))).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('defineType() refuses a schema declaring a field no filter could name', async () => {
+    await expect(
+      stack.defineType('com.example.test/dotted@1', 'Dotted', {
+        'a.b': { kind: 'string' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('defineType() checks nested object properties as well', async () => {
+    await expect(
+      stack.defineType('com.example.test/nested@1', 'Nested', {
+        outer: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
+      }),
+    ).rejects.toThrow(StackValidationError);
+    await expect(
+      stack.defineType('com.example.test/arr@1', 'Arr', {
+        items: {
+          kind: 'array',
+          items: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
+        },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('ordinary names, including unicode and reverse-DNS-ish ones, still pass', async () => {
+    const record = await stack.create(NOTE_V1, {
+      text: 'hi',
+      com_example_field: 1,
+      çé: 2,
+      'with space': 3,
+      '@context': 4,
+    });
+
+    expect(record.content['@context']).toBe(4);
+  });
+});
+
+// -------------------------------------------------------
+// Nested content paths: MemoryAdapter answers the same question the
+// SQLite adapters answer in SQL. See docs/spec/data-model.md.
+// -------------------------------------------------------
+
+describe('nested content paths', () => {
+  const CONTACT = 'com.example.test/contact@1';
+
+  const seed = async () => {
+    await stack.defineType(CONTACT, 'Contact', {
+      name: { kind: 'string', required: true },
+      emails: {
+        kind: 'array',
+        items: { kind: 'object', properties: { value: { kind: 'string' } } },
+      },
+    });
+    await stack.create(CONTACT, {
+      name: 'ada',
+      emails: [
+        { value: 'ada@example.com', label: 'home' },
+        { value: 'a@work.example', label: 'work' },
+      ],
+      address: { city: 'Lisbon' },
+      tags: ['starred', 'todo'],
+    });
+    await stack.create(CONTACT, {
+      name: 'grace',
+      emails: [{ value: 'grace@example.com', label: 'home' }],
+      address: { city: 'Porto' },
+      tags: ['todo'],
+    });
+  };
+
+  const names = async (content: Record<string, unknown>): Promise<string[]> =>
+    (await stack.query({ filter: { typeId: CONTACT, content } })).records
+      .map((r) => r.content.name as string)
+      .sort();
+
+  test('matches inside an array of objects', async () => {
+    await seed();
+
+    expect(await names({ 'emails.value': 'a@work.example' })).toEqual(['ada']);
+    expect(await names({ 'emails.value': 'grace@example.com' })).toEqual(['grace']);
+  });
+
+  test('walks plain object properties', async () => {
+    await seed();
+
+    expect(await names({ 'address.city': 'Porto' })).toEqual(['grace']);
+  });
+
+  test('a leaf array matches by containment', async () => {
+    await seed();
+
+    expect(await names({ tags: 'starred' })).toEqual(['ada']);
+    expect(await names({ tags: 'todo' })).toEqual(['ada', 'grace']);
+  });
+
+  test('a path reaching no value matches a null filter', async () => {
+    await seed();
+    await stack.create(CONTACT, { name: 'hopper' });
+
+    expect(await names({ 'address.city': null })).toEqual(['hopper']);
+  });
+
+  test('a path descending through a scalar matches nothing', async () => {
+    await seed();
+
+    expect(await names({ 'name.first': 'ada' })).toEqual([]);
+  });
+
+  test('a malformed path is a query error, not an empty result', async () => {
+    await seed();
+
+    await expect(stack.query({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(stack.query({ filter: { content: { 'emails[0]': 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a nested path needs the nestedContentQuery capability', async () => {
+    const narrow = Object.assign(
+      new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      {
+        capabilities: {
+          fullTextSearch: false,
+          contentFieldQuery: true,
+          nestedContentQuery: false,
+          sortableFields: ['createdAt', 'updatedAt', 'version'],
+          maxAttachmentBytes: null,
+          maxContentBytes: null,
+        },
+      },
+    );
+    const narrowStack = await Stack.create(narrow as StackAdapter);
+
+    // A single-segment filter is still served by contentFieldQuery alone.
+    await expect(
+      narrowStack.query({ filter: { content: { name: 'ada' } } }),
+    ).resolves.toBeDefined();
+    await expect(narrowStack.query({ filter: { content: { 'a.b': 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+});
+
+// -------------------------------------------------------
 // maxContentBytes pre-check: the content half of the attachment
 // ceiling below. Local adapters declare null; a server declares its
 // request-size limit so apps can fail before the round trip.
@@ -3079,6 +3289,7 @@ describe('maxContentBytes pre-check', () => {
       capabilities: {
         fullTextSearch: false,
         contentFieldQuery: true,
+        nestedContentQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: null,
         maxContentBytes,
@@ -3129,6 +3340,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
       capabilities: {
         fullTextSearch: false,
         contentFieldQuery: false,
+        nestedContentQuery: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,
         maxContentBytes: null,

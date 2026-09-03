@@ -30,7 +30,14 @@ import {
   isWellFormedTypeId,
 } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
-import { validateContent, validateReservedKeys } from './validate.js';
+import {
+  CONTENT_SEGMENT_METACHARACTERS,
+  SEGMENT_METACHARACTER_RE,
+  validateContent,
+  validateContentKeys,
+  validateReservedKeys,
+  validateSchemaFieldNames,
+} from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { checkAccess, groupRoleFromAssociations, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
@@ -549,18 +556,62 @@ export class StackQueryError extends StackError {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'fullTextSearch' | 'contentFieldQuery'>,
+  capabilities: Pick<StackFeatures, 'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery'>,
 ): void {
   if (filter?.search && !capabilities.fullTextSearch) {
     throw new StackQueryError(
       'Query uses filter.search, but this adapter does not declare the fullTextSearch capability.',
     );
   }
-  if (filter?.content && !capabilities.contentFieldQuery) {
+  if (!filter?.content) return;
+  if (!capabilities.contentFieldQuery) {
     throw new StackQueryError(
       'Query uses filter.content, but this adapter does not declare the contentFieldQuery capability.',
     );
   }
+  for (const key of Object.keys(filter.content)) {
+    if (parseContentFilterKey(key).length > 1 && !capabilities.nestedContentQuery) {
+      throw new StackQueryError(
+        `Query uses the nested content path "${key}", but this adapter does not declare ` +
+          'the nestedContentQuery capability.',
+      );
+    }
+  }
+}
+
+/** The longest path both SQLite engines can execute — see the spec link below. */
+const MAX_CONTENT_PATH_SEGMENTS = 32;
+
+/**
+ * Split a content filter key into path segments. Write-time validation
+ * keeps stored field names free of the path metacharacters, but a filter
+ * arrives from a request body and has made no such promise, so the same
+ * rule is enforced here. See docs/spec/data-model.md § Content field names.
+ */
+export function parseContentFilterKey(key: string): string[] {
+  const segments = key.split('.');
+  // A SQLite adapter spends two json_each joins per segment against a
+  // 64-table join limit, so a path past the cap is one the engine could
+  // not execute. See docs/spec/data-model.md § Nested content paths.
+  if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
+    throw new StackQueryError(
+      `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
+    );
+  }
+  for (const segment of segments) {
+    if (segment === '') {
+      throw new StackQueryError(
+        `Invalid content filter path "${key}": a path segment cannot be empty.`,
+      );
+    }
+    if (SEGMENT_METACHARACTER_RE.test(segment)) {
+      throw new StackQueryError(
+        `Invalid content filter path "${key}": a segment cannot contain any of ` +
+          `${CONTENT_SEGMENT_METACHARACTERS.join(' ')}.`,
+      );
+    }
+  }
+  return segments;
 }
 
 /** The only sort fields any adapter maps; anything else is a caller error. */
@@ -1280,6 +1331,11 @@ export class Stack implements StackClient {
     const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
     if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
+    const nameErrors = validateSchemaFieldNames(schema);
+    if (nameErrors.length > 0) {
+      throw new StackValidationError(nameErrors);
+    }
+
     const schemaHash = await hashSchema(schema);
     const existing = await this.getTypeCached(id);
 
@@ -1498,6 +1554,7 @@ export class Stack implements StackClient {
 
     const errors = [
       ...validateReservedKeys(content),
+      ...validateContentKeys(content),
       ...validateContent(content, type.schema),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -1655,7 +1712,7 @@ export class Stack implements StackClient {
     // Checked on the raw patch, before the merge: a reserved key in a
     // patch is lost by applyMergePatch rather than stored, so a check on
     // the merged result would never see it. See validateReservedKeys().
-    const patchErrors = validateReservedKeys(content);
+    const patchErrors = [...validateReservedKeys(content), ...validateContentKeys(content)];
     if (patchErrors.length > 0) {
       throw new StackValidationError(patchErrors);
     }
@@ -2094,7 +2151,11 @@ export class Stack implements StackClient {
       throw new Error(`Unknown type: "${toTypeId}". Call defineType() first.`);
     }
 
-    const errors = [...validateReservedKeys(content), ...validateContent(content, type.schema)];
+    const errors = [
+      ...validateReservedKeys(content),
+      ...validateContentKeys(content),
+      ...validateContent(content, type.schema),
+    ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }

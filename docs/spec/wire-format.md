@@ -18,6 +18,7 @@ GET /.well-known/stack
   "capabilities": {
     "fullTextSearch": true,
     "contentFieldQuery": true,
+    "nestedContentQuery": true,
     "sortableFields": ["createdAt", "updatedAt", "version"],
     "maxAttachmentBytes": 52428800,
     "maxContentBytes": 1048576
@@ -259,6 +260,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 
+**`nestedContentQuery` gates a filter shape, not an endpoint.** A server supporting `POST /records/query` may still decline multi-segment content keys, so declaring `contentFieldQuery: true` says the endpoint exists and single-segment keys work, and nothing about paths. A server that declares `nestedContentQuery: false` and receives a multi-segment key answers **400** (`bad_request`) rather than matching what it can — an unfiltered superset presented as a filtered result is the failure the capability exists to prevent. A discovery response omitting the field means `false`; `APIAdapter` refuses such a filter locally, without sending a request, exactly as it does for the other gated filters.
+
 **Filters gated by a capability fail loudly, not silently.** A `content` filter has no representation in `GET /records`' query params, and `search` behaves however the server does with an unsupported param — so `APIAdapter` checks `capabilities.contentFieldQuery`/`capabilities.fullTextSearch` before dispatching and throws `APIAdapterCapabilityError` locally, without sending a request, when the corresponding filter is used against a server that hasn't declared the capability. The alternative — degrading to an unfiltered or partially filtered result presented as the requested query — is worse than an error for anything that trusts the filter (dedup checks, existence checks, selection-sensitive logic).
 
 `PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints.
@@ -315,6 +318,8 @@ The limit applies to the whole request body, so the check belongs upstream of pa
 **A server SHOULD declare the limit as `maxContentBytes` in [discovery](#discovery)**, the content-side counterpart to `maxAttachmentBytes`. `Stack.create()` and `Stack.update()` pre-check against it — the create body and the patch respectively, since the patch is what travels — and throw `StackPayloadTooLargeError` before sending. As with attachments, the client-side check is a courtesy that saves a round trip and yields a typed error; the server's own limit remains authoritative, and a server that declares `null` (or omits the field) is simply saying clients can't pre-check, not that nothing is enforced.
 
 **`__proto__`, `constructor`, and `prototype` are refused as top-level content keys** on `POST /records` and `PATCH /records/:id`, with `422` (code `validation`) — a `Stack` invariant a server built on core inherits through ordinary record validation, and one that a server mapping request bodies onto storage directly has to apply itself. See [Data model § Reserved content keys](./data-model.md#reserved-content-keys).
+
+**A content field name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth**, on the same endpoints and with the same `422`, and on `POST /records/:id/migrate` alongside them. A field name that collides with content-path syntax would make a filter key ambiguous, so it is refused where it is written rather than where it is read. See [Data model § Content field names](./data-model.md#content-field-names).
 
 ## Permissions
 

@@ -106,6 +106,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       capabilities: {
         fullTextSearch: true,
         contentFieldQuery: true,
+        nestedContentQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -127,6 +128,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       capabilities: {
         fullTextSearch: false,
         contentFieldQuery: false,
+        nestedContentQuery: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
         maxContentBytes: null,
@@ -151,6 +153,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       capabilities: {
         fullTextSearch: true,
         contentFieldQuery: true,
+        nestedContentQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -175,6 +178,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       capabilities: {
         fullTextSearch: true,
         contentFieldQuery: true,
+        nestedContentQuery: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -199,6 +203,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       capabilities: {
         fullTextSearch: false,
         contentFieldQuery: false,
+        nestedContentQuery: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
         maxContentBytes: null,

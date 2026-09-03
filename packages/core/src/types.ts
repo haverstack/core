@@ -454,7 +454,14 @@ export type RecordFilter = {
   relatedTo?: RelatedToFilter;
   attachmentFileId?: FileId; // Records that reference this attachment file ID
 
-  // Content fields — exact match on top-level keys (POST /query only)
+  /**
+   * Exact match on content fields, keyed by a dot-separated path
+   * (`'emails.value'`). An array anywhere along the path is matched
+   * element-wise, so the motivating question — which contact holds this
+   * email address — is one filter. A multi-segment key needs the
+   * nestedContentQuery capability. POST /query only.
+   * See docs/spec/data-model.md § Filter.
+   */
   content?: Record<string, unknown>;
 
   // Full-text search (capability varies by adapter)
@@ -529,6 +536,17 @@ export type AdapterCapabilities = {
    * See docs/spec/adapters.md § Adapter capabilities.
    */
   contentFieldQuery: boolean;
+  /**
+   * Whether a content filter key may be a multi-segment path
+   * (`'emails.value'`) rather than a single field name. Separate from
+   * contentFieldQuery rather than folded into it: a foreign server
+   * declaring contentFieldQuery implements single-segment matching, and
+   * reading that as a promise of path traversal would hand a client an
+   * unfiltered superset presented as a filtered result — the failure
+   * assertQueryCapabilities() exists to prevent.
+   * See docs/spec/adapters.md § Adapter capabilities.
+   */
+  nestedContentQuery: boolean;
   sortableFields: Array<QuerySort['field']>;
   /**
    * Maximum attachment upload size in bytes, or `null` if unbounded. Lets

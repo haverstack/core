@@ -185,15 +185,121 @@ export const validateContent = (
 export const RESERVED_CONTENT_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];
 
 /**
- * Top-level only. Nested occurrences survive the JSON round trip as inert
- * own properties (see above), and walking undeclared subtrees to find them
- * would cost a traversal the schema walk doesn't otherwise do.
+ * Top-level only: a nested occurrence round-trips inertly as an own data
+ * property, so it reaches none of the machinery above.
  */
 export const validateReservedKeys = (content: Record<string, unknown>): ValidationError[] =>
   RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(content, key)).map((key) => ({
     path: key,
     message: `"${key}" is a reserved content key and cannot be used as a field name`,
   }));
+
+/**
+ * Characters a content field name may not contain, because a content
+ * filter key is a dot-separated path: `{ content: { 'emails.value': x } }`
+ * addresses `value` inside `emails`. A field literally named `emails.value`
+ * would make that filter mean two things at once, so the ambiguity is
+ * removed from the write side — where it is a validation error a caller
+ * can act on — rather than from the query side, where it would need an
+ * escape convention that silently misreads when a caller forgets it.
+ *
+ * Wider than what SQLite's JSON path grammar treats as syntax today (`.`,
+ * `[`, `]`, `$`, `"`): `*` and `#` are reserved against a path grammar
+ * that grows a wildcard or a last-element form. Narrowing a legal charset
+ * is a one-way door, so the cost of reserving a character now is nothing
+ * and the cost of reserving it later is every stored record.
+ *
+ * See docs/spec/data-model.md § Content field names.
+ */
+export const CONTENT_KEY_PATH_METACHARACTERS = ['.', '[', ']', '$', '"', '*', '#'] as const;
+
+/**
+ * A filter key is split on `.` before its segments are checked, so a
+ * segment is the only place the separator itself cannot appear.
+ */
+export const CONTENT_SEGMENT_METACHARACTERS = CONTENT_KEY_PATH_METACHARACTERS.filter(
+  (char) => char !== '.',
+);
+
+/** Derived so the reserved set has one definition, not two that drift. */
+const characterClass = (chars: readonly string[]): RegExp =>
+  new RegExp(`[${chars.map((char) => char.replace(/[\\\]^-]/g, '\\$&')).join('')}]`);
+
+const PATH_METACHARACTER_RE = characterClass(CONTENT_KEY_PATH_METACHARACTERS);
+
+export const SEGMENT_METACHARACTER_RE = characterClass(CONTENT_SEGMENT_METACHARACTERS);
+
+/**
+ * Unlike the reserved keys above, this holds at every depth: a filter path
+ * of `a.b.c` is as ambiguous against a nested field named `b.c` as against
+ * a top-level one named `a.b`. Undeclared subtrees are walked too, since
+ * they are exactly the fields no schema promised anything about.
+ */
+const collectKeyErrors = (
+  value: unknown,
+  prefix: string,
+  errors: ValidationError[],
+  depth: number,
+): void => {
+  // The walk stops one level deeper than the longest filter path can
+  // reach, so a name this never inspects is a name no filter can address.
+  // Array nesting spends a level here and a segment there alike.
+  if (depth > MAX_VALIDATION_DEPTH) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => collectKeyErrors(item, `${prefix}[${i}]`, errors, depth + 1));
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (PATH_METACHARACTER_RE.test(key)) {
+      errors.push({
+        path,
+        message:
+          `Field name "${key}" contains a reserved character ` +
+          `(${CONTENT_KEY_PATH_METACHARACTERS.join(' ')}) and cannot be used as a field name`,
+      });
+    }
+    collectKeyErrors(child, path, errors, depth + 1);
+  }
+};
+
+/** Recursive — see collectKeyErrors. */
+export const validateContentKeys = (content: Record<string, unknown>): ValidationError[] => {
+  const errors: ValidationError[] = [];
+  collectKeyErrors(content, '', errors, 0);
+  return errors;
+};
+
+/**
+ * A schema may not declare a field a content filter could never name.
+ * Recurses into `object` properties; `array` items carry no field names of
+ * their own beyond the object properties nested under them.
+ */
+export const validateSchemaFieldNames = (
+  schema: TypeSchema,
+  prefix = '',
+  errors: ValidationError[] = [],
+  depth = 0,
+): ValidationError[] => {
+  if (depth > MAX_VALIDATION_DEPTH) return errors;
+  for (const [key, def] of Object.entries(schema)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (PATH_METACHARACTER_RE.test(key)) {
+      errors.push({
+        path,
+        message:
+          `Field name "${key}" contains a reserved character ` +
+          `(${CONTENT_KEY_PATH_METACHARACTERS.join(' ')}) and cannot be declared in a schema`,
+      });
+    }
+    let inner: FieldDef = def;
+    while (inner.kind === 'array') inner = inner.items;
+    if (inner.kind === 'object')
+      validateSchemaFieldNames(inner.properties, path, errors, depth + 1);
+  }
+  return errors;
+};
 
 /**
  * Returns true if the content is valid against the schema.
