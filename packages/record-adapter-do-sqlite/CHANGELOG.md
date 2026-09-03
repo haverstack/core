@@ -1,5 +1,16 @@
 # @haverstack/record-adapter-do-sqlite
 
+## 0.2.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`d27cfe4`](https://github.com/haverstack/core/commit/d27cfe4fc09406abda36c1c93f071446e13ef7b8)]:
+  - @haverstack/core@0.17.0
+
 ## 0.1.1
 
 ### Patch Changes
