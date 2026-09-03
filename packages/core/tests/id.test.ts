@@ -1,15 +1,19 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import {
   generateId,
+  generateIdForTimestamp,
   crockford32Encode,
   crockford32Decode,
   isValidIdFormat,
   idTimestamp,
   RAND_SUFFIX_LENGTH,
   BASE,
+  IdGenerationError,
   IdGenerationOverflowError,
+  MAX_ID_TIMESTAMP,
   _setLastNowId,
   _setLastRandChars,
+  _setLastTimestamp,
   _resetIdState,
 } from '../src/id.js';
 
@@ -223,6 +227,83 @@ describe('generateId', () => {
 
     expect(id2.slice(0, -RAND_SUFFIX_LENGTH)).toBe(crockford32Encode(t2).padStart(9, '0'));
     expect(id1 < id2).toBe(true);
+  });
+});
+
+// -------------------------------------------------------
+// generateIdForTimestamp
+// -------------------------------------------------------
+
+describe('generateIdForTimestamp', () => {
+  beforeEach(() => {
+    _resetIdState();
+  });
+
+  test('timestamp prefix matches the encoded timestamp', () => {
+    const t = new Date('2020-06-15T12:00:00.000Z').valueOf();
+    const id = generateIdForTimestamp(t);
+    expect(idTimestamp(id)).toBe(t);
+  });
+
+  test('produces a well-formed id', () => {
+    const id = generateIdForTimestamp(new Date('2020-06-15T12:00:00.000Z').valueOf());
+    expect(isValidIdFormat(id)).toBe(true);
+  });
+
+  test('is not clamped by a later live generateId() call in the same process (regression)', () => {
+    // A live create() advances the monotonic floor to "now" — a much
+    // larger timestamp than any historical import date.
+    generateId(Date.now());
+
+    const historical = new Date('2020-06-15T12:00:00.000Z').valueOf();
+    const id = generateIdForTimestamp(historical);
+
+    // generateId() itself would have clamped this forward to "now";
+    // generateIdForTimestamp() must not.
+    expect(idTimestamp(id)).toBe(historical);
+  });
+
+  test('does not advance generateId()’s monotonic floor for later live ids', () => {
+    // Minting a historical id must not make generateId() think the clock
+    // has already reached that timestamp when live generation resumes.
+    generateIdForTimestamp(new Date('2099-01-01').valueOf());
+
+    const now = Date.now();
+    const liveId = generateId(now);
+    expect(idTimestamp(liveId)).toBe(now);
+  });
+
+  test('does not consult the live monotonic floor for a backward-looking timestamp', () => {
+    _setLastTimestamp(new Date('2024-06-01').valueOf());
+    const historical = new Date('2020-06-15T12:00:00.000Z').valueOf();
+    const id = generateIdForTimestamp(historical);
+    expect(idTimestamp(id)).toBe(historical);
+  });
+
+  // generateId() encodes Date.now() and so can never leave the encodable
+  // range; generateIdForTimestamp() encodes whatever it is handed, so the
+  // bound has to live here. Without it a timestamp past 32^9-1 overflows
+  // the 9-char prefix and yields a 13-char id the library itself rejects.
+  test('accepts the last encodable millisecond and keeps the id well-formed', () => {
+    const id = generateIdForTimestamp(MAX_ID_TIMESTAMP);
+    expect(isValidIdFormat(id)).toBe(true);
+    expect(idTimestamp(id)).toBe(MAX_ID_TIMESTAMP);
+  });
+
+  test('throws rather than minting a malformed id one ms past the range', () => {
+    expect(() => generateIdForTimestamp(MAX_ID_TIMESTAMP + 1)).toThrow(IdGenerationError);
+  });
+
+  test('throws on a negative (pre-epoch) timestamp', () => {
+    expect(() => generateIdForTimestamp(new Date('1969-07-20').valueOf())).toThrow(
+      IdGenerationError,
+    );
+  });
+
+  test('throws on NaN rather than silently minting the epoch-zero id', () => {
+    expect(() => generateIdForTimestamp(new Date('not a date').valueOf())).toThrow(
+      IdGenerationError,
+    );
   });
 });
 

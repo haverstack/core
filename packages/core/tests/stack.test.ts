@@ -13,7 +13,14 @@ import {
   StackPayloadTooLargeError,
   StackClosedError,
 } from '../src/stack.js';
-import { generateId, crockford32Encode, IdGenerationError } from '../src/id.js';
+import {
+  generateId,
+  crockford32Encode,
+  idTimestamp,
+  isValidIdFormat,
+  MAX_ID_TIMESTAMP,
+  IdGenerationError,
+} from '../src/id.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
@@ -517,6 +524,198 @@ describe('create — client-supplied id', () => {
     const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
     const record = await stack.create(NOTE_V1, { text: 'hello' }, { id: ancientId });
     expect(record.id).toBe(ancientId);
+  });
+});
+
+// -------------------------------------------------------
+// create — backdating (createdAt / updatedAt)
+// -------------------------------------------------------
+
+describe('create — backdating (createdAt/updatedAt)', () => {
+  test('accepts an explicit createdAt and defaults updatedAt to match', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { createdAt });
+    expect(record.createdAt).toEqual(createdAt);
+    expect(record.updatedAt).toEqual(createdAt);
+  });
+
+  test('accepts a distinct updatedAt when supplied', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const updatedAt = new Date('2020-06-20T12:00:00.000Z');
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { createdAt, updatedAt });
+    expect(record.createdAt).toEqual(createdAt);
+    expect(record.updatedAt).toEqual(updatedAt);
+  });
+
+  test('rejects an updatedAt preceding createdAt', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const updatedAt = new Date('2020-06-10T12:00:00.000Z');
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { createdAt, updatedAt }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('derives the id from createdAt when no id is supplied', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { createdAt });
+    expect(idTimestamp(record.id)).toBe(createdAt.valueOf());
+  });
+
+  test('accepts an explicit id whose timestamp agrees with createdAt', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const id = idWithTimestamp(createdAt.valueOf());
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { id, createdAt });
+    expect(record.id).toBe(id);
+  });
+
+  test('rejects an explicit id whose timestamp disagrees with createdAt beyond tolerance', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const id = idWithTimestamp(new Date('2000-01-01').valueOf());
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, { id, createdAt })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('idTimestampSkewMs: null disables the id/createdAt consistency check too', async () => {
+    const permissiveAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const permissiveStack = await Stack.create(permissiveAdapter, { idTimestampSkewMs: null });
+    await permissiveStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const id = idWithTimestamp(new Date('2000-01-01').valueOf());
+    const record = await permissiveStack.create(NOTE_V1, { text: 'hello' }, { id, createdAt });
+    expect(record.id).toBe(id);
+  });
+
+  test('an id alone (no createdAt) stays a pure position choice — no consistency check applies', async () => {
+    const ancientId = idWithTimestamp(new Date('2000-01-01').valueOf());
+    const before = new Date();
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { id: ancientId });
+    expect(record.id).toBe(ancientId);
+    expect(record.createdAt.valueOf()).toBeGreaterThanOrEqual(before.valueOf());
+  });
+
+  test('a prior live create() does not clamp a later backdated id forward (regression)', async () => {
+    // Advance generateId()'s monotonic floor to "now" via an ordinary,
+    // undated create() — the scenario a long-running import script hits
+    // once it has written anything live before importing historical data.
+    await stack.create(NOTE_V1, { text: 'live' });
+
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.create(NOTE_V1, { text: 'backdated' }, { createdAt });
+    expect(idTimestamp(record.id)).toBe(createdAt.valueOf());
+  });
+
+  test('unlistedAt stamps from createdAt, not the actual current time', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { createdAt, unlisted: true });
+    expect(record.unlistedAt).toEqual(createdAt);
+  });
+
+  // An Invalid Date's getTime() is NaN, and every comparison against NaN
+  // is false — so an unchecked Invalid Date doesn't slip past the
+  // ordering and skew checks, it switches them off, then persists a
+  // record that throws RangeError the moment anything serializes it.
+  test('rejects an Invalid Date createdAt rather than minting an epoch-zero id', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { createdAt: new Date('not a date') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects an Invalid Date updatedAt', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { updatedAt: new Date('not a date') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('an Invalid Date createdAt cannot switch off the id/createdAt skew check', async () => {
+    const id = idWithTimestamp(new Date('2000-01-01').valueOf());
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { id, createdAt: new Date('not a date') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a pre-epoch createdAt as a validation error, not a raw RangeError', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { createdAt: new Date('1969-07-20T00:00:00.000Z') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a pre-epoch createdAt even when an explicit id skips ID derivation', async () => {
+    const id = idWithTimestamp(0);
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'hello' },
+        { id, createdAt: new Date('1969-07-20T00:00:00.000Z') },
+      ),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // Past 32^9-1 ms the 9-char timestamp prefix overflows to 10, so the
+  // derived id would be 13 chars — one the library itself rejects via
+  // isValidIdFormat(). Year-9999 sentinels are ordinary in imported data.
+  test('rejects a far-future createdAt rather than minting a malformed 13-char id', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { createdAt: new Date('9999-01-01T00:00:00.000Z') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('accepts a createdAt at the last encodable millisecond', async () => {
+    const createdAt = new Date(MAX_ID_TIMESTAMP);
+    const record = await stack.create(NOTE_V1, { text: 'hello' }, { createdAt });
+    expect(isValidIdFormat(record.id)).toBe(true);
+    expect(idTimestamp(record.id)).toBe(MAX_ID_TIMESTAMP);
+  });
+
+  // The one-sided case: createdAt defaults to now, which a backdated
+  // updatedAt on its own still precedes.
+  test('rejects an updatedAt preceding a defaulted createdAt', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { updatedAt: new Date('2000-01-01T00:00:00.000Z') }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // JSON has no Date type, so a server forwarding a parsed POST /records
+  // body hands these options the ISO string it deserialized. That has to
+  // come back as a validation error naming the field, not a raw TypeError
+  // out of .getTime() — a 400, not a 500.
+  test('rejects a wire-shaped ISO string createdAt as a validation error', async () => {
+    const opts = { createdAt: '2020-06-15T12:00:00.000Z' } as unknown as { createdAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects a wire-shaped ISO string updatedAt as a validation error', async () => {
+    const opts = { updatedAt: '2020-06-15T12:00:00.000Z' } as unknown as { updatedAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('rejects a numeric epoch createdAt as a validation error', async () => {
+    const opts = { createdAt: 1592222400000 } as unknown as { createdAt: Date };
+    await expect(stack.create(NOTE_V1, { text: 'hello' }, opts)).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('does not alias the caller Date — mutating it after create leaves the record alone', async () => {
+    const cursor = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      { createdAt: cursor, unlisted: true },
+    );
+
+    // The shape of a real import loop: one Date advanced per row.
+    cursor.setFullYear(1990);
+
+    const stored = await stack.get(record.id);
+    expect(stored?.createdAt).toEqual(new Date('2020-06-15T12:00:00.000Z'));
+    expect(stored?.updatedAt).toEqual(new Date('2020-06-15T12:00:00.000Z'));
+    expect(stored?.unlistedAt).toEqual(new Date('2020-06-15T12:00:00.000Z'));
   });
 });
 

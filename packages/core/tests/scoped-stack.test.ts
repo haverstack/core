@@ -924,6 +924,102 @@ describe('ScopedStack.create — client-supplied id', () => {
 });
 
 // -------------------------------------------------------
+// ScopedStack.create — createdAt/updatedAt: owner acting alone only
+// -------------------------------------------------------
+
+describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the owner acting alone', () => {
+  beforeEach(async () => {
+    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+  });
+
+  test('rejects a grantee-supplied createdAt with StackPermissionError', async () => {
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('rejects a grantee-supplied updatedAt with StackPermissionError', async () => {
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .create(COMMENT, { text: 'hello' }, { updatedAt: new Date('2020-01-01') }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('does not create a record when refused', async () => {
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
+    ).rejects.toThrow();
+    expect((await stack.query({ filter: { typeId: COMMENT } })).records).toHaveLength(0);
+  });
+
+  test('rejects createdAt from a principal delegated to act for the owner (not owner acting alone)', async () => {
+    // subjectEntityId === OWNER satisfies checkCreateGrant()'s owner-subject
+    // carve-out, so this exercises the createdAt/updatedAt gate itself
+    // rather than getting stopped earlier by a missing create grant.
+    await expect(
+      stack
+        .asEntity(MEMBER, { onBehalfOf: OWNER })
+        .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('rejects createdAt when the owner delegates for someone else — the owner’s trust does not transfer to the subject', async () => {
+    await expect(
+      stack
+        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('owner acting alone may set createdAt, and updatedAt defaults to match', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' }, { createdAt });
+    expect(record.createdAt).toEqual(createdAt);
+    expect(record.updatedAt).toEqual(createdAt);
+  });
+
+  test('owner acting alone may set updatedAt distinct from createdAt', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const updatedAt = new Date('2020-06-20T12:00:00.000Z');
+    const record = await stack
+      .asEntity(OWNER)
+      .create(COMMENT, { text: 'hello' }, { createdAt, updatedAt });
+    expect(record.updatedAt).toEqual(updatedAt);
+  });
+
+  test('owner acting alone: an id agreeing with createdAt is accepted, ignoring the "vs. now" skew check', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const id = idWithTimestamp(createdAt.valueOf());
+    const record = await stack
+      .asEntity(OWNER)
+      .create(COMMENT, { text: 'hello' }, { id, createdAt });
+    expect(record.id).toBe(id);
+  });
+
+  test('owner acting alone: an id disagreeing with createdAt is rejected against createdAt, not "now"', async () => {
+    const createdAt = new Date('2020-06-15T12:00:00.000Z');
+    const id = idWithTimestamp(new Date('2000-01-01').valueOf());
+    await expect(
+      stack.asEntity(OWNER).create(COMMENT, { text: 'hello' }, { id, createdAt }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('owner acting alone still gets the reserved-prefix and format checks on a backdated id', async () => {
+    await expect(
+      stack
+        .asEntity(OWNER)
+        .create(COMMENT, { text: 'hello' }, { id: 'too-short', createdAt: new Date('2020-01-01') }),
+    ).rejects.toThrow(StackQueryError);
+  });
+});
+
+// -------------------------------------------------------
 // ScopedStack — grant-based read
 // -------------------------------------------------------
 

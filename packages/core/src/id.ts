@@ -148,6 +148,18 @@ export const _resetIdState = (): void => {
 // -------------------------------------------------------
 
 /**
+ * Largest timestamp (ms since epoch) that still encodes to the
+ * 9-character prefix an ID's format requires: 32^9 - 1, i.e.
+ * 3084-12-12T12:41:28.831Z. One millisecond past it the prefix grows to 10
+ * characters and the ID no longer passes isValidIdFormat() — the library
+ * would be minting an ID it rejects on the way back in. generateId() can't
+ * reach this, since it encodes Date.now(); generateIdForTimestamp() takes
+ * whatever timestamp the caller asks for, so it is the one that has to
+ * check.
+ */
+export const MAX_ID_TIMESTAMP = Math.pow(BASE, MIN_TIMESTAMP_LENGTH) - 1;
+
+/**
  * Generate a new Stack record ID. Time-sortable: lexicographic order
  * matches creation order, with same-millisecond IDs monotonically
  * incremented. Throws IdGenerationOverflowError past 32^3 IDs in one
@@ -165,6 +177,31 @@ export const generateId = (timestamp: number = Date.now()): string => {
   lastRandChars = randChars;
 
   return nowId + randChars;
+};
+
+/**
+ * Mint an ID for an arbitrary (typically past) timestamp — used by
+ * Stack.create() to derive an ID from an explicit `createdAt` when
+ * importing historical records. Deliberately bypasses generateId()'s
+ * monotonic `lastTimestamp` floor: that floor exists to protect *live* ID
+ * generation from a backward clock step (NTP correction, suspend/resume),
+ * and would otherwise clamp a deliberately historical timestamp forward to
+ * "now" the moment the process has minted any live ID past it — silently
+ * defeating the backdate it was asked for. Same-millisecond uniqueness for
+ * a historical timestamp is therefore left to a fresh random suffix each
+ * call rather than the live incrementing scheme; a collision surfaces the
+ * same way any client-supplied id collision does, as StackConflictError
+ * from the adapter.
+ */
+export const generateIdForTimestamp = (timestamp: number): string => {
+  if (!Number.isFinite(timestamp) || timestamp < 0 || timestamp > MAX_ID_TIMESTAMP) {
+    throw new IdGenerationError(
+      `Timestamp ${timestamp} cannot be encoded as an ID: expected 0…${MAX_ID_TIMESTAMP} ` +
+        `(1970-01-01T00:00:00.000Z…${new Date(MAX_ID_TIMESTAMP).toISOString()}).`,
+    );
+  }
+  const nowId = pad(crockford32Encode(timestamp), MIN_TIMESTAMP_LENGTH);
+  return nowId + generateRandChars();
 };
 
 // -------------------------------------------------------
