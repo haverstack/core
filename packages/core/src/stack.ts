@@ -578,23 +578,20 @@ export function assertQueryCapabilities(
   }
 }
 
-/** Mirrors validate.ts's MAX_VALIDATION_DEPTH — see parseContentFilterKey. */
+/** The longest path both SQLite engines can execute — see the spec link below. */
 const MAX_CONTENT_PATH_SEGMENTS = 32;
 
 /**
  * Split a content filter key into path segments. Write-time validation
- * keeps every stored field name free of the path metacharacters, so a
- * segment is unambiguous — but a filter arrives from a request body or a
- * delegated app and has made no such promise, and adapters build a JSON
- * path out of what comes back. Rejecting here is what lets them quote a
- * segment without an escape convention. See docs/spec/data-model.md
- * § Content field names.
+ * keeps stored field names free of the path metacharacters, but a filter
+ * arrives from a request body and has made no such promise, so the same
+ * rule is enforced here. See docs/spec/data-model.md § Content field names.
  */
 export function parseContentFilterKey(key: string): string[] {
   const segments = key.split('.');
-  // Matches the depth content validation walks, and bounds the SQL a
-  // SQLite adapter generates: each segment nests another EXISTS, so an
-  // unbounded path is an unbounded statement built from a request body.
+  // A SQLite adapter spends two json_each joins per segment against a
+  // 64-table join limit, so a path past the cap is one the engine could
+  // not execute. See docs/spec/data-model.md § Nested content paths.
   if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
     throw new StackQueryError(
       `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
@@ -3134,6 +3131,30 @@ function stripVersionPermissions(version: RecordVersion): RecordVersion {
 }
 
 /**
+ * The tombstone a soft-deleted Record is presented as. `permissions` is
+ * retained because it decides whether the caller may undelete; history is
+ * exempt, which is why getVersions() still serves the content this
+ * withholds. See docs/spec/versioning.md § The tombstone is literal.
+ */
+function tombstoneOf(record: StackRecord): StackRecord {
+  return {
+    id: record.id,
+    typeId: record.typeId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    version: record.version,
+    content: {},
+    ...(record.deletedAt !== undefined && { deletedAt: record.deletedAt }),
+    ...(record.unlistedAt !== undefined && { unlistedAt: record.unlistedAt }),
+    ...(record.permissions !== undefined && { permissions: record.permissions }),
+  };
+}
+
+/** A soft-deleted Record presented as its tombstone; anything else untouched. */
+const presentDeleted = (record: StackRecord): StackRecord =>
+  record.deletedAt ? tombstoneOf(record) : record;
+
+/**
  * A permission-enforcing view of a Stack for a single (principal, subject)
  * pair, obtained via `stack.asEntity(entityId)`. A record the request
  * cannot read answers exactly as a missing one does — null on reads,
@@ -3254,7 +3275,16 @@ class ScopedSubscription extends Subscription {
       this.reportError(err);
       return;
     }
-    this.deliver(emission);
+    // After the permission decision, which needs the whole record: a frame
+    // carrying a deleted record's body would be a read channel around the
+    // tombstone. See docs/spec/events.md § Soft-deleted records reach the
+    // feed as tombstones.
+    this.deliver(this.project(emission));
+  }
+
+  private project(emission: EmittedChange): EmittedChange {
+    const record = presentDeleted(emission.record);
+    return record === emission.record ? emission : { ...emission, record };
   }
 }
 
@@ -3551,16 +3581,33 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (opts.mutating ?? true) await this.requireOwnerForGrantRecord(record);
+    const mutating = opts.mutating ?? true;
+    if (mutating) await this.requireOwnerForGrantRecord(record);
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
       if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return record;
+      return this.refuseIfDeleted(record, mutating);
     }
     const allowed =
       ((await this.checkWrite(record)) ||
         (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
       (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
     if (!allowed) throw await this.denialFor(record);
+    return this.refuseIfDeleted(record, mutating);
+  }
+
+  /**
+   * Refuse a mutation aimed at a soft-deleted Record. Asked only of a
+   * mutating caller, so the history readers borrowing this gate still work,
+   * and only after the authority decision, so "exists but deleted" is never
+   * a probe a stranger can run. See docs/spec/versioning.md § Mutations are
+   * refused, not applied to a tombstone.
+   */
+  private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
+    if (mutating && record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
+      );
+    }
     return record;
   }
 
@@ -3612,7 +3659,9 @@ export class ScopedStack implements StackClient {
 
     const match = await findFirstMatch(
       (q) => this.stack.query(q),
-      { filter: { attachmentFileId: fileId } },
+      // Reach, not enumeration: a record readable by ID conveys the file it
+      // references. See docs/spec/access-control.md § Unlisted records.
+      { filter: { attachmentFileId: fileId, includeUnlisted: true } },
       (record) => this.canRead(record, prefetchedGrants, groupRoles),
     );
     return match !== undefined;
@@ -3834,7 +3883,8 @@ export class ScopedStack implements StackClient {
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    return (await this.canRead(record)) ? record : null;
+    if (!(await this.canRead(record))) return null;
+    return presentDeleted(record);
   }
 
   /**
@@ -3869,7 +3919,12 @@ export class ScopedStack implements StackClient {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       totalFetched += page.records.length;
       for (const record of page.records) {
-        if (await this.canRead(record, prefetchedGrants, groupRoles)) records.push(record);
+        // Projected here as well as in get(), or `includeDeleted` would be
+        // a strictly better read channel than the fetch-by-ID it is
+        // supposed to match.
+        if (await this.canRead(record, prefetchedGrants, groupRoles)) {
+          records.push(presentDeleted(record));
+        }
       }
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
@@ -4038,6 +4093,10 @@ export class ScopedStack implements StackClient {
         throw await this.denialFor(record);
       }
     }
+    // Reached through its own gate rather than requireUpdatable(), so the
+    // soft-delete refusal has to be asked here too — after the authority
+    // decision above, for the reason refuseIfDeleted() gives.
+    this.refuseIfDeleted(record, true);
 
     return this.stack.setPermissions(id, permissions, { ...opts, ...this.actor });
   }
@@ -4061,6 +4120,8 @@ export class ScopedStack implements StackClient {
         throw await this.denialFor(record);
       }
     }
+    // See setPermissions() above — same gate, same reason.
+    this.refuseIfDeleted(record, true);
 
     return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
   }

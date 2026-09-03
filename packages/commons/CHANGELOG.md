@@ -1,5 +1,30 @@
 # @haverstack/commons
 
+## 0.12.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b), [`d0c0bb2`](https://github.com/haverstack/core/commit/d0c0bb25bae95f1285e2b2a0db980d0c4d215ac2), [`5324f8e`](https://github.com/haverstack/core/commit/5324f8ec4ef6ef2225f3c05661e3d3d1d860512b)]:
+  - @haverstack/core@0.18.0
+
+## 0.11.0
+
+### Minor Changes
+
+- [#221](https://github.com/haverstack/core/pull/221) [`9397db8`](https://github.com/haverstack/core/commit/9397db86737ec2290dd06569fff119b7c386c1e8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `SITE`, the `org.haverstack/site@1` commons type: `title` and `baseUrl`
+  required, `description` and `handle` optional. Lets one personal stack back
+  several published sites — a root page's `parentId` names the site it belongs
+  to, and a `{ kind: 'relationship', label: 'site', target: { scope: 'record',
+recordId } }` association on an `article`, `photo`, `bookmark`, or `post`
+  says which site(s) publish it, multi-valued for cross-posting. `page`'s
+  `collection` roots scope to a site by composing that association into their
+  query rather than storing site membership on the collection. See
+  `docs/commons/site.md` and the updated `page.md`/`README.md` conventions.
+
 ## 0.10.0
 
 ### Minor Changes

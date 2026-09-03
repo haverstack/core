@@ -1029,8 +1029,14 @@ describe('queryRecords', () => {
 
   // A malformed path is the caller's error, not the server's missing
   // reach, so it must not be reported as an absent capability.
-  test('a malformed content path stays a StackQueryError', async () => {
-    const adapter = await openAdapter();
+  test.each([
+    ['with nestedContentQuery', true],
+    ['without nestedContentQuery', false],
+  ])('a malformed content path stays a StackQueryError %s', async (_label, nested) => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, nestedContentQuery: nested },
+    });
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
       StackQueryError,
     );

@@ -766,6 +766,72 @@ describe('records — queries', () => {
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
+  // A field name may hold anything but the reserved characters, and such a
+  // name is matched as one segment rather than reinterpreted as syntax.
+  test.each([
+    ['spaced', 'sp ace'],
+    ['backslashed', 'back\\slash'],
+    ['colonned', 'a:b'],
+  ])('a %s key is matched literally', async (_label, key) => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', [key]: 'hit' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', other: 'miss' } }));
+
+    const result = await adapter.queryRecords({ filter: { content: { [key]: 'hit' } } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  // A key carrying path syntax is a structural fault in the request,
+  // answered as StackQueryError (400) rather than reaching the engine as a
+  // malformed path and escaping as a raw error.
+  test('a key that is not path-shaped is refused, never an engine error', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'present' } }));
+
+    for (const key of ['$.', '[', '"', 'a[0', '', 'a..b', '*', '#']) {
+      await expect(adapter.queryRecords({ filter: { content: { [key]: 'x' } } })).rejects.toThrow(
+        StackQueryError,
+      );
+    }
+  });
+
+  // The segment cap is what keeps the generated join list inside SQLite's
+  // 64-table limit, so the longest legal path has to be executable, not
+  // merely accepted. See docs/spec/data-model.md § Nested content paths.
+  test('a path at the segment cap executes; one past it is refused', async () => {
+    const adapter = await initAdapter();
+    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
+
+    await expect(
+      adapter.queryRecords({ filter: { content: { [deepest]: 'x' } } }),
+    ).resolves.toMatchObject({ records: [] });
+    await expect(
+      adapter.queryRecords({ filter: { content: { [deepest]: null } } }),
+    ).resolves.toMatchObject({ records: [{ id: 'r1' }] });
+    await expect(
+      adapter.queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  // json_each exposes a stored object as its JSON text; a scalar filter
+  // value must not match that text, or one filter would mean two things
+  // depending on the backend.
+  test('a scalar filter value never matches an object or array at the path', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'a', a: { b: { k: 'v' } } } }),
+    );
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', obj: { k: 'v' } } }));
+
+    const nested = await adapter.queryRecords({
+      filter: { content: { 'a.b': '{"k":"v"}' } },
+    });
+    expect(nested.records).toEqual([]);
+    const top = await adapter.queryRecords({ filter: { content: { obj: '{"k":"v"}' } } });
+    expect(top.records).toEqual([]);
+  });
+
   test('full-text search (FTS5)', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));

@@ -34,7 +34,11 @@ import type {
   ChangeFilter,
   RecordChange,
 } from '@haverstack/core';
-import { assertQueryCapabilities, assertValidRelatedTo } from '@haverstack/core/adapter';
+import {
+  assertQueryCapabilities,
+  assertValidRelatedTo,
+  parseContentFilterKey,
+} from '@haverstack/core/adapter';
 import type { AdapterCapabilities, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
@@ -308,9 +312,18 @@ const missingQueryCapability = (
   if (!filter?.content) return undefined;
   if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
   if (capabilities.nestedContentQuery) return undefined;
-  return Object.keys(filter.content).some((key) => key.includes('.'))
-    ? 'nestedContentQuery'
-    : undefined;
+  // A key this server would refuse only because it is malformed is the
+  // caller's error at any capability level, so it is parsed the same way
+  // assertQueryCapabilities parses it rather than scanned for a dot.
+  return Object.keys(filter.content).some(isNestedPath) ? 'nestedContentQuery' : undefined;
+};
+
+const isNestedPath = (key: string): boolean => {
+  try {
+    return parseContentFilterKey(key).length > 1;
+  } catch {
+    return false;
+  }
 };
 
 // Query parameter builder (used when contentFieldQuery is false)
@@ -1344,9 +1357,12 @@ export class APIAdapter implements StackAdapter {
         for (const frame of decoder.push(value)) {
           if (frame.event === CHANGE_FRAME_READY && head === undefined) {
             // A malformed ready payload costs the reset fallback its head
-            // cursor, not the connection: treat the head as unknown.
+            // cursor, not the connection: treat the head as unknown. The
+            // seq is charset-checked like a frame id, since it becomes the
+            // Last-Event-ID fetch would refuse on every reconnect.
             try {
-              head = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+              const seq = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
+              head = seq !== undefined && isValidSeq(seq) ? seq : undefined;
             } catch {
               head = undefined;
             }

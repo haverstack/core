@@ -793,6 +793,38 @@ describe('query — content filter null semantics', () => {
     expect(result.records).toHaveLength(1);
     expect(result.records[0].content.text).toBe('explicit null');
   });
+
+  // The same contract the SQL adapters honor by quoting the key into a JSON
+  // path: a content key is a field name, never a path expression, so both
+  // sides of the wire agree on what a dotted key asks for.
+  // The field-name walk and the filter-path cap are sized together: a name
+  // the walk stops short of is one no path can address.
+  test('a name the field-name walk cannot reach is a name no path can address', async () => {
+    const deep = (d: number): Record<string, unknown> =>
+      d === 0 ? { 'bad.name': 1 } : { n: deep(d - 1) };
+
+    await expect(stack.create(NOTE_V1, { text: 'a', ...deep(31) })).rejects.toThrow(
+      StackValidationError,
+    );
+    const beyond = await stack.create(NOTE_V1, { text: 'b', ...deep(33) });
+    const path = [...Array(33).fill('n'), 'bad', 'name'].join('.');
+    await expect(stack.query({ filter: { content: { [path]: 1 } } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(beyond.id).toBeDefined();
+  });
+
+  // A dotted key is a path, and a field literally named `a.b` is refused
+  // at write time, so the two readings can never both be available.
+  test('a dotted key is a path, and the colliding field name is unwritable', async () => {
+    await stack.create(NOTE_V1, { text: 'nested', a: { b: 'x' } });
+    const result = await stack.query({ filter: { content: { 'a.b': 'x' } } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['nested']);
+
+    await expect(stack.create(NOTE_V1, { text: 'literal', 'a.b': 'x' })).rejects.toThrow(
+      StackValidationError,
+    );
+  });
 });
 
 // -------------------------------------------------------

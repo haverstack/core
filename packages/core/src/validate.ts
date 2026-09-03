@@ -227,6 +227,9 @@ const collectKeyErrors = (
   errors: ValidationError[],
   depth: number,
 ): void => {
+  // The walk stops one level deeper than the longest filter path can
+  // reach, so a name this never inspects is a name no filter can address.
+  // Array nesting spends a level here and a segment there alike.
   if (depth > MAX_VALIDATION_DEPTH) return;
   if (Array.isArray(value)) {
     value.forEach((item, i) => collectKeyErrors(item, `${prefix}[${i}]`, errors, depth + 1));

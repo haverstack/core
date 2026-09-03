@@ -121,7 +121,7 @@ await stack.setUnlisted(recordId, false); // relist it
 
 ### `includeUnlisted` is owner-only
 
-Unlike `includeDeleted` — which any `ScopedStack` requester may pass, since a soft-deleted Record's own `permissions` still gate whether they can see it — **`includeUnlisted` is refused to everyone but the owner acting alone**, on both `query()` and `subscribe()`:
+Unlike `includeDeleted` — which any `ScopedStack` requester may pass, since a soft-deleted Record's own `permissions` still gate whether they can see it, and what comes back is [a tombstone rather than the Record](./versioning.md#the-tombstone-is-literal) — **`includeUnlisted` is refused to everyone but the owner acting alone**, on both `query()` and `subscribe()`:
 
 ```ts
 stack.query({ filter: { includeUnlisted: true } }); // plain Stack: honored

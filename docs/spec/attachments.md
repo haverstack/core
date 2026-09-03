@@ -61,7 +61,7 @@ A lost race therefore leaves a contradiction in the data, not an exploitable one
 - `Stack.putAttachment(data, mimeType, filename?, appId?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
 - `ScopedStack.putAttachment(data, mimeType, filename?, appId?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is the subject, and `principalId` the authenticated principal when the two differ — stamped exactly as `ScopedStack.create()` does (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)).
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
-- `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise.
+- `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise. A referencing record that is [unlisted](./access-control.md#unlisted-records) counts exactly as a listed one does: unlisted governs enumeration, not reach, and the requester's ability to read the record is what the clause turns on.
 - `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file (including soft-deleted ones). See [Deleting attachments](#deleting-attachments).
 - `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
 
