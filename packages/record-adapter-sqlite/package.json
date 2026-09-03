@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/record-adapter-sqlite",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Native SQLite (node:sqlite) record adapter for Haverstack — Node's built-in engine, no native compilation",
   "type": "module",
   "engines": {
