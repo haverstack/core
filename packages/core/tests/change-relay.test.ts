@@ -172,6 +172,33 @@ describe('a stack whose adapter relays', () => {
 
     expect(adapter.relays[0]!.opts.since).toBe('AA3f1R');
   });
+
+  // A cursor that cannot be framed would truncate the header carrying it,
+  // so it is refused here rather than by whichever adapter is underneath:
+  // a malformed one reports the same everywhere. See
+  // docs/spec/wire-format.md § Frames.
+  test.each([
+    ['an empty cursor', ''],
+    ['a cursor carrying a newline', 'AA3f1R\nid: forged'],
+    ['a cursor outside base64url', 'AA3f1R=='],
+  ])('refuses %s, and opens no relay', async (_label, since) => {
+    await expect(stack.subscribe(() => {}, { since })).rejects.toBeInstanceOf(StackQueryError);
+
+    expect(adapter.relays).toHaveLength(0);
+  });
+
+  // The refusal precedes the local half, so a rejected subscribe() leaves
+  // nothing registered — the caller holds no unsubscribe to clean up with.
+  test('registers nothing locally when it refuses a cursor', async () => {
+    const seen: RecordChange[] = [];
+
+    await expect(stack.subscribe((c) => void seen.push(c), { since: '' })).rejects.toBeInstanceOf(
+      StackQueryError,
+    );
+    await stack.create(NOTE, { text: 'after the refusal' });
+
+    expect(seen).toHaveLength(0);
+  });
 });
 
 describe('a stack whose adapter does not relay', () => {

@@ -669,7 +669,11 @@ export type RecordChange = {
    * shape.
    */
   record?: StackRecord;
-  /** Resume cursor, minted by a server. Local changes carry none. */
+  /**
+   * Resume cursor, minted by a server. Local changes carry none, this
+   * stack's own writes included — so a consumer holding a cursor keeps
+   * the last one that was present rather than the last change's.
+   */
   seq?: string;
 };
 
@@ -703,14 +707,21 @@ export type SubscribeOptions = {
    */
   includeUnlisted?: boolean;
   /**
-   * Resume from this cursor rather than the present — the `seq` off a
-   * previously delivered `RecordChange`. Forwarded to the adapter as
-   * `SubscribeChangesOptions.since`, so it only means something where a
-   * relay exists: a stack with none has no third-party writes to have
-   * missed, and therefore no cursor it could ever have minted. Passing
-   * `since` there throws `StackQueryError` rather than silently starting
-   * from the present, which would let the caller believe it resumed when
-   * it did not. See docs/spec/events.md § Subscribing.
+   * Resume from this cursor rather than the present — the last `seq` that
+   * was present on a delivered `RecordChange`. A relaying stack delivers
+   * its own local writes through the same handler and those carry none, so
+   * a consumer that stores every change's `seq` unconditionally erases its
+   * own cursor on its next write.
+   *
+   * Forwarded to the adapter as `SubscribeChangesOptions.since`, so it
+   * only means something where a relay exists: a stack with none has no
+   * third-party writes to have missed, and therefore no cursor it could
+   * ever have minted. Passing `since` there throws `StackQueryError`
+   * rather than silently starting from the present, which would let the
+   * caller believe it resumed when it did not. A cursor outside the
+   * framable charset is refused the same way, so a malformed one reports
+   * identically whatever adapter is underneath. See
+   * docs/spec/events.md § Subscribing.
    */
   since?: string;
   /**

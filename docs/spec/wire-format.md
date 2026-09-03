@@ -570,7 +570,7 @@ data: {"reason":"cursor_expired"}
 
 **A client MUST ignore a frame whose name it does not recognize.** That is what makes a new frame an additive, minor change under [version negotiation](#version-negotiation) rather than a break — type events, batch frames and anything else arrive that way.
 
-**`seq` is opaque and restricted to the unreserved base64url alphabet (`A-Za-z0-9_-`)**, for the same reason [a nonce is](#the-handshake): it travels in a line-oriented protocol, where an unconstrained value would span fields and truncate the frame carrying it. A client echoes a cursor back and never computes with one, so a server is free to implement it as a WAL offset, a timestamp-counter pair, or anything else. `isValidSeq()` in `@haverstack/wire-types` applies the rule on both sides.
+**`seq` is opaque and restricted to the unreserved base64url alphabet (`A-Za-z0-9_-`)**, for the same reason [a nonce is](#the-handshake): it travels in a line-oriented protocol, where an unconstrained value would span fields and truncate the frame carrying it. A client echoes a cursor back and never computes with one, so a server is free to implement it as a WAL offset, a timestamp-counter pair, or anything else. `isValidSeq()` in `@haverstack/wire-types` applies the rule on both sides, and `@haverstack/core` applies it again to a `since` handed to `subscribe()` — so a cursor that could not be framed is refused the same way whatever adapter is underneath, rather than reaching one as a header it would truncate.
 
 ### Backpressure and reconnection
 

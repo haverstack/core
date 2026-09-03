@@ -802,19 +802,40 @@ export class StackRelayScopeError extends Error {
 }
 
 /**
+ * A resume cursor is opaque, but not arbitrary: it travels in an SSE `id:`
+ * field, so a value spanning a line would truncate the frame carrying it.
+ * Same charset and same reason as the auth nonce — see
+ * docs/spec/wire-format.md § Frames.
+ */
+const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
+
+/**
  * `since` only means something where a relay exists: a stack with no
  * third party whose writes could have been missed has no cursor it could
  * ever have minted. Silently starting from the present would let the
  * caller believe it resumed when it did not, so a stack that cannot honor
- * `since` refuses it rather than ignoring it. See
+ * `since` refuses it rather than ignoring it.
+ *
+ * Its shape is checked here rather than left to the adapter, so that a
+ * malformed cursor is the same error whoever is underneath — the posture
+ * query() already takes with a filter no adapter declared. The value stays
+ * opaque: this asks whether it is framable, never what it means. See
  * docs/spec/events.md § Subscribing.
  */
-function assertSinceSupported(since: string | undefined, relaysChanges: boolean): void {
-  if (since !== undefined && !relaysChanges) {
+function assertSinceUsable(since: string | undefined, relaysChanges: boolean): void {
+  if (since === undefined) return;
+  if (!relaysChanges) {
     throw new StackQueryError(
       'subscribe() was passed `since`, but this stack relays no changes from elsewhere and so ' +
         'has no cursor it could ever have minted. Omit `since` — or, for a stack that relays ' +
         'from a server, use the seq off a previously delivered RecordChange.',
+    );
+  }
+  if (!SEQ_FORMAT.test(since)) {
+    throw new StackQueryError(
+      `subscribe() was passed the resume cursor "${since}", which is not a valid seq: a cursor ` +
+        'carries unreserved base64url characters only, because it travels in a frame id. Use ' +
+        'the seq off a previously delivered RecordChange, unaltered.',
     );
   }
 }
@@ -2633,7 +2654,7 @@ export class Stack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertOpen();
-    assertSinceSupported(opts.since, this.relaysChanges);
+    assertSinceUsable(opts.since, this.relaysChanges);
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {
@@ -4201,7 +4222,7 @@ export class ScopedStack implements StackClient {
     }
     // A relaying stack was already refused above, so relaysChanges is
     // always false here — `since` never has a cursor to mean anything by.
-    assertSinceSupported(opts.since, false);
+    assertSinceUsable(opts.since, false);
     if (opts.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
