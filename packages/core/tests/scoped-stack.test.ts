@@ -1014,6 +1014,31 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
     ).rejects.toThrow(StackPermissionError);
   });
 
+  // The gate reads values, not keys: a caller spreading an options object
+  // that carries neither date has supplied neither, and gets the ordinary
+  // current-time stamp every grantee create gets.
+  test('a grantee may pass an explicitly undefined createdAt', async () => {
+    const before = Date.now();
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hello' }, { createdAt: undefined });
+    expect(record.createdAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  test('a grantee may pass an explicitly undefined updatedAt', async () => {
+    const record = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hello' }, { updatedAt: undefined });
+    expect(record.updatedAt).toEqual(record.createdAt);
+  });
+
+  test('a delegated create may pass both as undefined', async () => {
+    const record = await stack
+      .asEntity(MEMBER, { onBehalfOf: OWNER })
+      .create(COMMENT, { text: 'hello' }, { createdAt: undefined, updatedAt: undefined });
+    expect(record.updatedAt).toEqual(record.createdAt);
+  });
+
   test('owner acting alone may set createdAt, and updatedAt defaults to match', async () => {
     const createdAt = new Date('2020-06-15T12:00:00.000Z');
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' }, { createdAt });
@@ -3526,6 +3551,45 @@ describe('ScopedStack — _app bindings', () => {
   // exercising the display-field reach the test above pins — a presence
   // check would make that reach unreachable for any client that round-trips
   // the whole content object.
+  // `undefined` is not a value the patch language carries, so it never
+  // reaches the fence as a claim on the field it names: the patch is
+  // malformed for every requester alike, and the error says so rather than
+  // naming a binding nobody set.
+  test.each([
+    ['a write-holder', MEMBER],
+    ['the owner', OWNER],
+  ])('%s patching a binding with undefined gets the malformed-patch error', async (_who, actor) => {
+    const shared = await stack.create('_app@1', {
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+    await stack.setPermissions(shared.id, [
+      { access: 'entity', entityId: MEMBER, read: true, write: true },
+    ]);
+
+    for (const field of ['did', 'appId']) {
+      let error: StackValidationError | undefined;
+      try {
+        await stack.asEntity(actor).update(shared.id, { name: 'Renamed', [field]: undefined });
+      } catch (e) {
+        error = e as StackValidationError;
+      }
+      expect(error).toBeInstanceOf(StackValidationError);
+      expect(error?.errors).toEqual([
+        { path: field, message: expect.stringContaining('undefined') },
+      ]);
+    }
+
+    // Rejected outright, so the `name` travelling with it doesn't land either.
+    const after = await stack.get(shared.id);
+    expect(after?.content).toMatchObject({
+      appId: 'com.example.notes',
+      name: 'My Notes App',
+      did: APP_DID,
+    });
+  });
+
   test('a write-holder may round-trip unchanged bindings in a full-content update', async () => {
     const shared = await stack.create('_app@1', {
       appId: 'com.example.notes',

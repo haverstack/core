@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'vitest';
-import { validateContent, validateReservedKeys, isValid } from '../src/validate.js';
+import {
+  validateContent,
+  validatePatchValues,
+  validateReservedKeys,
+  isValid,
+} from '../src/validate.js';
 import type { TypeSchema } from '../src/types.js';
 
 // -------------------------------------------------------
@@ -322,5 +327,39 @@ describe('validateReservedKeys', () => {
     const content = JSON.parse('{"__proto__": 1, "prototype": 2}') as Record<string, unknown>;
 
     expect(validateReservedKeys(content).map((e) => e.path)).toEqual(['__proto__', 'prototype']);
+  });
+});
+
+// -------------------------------------------------------
+// validatePatchValues
+// -------------------------------------------------------
+
+describe('validatePatchValues', () => {
+  test('an undefined value is rejected', () => {
+    const errors = validatePatchValues({ text: 'hi', extra: undefined });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].path).toBe('extra');
+  });
+
+  test('null is the deletion sentinel, not an undefined value', () => {
+    expect(validatePatchValues({ extra: null })).toEqual([]);
+  });
+
+  test('an absent key claims nothing', () => {
+    expect(validatePatchValues({ text: 'hi' })).toEqual([]);
+  });
+
+  // Top-level only, matching the shallow merge: a nested undefined is part
+  // of a value being replaced wholesale, not a field the patch addresses.
+  test('a nested undefined is left alone', () => {
+    expect(validatePatchValues({ meta: { a: 1, b: undefined } })).toEqual([]);
+  });
+
+  test('reports every undefined value present, not just the first', () => {
+    expect(validatePatchValues({ a: undefined, b: 1, c: undefined }).map((e) => e.path)).toEqual([
+      'a',
+      'c',
+    ]);
   });
 });

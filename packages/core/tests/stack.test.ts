@@ -3090,6 +3090,55 @@ describe('reserved content keys', () => {
 });
 
 // -------------------------------------------------------
+// Undefined patch values: a merge patch spells "leave it alone" by
+// omission and "remove it" with null, and has no third state for
+// undefined to occupy.
+// See docs/spec/data-model.md § Undefined values in a patch.
+// -------------------------------------------------------
+
+describe('undefined patch values', () => {
+  test('update() rejects a patch key whose value is undefined', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+
+    await expect(stack.update(record.id, { extra: undefined })).rejects.toThrow(
+      StackValidationError,
+    );
+    // Rejected outright, so the rest of the patch doesn't land either.
+    await expect(stack.update(record.id, { text: 'edited', extra: undefined })).rejects.toThrow(
+      StackValidationError,
+    );
+    expect((await stack.get(record.id))?.content).toEqual({ text: 'hi', extra: 'kept' });
+  });
+
+  test('null still removes the field', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+
+    const updated = await stack.update(record.id, { extra: null });
+    expect(updated.content).toEqual({ text: 'hi' });
+  });
+
+  test('omitting the field still leaves it unchanged', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+
+    const updated = await stack.update(record.id, { text: 'edited' });
+    expect(updated.content).toEqual({ text: 'edited', extra: 'kept' });
+  });
+
+  test('a nested undefined is left alone — the whole value is being replaced', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+    const updated = await stack.update(record.id, { meta: { a: 1, b: undefined } });
+    expect(updated.content).toEqual({ text: 'hi', meta: { a: 1 } });
+  });
+
+  test('create() takes an undefined field as a field the record does not have', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi', extra: undefined });
+
+    expect(record.content).toEqual({ text: 'hi' });
+  });
+});
+
+// -------------------------------------------------------
 // Content field names: a filter key is a dot-separated path, so a stored
 // field name may not contain the characters that make a path.
 // -------------------------------------------------------
