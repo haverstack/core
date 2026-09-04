@@ -1,5 +1,16 @@
 # @haverstack/wire-types
 
+## 0.20.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`64dfb36`](https://github.com/haverstack/core/commit/64dfb3621635438c9529b4be134b60cf936fb152)]:
+  - @haverstack/core@0.21.0
+
 ## 0.19.0
 
 ### Minor Changes
