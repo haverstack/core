@@ -1,5 +1,13 @@
 # @haverstack/core
 
+## 0.20.0
+
+### Minor Changes
+
+- [#227](https://github.com/haverstack/core/pull/227) [`59df7e6`](https://github.com/haverstack/core/commit/59df7e657a95cdc22a6f29c73c86e5d0e2d59b80) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Refuse a record-level `access: 'group'` permission whose `groupId` names a Record outside the `_group` family. Only a `_group` Record carries a roster; without the check, an app modelling its own `member`/`admin` relationship links turned every Record a permission was pointed at into an ACL, and a Record migrated out of `_group` kept resolving after it stopped being a group. Type-level grants already applied this rule — record-level permissions now match. Access that depended on the old behavior stops resolving: point the permission at a real `_group` Record.
+
+- [#227](https://github.com/haverstack/core/pull/227) [`59df7e6`](https://github.com/haverstack/core/commit/59df7e657a95cdc22a6f29c73c86e5d0e2d59b80) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Raise `StackQueryError` (`bad_request`/400) rather than a bare `Error` for a `typeId` no definition exists for and for a malformed TypeId. Both are client-reachable over the wire, and an error outside the `StackError` taxonomy has no code for a server to map, so ordinary requests answered as 500s.
+
 ## 0.19.0
 
 ### Minor Changes

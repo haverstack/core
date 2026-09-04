@@ -1,5 +1,17 @@
 # @haverstack/adapter-api
 
+## 0.19.0
+
+### Minor Changes
+
+- [#227](https://github.com/haverstack/core/pull/227) [`59df7e6`](https://github.com/haverstack/core/commit/59df7e657a95cdc22a6f29c73c86e5d0e2d59b80) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Refuse a plaintext `http://` URL to a non-loopback host, before the credential is spent or anything is sent: the bearer token, the handshake signature and every record would travel in the clear. `localhost`, `127.0.0.0/8` and `::1` are unaffected. Pass `allowInsecure: true` where the transport is already private.
+
+### Patch Changes
+
+- Updated dependencies [[`59df7e6`](https://github.com/haverstack/core/commit/59df7e657a95cdc22a6f29c73c86e5d0e2d59b80), [`59df7e6`](https://github.com/haverstack/core/commit/59df7e657a95cdc22a6f29c73c86e5d0e2d59b80)]:
+  - @haverstack/wire-types@0.19.0
+  - @haverstack/core@0.20.0
+
 ## 0.18.0
 
 ### Minor Changes
