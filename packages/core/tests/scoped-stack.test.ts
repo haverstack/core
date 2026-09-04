@@ -2717,15 +2717,16 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
   // that would let one successful guess unlock unlimited further records
   // for the same fileId.
   test('carve-out does not extend to the uploader clause', async () => {
-    await stack.create(
-      '_attachment@1',
-      { fileId: 'file-mine', mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
-    );
+    // A real fileId from an actual upload by the requester themselves —
+    // not a placeholder — so this fails on the permission check, not on
+    // fileId validation, however `_attachment@1`'s fileId field is declared.
+    const {
+      content: { fileId },
+    } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([7]), 'image/png');
 
     await expect(
       stack.asEntity(MEMBER).create('_attachment@1', {
-        fileId: 'file-mine',
+        fileId,
         mimeType: 'image/png',
         size: 1,
         filename: 'second-name.png',

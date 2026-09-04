@@ -3012,6 +3012,12 @@ export class Stack implements StackClient {
       granteeGroupId: { kind: 'string' },
     });
     await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
+      // Deliberately `string`, not `file-ref`: attachmentFileId matching
+      // (deleteAttachment()/collectAttachmentGarbage()'s reference scan) is
+      // schema-driven, so a `file-ref` fileId here would make every
+      // metadata record its own file's reference — nothing would ever be
+      // deletable or collectible. See docs/spec/attachments.md § Deleting
+      // attachments / Garbage collection.
       fileId: { kind: 'string', required: true },
       mimeType: { kind: 'string', required: true },
       size: { kind: 'number', required: true },
@@ -3661,6 +3667,12 @@ export class ScopedStack implements StackClient {
    * shared by canAccessFile() and the non-owner _attachment@1 create()
    * carve-out, which deliberately excludes the uploader clause. Walks
    * every referencing record, short-circuiting on the first readable one.
+   * `_attachment@1` records are excluded from matching outright: the
+   * carve-out must be satisfied by some *other* record referencing the
+   * file, never by the requester's own prior metadata record for it —
+   * allowing that would let one successful guess unlock unlimited further
+   * metadata records for the same fileId, reintroducing the circularity
+   * the carve-out's uploader-clause exclusion closes.
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
@@ -3676,7 +3688,9 @@ export class ScopedStack implements StackClient {
       // Reach, not enumeration: a record readable by ID conveys the file it
       // references. See docs/spec/unlisted.md.
       { filter: { attachmentFileId: fileId, includeUnlisted: true } },
-      (record) => this.canRead(record, prefetchedGrants, groupRoles),
+      (record) =>
+        baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT &&
+        this.canRead(record, prefetchedGrants, groupRoles),
     );
     return match !== undefined;
   }
