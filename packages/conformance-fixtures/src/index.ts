@@ -118,7 +118,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     description:
       'A stack with no timezone omits the field rather than defaulting it. An absent timezone ' +
       'stays undefined end to end — a default would assert knowledge the stack was never ' +
-      'given (docs/spec.md § Stack identity).',
+      'given (docs/spec.md § The _config record).',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -545,7 +545,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'reject an empty relatedToStack with 400 rather than read it as local or as a ' +
       'wildcard, and likewise an empty relatedToId, which omission already expresses as the ' +
       'whole namespace. ' +
-      'See docs/spec/wire-format.md § Query parameters.',
+      'See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
     responseStatus: 200,
@@ -557,7 +557,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming an identity travels as relatedToEntity, distinct from ' +
       'relatedTo: a DID and a Record id are different reference spaces, and a server that ' +
       'matched one against the other would report group rosters as record references. ' +
-      'See docs/spec/wire-format.md § Query parameters.',
+      'See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
     responseStatus: 200,
@@ -571,7 +571,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'is how a bridge asks what it has already syndicated. A server MUST reject a request ' +
       'mixing parameters from two scopes with 400, and can rely on at least one relatedTo ' +
       'parameter being present whenever the filter is used — the filter never encodes to ' +
-      'nothing. See docs/spec/wire-format.md § Query parameters.',
+      'nothing. See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedToNs=atproto',
     responseStatus: 200,

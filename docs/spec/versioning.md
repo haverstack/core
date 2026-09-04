@@ -77,13 +77,13 @@ await stack.update(id, { title: 'New' }, { ifVersion: 5 });
 - This covers every mutation path per the one-rule versioning model above: a lost race on an association or permission change is caught exactly like a lost race on content.
 - Over the wire, this is the `If-Match` header (see [Wire format § Records](./wire-format.md#records)) — local and remote behave identically.
 
-**Collisions are never silently dropped:** two writers racing past the same version without `ifVersion` (or a server race that outpaces `ifVersion` entirely) can still collide on the same version number when both snapshot their prior state. Rather than silently discarding the second snapshot — which would leave a hole in rollback history exactly where a conflict happened — adapters reject the collision loudly (`StackConflictError`), so the losing write fails outright rather than corrupting history.
+**Collisions are never silently dropped.** Two writers racing past the same version — without `ifVersion`, or through a server race that outpaces it — can still collide on the same snapshot version number. Adapters reject the loser with `StackConflictError` rather than discarding its snapshot; see [Snapshot atomicity](#snapshot-atomicity).
 
 ## Storage per adapter
 
 - JSON: sibling file `{id}.versions.json`
 - SQLite: `versions` table
-- API: **the server snapshots prior state on every mutating endpoint that bumps `version`** — `saveVersion()` is a deliberate no-op over `APIAdapter` (the server is the only snapshot writer for this adapter), so a server that implements anything less than the full endpoint list silently loses rollback history for that endpoint's mutations. See [Wire format § Versions](./wire-format.md#versions) for the exhaustive list.
+- API: **the server is the only snapshot writer** — `saveVersion()` is a deliberate no-op over `APIAdapter`, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. See [Wire format § Versions](./wire-format.md#versions) for that list.
 
 ## Deletion
 

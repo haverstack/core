@@ -79,7 +79,7 @@ export type EntityTarget = {
  * Something outside the stack entirely. `ns` names the scheme that
  * interprets `id` — e.g. "atproto", "activitypub", "email", "url" — so an
  * app selects on it rather than sniffing the identifier.
- * See docs/spec/data-model.md § External targets.
+ * See docs/spec/data-model.md § Relationship targets.
  */
 export type ExternalTarget = {
   scope: 'external';
