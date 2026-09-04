@@ -28,7 +28,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](#change-feed); its absence means the server offers none.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none.
 
 ### Version negotiation
 
@@ -222,7 +222,7 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
-**A soft-deleted Record is served as a tombstone.** `GET /records/:id` on one answers `200` with identity, clock, `version`, `deletedAt` and `permissions`, an empty `content` object, and no `associations`, `parentId` or authorship fields — the shape [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines. The same projection applies to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It is not a `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
+**A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
 
 **Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints, `PUT .../permissions` and `PUT .../unlisted`, and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
 
@@ -260,7 +260,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 
-**`nestedContentQuery` gates a filter shape, not an endpoint.** A server supporting `POST /records/query` may still decline multi-segment content keys, so declaring `contentFieldQuery: true` says the endpoint exists and single-segment keys work, and nothing about paths. A server that declares `nestedContentQuery: false` and receives a multi-segment key answers **400** (`bad_request`) rather than matching what it can — an unfiltered superset presented as a filtered result is the failure the capability exists to prevent. A discovery response omitting the field means `false`; `APIAdapter` refuses such a filter locally, without sending a request, exactly as it does for the other gated filters.
+**`nestedContentQuery` gates a filter shape, not an endpoint.** A server supporting `POST /records/query` may still decline multi-segment content keys, so declaring `contentFieldQuery: true` says the endpoint exists and single-segment keys work, and nothing about paths. A server that declares `nestedContentQuery: false` and receives a multi-segment key answers **400** (`bad_request`) rather than matching what it can. A discovery response omitting the field means `false`; `APIAdapter` refuses such a filter locally, without sending a request, exactly as it does for the other gated filters.
 
 **Filters gated by a capability fail loudly, not silently.** A `content` filter has no representation in `GET /records`' query params, and `search` behaves however the server does with an unsupported param — so `APIAdapter` checks `capabilities.contentFieldQuery`/`capabilities.fullTextSearch` before dispatching and throws `APIAdapterCapabilityError` locally, without sending a request, when the corresponding filter is used against a server that hasn't declared the capability. The alternative — degrading to an unfiltered or partially filtered result presented as the requested query — is worse than an error for anything that trusts the filter (dedup checks, existence checks, selection-sensitive logic).
 
@@ -277,7 +277,13 @@ When present, the server applies the mutation only if the record's current versi
 
 `POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](./data-model.md#record-ids) for the validation and duplicate-conflict rules the server applies.
 
-**`entityId`, `principalId`, `updatedBy` and `updatedVia` are assigned by the server from the authenticated session, and MUST be ignored if a request body carries them.** They are the fields that answer "who did this", so a server that echoes back what it was handed makes every one of them self-reported — and `principalId` exists precisely to be the field that isn't (see [Identity § Attribution and what can be trusted](./identity.md#attribution-and-what-can-be-trusted)). A client naming its own `principalId` could dress any write up as a verified app action, defeating the `_app` cross-check that reads it. `ScopedStack` already overrides both regardless of what a caller passes, so a server built on it inherits this; one that maps a request body onto `Stack` directly has to drop them itself. `updatedBy` and `updatedVia` answer the same question about the mutation that `entityId` and `principalId` answer about the Record, so they are assigned and ignored on identical terms — see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution). The same applies to `version`, which the server always assigns. `createdAt` and `updatedAt` are server-assigned and ignored on every request but one: an **owner-authenticated** request (the stack owner acting alone, undelegated — the same tier that already gates hard delete, `commitMigration()`, and `includeUnlisted`) may include them, to backdate an imported record's clock fields instead of stamping the import moment. **The server MUST drop both fields from a non-owner request body before it creates the record.** Dropping is judged by value, not by key: `ScopedStack.create()` reads an absent field and an `undefined` one alike, so deleting the keys and setting them to `undefined` are both drops. This one is not inherited the way `entityId`/`principalId` are, and the difference matters: those two are _overridden_ by `ScopedStack` whatever a caller passes, whereas `createdAt`/`updatedAt` are **refused** — `ScopedStack.create()` throws `StackPermissionError` rather than ignoring them. A client always sends both fields (a record body is a whole record; `adapter-api` serializes it with `JSON.stringify`, Dates included), so a server that forwards a non-owner body unfiltered turns every ordinary grantee create into a refusal. Dropping is therefore the server's job, and deciding whether to drop means making the owner-acting-alone determination itself. Forwarding anyway fails safe — `ScopedStack` refuses rather than accepting a forged date — but it fails. A server that maps a request body onto `Stack` directly has neither the refusal nor the override, so it has to reproduce the owner check _and_ the drop. See [Data model § Backdating on import](./data-model.md#backdating-on-import). `appId` is the deliberate exception among the rest — self-reported by design, and never a permission input. For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of grants — see [Attachments](./attachments.md#creating-_attachment1-records-directly) for the refusal, its carve-out, and `POST /attachments` as the non-owner-safe combined path.
+**`entityId`, `principalId`, `updatedBy`, `updatedVia` and `version` are assigned by the server from the authenticated session, and MUST be ignored if a request body carries them.** The first four answer "who did this", so a server that echoes back what it was handed makes every one of them self-reported — and `principalId` exists precisely to be the field that isn't (see [Identity § Attribution and what can be trusted](./identity.md#attribution-and-what-can-be-trusted)): a client naming its own could dress any write up as a verified app action, defeating the `_app` cross-check that reads it. `ScopedStack` overrides all of them regardless of what a caller passes, so a server built on it inherits this; one that maps a request body onto `Stack` directly has to drop them itself. `appId` is the deliberate exception — self-reported by design, and never a permission input.
+
+**`createdAt`/`updatedAt` are server-assigned too, with one exception — and that exception is _not_ inherited.** An **owner-authenticated** request (the stack owner acting alone, undelegated — the same tier that already gates hard delete, `commitMigration()`, and `includeUnlisted`) may include them, to backdate an imported record's clock fields instead of stamping the import moment; see [Data model § Backdating on import](./data-model.md#backdating-on-import). For every other requester **the server MUST drop both fields from the body before it creates the record.** Dropping is judged by value, not by key: `ScopedStack.create()` reads an absent field and an `undefined` one alike, so deleting the keys and setting them to `undefined` are both drops.
+
+The difference from the fields above matters. Those are _overridden_ by `ScopedStack` whatever a caller passes; these are **refused** — `ScopedStack.create()` throws `StackPermissionError` rather than ignoring them. And a client always sends both (a record body is a whole record; `adapter-api` serializes it with `JSON.stringify`, Dates included), so a server that forwards a non-owner body unfiltered turns every ordinary grantee create into a refusal. Dropping is therefore the server's job, and deciding whether to drop means making the owner-acting-alone determination itself. Forwarding anyway fails safe — `ScopedStack` refuses rather than accepting a forged date — but it fails. A server that maps a request body onto `Stack` directly has neither the refusal nor the override, so it has to reproduce the owner check _and_ the drop.
+
+For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of grants — see [Attachments](./attachments.md#creating-_attachment1-records-directly) for the refusal, its carve-out, and `POST /attachments` as the non-owner-safe combined path.
 
 ### Migration commit
 
@@ -295,9 +301,9 @@ Both query endpoints return:
 }
 ```
 
-**`total` is always `null` over the wire.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary — and a count of matching Records ignoring pagination would report how many Records exist beyond what that requester may read. The field stays in the envelope (it is part of core's `QueryResult`, and an in-process unscoped `Stack.query()` does report a number) but a server MUST NOT populate it, and a client MUST NOT rely on it. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
+**`total` is always `null` over the wire.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary. The field stays in the envelope — it is part of core's `QueryResult`, and an in-process unscoped `Stack.query()` does report a number — but a server MUST NOT populate it, and a client MUST NOT rely on it. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
 
-**An empty `records` array with a non-null `cursor` is a valid response, and does not mean the result set is exhausted.** A server filters a bounded window of stored Records per request against the requester's permissions, so a requester with little visibility into a large Stack can receive several empty pages before results appear. `cursor: null` is the only end-of-results signal; a client that stops paging on an empty page silently truncates its own results.
+**An empty `records` array with a non-null `cursor` is a valid response, and does not mean the result set is exhausted.** `cursor: null` is the only end-of-results signal; a client that stops paging on an empty page silently truncates its own results. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination) for why the case is reachable rather than theoretical.
 
 ### Bounding query cost
 
@@ -317,9 +323,9 @@ The limit applies to the whole request body, so the check belongs upstream of pa
 
 **A server SHOULD declare the limit as `maxContentBytes` in [discovery](#discovery)**, the content-side counterpart to `maxAttachmentBytes`. `Stack.create()` and `Stack.update()` pre-check against it — the create body and the patch respectively, since the patch is what travels — and throw `StackPayloadTooLargeError` before sending. As with attachments, the client-side check is a courtesy that saves a round trip and yields a typed error; the server's own limit remains authoritative, and a server that declares `null` (or omits the field) is simply saying clients can't pre-check, not that nothing is enforced.
 
-**`__proto__`, `constructor`, and `prototype` are refused as top-level content keys** on `POST /records` and `PATCH /records/:id`, with `422` (code `validation`) — a `Stack` invariant a server built on core inherits through ordinary record validation, and one that a server mapping request bodies onto storage directly has to apply itself. See [Data model § Reserved content keys](./data-model.md#reserved-content-keys).
+### Content key rules
 
-**A content field name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth**, on the same endpoints and with the same `422`, and on `POST /records/:id/migrate` alongside them. A field name that collides with content-path syntax would make a filter key ambiguous, so it is refused where it is written rather than where it is read. See [Data model § Content field names](./data-model.md#content-field-names).
+Two content-key rules are `Stack` invariants that a server built on core inherits through ordinary record validation, and that a server mapping request bodies onto storage directly has to apply itself. `__proto__`, `constructor` and `prototype` are refused as top-level content keys; a content field name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth. Both answer **422** (code `validation`) on `POST /records` and `PATCH /records/:id`, and the second on `POST /records/:id/migrate` as well — a field name that collides with content-path syntax would make a filter key ambiguous, so it is refused where it is written rather than where it is read. See [Data model § Reserved content keys](./data-model.md#reserved-content-keys) and [§ Content field names](./data-model.md#content-field-names).
 
 ## Permissions
 
@@ -338,9 +344,9 @@ An entry conveying `write` without `read` is refused with `422` (code `validatio
 PUT  /records/:id/unlisted           — withhold from enumeration, or relist
 ```
 
-Request body: `{ "unlisted": boolean }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint. Orthogonal to `PUT .../permissions`: it decides whether the record is enumerable, never who may read it. See [Access control § Unlisted records](./access-control.md#unlisted-records).
+Request body: `{ "unlisted": boolean }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint. Orthogonal to `PUT .../permissions`: it decides whether the record is enumerable, never who may read it. See [Unlisted records](./unlisted.md).
 
-**`GET /records` and `POST /records/query` accept `includeUnlisted`** (a query parameter on the former, a `filter` key on the latter), excluded by default like `includeDeleted`. **A server built on `ScopedStack` MUST refuse it with `403` for any requester but the owner acting alone** — enumeration standing rests on nothing but ownership, so no grant or delegation carries it (see [Access control § `includeUnlisted` is owner-only](./access-control.md#includeunlisted-is-owner-only)). `GET /changes` accepts the same parameter, refused on the same terms, for the change feed's own default exclusion — see [Change feed](#change-feed) below.
+**`GET /records` and `POST /records/query` accept `includeUnlisted`** (a query parameter on the former, a `filter` key on the latter), excluded by default like `includeDeleted`. **A server built on `ScopedStack` MUST refuse it with `403` for any requester but the owner acting alone** — enumeration standing rests on nothing but ownership, so no grant or delegation carries it (see [Unlisted records § `includeUnlisted` is owner-only](./unlisted.md#includeunlisted-is-owner-only)). `GET /changes` accepts the same parameter, refused on the same terms, for the change feed's own default exclusion — see [Change feed](./change-feed.md).
 
 **The one unsafe path is a server mapping a request body straight onto an unscoped `Stack`.** Unscoped `Stack` honors `includeUnlisted` unconditionally, the same as `includeDeleted` — it is fully trusted by definition — so a server that forwards a request's filter verbatim onto one must strip `includeUnlisted` itself before dispatching, exactly as it already must for `entityId`/`principalId` on a create body (see [Records](#records)). Routing the request through `ScopedStack` instead makes this the library's problem rather than the server's, which is the shape every example in this document assumes.
 
@@ -358,7 +364,7 @@ Both `GET` endpoints require the requester to hold the same mutate-surface autho
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records).
 
-**That same exhaustive list is what the [change feed](#change-feed) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
+**That same exhaustive list is what the [change feed](./change-feed.md) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
 
 ## Associations
 
@@ -509,120 +515,4 @@ A convenience alias for the owner entity rather than requiring clients to look i
 
 ## Change feed
 
-Apps observe record changes by subscribing rather than polling. The feed answers _when_ something the requester can read changed; `query()` and `get()` answer _what_ it now is. The event vocabulary, the delivery guarantees and the permission rule are one design shared with the local API — see [Change events](./events.md), which this section is the wire encoding of.
-
-### Advertising it
-
-```json
-"changes": { "transports": ["sse"], "resume": true, "records": true }
-```
-
-An object rather than a boolean, for the same reason `auth` is one: this surface grows entries — another transport, batched frames — and the alternative is a boolean followed by three more of them. Absent `changes` means no feed.
-
-- `transports` lists the delivery mechanisms offered. `sse` is the only one in this version.
-- `resume: false` is conformant. It means the server honors no cursor, so every connection is answered with a `reset` frame.
-- `records` reports whether `?include=record` is honored. `false` is conformant; the fetch fallback is the contract either way.
-
-**A client checks discovery and fails locally.** `APIAdapter.subscribeChanges()` against a server advertising no feed throws `APIAdapterCapabilityError` **without sending a request**, exactly as `contentFieldQuery` and `fullTextSearch` filters do. Learning this as a 404 partway through a connection is the failure mode `auth.methods` exists to avoid.
-
-### The endpoint
-
-```
-GET /changes
-Accept: text/event-stream
-Authorization: Bearer <token>
-Last-Event-ID: <seq>          (equivalently ?since=<seq>)
-
-?typeId=          (repeatable; baseId or versioned, matched by baseId)
-?parentId=        ("null" for root records, as GET /records)
-?entityId=        (the record's author, not the actor)
-?kind=            (repeatable: created|changed|deleted|purged)
-?include=record   (ignored for kind=purged)
-?includeUnlisted= (owner-only — see Unlisted)
-```
-
-Response: `200 text/event-stream`, a stream of frames.
-
-**Filtering is exact, not advisory.** A filtered connection never receives an event outside its filter, so a client that filters again is doing redundant work rather than defensive work. `typeId` is matched by `baseId`, exactly as [grants are](./access-control.md#type-level-grants), so a type version bump never silently orphans a subscription. `entityId` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
-
-### Frames
-
-```
-event: ready
-data: {"seq":"AA3f1Q"}
-
-id: AA3f1R
-event: record
-data: {"kind":"changed","op":"update","recordId":"1hk153x00001",
-       "typeId":"com.example/note@1","version":7,
-       "updatedAt":"2026-08-13T12:00:00.000Z",
-       "actor":{"entityId":"did:key:z6Mk..."}}
-
-id: AA3f1S
-event: record
-data: {"kind":"purged","op":"hard-delete","recordId":"1hk153x00002",
-       "typeId":"com.example/note@1","version":4,
-       "updatedAt":"2026-08-13T12:00:03.000Z",
-       "actor":{"entityId":"did:key:z6MkOwner..."}}
-
-: keepalive
-
-event: reset
-data: {"reason":"cursor_expired"}
-```
-
-- **`ready` is sent first, always.** It carries the head cursor, and it is what makes subscribe-then-query gap-free: a client that awaits it before querying knows every later change is in one or the other. A server that mints no cursors sends it with no `seq`.
-- **`record`** carries one change. `updatedAt` is an ISO string; `record`, when included, is a `WireRecord`. The envelope describes the change and carries no record provenance — `actor` is who performed it, never who authored the record. See [Change events § Attribution](./events.md#attribution).
-- **`reset`** means _your cursor cannot be honored; resynchronize by query_. A server with no buffer at all sends it on every connection and is fully conformant. `reason` is informational (`cursor_expired`, `not_supported`, `overflow`) — the client's repair is the same for all three.
-- **`: keepalive` comments** SHOULD be sent on an idle interval, so intermediaries do not reap the connection and a client can detect a dead one.
-
-**A purged frame carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt` and `actor` — nothing else**, whatever the client asked for and whatever the server advertises. No `record`, no `parentId`, no author. Hard delete is the erasure primitive, and a frame naming what was erased hands every subscriber a permanent, un-erasable note about it at the moment the stack finished destroying its own copy. `@haverstack/wire-types`' `serializeChange()` enforces this in the encoding, because the server holds the record at emission — for the readability check below — and is therefore in exactly the position to leak it. See [Change events § Purged records carry nothing](./events.md#purged-records-carry-nothing).
-
-**A client MUST ignore a frame whose name it does not recognize.** That is what makes a new frame an additive, minor change under [version negotiation](#version-negotiation) rather than a break — type events, batch frames and anything else arrive that way.
-
-**`seq` is opaque and restricted to the unreserved base64url alphabet (`A-Za-z0-9_-`)**, for the same reason [a nonce is](#the-handshake): it travels in a line-oriented protocol, where an unconstrained value would span fields and truncate the frame carrying it. A client echoes a cursor back and never computes with one, so a server is free to implement it as a WAL offset, a timestamp-counter pair, or anything else. `isValidSeq()` in `@haverstack/wire-types` applies the rule on both sides, and `@haverstack/core` applies it again to a `since` handed to `subscribe()` — so a cursor that could not be framed is refused the same way whatever adapter is underneath, rather than reaching one as a header it would truncate.
-
-### Backpressure and reconnection
-
-**On buffer overflow a server closes the stream** rather than dropping frames silently. The client reconnects, presents its cursor, and receives `reset` if the gap cannot be filled. Silent gaps are the one behavior that makes a feed untrustworthy: a client that cannot tell it missed something cannot repair it either.
-
-**Reconnection is the client's job, with exponential backoff and jitter.** A server restart otherwise produces a synchronized reconnect stampede from every client it dropped.
-
-**A client stops reconnecting when the answer was `4xx`, and keeps reconnecting when it was `5xx`.** The reconnect sends the same request, so a status faulting that request — a malformed cursor or filter, an unrenewable credential, an authorization refusal — will be answered identically however long the client waits, and backing off only spins. A `5xx` says the server could not serve a request it did not fault, which is the case backoff exists for; `timeout` is the answer a server gives while [shedding query load](#bounding-query-cost) and a client that gave up on it would turn a busy server into a dead subscription. A client that stops reports the error to its subscriber first; the repair is to subscribe again.
-
-### Permission scoping
-
-**A connection delivers the events its token's session may read, and nothing else.** The predicate is literally `canRead` applied per event — no second vocabulary, no feed-specific ACL. A server subscribes **unscoped** at the storage owner and fans out per connection, filtering each through the `ScopedStack` its token's session names via `Stack.forSession()`, taking the `(principalId, subjectId)` pair whole. Delegated authority is then the ordinary [intersection](./access-control.md#delegation-principal-and-subject), inherited rather than reimplemented.
-
-**A record the requester cannot read produces no frame** — not an empty or redacted one. The existence of a change is itself a disclosure, the same reasoning that keeps `ScopedStack.query()`'s `total` null.
-
-Two consequences are easy to discover too late:
-
-- **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. A subscription opened through `ScopedStack.subscribe()` already carries that cache and expires it from the stream itself, so a server that opens one per connection inherits both and has nothing to build — see [Change events § Permission scoping](./events.md#permission-scoping). The cost is a real one to weigh only where a server scopes the feed some other way.
-- **A purged record cannot be permission-checked after the fact.** Readability must be evaluated at mutation time, on the record as it stood, because after the write there is nothing left to check.
-
-### Auth, and what a stream does not renew
-
-A feed connection is an ordinary request through the same path every other request takes, so a `401` triggers the existing single-flight re-authentication and one retry. **The change feed introduces no new auth machinery**, and a design that opened the stream outside that path would need its own token lifecycle and would get it subtly wrong.
-
-**A stream's authority is fixed at connect and re-evaluated only at reconnect.** Renewing a token does not extend or re-authorize an open stream, and a client MUST NOT assume it does; [`expiresAt` is advisory](#the-handshake) and stays so, since the stream is not what holds the token. The consequence is the one genuinely new hazard here: **a long-lived stream can outlive the authority that opened it**, delivering to a token that has since expired or been revoked. It is a property of state rather than shape, so no fixture catches it — see the checklist below.
-
-### Feed implementation checklist
-
-As with [the auth checklist](#server-implementation-checklist), each of these is a property of state or configuration rather than shape, so **a server can pass every change-feed fixture and still be wrong.**
-
-- **Bound stream lifetime, or re-check the session periodically.** A revoked or expired token must stop delivering. Closing the stream is enough: the client reconnects and gets a `401`, which is a path that already works.
-- **Never accept a bearer token as a query parameter**, on this endpoint or any other, however convenient `EventSource` would make it.
-- **Evaluate readability at mutation time for a purge**, before the record is destroyed.
-- **Never put the purged record, or anything identifying it, into a purged frame.** Holding the record for that readability check makes it easy to serve under `?include=record`, and to fill an author field from it. Both defeat the erasure the verb performs.
-- **Invalidate any authority cache of your own on `_grant` and `_group` events.** Caching authority is necessary for throughput and unsafe without it — a cache that ignores them serves a revoked subscriber indefinitely. The per-subscription cache behind `canRead` already does this, so what remains is any cache a server adds on top, such as one shared across connections.
-- **Close on buffer overflow; never drop a frame silently.**
-- **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
-- **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
-- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](#versions), plus create and hard delete.
-
-### Why SSE, and why not `EventSource`
-
-SSE is one-way server→client, which is the entire requirement; it carries frame ids and resumption (`id:` / `Last-Event-ID`) in the protocol itself; and a server implements it as a streaming HTTP response with no new dependency, no upgrade path and no separate auth story. WebSocket buys bidirectionality that nothing here needs.
-
-But **the browser `EventSource` API cannot set an `Authorization` header**, which is why SSE deployments so often end up with a token in the query string. That is not available here — query strings land in access logs, referrers and proxy telemetry, and this token is a programmatically renewable credential rather than a hand-placed one. The feed is therefore consumed via `fetch` with a streaming body.
+`GET /changes` streams record changes over SSE. Its frames, resumption rules and the obligations that fall on a server are [Change feed](./change-feed.md); the model it encodes is [Change events](./events.md).

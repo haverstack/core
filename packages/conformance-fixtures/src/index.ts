@@ -118,7 +118,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     description:
       'A stack with no timezone omits the field rather than defaulting it. An absent timezone ' +
       'stays undefined end to end — a default would assert knowledge the stack was never ' +
-      'given (docs/spec.md § Stack identity).',
+      'given (docs/spec.md § The _config record).',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -168,7 +168,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       'at open() whether there is a feed to connect to rather than as a 404 partway through a ' +
       'connection. `transports` lists what it speaks, `resume` whether a cursor is honored, and ' +
       '`records` whether ?include=record is. An object rather than a boolean because the ' +
-      'surface grows entries — see docs/spec/wire-format.md § Change feed.',
+      'surface grows entries — see docs/spec/change-feed.md.',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -248,7 +248,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       'unlisted, so there is no window where it exists and is enumerable before a later ' +
       'PUT .../unlisted catches up. Excluded from an unfiltered GET/POST /records/query and the ' +
       'change feed by default, the same as any other unlisted record. See ' +
-      'docs/spec/access-control.md § Unlisted records.',
+      'docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records',
     requestBody: {
@@ -545,7 +545,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'reject an empty relatedToStack with 400 rather than read it as local or as a ' +
       'wildcard, and likewise an empty relatedToId, which omission already expresses as the ' +
       'whole namespace. ' +
-      'See docs/spec/wire-format.md § Query parameters.',
+      'See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
     responseStatus: 200,
@@ -557,7 +557,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming an identity travels as relatedToEntity, distinct from ' +
       'relatedTo: a DID and a Record id are different reference spaces, and a server that ' +
       'matched one against the other would report group rosters as record references. ' +
-      'See docs/spec/wire-format.md § Query parameters.',
+      'See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
     responseStatus: 200,
@@ -571,7 +571,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'is how a bridge asks what it has already syndicated. A server MUST reject a request ' +
       'mixing parameters from two scopes with 400, and can rely on at least one relatedTo ' +
       'parameter being present whenever the filter is used — the filter never encodes to ' +
-      'nothing. See docs/spec/wire-format.md § Query parameters.',
+      'nothing. See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?relatedToNs=atproto',
     responseStatus: 200,
@@ -840,8 +840,7 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
     description:
       'PUT /records/:id/unlisted withholds a record from enumeration without changing who may ' +
       'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
-      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/access-control.md ' +
-      '§ Unlisted records.',
+      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/unlisted.md.',
     method: 'PUT',
     path: '/records/1hk153x00001/unlisted',
     requestBody: { unlisted: true },
@@ -1115,8 +1114,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'returns 403 / code "permission" — enumeration standing rests on nothing but ownership, so ' +
       'no grant or delegation carries it. A server MUST refuse the flag outright rather than ' +
       'silently drop it: a caller that believes it asked for the full picture and silently got ' +
-      'the filtered one is worse than one that was told no. See docs/spec/access-control.md ' +
-      '§ Unlisted records.',
+      'the filtered one is worse than one that was told no. See docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records/query',
     requestBody: { filter: { includeUnlisted: true } },
@@ -2178,7 +2176,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
 //
 // Every connection below assumes a valid bearer token and Accept:
 // text/event-stream, and a server advertising `changes` in discovery. See
-// docs/spec/wire-format.md § Change feed.
+// docs/spec/change-feed.md.
 
 /** One SSE frame: `id:` (when the frame is resumable), `event:`, and parsed `data:`. */
 export type ChangeFeedFrame = {

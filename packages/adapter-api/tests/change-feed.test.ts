@@ -1,7 +1,7 @@
 /**
  * The change feed over the wire: what APIAdapter sends to open one, what
  * it makes of the frames that come back, and what it does when the stream
- * ends. See docs/spec/wire-format.md § Change feed.
+ * ends. See docs/spec/change-feed.md.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import {

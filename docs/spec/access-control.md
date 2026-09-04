@@ -2,6 +2,8 @@
 
 Access control in a Stack has two complementary layers: **record-level permissions** (per-record sharing) and **type-level grants** (per-type delegation). `ScopedStack` enforces both; plain `Stack` is unscoped and performs no checks — correct for single-entity embedded use, where there's no requester distinct from the app itself.
 
+Whether a Record is _enumerable_ is a separate question from who may read it, and has its own document: [Unlisted records](./unlisted.md).
+
 ## Record-level permissions
 
 All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement is the responsibility of the API adapter; the local storage adapters ignore the permissions field.
@@ -76,75 +78,6 @@ What this buys is an invariant the mutate gate already assumed: **anything that 
 - **The contributor keeps no sent copy.** That's the federated shape — a sender who wants one writes it to their own stack — not something the box can hand back.
 
 What is _not_ offered is blind mutation of an existing Record. `update()` is a merge patch defined over content the requester would not be able to see, `ifVersion` needs a version number that comes from a read, and the write bit's recoverability argument requires prior content by construction. A write-only surface is a total write; nothing in this model is one.
-
-## Unlisted records
-
-`unlistedAt` is a native field, orthogonal to `permissions`: it says nothing about who may read a Record, only whether it is enumerable. A Record with `unlistedAt` set is reachable by `get()` for anyone who may already read it, and absent from an unfiltered `query()` and the change feed by default — a signal for content that is genuinely public where the _location_ is what's being withheld (a bonus post for feed subscribers, a superseded page kept alive for old links), never a substitute for `permissions` on content that must stay unreadable.
-
-```ts
-type StackRecord = {
-  // ...
-  unlistedAt?: Date; // Present if withheld from enumeration
-};
-
-type RecordFilter = {
-  // ...
-  includeUnlisted?: boolean; // Unlisted Records are excluded by default
-};
-```
-
-**Stated plainly, because the name will otherwise over-promise:**
-
-> Unlisted withholds a Record from enumeration and announcement. It never withholds the Record. A requester who may read it and holds its ID gets it. A requester without the ID has no supported way to discover it.
-
-That sits inside the same threat model as [record IDs being guessable](#errors-and-information-exposure) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
-
-### Three tiers, not two
-
-The reach question access control usually asks is binary — enforced or not — but enumeration has a real middle tier, and `unlistedAt` occupies it rather than inventing a softer word for "advisory":
-
-|               | Behavior                                   | Occupants                            |
-| ------------- | ------------------------------------------ | ------------------------------------ |
-| **Enforced**  | Refused regardless of what the caller asks | `permissions`, grants                |
-| **Defaulted** | Refused unless the caller asks             | `deletedAt`, `unlistedAt`, `_config` |
-| **Advisory**  | Always returned; the consumer decides      | A tag convention                     |
-
-A consumer that has never heard of `unlistedAt` gets correct behavior by default — an unfiltered `query()` excludes it, the same posture as `deletedAt` and `_config`. That default is what makes the field real rather than a documentation-only convention: nothing about it depends on every consumer choosing to respect it.
-
-### Setting it
-
-```ts
-await stack.create(typeId, content, { unlisted: true }); // created already unlisted — no window where it's briefly enumerable
-await stack.setUnlisted(recordId, true); // withhold an existing Record
-await stack.setUnlisted(recordId, false); // relist it
-```
-
-`setUnlisted()` is gated exactly like [`setPermissions()`](#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule `setPermissions()` uses there too. No-op if the Record is already in the requested state.
-
-### `includeUnlisted` is owner-only
-
-Unlike `includeDeleted` — which any `ScopedStack` requester may pass, since a soft-deleted Record's own `permissions` still gate whether they can see it, and what comes back is [a tombstone rather than the Record](./versioning.md#the-tombstone-is-literal) — **`includeUnlisted` is refused to everyone but the owner acting alone**, on both `query()` and `subscribe()`:
-
-```ts
-stack.query({ filter: { includeUnlisted: true } }); // plain Stack: honored
-scoped.query({ filter: { includeUnlisted: true } }); // ScopedStack, non-owner: StackPermissionError
-```
-
-Enumeration standing rests on nothing but ownership. A grant conveys reach over specific Records or a type family; it says nothing about whether the requester should see the stack's _entire_ enumeration surface, unlisted Records included — so no grant, and no delegation, carries the flag. An owner principal acting for a visitor through the owner's own server does not lend that visitor the flag either, for the same reason delegation carries none of the [owner-acting-alone verbs](#delegation-principal-and-subject). The flag is refused outright rather than silently dropped: a caller that believes it captured the full enumeration and silently got the filtered one is worse off than one that was told no — the same reasoning [create-time `permissions`](#delegation-principal-and-subject) is refused under delegation rather than quietly stripped.
-
-### The feed matches `query()`
-
-An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. The one wrinkle is the transition itself: marking a Record unlisted must still reach a subscriber who already knows it, so it can drop its copy, even though the Record's new state would otherwise fail that same exclusion. See [Change events § The unlisted transition](./events.md#the-unlisted-transition) for the full transition table and the `list`/`unlist` change ops.
-
-### What this is not
-
-**Not a fourth `Permission` variant.** `Permission` is a union over mutually exclusive answers to "who may read this"; `unlistedAt` is orthogonal to that question, not another answer to it, and composes with any permission tier — public-and-unlisted (a bonus post) and owner-only-and-unlisted are both coherent, meaning different things.
-
-**Not per-audience.** There is no `Listing[]` parallel to `Permission[]` — enumeration does not vary by who is asking, the way reach does. A record is unlisted for everyone or for no one; if a future need for audience-varying enumeration arises, that is new surface, not a reinterpretation of this field.
-
-**Not a query filter for the excluded half.** `RecordFilter` has no negation, so `includeUnlisted: true` returns _both_ listed and unlisted Records together — there is no "unlisted only" filter. A consumer that needs to tell them apart checks `unlistedAt` on the results it gets back.
-
-`ScopedStack.query()`'s `total` excludes unlisted Records from the count the same way it excludes everything else the requester can't see — a count that included what the exclusion just hid would leak the fact being withheld.
 
 ## Type-level grants
 
@@ -221,7 +154,7 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 - **The grantee may be an app**: `granteeEntityId` is a DID, and an app that holds its own key has one — so granting an installed app the types it needs is the existing model applied, not new machinery (see [App](./identity.md#app)). When such an app acts for a person, the `-own`/`-any` distinction on _its_ grant collapses to the bare verb; see [Delegation](#delegation-principal-and-subject).
 - **Group-targeted grants match any roster role.** A `granteeGroupId` grant is satisfied by any entity holding a `member` or `admin` association on the named `_group` Record — unlike record-level `access: 'group'` permissions, there's no `role: 'admin'` narrowing on the grant side; a set of grantees is undifferentiated by role, so the narrower record-level shape doesn't carry over. `granteeEntityId` and `granteeGroupId` are mutually exclusive on grants written through `grant()`; a `_grant` Record naming both (only reachable by writing around it) requires both to be satisfied, consistent with the refuse-again-at-evaluation posture above. The named Record must be in the `_group` family: any Record's `relationship` associations would otherwise serve as a roster, and a group migrated out of the family would keep resolving after it had stopped being a group.
 - **Group-targeted grants do not count on the principal's side** of a delegated request, for the same reason default grants don't (see [Delegation](#delegation-principal-and-subject)) — one step removed. A `_group` roster is editable by any of its admins, not only by the stack owner, so a grant reaching a principal through a roster would let someone other than the owner name an app to a type the owner never named it to. The rule is about **how the authority arrived, not who holds it**, which is what makes it enforceable: a roster entry is an opaque DID and an `_app` Record's `did` is optional, so nothing can reliably tell an app's DID from a person's. An owner who means to grant an app names it directly, one grant at a time — the same shape as any other capability system that has to name software. Group grants still apply to the **subject** under delegation; only the principal half refuses them.
-- **A grant target must name someone.** `grant()`, `revoke()` and `listGrants()` reject an empty `entityId` or an empty or absent `groupId` with `StackQueryError`. `null` is the only way to say "default grant": both an empty string and an absent field are falsy, so a target that names nobody would otherwise be stored as — and evaluated as — a grant to every authenticated entity. Evaluation refuses the same shape again, so a `_grant` Record carrying an empty `granteeEntityId` or `granteeGroupId` confers nothing however it came to exist. The `groupId` itself is **not** format-checked: it is a reference to an existing Record, like `parentId` or a relationship association's `record` target, and one that resolves to nothing simply denies.
+- **A grant target must name someone.** `grant()`, `revoke()` and `listGrants()` reject an empty `entityId` or an empty or absent `groupId` with `StackQueryError`. `null` is the only way to say "default grant": both an empty string and an absent field are falsy, so a target that names nobody would otherwise be stored as — and evaluated as — a grant to every authenticated entity. Evaluation refuses the same shape again, so a `_grant` Record carrying an empty `granteeEntityId` or `granteeGroupId` confers nothing however it came to exist. The `groupId` itself is not format-checked, and the Record it names must be in the `_group` family — both on the same terms as a record-level `access: 'group'` entry (see [Record-level permissions](#record-level-permissions)).
 - **Group roster resolution is memoized per operation.** Resolving `granteeGroupId` re-fetches the `_group` Record the same way `access: 'group'` permission resolution does (walking `relationship` associations), so it costs the same per-group lookup. The resolved roles are cached for the lifetime of one operation and threaded alongside `prefetchedGrants` — exactly the lifetime that has — so a `query()` examining many Records resolves a given roster once instead of once per candidate. Deliberately **not** cached for the life of a `ScopedStack`: `asEntity()`/`forSession()` return an object a caller may hold for as long as it likes, and a cache outliving the operation would let removal from a group go unnoticed by that instance. Revocation is the direction an authorization cache must never fail in.
 
 **Granting a group grants everyone its admins ever add.** A `_group` roster is managed by the stack owner _and_ by any entity holding an `admin` association on it, and an admin may appoint further admins. So a group-targeted grant is a standing delegation, not a fixed list: whoever holds `admin` on that group decides, from then on, who the grant reaches. This is what delegating group management means, and it is bounded in two ways — the owner outranks the roster, so ownership can never be locked out of a group and pruning is always available; and roster-derived authority stops at the principal boundary (above), so it can never reach an app acting for someone. An owner who wants a roster only they can change appoints no other admins: a group begins with exactly one admin, its creator, and plain members hold no roster authority at all. Where one group would need two levels of trust, use two groups.
@@ -279,7 +212,7 @@ Read in the other direction, an **owner principal** acting for someone else — 
 
 | Verb                                                          | Why delegation doesn't carry it                                                                                      |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `includeUnlisted` on `query()`/`subscribe()`                  | Enumeration standing rests on nothing but ownership — see [Unlisted records](#unlisted-records)                      |
+| `includeUnlisted` on `query()`/`subscribe()`                  | Enumeration standing rests on nothing but ownership — see [Unlisted records](./unlisted.md)                          |
 | Hard delete                                                   | Irreversible; the subject holds soft delete already                                                                  |
 | `deleteAttachment()`, `collectAttachmentGarbage()`            | Irreversible, and neither takes a Record to gate on                                                                  |
 | Unstripped snapshot `permissions`                             | Discloses the stack's sharing graph                                                                                  |
@@ -362,7 +295,7 @@ This is the same closure [reference-creation gating](#reference-creation-gating)
 
 **The closure is in the answer, not in the timing.** Refusing an existing Record does strictly more work than refusing a missing one — a fetch, then a read check that may walk grants and a Group roster — so a caller measuring closely enough can still tell the two apart. Constant-time refusal is not attempted: it would mean paying the read check on every miss, and the deployments this spec targets are not where that trade pays.
 
-`ScopedStack.query()`'s `total` is always `null`. The adapter's unfiltered count would otherwise leak the existence and cardinality of Records the requester can't read, even when the returned `records` array comes back empty. Computing an exact filtered count would require evaluating every match rather than just the returned page, so it's intentionally not attempted.
+`ScopedStack.query()`'s `total` is always `null`, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination). Computing an exact _filtered_ count instead would mean evaluating every match rather than just the returned page, so that is not attempted either.
 
 ### Known limitation
 

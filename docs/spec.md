@@ -13,11 +13,13 @@ The spec is split into focused documents:
 | [Data model](./spec/data-model.md)            | Records, IDs, associations, types, schemas, migrations, queries           |
 | [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                |
 | [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement    |
+| [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it      |
 | [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft/hard delete        |
 | [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection    |
 | [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery  |
 | [Adapters](./spec/adapters.md)                | Adapter contract, backends, capabilities, concurrency & storage ownership |
 | [Wire format](./spec/wire-format.md)          | The HTTP API stack servers implement and `adapter-api` consumes           |
+| [Change feed](./spec/change-feed.md)          | The wire encoding of the change events above — `GET /changes` over SSE    |
 
 ## Stack initialization
 

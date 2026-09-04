@@ -375,7 +375,7 @@ export function supportsDidChallenge(discovery: DiscoveryResponse): boolean {
  * grows entries — another transport, batched frames — and the alternative
  * is a boolean followed by three more of them.
  *
- * See docs/spec/wire-format.md § Change feed.
+ * See docs/spec/change-feed.md.
  */
 export type DiscoveryChanges = {
   transports: ChangeTransport[];
@@ -555,7 +555,7 @@ export function serializeChange(c: RecordChange): WireRecordChange {
 /**
  * Frame names. Every frame carries one, and a client MUST ignore a name it
  * does not recognize — which is what makes a new frame an additive, minor
- * change rather than a break. See docs/spec/wire-format.md § Change feed.
+ * change rather than a break. See docs/spec/change-feed.md.
  */
 export const CHANGE_FRAME_READY = 'ready';
 export const CHANGE_FRAME_RECORD = 'record';
