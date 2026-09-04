@@ -195,6 +195,22 @@ export const validateReservedKeys = (content: Record<string, unknown>): Validati
   }));
 
 /**
+ * `undefined` is not a value a merge patch can carry: `null` is the
+ * deletion sentinel, JSON drops the key on the way to storage, and the
+ * presence checks a patch runs through read the key as a claim on the
+ * field it names. Top-level only, matching the shallow merge — a nested
+ * one is part of a value being replaced wholesale.
+ * See docs/spec/data-model.md § Undefined values in a patch.
+ */
+export const validatePatchValues = (patch: Record<string, unknown>): ValidationError[] =>
+  Object.keys(patch)
+    .filter((key) => patch[key] === undefined)
+    .map((key) => ({
+      path: key,
+      message: `"${key}" is undefined; omit it to leave the field unchanged, or use null to remove it`,
+    }));
+
+/**
  * Characters a content field name may not contain, because a content
  * filter key is a dot-separated path: `{ content: { 'emails.value': x } }`
  * addresses `value` inside `emails`. A field literally named `emails.value`

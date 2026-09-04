@@ -35,6 +35,7 @@ import {
   SEGMENT_METACHARACTER_RE,
   validateContent,
   validateContentKeys,
+  validatePatchValues,
   validateReservedKeys,
   validateSchemaFieldNames,
 } from './validate.js';
@@ -1716,9 +1717,15 @@ export class Stack implements StackClient {
     }
 
     // Checked on the raw patch, before the merge: a reserved key in a
-    // patch is lost by applyMergePatch rather than stored, so a check on
-    // the merged result would never see it. See validateReservedKeys().
-    const patchErrors = [...validateReservedKeys(content), ...validateContentKeys(content)];
+    // patch is lost by applyMergePatch rather than stored, and an
+    // `undefined` value is indistinguishable from an absent field once
+    // merged, so a check on the merged result would see neither. See
+    // validateReservedKeys() and validatePatchValues().
+    const patchErrors = [
+      ...validateReservedKeys(content),
+      ...validatePatchValues(content),
+      ...validateContentKeys(content),
+    ];
     if (patchErrors.length > 0) {
       throw new StackValidationError(patchErrors);
     }
@@ -3795,11 +3802,12 @@ export class ScopedStack implements StackClient {
     // position, and a delegated app acting for the owner inherits none of
     // the owner's extra trust — same reasoning as mayGrantAccess() below.
     // Refused rather than silently dropped, so an app never believes it
-    // published something it didn't. This is also the enforcement a
-    // server built on ScopedStack inherits for `POST /records`: an
-    // owner-authenticated request may carry both fields, anyone else's
-    // has them ignored.
-    if (('createdAt' in opts || 'updatedAt' in opts) && !this.ownerActingAlone) {
+    // published something it didn't — asked value-wise, since an
+    // `undefined` carries no date and Stack.create() reads it as absent.
+    // This is also the enforcement a server built on ScopedStack inherits
+    // for `POST /records`: an owner-authenticated request may carry both
+    // fields, anyone else's has them ignored.
+    if ((opts.createdAt !== undefined || opts.updatedAt !== undefined) && !this.ownerActingAlone) {
       throw new StackPermissionError(
         'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
       );
@@ -3944,6 +3952,13 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
+    // Ahead of the binding fences below, which compare the patch's value
+    // for a field against the stored one: `undefined` names a field
+    // without claiming a value, so it is refused as a malformed patch
+    // rather than read as a change. See Stack.update() for the same check
+    // on every other path into a patch.
+    const patchErrors = validatePatchValues(content);
+    if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
     // Value-wise, not presence-wise: a client that reads a card, edits its
     // `name` and sends the whole content object back is not setting the
     // binding it round-trips, and `name` is writable by record-level

@@ -266,6 +266,14 @@ They name JavaScript's object machinery rather than a field, and the two write p
 
 This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter.
 
+### Undefined values in a patch
+
+`update()` takes a merge patch: an omitted field keeps its current value, and a field set to `null` is removed (RFC 7396). `undefined` is neither, and there is no third meaning left for it to carry — so **a top-level patch key whose value is `undefined` is rejected with `StackValidationError` (422)**. This is an `update()` rule only: `create()` and `commitMigration()` take a whole content object, where an undefined field is simply a field the record does not have, and the schema's own required-field check already speaks to it.
+
+It cannot arrive over the wire — JSON has no `undefined`, and `JSON.stringify` omits the key rather than emitting one — so every occurrence is an in-process caller spreading a partial object, meaning either "leave this alone" or "remove this" and spelling neither. Accepting it would resolve the ambiguity twice over, differently each time: storage drops the key on serialization, landing on the first, while the checks that ask whether a patch _names_ a field land on the second. Those checks are load-bearing — [binding immutability](./identity.md#did-bindings), [attachment field immutability](./attachments.md#the-_attachment-record-type), and `ScopedStack`'s owner-only fence on `_app` bindings all read the key as a claim on the field. A write-holder patching an `_app` card with `{ did: undefined }` would be refused for repointing a DID it never sent, and the refusal would be a permission error naming a field the caller did not set.
+
+This is a `Stack` invariant, so every adapter inherits it. `ScopedStack.update()` additionally applies it ahead of its own binding fences, so a patch carrying `undefined` is a validation error for every requester rather than a validation error for the owner and a permission refusal for everyone else.
+
 ### Content field names
 
 A content filter key is a **dot-separated path** (see [Filter](#filter)), so a field named `emails.value` and a path reaching `value` inside `emails` would be the same string asking two different questions. The ambiguity is removed from the field name rather than from the path: **a content field name may not contain `.`, `[`, `]`, `$`, `"`, `*`, or `#`** — rejected with `StackValidationError` (422) on `create()`, in an `update()` patch, and on `commitMigration()`.
