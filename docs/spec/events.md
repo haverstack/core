@@ -2,7 +2,7 @@
 
 Apps observe record changes by subscribing, rather than by polling `query()`. A subscription reports **that** something changed; `query()` and `get()` report **what** it now is.
 
-This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Wire format § Change feed](./wire-format.md#change-feed).
+This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Change feed](./change-feed.md).
 
 **A change event is the observable side of the versioning one-rule.** Every mutation that snapshots prior state and bumps `version` emits exactly one event; hard delete, the one exception to that rule, is the one exception here too — it emits, carries no snapshot, and ends the record's stream. See [Versioning § Version history](./versioning.md#version-history).
 
@@ -180,7 +180,7 @@ type Unsubscribe = () => void;
 type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
-  includeUnlisted?: boolean; // owner-only under ScopedStack — see Access control § Unlisted records
+  includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
   since?: string; // resume cursor — the last `seq` present on a delivered RecordChange
   onError?: (err: unknown) => void;
   onReset?: () => void;
@@ -204,7 +204,7 @@ interface StackClient {
 - **`typeId` matches by `baseId`**, exactly as [grants do](./access-control.md#type-level-grants), so a type version bump never silently orphans a subscription.
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event outside its filter; a consumer that filters again is doing redundant work, not defensive work.
 - **`onReset` is the one control signal an app must handle.** A reconnect that resumes cleanly is the adapter's business and the app never hears about it; `onReset` means a gap opened that resumption could not close, and reconciling by query is the repair — the same work as startup. It never fires on a local stack, which has one writing process and so no gap to open. Passing a `since` the far end refuses (a `resume: false` server, an expired cursor) fires it on the very first connection — that is a gap too, and the one an app most needs to hear about: the difference between "you are current" and "you are missing an unknown amount."
-- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter as `SubscribeChangesOptions.since` — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackQueryError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./wire-format.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
+- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter as `SubscribeChangesOptions.since` — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackQueryError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
 
 ## Permission scoping
 
@@ -212,7 +212,7 @@ interface StackClient {
 
 **The unlisted exclusion composes with `canRead` rather than replacing it, and is not a second ACL either.** It is the same boundary an unfiltered `query()` applies, asked again here so the feed can never deliver more than an equivalent `query()` would return — see [The unlisted transition](#the-unlisted-transition) below.
 
-**A scoped view of a stack that relays refuses to subscribe**, with `StackRelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./wire-format.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
+**A scoped view of a stack that relays refuses to subscribe**, with `StackRelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./change-feed.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
 
 - **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that makes `ScopedStack.query()`'s `total` always `null`.
 - **A `purged` record is evaluated at mutation time**, on the record as it stood, because after the write there is nothing left to check.
@@ -225,7 +225,7 @@ interface StackClient {
 
 ## The unlisted transition
 
-An unlisted record that emits a change event to a default subscriber is not unlisted, so the feed excludes them the same way `query()` does — `includeUnlisted` opts a subscription back in, gated exactly as [`RecordFilter.includeUnlisted`](./access-control.md#includeunlisted-is-owner-only) is. Since `unlistedAt` deliberately keeps `get()` working, an ID is sufficient to fetch; if `query()` excluded unlisted records but the feed did not, the feed would be a strictly better enumeration channel than the query it is supposed to match.
+An unlisted record that emits a change event to a default subscriber is not unlisted, so the feed excludes them the same way `query()` does — `includeUnlisted` opts a subscription back in, gated exactly as [`RecordFilter.includeUnlisted`](./unlisted.md#includeunlisted-is-owner-only) is. Since `unlistedAt` deliberately keeps `get()` working, an ID is sufficient to fetch; if `query()` excluded unlisted records but the feed did not, the feed would be a strictly better enumeration channel than the query it is supposed to match.
 
 **Suppression is not total, or a default subscriber would keep a stale copy forever.** Soft delete is the model: `query()` hides a deleted record while the feed still emits `deleted`, because that event is what tells a subscriber to drop its copy. The same reasoning governs every transition here:
 

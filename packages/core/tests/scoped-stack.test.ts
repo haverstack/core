@@ -339,7 +339,7 @@ describe('ScopedStack — write access', () => {
 // -------------------------------------------------------
 // setUnlisted — gated exactly like setPermissions, since both decide who
 // or what can discover a record rather than merely read one already found.
-// See docs/spec/access-control.md § Unlisted records.
+// See docs/spec/unlisted.md.
 // -------------------------------------------------------
 
 describe('ScopedStack.setUnlisted', () => {
@@ -758,7 +758,7 @@ describe('ScopedStack.query', () => {
 
   // includeUnlisted is owner-only: enumeration standing rests on nothing
   // but ownership, so no grant or delegation carries it. See
-  // docs/spec/access-control.md § includeUnlisted is owner-only.
+  // docs/spec/unlisted.md § includeUnlisted is owner-only.
   describe('includeUnlisted', () => {
     test('refuses a non-owner requester with StackPermissionError', async () => {
       await expect(

@@ -317,7 +317,7 @@ export type CreateRecordOptions = {
    * Create the record already unlisted, so the create event itself is
    * withheld from the feed — there is no window where the record exists
    * and is listed before setUnlisted() catches up. See
-   * docs/spec/access-control.md § Unlisted records.
+   * docs/spec/unlisted.md.
    */
   unlisted?: boolean;
 };
@@ -863,7 +863,7 @@ export class StackRelayScopeError extends Error {
  * A resume cursor is opaque, but not arbitrary: it travels in an SSE `id:`
  * field, so a value spanning a line would truncate the frame carrying it.
  * Same charset and same reason as the auth nonce — see
- * docs/spec/wire-format.md § Frames.
+ * docs/spec/change-feed.md § Frames.
  */
 const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
 
@@ -3674,7 +3674,7 @@ export class ScopedStack implements StackClient {
     const match = await findFirstMatch(
       (q) => this.stack.query(q),
       // Reach, not enumeration: a record readable by ID conveys the file it
-      // references. See docs/spec/access-control.md § Unlisted records.
+      // references. See docs/spec/unlisted.md.
       { filter: { attachmentFileId: fileId, includeUnlisted: true } },
       (record) => this.canRead(record, prefetchedGrants, groupRoles),
     );
@@ -4127,7 +4127,7 @@ export class ScopedStack implements StackClient {
    * Withhold a record from enumeration, or restore it — gated exactly like
    * setPermissions(), since both decide who or what can discover the
    * record rather than merely read it once found. See
-   * docs/spec/access-control.md § Unlisted records.
+   * docs/spec/unlisted.md.
    */
   async setUnlisted(id: string, unlisted: boolean, opts: IfVersionOptions = {}): Promise<void> {
     const record = await this.stack.get(id);

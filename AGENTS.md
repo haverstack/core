@@ -47,7 +47,7 @@ These rules are enforced in review. Applying them to code you touch is expected;
 
 ## The spec is the source of truth
 
-Design lives in [`docs/spec.md`](./docs/spec.md) and [`docs/spec/`](./docs/spec/): data model, identity, access control, versioning, attachments, adapters, wire format.
+Design lives in [`docs/spec.md`](./docs/spec.md) and [`docs/spec/`](./docs/spec/): data model, identity, access control, unlisted records, versioning, attachments, change events, adapters, wire format, change feed.
 
 - A change to observable behavior (API contract, permission rule, wire shape, error mapping) **updates the spec in the same change**.
 - Section names are load-bearing — code comments reference them as `docs/spec/<file>.md § Section`. Verify a section exists before linking to it, and update inbound references when renaming a heading.

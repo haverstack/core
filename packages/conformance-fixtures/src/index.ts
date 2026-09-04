@@ -168,7 +168,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       'at open() whether there is a feed to connect to rather than as a 404 partway through a ' +
       'connection. `transports` lists what it speaks, `resume` whether a cursor is honored, and ' +
       '`records` whether ?include=record is. An object rather than a boolean because the ' +
-      'surface grows entries — see docs/spec/wire-format.md § Change feed.',
+      'surface grows entries — see docs/spec/change-feed.md.',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -248,7 +248,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       'unlisted, so there is no window where it exists and is enumerable before a later ' +
       'PUT .../unlisted catches up. Excluded from an unfiltered GET/POST /records/query and the ' +
       'change feed by default, the same as any other unlisted record. See ' +
-      'docs/spec/access-control.md § Unlisted records.',
+      'docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records',
     requestBody: {
@@ -840,8 +840,7 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
     description:
       'PUT /records/:id/unlisted withholds a record from enumeration without changing who may ' +
       'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
-      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/access-control.md ' +
-      '§ Unlisted records.',
+      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/unlisted.md.',
     method: 'PUT',
     path: '/records/1hk153x00001/unlisted',
     requestBody: { unlisted: true },
@@ -1115,8 +1114,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'returns 403 / code "permission" — enumeration standing rests on nothing but ownership, so ' +
       'no grant or delegation carries it. A server MUST refuse the flag outright rather than ' +
       'silently drop it: a caller that believes it asked for the full picture and silently got ' +
-      'the filtered one is worse than one that was told no. See docs/spec/access-control.md ' +
-      '§ Unlisted records.',
+      'the filtered one is worse than one that was told no. See docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records/query',
     requestBody: { filter: { includeUnlisted: true } },
@@ -2178,7 +2176,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
 //
 // Every connection below assumes a valid bearer token and Accept:
 // text/event-stream, and a server advertising `changes` in discovery. See
-// docs/spec/wire-format.md § Change feed.
+// docs/spec/change-feed.md.
 
 /** One SSE frame: `id:` (when the frame is resumable), `event:`, and parsed `data:`. */
 export type ChangeFeedFrame = {

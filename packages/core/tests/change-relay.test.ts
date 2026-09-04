@@ -176,7 +176,7 @@ describe('a stack whose adapter relays', () => {
   // A cursor that cannot be framed would truncate the header carrying it,
   // so it is refused here rather than by whichever adapter is underneath:
   // a malformed one reports the same everywhere. See
-  // docs/spec/wire-format.md § Frames.
+  // docs/spec/change-feed.md § Frames.
   test.each([
     ['an empty cursor', ''],
     ['a cursor carrying a newline', 'AA3f1R\nid: forged'],

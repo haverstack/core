@@ -3,7 +3,7 @@
  * them — a purge carries nothing, ready leads, a cursor is framable — and
  * a fixture that quietly violated the rule it exists to pin would take
  * every consumer with it. These assert the data against the rules it is
- * written in terms of. See docs/spec/wire-format.md § Change feed.
+ * written in terms of. See docs/spec/change-feed.md.
  */
 import { describe, it, expect } from 'vitest';
 import { isValidSeq } from '@haverstack/wire-types';

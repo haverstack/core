@@ -2,6 +2,8 @@
 
 Access control in a Stack has two complementary layers: **record-level permissions** (per-record sharing) and **type-level grants** (per-type delegation). `ScopedStack` enforces both; plain `Stack` is unscoped and performs no checks — correct for single-entity embedded use, where there's no requester distinct from the app itself.
 
+Whether a Record is _enumerable_ is a separate question from who may read it, and has its own document: [Unlisted records](./unlisted.md).
+
 ## Record-level permissions
 
 All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement is the responsibility of the API adapter; the local storage adapters ignore the permissions field.
@@ -76,73 +78,6 @@ What this buys is an invariant the mutate gate already assumed: **anything that 
 - **The contributor keeps no sent copy.** That's the federated shape — a sender who wants one writes it to their own stack — not something the box can hand back.
 
 What is _not_ offered is blind mutation of an existing Record. `update()` is a merge patch defined over content the requester would not be able to see, `ifVersion` needs a version number that comes from a read, and the write bit's recoverability argument requires prior content by construction. A write-only surface is a total write; nothing in this model is one.
-
-## Unlisted records
-
-`unlistedAt` is a native field, orthogonal to `permissions`: it says nothing about who may read a Record, only whether it is enumerable. A Record with `unlistedAt` set is reachable by `get()` for anyone who may already read it, and absent from an unfiltered `query()` and the change feed by default — a signal for content that is genuinely public where the _location_ is what's being withheld (a bonus post for feed subscribers, a superseded page kept alive for old links), never a substitute for `permissions` on content that must stay unreadable.
-
-```ts
-type StackRecord = {
-  // ...
-  unlistedAt?: Date; // Present if withheld from enumeration
-};
-
-type RecordFilter = {
-  // ...
-  includeUnlisted?: boolean; // Unlisted Records are excluded by default
-};
-```
-
-**Stated plainly, because the name will otherwise over-promise:**
-
-> Unlisted withholds a Record from enumeration and announcement. It never withholds the Record. A requester who may read it and holds its ID gets it. A requester without the ID has no supported way to discover it.
-
-That sits inside the same threat model as [record IDs being guessable](#errors-and-information-exposure) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
-
-### Three tiers, not two
-
-The reach question access control usually asks is binary — enforced or not — but enumeration has a real middle tier, and `unlistedAt` occupies it rather than inventing a softer word for "advisory":
-
-|               | Behavior                                   | Occupants                            |
-| ------------- | ------------------------------------------ | ------------------------------------ |
-| **Enforced**  | Refused regardless of what the caller asks | `permissions`, grants                |
-| **Defaulted** | Refused unless the caller asks             | `deletedAt`, `unlistedAt`, `_config` |
-| **Advisory**  | Always returned; the consumer decides      | A tag convention                     |
-
-A consumer that has never heard of `unlistedAt` gets correct behavior by default — an unfiltered `query()` excludes it, the same posture as `deletedAt` and `_config`. That default is what makes the field real rather than a documentation-only convention: nothing about it depends on every consumer choosing to respect it.
-
-### Setting it
-
-```ts
-await stack.create(typeId, content, { unlisted: true }); // created already unlisted — no window where it's briefly enumerable
-await stack.setUnlisted(recordId, true); // withhold an existing Record
-await stack.setUnlisted(recordId, false); // relist it
-```
-
-`setUnlisted()` is gated exactly like [`setPermissions()`](#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule `setPermissions()` uses there too. No-op if the Record is already in the requested state.
-
-### `includeUnlisted` is owner-only
-
-Unlike `includeDeleted` — which any `ScopedStack` requester may pass, since a soft-deleted Record's own `permissions` still gate whether they can see it, and what comes back is [a tombstone rather than the Record](./versioning.md#the-tombstone-is-literal) — **`includeUnlisted` is refused to everyone but the owner acting alone**, on both `query()` and `subscribe()`:
-
-```ts
-stack.query({ filter: { includeUnlisted: true } }); // plain Stack: honored
-scoped.query({ filter: { includeUnlisted: true } }); // ScopedStack, non-owner: StackPermissionError
-```
-
-Enumeration standing rests on nothing but ownership. A grant conveys reach over specific Records or a type family; it says nothing about whether the requester should see the stack's _entire_ enumeration surface, unlisted Records included — so no grant, and no delegation, carries the flag. An owner principal acting for a visitor through the owner's own server does not lend that visitor the flag either, for the same reason delegation carries none of the [owner-acting-alone verbs](#delegation-principal-and-subject). The flag is refused outright rather than silently dropped: a caller that believes it captured the full enumeration and silently got the filtered one is worse off than one that was told no — the same reasoning [create-time `permissions`](#delegation-principal-and-subject) is refused under delegation rather than quietly stripped.
-
-### The feed matches `query()`
-
-An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. The one wrinkle is the transition itself: marking a Record unlisted must still reach a subscriber who already knows it, so it can drop its copy, even though the Record's new state would otherwise fail that same exclusion. See [Change events § The unlisted transition](./events.md#the-unlisted-transition) for the full transition table and the `list`/`unlist` change ops.
-
-### What this is not
-
-**Not a fourth `Permission` variant.** `Permission` is a union over mutually exclusive answers to "who may read this"; `unlistedAt` is orthogonal to that question, not another answer to it, and composes with any permission tier — public-and-unlisted (a bonus post) and owner-only-and-unlisted are both coherent, meaning different things.
-
-**Not per-audience.** There is no `Listing[]` parallel to `Permission[]` — enumeration does not vary by who is asking, the way reach does. A record is unlisted for everyone or for no one; if a future need for audience-varying enumeration arises, that is new surface, not a reinterpretation of this field.
-
-**Not a query filter for the excluded half.** `RecordFilter` has no negation, so `includeUnlisted: true` returns _both_ listed and unlisted Records together — there is no "unlisted only" filter. A consumer that needs to tell them apart checks `unlistedAt` on the results it gets back.
 
 ## Type-level grants
 
@@ -277,7 +212,7 @@ Read in the other direction, an **owner principal** acting for someone else — 
 
 | Verb                                                          | Why delegation doesn't carry it                                                                                      |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `includeUnlisted` on `query()`/`subscribe()`                  | Enumeration standing rests on nothing but ownership — see [Unlisted records](#unlisted-records)                      |
+| `includeUnlisted` on `query()`/`subscribe()`                  | Enumeration standing rests on nothing but ownership — see [Unlisted records](./unlisted.md)                          |
 | Hard delete                                                   | Irreversible; the subject holds soft delete already                                                                  |
 | `deleteAttachment()`, `collectAttachmentGarbage()`            | Irreversible, and neither takes a Record to gate on                                                                  |
 | Unstripped snapshot `permissions`                             | Discloses the stack's sharing graph                                                                                  |

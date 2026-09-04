@@ -1240,7 +1240,7 @@ export class APIAdapter implements StackAdapter {
    * Reconnection is this adapter's business and the subscriber never hears
    * about it, so long as the cursor closes the gap. `onReset` is what a gap
    * it could not close looks like, and reconciling by query is the repair.
-   * See docs/spec/wire-format.md § Change feed.
+   * See docs/spec/change-feed.md.
    */
   async subscribeChanges(
     opts: SubscribeChangesOptions,

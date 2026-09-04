@@ -164,7 +164,7 @@ export type StackRecord = {
    * `get()` for anyone who may read it. Orthogonal to `permissions`: it
    * says nothing about who may read the record, only whether its
    * existence is discoverable without already holding its ID. See
-   * docs/spec/access-control.md § Unlisted records.
+   * docs/spec/unlisted.md.
    */
   unlistedAt?: Date;
   permissions?: Permission[];
@@ -474,7 +474,7 @@ export type RecordFilter = {
    * Unlisted records are excluded by default, like soft-deleted ones.
    * Owner-only under `ScopedStack` — enumeration standing rests on nothing
    * but ownership, so a grant or delegation never carries it. See
-   * docs/spec/access-control.md § Unlisted records.
+   * docs/spec/unlisted.md.
    */
   includeUnlisted?: boolean;
 };
@@ -721,7 +721,7 @@ export type SubscribeOptions = {
    * `ScopedStack`, same authority as `RecordFilter.includeUnlisted` — the
    * feed excludes unlisted records by default so it never delivers more
    * than an equivalent `query()` would return. See
-   * docs/spec/access-control.md § Unlisted records.
+   * docs/spec/unlisted.md.
    */
   includeUnlisted?: boolean;
   /**
