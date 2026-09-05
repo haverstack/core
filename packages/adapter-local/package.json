@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/adapter-local",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "Local (SQLite + disk) stack adapter for Haverstack",
   "type": "module",
   "engines": {
