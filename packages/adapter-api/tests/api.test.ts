@@ -14,6 +14,7 @@ import {
 } from '../src/index.js';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
+import type { DiscoveryCapabilities } from '@haverstack/wire-types';
 import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
 import {
   StackPermissionError,
@@ -38,15 +39,23 @@ const DISCOVERY = {
   entityId: 'entity-owner-123',
   timezone: 'America/New_York',
   capabilities: {
-    fullTextSearch: true,
-    contentFieldQuery: true,
-    nestedContentQuery: true,
-    contentPresenceQuery: true,
-    contentFieldSort: true,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-    maxAttachmentBytes: 52428800,
-  },
+    filter: { content: 'path', contentPresent: true, search: true },
+    sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+    // contentBytes omitted: a server declaring one limit and not the other
+    // is the case the null default exists for.
+    limits: { attachmentBytes: 52428800 },
+  } satisfies DiscoveryCapabilities,
 };
+
+/** DISCOVERY with individual capabilities overridden, groups left intact. */
+const discoveryWith = (caps: DiscoveryCapabilities) => ({
+  ...DISCOVERY,
+  capabilities: {
+    filter: { ...DISCOVERY.capabilities.filter, ...caps.filter },
+    sort: { ...DISCOVERY.capabilities.sort, ...caps.sort },
+    limits: { ...DISCOVERY.capabilities.limits, ...caps.limits },
+  },
+});
 
 const RECORD_RAW = {
   id: 'rec-abc123',
@@ -170,26 +179,23 @@ describe('open', () => {
 
   test('populates capabilities from discovery response', async () => {
     const adapter = await openAdapter();
-    expect(adapter.capabilities.fullTextSearch).toBe(true);
-    expect(adapter.capabilities.contentFieldQuery).toBe(true);
-    expect(adapter.capabilities.sortableFields).toEqual(['createdAt', 'updatedAt', 'version']);
-    expect(adapter.capabilities.maxAttachmentBytes).toBe(52428800);
+    expect(adapter.capabilities.filter.search).toBe(true);
+    expect(adapter.capabilities.filter.content).toBe('path');
+    expect(adapter.capabilities.sort.fields).toEqual(['createdAt', 'updatedAt', 'version']);
+    expect(adapter.capabilities.limits.attachmentBytes).toBe(52428800);
   });
 
-  test('populates maxContentBytes from discovery response', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, maxContentBytes: 1048576 },
-    });
-    expect(adapter.capabilities.maxContentBytes).toBe(1048576);
+  test('populates limits.contentBytes from discovery response', async () => {
+    const adapter = await openAdapter(discoveryWith({ limits: { contentBytes: 1048576 } }));
+    expect(adapter.capabilities.limits.contentBytes).toBe(1048576);
   });
 
   // "Can't pre-check" — not "unbounded", and not undefined leaking into
   // the numeric comparison Stack.create() makes against it. The server's
   // own request-size limit is authoritative regardless.
-  test('reports maxContentBytes as null when a server does not declare one', async () => {
+  test('reports limits.contentBytes as null when a server does not declare one', async () => {
     const adapter = await openAdapter();
-    expect(adapter.capabilities.maxContentBytes).toBeNull();
+    expect(adapter.capabilities.limits.contentBytes).toBeNull();
   });
 
   test('populates ownerEntityId from discovery response', async () => {
@@ -928,7 +934,7 @@ describe('queryRecords', () => {
     total: 1,
   };
 
-  test('uses POST /records/query when contentFieldQuery is true', async () => {
+  test('uses POST /records/query when the server reaches content', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
@@ -938,12 +944,8 @@ describe('queryRecords', () => {
     );
   });
 
-  test('uses GET /records when contentFieldQuery is false', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+  test('uses GET /records when the server reaches no content', async () => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -975,11 +977,7 @@ describe('queryRecords', () => {
   });
 
   test('builds correct GET params — parentId null becomes "null"', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({ filter: { parentId: null } });
     const [url] = mockFetch.mock.lastCall as [string];
@@ -987,10 +985,7 @@ describe('queryRecords', () => {
   });
 
   test('GET params carry a content sort as ?sortContent=, not ?sort=', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    });
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
     const [url] = mockFetch.mock.lastCall as [string];
@@ -1000,11 +995,7 @@ describe('queryRecords', () => {
   });
 
   test('GET params include relatedToLabel alongside relatedTo', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
       filter: { relatedTo: { label: 'author', target: { scope: 'record', recordId: 'rec-1' } } },
@@ -1015,11 +1006,7 @@ describe('queryRecords', () => {
   });
 
   test('GET params omit relatedToLabel when no label is given', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
       filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1' } } },
@@ -1050,25 +1037,17 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('throws APIAdapterCapabilityError for filter.content without contentFieldQuery', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+  test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('throws APIAdapterCapabilityError for a nested path without nestedContentQuery', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, nestedContentQuery: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
-    // A single-segment key is still served by contentFieldQuery alone.
+  test("throws APIAdapterCapabilityError for a nested path against reach 'field'", async () => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: 'field' } }));
+    // A single-segment key is still served by the 'field' rung.
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(
       adapter.queryRecords({ filter: { content: { slug: 'hello' } } }),
@@ -1078,21 +1057,18 @@ describe('queryRecords', () => {
     ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
-  // Silence is not a claim — and an absent sortableFields must refuse a
+  // Silence is not a claim — and an absent sort.fields must refuse a
   // stated sort as the declared-capability error, rather than reading
   // through undefined and raising a TypeError no caller can act on.
-  test('a server omitting the content-reach capabilities is treated as having none', async () => {
-    const {
-      contentPresenceQuery: _p,
-      contentFieldSort: _s,
-      sortableFields: _f,
-      ...capabilities
-    } = DISCOVERY.capabilities;
-    const adapter = await openAdapter({ ...DISCOVERY, capabilities });
+  test('a server omitting capabilities entirely is treated as having none', async () => {
+    const { capabilities: _drop, ...discovery } = DISCOVERY;
+    const adapter = await openAdapter(discovery);
 
-    expect(adapter.capabilities.contentPresenceQuery).toBe(false);
-    expect(adapter.capabilities.contentFieldSort).toBe(false);
-    expect(adapter.capabilities.sortableFields).toEqual([]);
+    expect(adapter.capabilities).toEqual({
+      filter: { content: 'none', contentPresent: false, search: false },
+      sort: { fields: [], contentField: false },
+      limits: { attachmentBytes: null, contentBytes: null },
+    });
 
     await expect(adapter.queryRecords({ sort: { field: 'createdAt' } })).rejects.toThrow(
       APIAdapterCapabilityError,
@@ -1103,23 +1079,29 @@ describe('queryRecords', () => {
     await expect(adapter.queryRecords({})).resolves.toBeDefined();
   });
 
-  test('a server omitting nestedContentQuery is treated as not having it', async () => {
-    const { nestedContentQuery: _drop, ...capabilities } = DISCOVERY.capabilities;
-    const adapter = await openAdapter({ ...DISCOVERY, capabilities });
+  // A rung this client has never heard of places nowhere on the ladder, so
+  // it can only be read as the bottom of it: refusing a query is
+  // recoverable, presenting an unfiltered superset as a filtered result is
+  // not.
+  test('a server declaring a reach this client does not know is treated as having none', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, filter: { content: 'galaxy-brain' } },
+    });
 
-    expect(adapter.capabilities.nestedContentQuery).toBe(false);
+    expect(adapter.capabilities.filter.content).toBe('none');
+    await expect(adapter.queryRecords({ filter: { content: { slug: 'x' } } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
   });
 
   // A malformed path is the caller's error, not the server's missing
   // reach, so it must not be reported as an absent capability.
   test.each([
-    ['with nestedContentQuery', true],
-    ['without nestedContentQuery', false],
-  ])('a malformed content path stays a StackQueryError %s', async (_label, nested) => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, nestedContentQuery: nested },
-    });
+    ["at reach 'path'", 'path'],
+    ["at reach 'field'", 'field'],
+  ] as const)('a malformed content path stays a StackQueryError %s', async (_label, reach) => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
       StackQueryError,
     );
@@ -1129,66 +1111,56 @@ describe('queryRecords', () => {
   });
 
   test('throws APIAdapterCapabilityError for contentPresent without the capability', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentPresenceQuery: false },
-    });
+    const adapter = await openAdapter(discoveryWith({ filter: { contentPresent: false } }));
     await expect(
       adapter.queryRecords({ filter: { contentPresent: ['publishedAt'] } }),
     ).rejects.toThrow(APIAdapterCapabilityError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('throws APIAdapterCapabilityError for a content sort without contentFieldSort', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, contentFieldSort: false },
-    });
+  test('throws APIAdapterCapabilityError for a content sort without sort.contentField', async () => {
+    const adapter = await openAdapter(discoveryWith({ sort: { contentField: false } }));
     await expect(adapter.queryRecords({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('throws APIAdapterCapabilityError for a native field outside sortableFields', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, sortableFields: ['createdAt'] },
-    });
+  test('throws APIAdapterCapabilityError for a native field outside sort.fields', async () => {
+    const adapter = await openAdapter(discoveryWith({ sort: { fields: ['createdAt'] } }));
     await expect(adapter.queryRecords({ sort: { field: 'version' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
   });
 
   // The reported capability must be the one the query actually asked for.
-  // An unconditional sortableFields check would blame the absent field for
-  // a failure the search filter caused, against every server whose
-  // discovery omits sortableFields.
+  // An unconditional sort.fields check would blame the absent field for a
+  // failure the search filter caused, against every server whose discovery
+  // omits sort.fields.
   test('names the capability the query asked for, not an unrelated absent sort field', async () => {
-    const { sortableFields: _drop, ...rest } = DISCOVERY.capabilities;
     const adapter = await openAdapter({
       ...DISCOVERY,
-      capabilities: { ...rest, fullTextSearch: false },
+      capabilities: {
+        ...DISCOVERY.capabilities,
+        filter: { ...DISCOVERY.capabilities.filter, search: false },
+        sort: { contentField: true },
+      },
     });
-    expect(adapter.capabilities.sortableFields).toEqual([]);
+    expect(adapter.capabilities.sort.fields).toEqual([]);
     await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toMatchObject({
-      capability: 'fullTextSearch',
+      capability: 'filter.search',
     });
   });
 
-  test('throws APIAdapterCapabilityError for filter.search without fullTextSearch', async () => {
-    const limitedDiscovery = {
-      ...DISCOVERY,
-      capabilities: { ...DISCOVERY.capabilities, fullTextSearch: false },
-    };
-    const adapter = await openAdapter(limitedDiscovery);
+  test('throws APIAdapterCapabilityError for filter.search without the capability', async () => {
+    const adapter = await openAdapter(discoveryWith({ filter: { search: false } }));
     await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  test('does not throw for filter.content when contentFieldQuery is true', async () => {
+  test('does not throw for filter.content when the server reaches content', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(

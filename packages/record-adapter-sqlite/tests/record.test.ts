@@ -183,9 +183,9 @@ describe('capabilities', () => {
   // refactor that regressed this to `false` would silently widen every
   // caller's query() results instead of erroring (see assertQueryCapabilities
   // in @haverstack/core).
-  test('declares contentFieldQuery: true', async () => {
+  test("declares filter.content: 'path'", async () => {
     const adapter = await initAdapter();
-    expect(adapter.capabilities.contentFieldQuery).toBe(true);
+    expect(adapter.capabilities.filter.content).toBe('path');
   });
 });
 

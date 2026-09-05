@@ -83,7 +83,7 @@ await stack.defineType('org.haverstack/vote@1', 'Vote', {
   in the commons, but a re-targeted ballot is fraud-shaped, so the reference lives
   where repointing is a visible, versioned content edit. The honest trade: `parentId`
   filtering is natively indexed on every adapter, while `content: { pollId }` needs
-  the `contentFieldQuery` capability — on adapters without it, tallying degrades to
+  a `filter.content` reach — on adapters without one, tallying degrades to
   fetch-and-scan of `vote@1` records, which is fine at this project's stated scale
   (small cohesive groups) and recorded here so nobody discovers it by surprise.
 - **One ballot per member per poll.** Revoting is updating your existing `vote` record,

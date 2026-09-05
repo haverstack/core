@@ -61,7 +61,7 @@ const adapter = combineAdapters({ record, blob });
 const stack = await Stack.create(adapter);
 ```
 
-`maxAttachmentBytes` lives on `AdapterCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `maxAttachmentBytes: null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
+`limits.attachmentBytes` lives on `AdapterCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
@@ -83,41 +83,52 @@ Adapters expose a capabilities object so apps can check what's supported before 
 
 ```ts
 type AdapterCapabilities = {
-  fullTextSearch: boolean;
-  contentFieldQuery: boolean;
-  nestedContentQuery: boolean; // content filter keys may be multi-segment paths
-  contentPresenceQuery: boolean; // filter.contentPresent is honored
-  contentFieldSort: boolean; // sort.contentField is honored
-  sortableFields: ('createdAt' | 'updatedAt' | 'version')[];
-  maxAttachmentBytes: number | null; // upload size ceiling, or null = unbounded
-  maxContentBytes: number | null; // record content/patch size ceiling, or null = unbounded
+  filter: {
+    content: 'none' | 'field' | 'path'; // how far a content filter key may reach
+    contentPresent: boolean; // filter.contentPresent is honored
+    search: boolean; // filter.search is honored
+  };
+  sort: {
+    fields: ('createdAt' | 'updatedAt' | 'version')[]; // native columns this adapter can order by
+    contentField: boolean; // sort.contentField is honored
+  };
+  limits: {
+    attachmentBytes: number | null; // upload size ceiling, or null = client can't pre-check
+    contentBytes: number | null; // record content/patch size ceiling, same reading of null
+  };
 };
 ```
 
 `AdapterCapabilities` is the adapter-implementer-facing name. On the `StackClient` interface it is exposed as `features: StackFeatures` (a type alias for `AdapterCapabilities`). App and plugin code should read `stack.features` rather than going through the adapter directly.
 
-**`contentFieldQuery` is required-`true` for local adapters, optional and discovery-driven for wire adapters.** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, `record-adapter-do-sqlite` (a Durable Object's storage is in-process from that DO's own point of view, even though the DO itself is reached over the network), any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is just a linear scan over resident data — there's no architectural reason a local adapter can't support it, so declaring `false` is never legitimate there. A remote server reached through `adapter-api` is the one legitimate `false` case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it. `fullTextSearch` has no such local-required rule — a local adapter may legitimately decline it (see the JSON adapter note below).
+**Each entry is named for the query key it answers for.** `filter.content` gates `filter.content`, `sort.fields` gates `sort.field`, and so on down — so the capability a query needs is derivable from the query rather than memorized, and an error can name the key to look at. `limits` is grouped apart because a ceiling is not a feature to gate on: nothing is refused for lacking one.
 
-`Stack.query()` enforces this before dispatching — see [Capability-gated filters](./data-model.md#capability-gated-filters). That check is a backstop for the rule above, not a substitute for it: a local adapter that (incorrectly) declared `false` would otherwise return an unfiltered superset for every `content` query.
+**`filter.content` is a ladder, not a set of flags.** The rungs nest — `'path'` is `'field'` plus traversal — so they are one ordered value, which is what keeps "traverses paths but matches no field names" out of the type entirely. A single-segment key (`'did'`) needs `'field'`; a multi-segment key (`'emails.value'`) needs `'path'`. The rungs are separate because a foreign server declaring field matching is promising to match a field _name_, and reading that as a promise to walk a path would hand its client an unfiltered superset presented as a filtered result.
 
-**An absent capability is `false`, and an absent `sortableFields` names nothing.** A discovery response that omits a flag describes a server that does not offer it — a client never infers reach from silence, in either direction. A query naming no sort is unaffected: it asks for the server's own default order rather than a stated one, so it claims nothing that has to be declared.
+**`'path'` is required for local adapters, and any rung is legitimate for a wire adapter.** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, `record-adapter-do-sqlite` (a Durable Object's storage is in-process from that DO's own point of view, even though the DO itself is reached over the network), any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is a linear scan over resident data and traversal is the same scan with a deeper predicate — there's no architectural reason to stop short, so a shallower rung is never legitimate there. A remote server reached through `adapter-api` is the one legitimate case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it.
 
-**`contentPresenceQuery` is a third content flag**, gating `filter.contentPresent`, and required-`true` for local adapters on the same reasoning as the two above: a local adapter already walks resident data, and asking whether a path holds a value is the same walk with a weaker predicate. A remote server is again the one legitimate `false`, and it is meaningful only alongside `contentFieldQuery` — presence travels in the `POST /records/query` body, which a server declaring `contentFieldQuery: false` does not expose.
+`Stack.query()` enforces this before dispatching — see [Capability-gated filters](./data-model.md#capability-gated-filters). That check is a backstop for the rule above, not a substitute for it: a local adapter that (incorrectly) declared `'none'` would otherwise return an unfiltered superset for every `content` query.
 
-**`contentFieldSort` is a boolean, and `sortableFields` names native columns only.** Content fields are app-defined and unbounded, so an adapter cannot enumerate them; and an adapter that indexes content for sorting indexes [every top-level scalar](./data-model.md#sorting-by-a-content-field), so there is nothing per-field left to declare. It is required-`true` for local adapters on the same reasoning as `contentFieldQuery`, and independent of it: the two describe ordering and filtering, and a server may offer either without the other. Both are enforced — `Stack.query()` refuses a sort the adapter hasn't declared rather than letting it be answered in some other order, which a caller reading one bounded page cannot detect.
+**`filter.contentPresent` sits beside the ladder rather than on it.** It gates `filter.contentPresent`, and is required `true` for local adapters on the same reasoning: asking whether a path holds a value is the same walk with a weaker predicate. It is not a rung because a server promising to match a content value has not thereby promised to answer whether one is there at all. It is meaningful only above `'none'` — presence travels in the `POST /records/query` body, which a server reaching no content does not expose — and a presence path is itself gated by the rung, so a multi-segment one needs `'path'`.
 
-**`nestedContentQuery` is a second flag rather than a widening of `contentFieldQuery`**, and gates only multi-segment filter keys — a single-segment key needs `contentFieldQuery` alone. The two are separate because a foreign server declaring `contentFieldQuery` is promising to match a field name, and reading that as a promise to walk a path would hand its client an unfiltered superset presented as a filtered result. It is required-`true` for local adapters on the same reasoning as `contentFieldQuery`: a local adapter already walks resident data, and traversal is the same scan with a deeper predicate. A remote server is again the one legitimate `false`, and a discovery response that omits the field means `false` — a client never infers the capability from silence.
+**`filter.search` has no local-required rule.** A full-text index is a different mechanism from field matching, and neither implies the other, so a local adapter may legitimately decline it (see the JSON adapter note below).
+
+**`sort.contentField` is a boolean, and `sort.fields` names native columns only.** Content fields are app-defined and unbounded, so an adapter cannot enumerate them; and an adapter that indexes content for sorting indexes [every top-level scalar](./data-model.md#sorting-by-a-content-field), so there is nothing per-field left to declare. `sort.contentField` is required `true` for local adapters, and independent of `filter.content`: the two describe ordering and filtering, and a server may offer either without the other — filtering is answerable at whatever scale a server already scans at, where ordering wants an index. Both are enforced: `Stack.query()` refuses a sort the adapter hasn't declared rather than letting it be answered in some other order, which a caller reading one bounded page cannot detect.
+
+**Absent, malformed or unrecognized reads as the least capable value it could stand for.** One rule, for every entry: `'none'` for the reach, `false` for a flag, nothing for `sort.fields`, `null` for a limit. A discovery response that omits a group, omits `capabilities` entirely, or names a reach this client has never heard of describes a server this client will not send that query to — silence is never a claim, in either direction, and an unrecognized rung places nowhere on a ladder so it can only be read as its bottom. `normalizeCapabilities()` in `@haverstack/wire-types` applies the rule, so a client reads a foreign discovery response through one function rather than defaulting keys at each use.
+
+Two things this does not refuse. A query naming no sort asks for the server's own default order rather than a stated one, so it claims nothing that has to be declared and runs against an empty `sort.fields`. And a `null` limit is permissive by design: it says this client cannot pre-check, not that nothing is enforced — the server's own ceiling still answers with a `413`.
 
 **Per-adapter notes:**
 
-- **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `fullTextSearch: false` in v1 (local adapters may decline `fullTextSearch`; only `contentFieldQuery` is required-`true`)
+- **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `filter.search: false` in v1 (local adapters may decline search; `filter.content: 'path'` is the required one)
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
 - **Durable Object SQLite adapter** (`record-adapter-do-sqlite`) — same capabilities as the native SQLite adapter (shares `SharedSqlRecordLogic`); DO's SQLite storage ships FTS5
-- **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare `contentFieldQuery: false` or `nestedContentQuery: false`
+- **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare a `filter.content` rung below `'path'`
 
-Local, embedded adapters (JSON, native SQLite, Durable Object SQLite) declare `maxAttachmentBytes: null` — nothing at the storage layer imposes a ceiling. Only a server behind the API adapter enforces one, since it's the only adapter transporting attachment bytes over a connection with its own limits.
+Local, embedded adapters (JSON, native SQLite, Durable Object SQLite) declare both limits `null` — nothing at the storage layer imposes a ceiling, and a caller with in-process access to the database can spend its own memory however it likes. Only a server behind the API adapter declares one, since it's the only adapter carrying bytes over a connection with its own limits.
 
-**`maxContentBytes` is the same field for the JSON side of a write** — the serialized size of a Record's `content` on create, or of a merge patch on update. Local adapters declare `null` for the same reason: a caller with in-process access to the database can spend its own memory however it likes, and nothing at the storage layer objects. A server declares its request-size limit here, and `Stack.create()`/`Stack.update()` pre-check against it and throw `StackPayloadTooLargeError` before sending — the same client-side courtesy `putAttachment()` extends for attachments, with the server's own limit still authoritative (see [Wire format § Request size limits](./wire-format.md#request-size-limits)).
+**`limits.attachmentBytes` bounds an upload; `limits.contentBytes` bounds the JSON side of a write** — the serialized size of a Record's `content` on create, or of a merge patch on update. A server declares its request-size limit as the latter, and `Stack.create()`/`Stack.update()` pre-check against it and throw `StackPayloadTooLargeError` before sending — the same client-side courtesy `putAttachment()` extends for attachments, with the server's own limit still authoritative (see [Wire format § Request size limits](./wire-format.md#request-size-limits)).
 
 ## Concurrency & storage ownership
 

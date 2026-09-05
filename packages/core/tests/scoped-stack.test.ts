@@ -2009,13 +2009,16 @@ describe('ScopedStack.putAttachment', () => {
     expect(result.records[0].appId).toBe('com.example.myapp');
   });
 
-  // the maxAttachmentBytes pre-check applies to ScopedStack's own
+  // the limits.attachmentBytes pre-check applies to ScopedStack's own
   // upload path too, after the permission checks (grant checks run against
   // adapter.query(), which is unaffected by upload size).
   test('over-ceiling upload throws StackPayloadTooLargeError without touching the adapter', async () => {
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
     Object.assign(adapter, {
-      capabilities: { ...adapter.capabilities, maxAttachmentBytes: 2 },
+      capabilities: {
+        ...adapter.capabilities,
+        limits: { ...adapter.capabilities.limits, attachmentBytes: 2 },
+      },
     });
     const putAttachmentSpy = vi.spyOn(adapter, 'putAttachment');
 
@@ -2069,7 +2072,7 @@ describe('ScopedStack.getAttachment', () => {
     );
   });
 
-  // On adapters without contentFieldQuery the uploader check matches in
+  // On adapters reaching no content the uploader check matches in
   // memory, cursor-walking so every one of the requester's uploads is
   // considered. IncapableMemoryAdapter forces that fallback path (a
   // compliant local adapter takes the content-filtered query).

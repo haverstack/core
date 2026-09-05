@@ -16,7 +16,7 @@ An object rather than a boolean, for the same reason [`auth`](./wire-format.md#a
 - `resume: false` is conformant. It means the server honors no cursor, so every connection is answered with a `reset` frame.
 - `records` reports whether `?include=record` is honored. `false` is conformant; the fetch fallback is the contract either way.
 
-**A client checks discovery and fails locally.** `APIAdapter.subscribeChanges()` against a server advertising no feed throws `APIAdapterCapabilityError` **without sending a request**, exactly as `contentFieldQuery` and `fullTextSearch` filters do. Learning this as a 404 partway through a connection is the failure mode `auth.methods` exists to avoid.
+**A client checks discovery and fails locally.** `APIAdapter.subscribeChanges()` against a server advertising no feed throws `APIAdapterCapabilityError` **without sending a request**, exactly as content and search filters do. Learning this as a 404 partway through a connection is the failure mode `auth.methods` exists to avoid.
 
 ## The endpoint
 

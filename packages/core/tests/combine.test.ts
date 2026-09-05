@@ -24,14 +24,19 @@ const purgedRecord: StackRecord = {
 // -------------------------------------------------------
 
 const capabilities: AdapterCapabilities = {
-  fullTextSearch: false,
-  contentFieldQuery: false,
-  nestedContentQuery: false,
-  contentPresenceQuery: false,
-  contentFieldSort: false,
-  sortableFields: ['createdAt', 'updatedAt', 'version'],
-  maxAttachmentBytes: null,
-  maxContentBytes: null,
+  filter: {
+    content: 'none',
+    contentPresent: false,
+    search: false,
+  },
+  sort: {
+    fields: ['createdAt', 'updatedAt', 'version'],
+    contentField: false,
+  },
+  limits: {
+    attachmentBytes: null,
+    contentBytes: null,
+  },
 };
 
 /** Bare-minimum StackRecordAdapter — only what combineAdapters() touches. */

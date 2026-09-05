@@ -58,20 +58,24 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
  * In-memory StackAdapter with offset-based cursor pagination. Implements
  * the full RecordFilter shape (mirroring sqlite-shared's buildWhereClause)
  * so permission logic under test exercises real predicates. Declares
- * `contentFieldQuery` and `nestedContentQuery`, as every local adapter
- * must; tests needing the capability-gated paths use
- * IncapableMemoryAdapter below.
+ * `filter.content: 'path'`, as every local adapter must; tests needing
+ * the capability-gated paths use IncapableMemoryAdapter below.
  */
 export class MemoryAdapter implements StackAdapter {
   readonly capabilities: AdapterCapabilities = {
-    fullTextSearch: false,
-    contentFieldQuery: true,
-    nestedContentQuery: true,
-    contentPresenceQuery: true,
-    contentFieldSort: true,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-    maxAttachmentBytes: null,
-    maxContentBytes: null,
+    filter: {
+      content: 'path',
+      contentPresent: true,
+      search: false,
+    },
+    sort: {
+      fields: ['createdAt', 'updatedAt', 'version'],
+      contentField: true,
+    },
+    limits: {
+      attachmentBytes: null,
+      contentBytes: null,
+    },
   };
 
   readonly ownerEntityId: string;
@@ -551,23 +555,27 @@ export class MemoryAdapter implements StackAdapter {
 }
 
 /**
- * A MemoryAdapter that declares both content-query capabilities false,
- * simulating the one legitimate case: a wire adapter whose server
- * declined them
+ * A MemoryAdapter reaching no content at all, simulating the one
+ * legitimate case: a wire adapter whose server declined it
  * (docs/spec/adapters.md § Adapter capabilities). For exercising Stack's
  * capability-gated fallbacks and the fail-loud assertQueryCapabilities
  * check in tests; not a stand-in for a real local adapter.
  */
 export class IncapableMemoryAdapter extends MemoryAdapter {
   override readonly capabilities: AdapterCapabilities = {
-    fullTextSearch: false,
-    contentFieldQuery: false,
-    nestedContentQuery: false,
-    contentPresenceQuery: false,
-    contentFieldSort: false,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-    maxAttachmentBytes: null,
-    maxContentBytes: null,
+    filter: {
+      content: 'none',
+      contentPresent: false,
+      search: false,
+    },
+    sort: {
+      fields: ['createdAt', 'updatedAt', 'version'],
+      contentField: false,
+    },
+    limits: {
+      attachmentBytes: null,
+      contentBytes: null,
+    },
   };
 }
 
