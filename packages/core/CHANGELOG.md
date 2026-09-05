@@ -1,5 +1,64 @@
 # @haverstack/core
 
+## 0.23.0
+
+### Minor Changes
+
+- [#248](https://github.com/haverstack/core/pull/248) [`896b516`](https://github.com/haverstack/core/commit/896b5167d68690a307cba430ded97268c83fe218) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `createOptionsFromWireRecord()` to `@haverstack/core/wire`
+
+  `POST /records` is the one endpoint where a client sends a whole record and
+  the server may trust only part of it, and the three dispositions its fields
+  take — stamped, conditionally dropped, forwarded — are not derivable from a
+  field's name. A server got them right by naming each field it wanted and
+  never reading `entityId`, which nothing enforces: the obvious
+  `create(body.typeId, body.content, { ...body })` forwards a self-reported
+  `entityId` and `principalId`, has no symptom, and passes every fixture.
+
+  The helper takes a body, a `TokenSession` and the owner's DID, and returns
+  the `typeId`, `content` and options `ScopedStack.create()` takes.
+  `entityId` and `principalId` are absent from the returned type rather than
+  merely unread. `createdAt`/`updatedAt` are dropped by value for anyone but
+  the owner acting alone — every client sends both on every create, so
+  forwarding them unfiltered turns an ordinary grantee create into a `403`.
+  `unlistedAt` becomes `unlisted: true` for everyone, leaving the refusal to
+  `ScopedStack`.
+
+  `isOwnerActingAlone()` is exported beside it and now backs `ScopedStack`'s
+  own owner-only gates, so the tier a server applies to a session and the one
+  core enforces are one definition. A server needs it for hard delete,
+  `commitMigration()` and `includeUnlisted` regardless.
+
+  A present field whose value is the wrong shape is refused rather than
+  dropped: a dropped `id` mints a different record than the one the client
+  asked for, and a dropped `unlistedAt` publishes one the client meant to
+  withhold. Which error class says so follows whether the failure names a
+  field of the record being written — `StackQueryError` (400) for a body that
+  is not a create request at all, `StackValidationError` (422), carrying the
+  path, for one that is.
+
+- [#246](https://github.com/haverstack/core/pull/246) [`e4119ea`](https://github.com/haverstack/core/commit/e4119eaa03f0510aa773b31cf36e860541857517) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add the parse half of the request encoding to `@haverstack/core/wire`
+
+  `adapter-api` builds requests and nothing in core parsed them, so every
+  mirror pair was split across repositories with the parse side hand-written
+  per implementation. `parseQueryParams()`, `parseQueryBody()`,
+  `parseChangeParams()`, `parseIfMatch()` and `parseUploadFilename()` are now
+  exported, and the round trip against the builders is pinned by a test rather
+  than by each implementer transcribing the query-parameter table correctly.
+
+  The parsers do not clamp `limit` — a ceiling is deployment policy — and do
+  not gate on capabilities, which stays a separate `assertQueryCapabilities()`
+  call.
+
+  Two behavioural changes come with them. A malformed `If-Match` is now
+  refused with `StackQueryError` instead of read as an absent header, which
+  had silently degraded a fenced write to unconditional last-writer-wins. And
+  `filter.baseId` and `presentAt`, which have no wire encoding, are refused
+  rather than dropped: dropping either answers with a result set wider, or
+  staler, than the one that was asked for.
+
+  `parseDate()` moves to core and `@haverstack/wire-types` re-exports it, so
+  the request and response sides share one definition.
+
 ## 0.22.0
 
 ### Minor Changes
