@@ -985,6 +985,19 @@ describe('queryRecords', () => {
     expect(url).toContain('parentId=null');
   });
 
+  test('GET params carry a content sort as ?sortContent=, not ?sort=', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    });
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
+    const [url] = mockFetch.mock.lastCall as [string];
+    expect(url).toContain('sortContent=publishedAt');
+    expect(url).toContain('direction=asc');
+    expect(url).not.toContain('sort=publishedAt');
+  });
+
   test('GET params include relatedToLabel alongside relatedTo', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
@@ -1085,6 +1098,27 @@ describe('queryRecords', () => {
       StackQueryError,
     );
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
+      APIAdapterCapabilityError,
+    );
+  });
+
+  test('throws APIAdapterCapabilityError for a content sort without contentFieldSort', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldSort: false },
+    });
+    await expect(adapter.queryRecords({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('throws APIAdapterCapabilityError for a native field outside sortableFields', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, sortableFields: ['createdAt'] },
+    });
+    await expect(adapter.queryRecords({ sort: { field: 'version' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
   });

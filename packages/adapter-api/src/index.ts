@@ -36,6 +36,7 @@ import type {
 } from '@haverstack/core';
 import {
   assertQueryCapabilities,
+  assertSortCapability,
   assertValidRelatedTo,
   parseContentFilterKey,
 } from '@haverstack/core/adapter';
@@ -339,15 +340,23 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 
 // -------------------------------------------------------
 /**
- * Which declared capability a filter needs and this server lacks, or
- * undefined when every filter it uses is supported — in which case a
- * StackQueryError from assertQueryCapabilities was about the filter's own
- * shape, not the server's reach.
+ * Which declared capability a query needs and this server lacks, or
+ * undefined when everything it asks for is supported — in which case the
+ * StackQueryError was about the query's own shape, not the server's
+ * reach.
  */
 const missingQueryCapability = (
-  filter: StackQuery['filter'],
+  query: StackQuery,
   capabilities: AdapterCapabilities,
 ): keyof AdapterCapabilities | undefined => {
+  const filter = query.filter;
+  if (query.sort?.contentField !== undefined && !capabilities.contentFieldSort)
+    return 'contentFieldSort';
+  if (
+    query.sort?.contentField === undefined &&
+    !capabilities.sortableFields.includes(query.sort?.field ?? 'createdAt')
+  )
+    return 'sortableFields';
   if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
   if (!filter?.content) return undefined;
   if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
@@ -417,6 +426,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
   if (f.includeUnlisted) p.set('includeUnlisted', 'true');
+  // Which parameter carries the name is what says whether it names a
+  // native column or a content field — the same "scope implied by the
+  // parameter" shape the relationship filter uses above.
+  if (query.sort?.contentField) p.set('sortContent', query.sort.contentField);
   if (query.sort?.field) p.set('sort', query.sort.field);
   if (query.sort?.direction) p.set('direction', query.sort.direction);
   if (query.limit) p.set('limit', String(query.limit));
@@ -1014,13 +1027,14 @@ export class APIAdapter implements StackAdapter {
     // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
     try {
       assertQueryCapabilities(query.filter, this.capabilities);
+      assertSortCapability(query.sort, this.capabilities);
     } catch (err) {
       if (!(err instanceof StackQueryError)) throw err;
       // assertQueryCapabilities also rejects a malformed content path,
       // which is a caller error rather than a missing capability. Name the
       // capability only when one is actually absent, and let anything else
       // travel as the StackQueryError it is.
-      const capability = missingQueryCapability(query.filter, this.capabilities);
+      const capability = missingQueryCapability(query, this.capabilities);
       if (!capability) throw err;
       throw new APIAdapterCapabilityError(capability, err.message);
     }
