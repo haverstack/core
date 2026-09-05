@@ -38,12 +38,18 @@ jobs:
       # Opens (or refreshes) the version PR while changesets are pending, and
       # publishes once that PR merges and none are left. v2 reads which
       # packages published from the CHANGESETS_OUTPUT file the CLI writes, and
-      # is what pushes tags afterwards; GITHUB_TOKEN is for changelog links.
+      # is what pushes tags afterwards.
+      #
+      # The token goes in `github-token`, not a GITHUB_TOKEN env var: v2 treats
+      # the two disagreeing as an error rather than picking one, so setting the
+      # env var alone leaves the input on its default `github.token` and fails
+      # the step before anything runs. RELEASE_TOKEN rather than the default so
+      # the version PR is authored by a user and its `pull_request` CI runs
+      # without an "Allow and Run" click.
       - uses: changesets/action@v2
         with:
+          github-token: ${{ secrets.RELEASE_TOKEN }}
           version-script: pnpm run version:packages
           publish-script: pnpm run release
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
