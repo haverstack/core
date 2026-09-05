@@ -4035,3 +4035,87 @@ describe('ScopedStack — mutating a soft-deleted record', () => {
     expect(versions.some((v) => (v.content as { text?: string }).text === 'gone')).toBe(true);
   });
 });
+
+// -------------------------------------------------------
+// getEntityByDid / getOwnerEntity
+// -------------------------------------------------------
+
+describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
+  test('resolves a card the requester can read', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        typeId: '_entity@1',
+        content: { did: 'did:key:x', name: 'X' },
+        permissions: [{ access: 'public' }],
+      }),
+    );
+    const found = await stack.asEntity(STRANGER).getEntityByDid('did:key:x');
+    expect(found?.id).toBe(record.id);
+  });
+
+  // Under ScopedStack, null covers missing, unreadable, and (below)
+  // unlisted-and-not-permitted — three reasons that share one answer, none
+  // of which is evidence the card is absent.
+  test('returns null for a card the requester cannot read', async () => {
+    await adapter.createRecord(
+      makeRecord({
+        typeId: '_entity@1',
+        entityId: OWNER,
+        content: { did: 'did:key:x', name: 'X' },
+      }),
+    );
+    expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
+  });
+
+  test('the owner acting alone sees an unlisted card', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        typeId: '_entity@1',
+        content: { did: 'did:key:x', name: 'X' },
+        unlistedAt: new Date(),
+      }),
+    );
+    const found = await stack.asEntity(OWNER).getEntityByDid('did:key:x');
+    expect(found?.id).toBe(record.id);
+  });
+
+  // includeUnlisted is owner-acting-alone only — a delegated request from
+  // the owner's own principal does not carry it, matching what query()
+  // itself would allow rather than throwing.
+  test('a delegated owner does not see an unlisted card, even one otherwise readable', async () => {
+    await adapter.createRecord(
+      makeRecord({
+        typeId: '_entity@1',
+        content: { did: 'did:key:x', name: 'X' },
+        unlistedAt: new Date(),
+        permissions: [{ access: 'public' }],
+      }),
+    );
+    const found = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getEntityByDid('did:key:x');
+    expect(found).toBeNull();
+  });
+
+  test('a stranger does not see an unlisted card even when otherwise readable', async () => {
+    await adapter.createRecord(
+      makeRecord({
+        typeId: '_entity@1',
+        content: { did: 'did:key:x', name: 'X' },
+        unlistedAt: new Date(),
+        permissions: [{ access: 'public' }],
+      }),
+    );
+    expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
+  });
+
+  test('getOwnerEntity resolves the owner’s own card regardless of permissions', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({ typeId: '_entity@1', content: { did: OWNER, name: 'Owner' } }),
+    );
+    const found = await stack.asEntity(OWNER).getOwnerEntity();
+    expect(found?.id).toBe(record.id);
+  });
+
+  test('getOwnerEntity returns null when no card claims the owner’s did', async () => {
+    expect(await stack.asEntity(OWNER).getOwnerEntity()).toBeNull();
+  });
+});

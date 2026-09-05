@@ -1034,6 +1034,22 @@ export interface StackClient {
   ): Promise<StackRecord & { content: T }>;
   get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
   query(query?: StackQuery): Promise<QueryResult>;
+  /**
+   * Resolve a DID to its `_entity` card, family-wide and including
+   * soft-deleted cards — the same rules `checkBindingUnique()` and the DID
+   * binding's immutability enforce, so this never reports "no card" for a
+   * DID that has one. See docs/spec/identity.md § DID bindings.
+   *
+   * Returns `null` for missing, unreadable, or (under a scoped caller other
+   * than the owner acting alone) unlisted-and-not-permitted — three
+   * distinct reasons that share one answer. Under `ScopedStack`, `null` is
+   * therefore never evidence the card is absent, per the anti-oracle rule.
+   *
+   * No caching: callers that want one keep it themselves.
+   */
+  getEntityByDid(did: EntityId): Promise<StackRecord | null>;
+  /** getEntityByDid() for the one DID every stack reserves: its own owner. */
+  getOwnerEntity(): Promise<StackRecord | null>;
   update(
     id: string,
     content: Record<string, unknown | null>,
@@ -1139,6 +1155,44 @@ async function findFirstMatch(
   return undefined;
 }
 
+/**
+ * Shared implementation behind Stack.getEntityByDid() and
+ * ScopedStack.getEntityByDid(). Family-wide by baseId (not typeId), so a
+ * card migrated to a later version still resolves, and includeDeleted:
+ * true, since a soft-deleted card still reserves its did — see
+ * docs/spec/identity.md § DID bindings. The content filter is applied only
+ * where the adapter declares contentFieldQuery, with an in-memory re-check
+ * either way via findFirstMatch's predicate, so the helper works on an
+ * adapter that hasn't declared the capability.
+ *
+ * `includeUnlisted` is a parameter rather than hardcoded: passing it
+ * unconditionally would make ScopedStack.query() throw for every caller but
+ * the owner acting alone, which a hand-written query would never do either
+ * (it would simply omit the flag). The invariant this buys: the helper is
+ * never more capable, and never less capable, than writing the query by
+ * hand. See #239.
+ */
+async function lookupEntityByDid(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  did: EntityId,
+  contentFieldQuery: boolean,
+  includeUnlisted: boolean,
+): Promise<StackRecord | null> {
+  const record = await findFirstMatch(
+    run,
+    {
+      filter: {
+        baseId: SYSTEM_TYPES.ENTITY,
+        includeDeleted: true,
+        ...(includeUnlisted && { includeUnlisted: true }),
+        ...(contentFieldQuery && { content: { did } }),
+      },
+    },
+    (r) => (r.content as EntityContent).did === did,
+  );
+  return record ?? null;
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -1239,11 +1293,7 @@ export class Stack implements StackClient {
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
-    const existing = await findFirstMatch(
-      (q) => this.query(q),
-      { filter: { baseId: SYSTEM_TYPES.ENTITY, includeDeleted: true, includeUnlisted: true } },
-      (r) => (r.content as EntityContent).did === this.ownerEntityId,
-    );
+    const existing = await this.getEntityByDid(this.ownerEntityId);
     if (existing) return;
 
     await this.create<EntityContent>(entityTypeId, {
@@ -1255,6 +1305,14 @@ export class Stack implements StackClient {
 
   get ownerEntityId(): EntityId {
     return this.adapter.ownerEntityId;
+  }
+
+  async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
+    return lookupEntityByDid((q) => this.query(q), did, this.features.contentFieldQuery, true);
+  }
+
+  async getOwnerEntity(): Promise<StackRecord | null> {
+    return this.getEntityByDid(this.ownerEntityId);
   }
 
   get timezone(): string | undefined {
@@ -3914,6 +3972,28 @@ export class ScopedStack implements StackClient {
     if (!record) return null;
     if (!(await this.canRead(record))) return null;
     return presentDeleted(record);
+  }
+
+  /**
+   * Runs through this.query(), not this.stack.query(): unlike
+   * getAttachmentRecords()-style lookups, this answers a question the
+   * caller is asking on their own behalf, so it stays subject to canRead()
+   * like any other query. includeUnlisted is passed only when this request
+   * is the owner acting alone — the one tier query() honors it for — rather
+   * than unconditionally, which would throw StackPermissionError for
+   * everyone else. See docs/spec/identity.md § DID bindings and #239.
+   */
+  async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
+    return lookupEntityByDid(
+      (q) => this.query(q),
+      did,
+      this.stack.features.contentFieldQuery,
+      this.ownerActingAlone,
+    );
+  }
+
+  async getOwnerEntity(): Promise<StackRecord | null> {
+    return this.getEntityByDid(this.stack.ownerEntityId);
   }
 
   /**

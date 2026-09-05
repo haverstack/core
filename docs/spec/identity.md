@@ -126,6 +126,8 @@ Note the contrast with `handle`, where duplicates are explicitly fine on both `_
 
 The uniqueness check reads before it writes, so two creates racing on one value can both pass. Closing that properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
+**Resolving a DID to its `_entity` card is `getEntityByDid()`, not a hand-rolled query.** The rules above — family-wide, soft-deleted cards included — make "the card claiming this DID" single-valued, and getting any of them wrong produces the same wrong answer: reporting no profile for a DID that has one. `getEntityByDid(did)` and `getOwnerEntity()` (the owner's own DID, the one reserved above) live on `StackClient`, so both `Stack` and a scoped caller reach the same lookup. Under `ScopedStack`, the result is additionally filtered to what the request may read, and `includeUnlisted` is applied only when the request is the owner acting alone — so `null` can mean the card is missing, unreadable, or (for anyone else) unlisted, never proof it doesn't exist. See `packages/core/src/stack.ts`.
+
 ## Group
 
 A Group is a set of Entities, modeled as a Record of the built-in system type `_group`. Groups serve two distinct purposes, distinguished by a single optional field:
