@@ -309,9 +309,8 @@ describe('GET /changes round trip', () => {
 // -------------------------------------------------------
 
 /**
- * Create a record through the adapter and hand back what core's helper
- * makes of the body it sent. The record is a whole record, which is what a
- * create body is — including the fields the server assigns.
+ * Create a record through the adapter and hand back what core's helper makes
+ * of the body it sent — a whole record, server-assigned fields included.
  */
 async function roundTripCreate(
   record: StackRecord,
@@ -364,9 +363,8 @@ describe('POST /records round trip', () => {
     expect(options.updatedAt).toEqual(record.updatedAt);
   });
 
-  // The client cannot avoid sending these — a record body is a whole
-  // record, serialized whole — so this is the body every server actually
-  // receives, not a hostile one.
+  // A client cannot avoid sending these, so this is the body every server
+  // receives rather than a hostile one.
   test('the identity fields the client serializes do not survive the trip', async () => {
     const { options } = await roundTripCreate(
       recordToCreate({ entityId: GRANTEE, principalId: 'did:key:zApp' }),
@@ -384,8 +382,8 @@ describe('POST /records round trip', () => {
     expect(options.unlisted).toBe(true);
   });
 
-  // The bug the helper exists to prevent: both clock fields are on every
-  // body a client sends, and forwarding a grantee's would earn a 403.
+  // Both clock fields are on every body a client sends, and forwarding a
+  // grantee's earns a 403.
   test('a grantee’s create arrives without the clock fields it could not use', async () => {
     const { options } = await roundTripCreate(recordToCreate(), {
       principalId: GRANTEE,

@@ -71,9 +71,8 @@ describe('createOptionsFromWireRecord — createdAt/updatedAt', () => {
     expect(options.updatedAt).toEqual(new Date('2020-01-02T00:00:00.000Z'));
   });
 
-  // The drop is by value, not by key: an options object carrying an
-  // undefined createdAt has supplied no date, but asserting on the key is
-  // what pins that a later edit cannot reintroduce one as undefined.
+  // Asserted on the key, not the value: an edit reintroducing either as
+  // undefined would be a drop by value and still fail this.
   test.each([
     ['a grantee', grantee],
     ['the owner acting for someone else', ownerForMember],
@@ -98,8 +97,7 @@ describe('createOptionsFromWireRecord — createdAt/updatedAt', () => {
     }
   });
 
-  // A field this requester was never going to send to create() cannot fail
-  // their create: it is dropped before anything reads it.
+  // Dropped before anything reads it, so it cannot fail their create.
   test('a malformed date costs a requester who cannot backdate nothing', () => {
     const { options } = parse(wireBody({ createdAt: 'yesterday' }), grantee);
     expect('createdAt' in options).toBe(false);
@@ -179,9 +177,7 @@ describe('createOptionsFromWireRecord — refusals', () => {
     expect('deletedAt' in options).toBe(false);
   });
 
-  // Dropping any of these silently writes a different record than the one
-  // the client asked for — a server-minted id, or a listed record the
-  // client meant to withhold.
+  // Dropping any of these writes a different record than the one asked for.
   test.each([
     ['id', { id: 12345 }],
     ['parentId', { parentId: 12345 }],

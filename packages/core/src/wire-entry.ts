@@ -73,22 +73,17 @@ export { parseDate } from './wire-request.js';
 // entry point stands alone. See docs/spec/wire-format.md § Error responses.
 export { StackQueryError } from './stack.js';
 
-// Thrown alongside it by createOptionsFromWireRecord() below, for a body
-// that is a create request but names a field the record cannot take — 422,
-// and it carries the field path that distinction exists to report.
+// Thrown alongside it by createOptionsFromWireRecord() below, which maps to
+// 422 and carries the field path that distinction exists to report.
 export { StackValidationError } from './stack.js';
 
-// No in-repo caller: the create half of the same contract. A `POST /records`
-// body is the one request where the client sends a whole record and the
-// server may trust only part of it, and which part is not derivable from a
-// field's name — see docs/spec/wire-format.md § Records and the module's
-// own header for the three dispositions.
+// No in-repo caller: the create half of the same contract, so a server
+// inherits which half of a record body it may trust rather than deciding
+// field by field. See docs/spec/wire-format.md § Records.
 export { createOptionsFromWireRecord } from './wire-record.js';
 export type { WireCreateRequest } from './wire-record.js';
 
-// The tier behind every owner-only route a server serves — hard delete,
-// commitMigration(), includeUnlisted — and the predicate
-// createOptionsFromWireRecord() applies internally. Exported because a
-// server needs the same answer for those routes, and computing it as
-// "is the owner" is a privilege bug with no symptom.
+// The tier gating hard delete, commitMigration() and includeUnlisted, which
+// a server must decide for those routes itself. Computing it as "is the
+// owner" is a privilege bug with no symptom.
 export { isOwnerActingAlone } from './access.js';

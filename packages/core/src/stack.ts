@@ -3419,10 +3419,8 @@ export class ScopedStack implements StackClient {
    * Whether unconditional owner authority applies — the owner acting as
    * itself. The verbs that rest on it are irreversible or disclose the
    * sharing graph, so delegation never carries one to a subject, whichever
-   * side the owner is on. Shares one definition with the predicate a
-   * server applies to a session, since a create body's owner-only fields
-   * are filtered there and refused here — two readings of the same tier
-   * that must not drift. See
+   * side the owner is on. Shared with the predicate a server applies to a
+   * session, which decides the same tier one step earlier. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    */
   private get ownerActingAlone(): boolean {

@@ -152,19 +152,13 @@ export function groupRoleFromAssociations(
 }
 
 /**
- * Whether a request is the stack owner acting alone — undelegated, and
- * authenticated as the owner rather than merely acting for it. This is the
- * tier behind every unconditional owner authority: hard delete,
- * `commitMigration()`, `includeUnlisted`, and the backdating exception on
- * create. Being the owner is never sufficient on its own, whichever side
- * of a delegation the owner is on, since a delegated app inherits none of
- * the owner's extra trust. An anonymous request fails it: its identities
- * are null and an owner DID is a string.
- *
- * Both identities are asked about by value rather than compared to each
- * other, so the answer holds for a caller holding a session as much as for
- * `ScopedStack`, which holds the pair separately.
- * See docs/spec/access-control.md § Delegation: principal and subject.
+ * Whether a request is the stack owner acting alone — the tier behind every
+ * unconditional owner authority. Being the owner is never sufficient on its
+ * own, whichever side of a delegation the owner is on. Both identities are
+ * asked about by value rather than compared to each other, so a caller
+ * holding a session and `ScopedStack`, which holds the pair separately, get
+ * one answer. See docs/spec/access-control.md § Delegation: principal and
+ * subject.
  */
 export function isOwnerActingAlone(
   session: { principalId: EntityId | null; subjectId: EntityId | null },
