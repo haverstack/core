@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
 import { StackQueryError } from '@haverstack/core';
 import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
@@ -11,6 +12,7 @@ import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
 // -------------------------------------------------------
 
 let testDir: string;
+let dbPath: string;
 let adapter: NativeSQLiteRecordAdapter;
 
 const ARTICLE = 'com.example.test/article@1';
@@ -57,8 +59,9 @@ const titles = async (query: StackQuery): Promise<string[]> =>
 beforeEach(async () => {
   testDir = join(tmpdir(), `sort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
+  dbPath = join(testDir, 'test.db');
   adapter = await NativeSQLiteRecordAdapter.initialize({
-    path: join(testDir, 'test.db'),
+    path: dbPath,
     entityId: 'entity-123',
   });
   await adapter.saveType(
@@ -296,9 +299,11 @@ describe('the sort index tracks the record', () => {
     const record = await create(ARTICLE, { title: 'gone', order: 1 });
     await adapter.deleteRecord(record.id, { hard: true });
 
-    const rows = adapter.db
+    const db = new DatabaseSync(dbPath);
+    const rows = db
       .prepare('SELECT COUNT(*) AS n FROM content_sort WHERE record_id = ?')
       .get(record.id) as { n: number };
+    db.close();
     expect(rows.n).toBe(0);
   });
 
@@ -308,9 +313,7 @@ describe('the sort index tracks the record', () => {
     // open().
     await create(ARTICLE, { title: 'b', order: 2 });
     await adapter.close?.();
-    adapter = await NativeSQLiteRecordAdapter.open({
-      path: join(testDir, 'test.db'),
-    });
+    adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
     await create(ARTICLE, { title: 'a', order: 1 });
 
     expect(await titles({ sort: { contentField: 'order', direction: 'asc' } })).toEqual(['a', 'b']);

@@ -155,7 +155,7 @@ type StackType = {
 
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
 
-**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. Query reach and reference indexing are separate mechanisms, and only the first extends to depth.
+**`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. **Indexing a content field, whether as a reference or [for sorting](#sorting-by-a-content-field), reaches top-level scalars only**, while query reach extends to depth: they are separate mechanisms, and one rule covers both.
 
 **Type identity:** two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
 
@@ -357,16 +357,17 @@ By default, `query()` (like `get()`) returns Records exactly as stored — see [
 ```ts
 type Query = {
   filter?: Filter;
-  sort?: {
-    field: 'createdAt' | 'updatedAt' | 'version';
-    direction?: 'asc' | 'desc';
-  };
+  sort?:
+    | { field: 'createdAt' | 'updatedAt' | 'version'; direction?: 'asc' | 'desc' }
+    | { contentField: string; direction?: 'asc' | 'desc' }; // see Sorting by a content field
   limit?: number;
   cursor?: string; // Opaque cursor for page-based pagination
 };
 ```
 
 Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackQueryError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
+
+**A sort names either a native column or a content field, never both**, and a request naming both is rejected with `StackQueryError` (**400**) rather than resolved in one direction. They are two members rather than one widened `field` because a content field may be named `version`, `createdAt` or `updatedAt`, and a `'content.publishedAt'` prefix would collide with the [path separator](#filter) a filter key is split on.
 
 **`sort.field` and `sort.direction` are validated, not merely typed.** The `'asc' | 'desc'` and three-field types are a compile-time contract only; a request arriving over the wire (a server mapping `?sort=`/`?direction=`) or from a delegated app supplies raw strings. A SQLite record adapter interpolates the direction into its `ORDER BY`, so `Stack.query()`/`ScopedStack.query()` reject a field or direction outside the enumerated set with `StackQueryError` (**400**, `bad_request`) before it reaches an adapter — the same posture as a malformed cursor. The value never reaches SQL as anything but one of the two keywords.
 
@@ -376,9 +377,43 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 **A permission-scoped query reports `total: null`.** The count of matching Records, unfiltered, would reveal how many Records exist that the requester cannot read — the cardinality of what the permission check just hid. `ScopedStack.query()` therefore always reports `null` rather than a number, and so does every response on the wire (see [Wire format § Response envelope](./wire-format.md#response-envelope)). A `total` is only ever a number on a direct, unscoped `Stack.query()` in-process, where there is no permission boundary to leak across.
 
+### Sorting by a content field
+
+`sort.contentField` orders by a **top-level scalar** content field — an article listing by `publishedAt`, a contact list by `name`. Without it, a consumer wanting a bounded page in a meaningful order has to read the whole matched set and sort it in memory, a cost that grows with the Stack while the page stays the same size. Content filtering already reaches into `content`; this closes the asymmetry for ordering.
+
+**Only top-level scalars are indexed for sorting**, the same line [`file-ref` indexing draws](#types) and for the same reason: a value inside an array or an object has no single position to order its Record by. Sorting reach stops at depth 1 while `filter.content` keeps its path traversal — query reach and indexing are separate mechanisms, and only the first extends to depth. A `contentField` carrying a path separator is refused with `StackQueryError` (400), and one naming a field no Type declares is a legitimate query whose Records simply have no value to order by.
+
+**Every top-level scalar is sortable, with no per-field opt-in.** A `sortable` marker in `TypeSchema` would change the schema hash, so making an existing field sortable would run the [schema drift](#schema-drift-detection) path for a change that alters no stored shape. The write cost is bounded by the number of top-level scalars on a Type.
+
+**A field orders as the kind its schema declares, not as the value a Record happens to hold.** `number` and `boolean` order numerically (false before true), `date` as epoch milliseconds — so a date field orders the way `createdAt` does rather than by ISO string collation — and every string-shaped kind as text. A value that doesn't match its declared kind orders as nothing. Deriving from the schema is what keeps an order stable across Records that spell a field differently.
+
+**A Record with no value at the sort field sorts after every Record that has one, in both directions.** An undated post belongs at the end of a date-ordered listing whichever way it runs; a rule that flipped with `direction` would put undated posts in the middle of the first page as often as not. Absence is not a value: `direction` reverses the order _between values_ and never moves absence.
+
+**Where a query spans Types that declare one field name differently, numbers sort before text**, and `direction` reverses that with everything else. Stating it here rather than leaving it to each engine's collation is what stops two adapters answering one query in two orders.
+
+**A content sort orders the stored shape, not the migrated one.** Migrations run in memory after the query returns (see [Type migrations](#type-migrations)), so a Stack mid-migration, sorting on a field a migration rewrites, gets an order derived from what is on disk. The distinction cannot arise for the native three.
+
+Sorting by an association — a relationship target, or a tag — is a different mechanism with a different cost and is not expressible; `order` on an association is ruled out by the [commons convention](../commons/README.md) that associations point and mark but never carry data.
+
+#### Text ordering
+
+Text orders by a **folded key**, not by code point: compatibility-decompose (NFKD), drop combining marks, lowercase. `apple` precedes `Émile` precedes `Zebra`, where raw code-point order files every capital ahead of every lowercase letter and every accented word after both. Two values that fold together (`Emile`, `Émile`) are then ordered by the stored value itself, so the order is total and a page boundary falls in the same place on every read.
+
+The lowercasing is **locale-independent**. A locale-sensitive fold orders Turkish `İstanbul` differently from every other runtime's, and the key is stored in an index — the divergence would be baked in rather than merely observed.
+
+**This is a fold, not a collation.** It buys the two things a reader notices — case and accents — and promises nothing beyond them:
+
+- No locale tailoring. Swedish `å ä ö` sort with `a`/`o` rather than after `z`; German `ß` does not fold to `ss`.
+- No script-aware ordering. CJK orders by code point.
+- No natural-number ordering: `item10` precedes `item9`.
+
+Locale-correct ordering is out of reach for a stored key regardless of effort, because the correct locale is the _reader's_ and a single index can only encode one. It would need a comparator registered with the engine, which neither SQLite build this project targets can accept — and an ICU-backed comparator would make an order depend on the ICU version each runtime happens to bundle, which is exactly the divergence the [conformance fixtures](./adapters.md) exist to catch.
+
 ### Capability-gated filters
 
 `content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically.
+
+**A sort is gated the same way.** `sort.contentField` needs `contentFieldSort`, and a native `sort.field` must appear in the adapter's `sortableFields`; a sort an adapter hasn't declared throws `StackQueryError` rather than being answered in some other order — which a caller reading one bounded page has no way to notice. `contentFieldSort` and `contentFieldQuery` are independent: a server may order by a content field without offering to filter on one, or the reverse.
 
 **A multi-segment content key needs `nestedContentQuery` on top of `contentFieldQuery`**; a single-segment key needs `contentFieldQuery` alone. Why these are two flags rather than one widened flag is [Adapter capabilities](./adapters.md#adapter-capabilities). A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
 

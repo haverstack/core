@@ -19,6 +19,7 @@ GET /.well-known/stack
     "fullTextSearch": true,
     "contentFieldQuery": true,
     "nestedContentQuery": true,
+    "contentFieldSort": true,
     "sortableFields": ["createdAt", "updatedAt", "version"],
     "maxAttachmentBytes": 52428800,
     "maxContentBytes": 1048576
@@ -249,6 +250,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?relatedToLabel=     (narrows any of the above to one label; valid alone)
 ?search=
 ?sort=createdAt|updatedAt|version
+?sortContent=        (a top-level content field; never alongside ?sort=)
 ?direction=asc|desc
 ?limit=
 ?cursor=
@@ -257,6 +259,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 ```
 
 **The relationship filter's scope is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. At least one of these parameters is always present when the filter is used — [`relatedTo` names a label, a target, or both](./data-model.md#filter), never neither — so the filter cannot encode to an empty query string and silently widen the query. Omitting `relatedToStack` means the target has no `stackUrl`; the server MUST NOT treat it as a wildcard matching targets that carry one. `relatedToStack` MUST be omitted rather than sent empty — this stack is named one way — and a server MUST reject an empty one with `400` rather than reading it as either a local target or a wildcard. The same holds for `relatedToId`: omit it to match a whole namespace.
+
+**A sort names a native column or a content field, and the parameter it arrives in says which** — the same shape the relationship filter uses above, and the only way to keep a content field named `version` distinct from the native column on a raw query string. A request carrying both `sort` and `sortContent` MUST be rejected with `400` rather than resolved in one direction; in a `POST /records/query` body the same two spellings are `sort.field` and `sort.contentField`. A server declaring `contentFieldSort: false` refuses `sortContent` with `400`. What the ordering itself must be — absent values last, numbers before text, and the [folded text key](./data-model.md#text-ordering) a server MUST reproduce — is in [Data model § Sorting by a content field](./data-model.md#sorting-by-a-content-field).
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `Query` object as a JSON body and additionally supports `content` field filtering. A server that declares `contentFieldQuery: false` in discovery does not support the POST query endpoint.
 
