@@ -808,6 +808,14 @@ export class APIAdapter implements StackAdapter {
         // matches only whole field names, and present what came back as
         // though the path had been applied.
         nestedContentQuery: discovery.capabilities?.nestedContentQuery ?? false,
+        // The same reading for the rest of the content-reach set: silence
+        // is a server that does not offer it, never one that does. An
+        // absent sortableFields leaves nothing this client may name — a
+        // query that names no sort still works, since it asks for the
+        // server's own default order rather than a stated one.
+        contentPresenceQuery: discovery.capabilities?.contentPresenceQuery ?? false,
+        contentFieldSort: discovery.capabilities?.contentFieldSort ?? false,
+        sortableFields: discovery.capabilities?.sortableFields ?? [],
       },
       // Kept whole rather than reduced to a flag: `resume` and `records`
       // are what subscribeChanges() promises its caller, and a client that

@@ -1078,6 +1078,31 @@ describe('queryRecords', () => {
     ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
+  // Silence is not a claim — and an absent sortableFields must refuse a
+  // stated sort as the declared-capability error, rather than reading
+  // through undefined and raising a TypeError no caller can act on.
+  test('a server omitting the content-reach capabilities is treated as having none', async () => {
+    const {
+      contentPresenceQuery: _p,
+      contentFieldSort: _s,
+      sortableFields: _f,
+      ...capabilities
+    } = DISCOVERY.capabilities;
+    const adapter = await openAdapter({ ...DISCOVERY, capabilities });
+
+    expect(adapter.capabilities.contentPresenceQuery).toBe(false);
+    expect(adapter.capabilities.contentFieldSort).toBe(false);
+    expect(adapter.capabilities.sortableFields).toEqual([]);
+
+    await expect(adapter.queryRecords({ sort: { field: 'createdAt' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    // A query naming no sort asks for the server's own default order, so it
+    // claims nothing and still runs.
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(adapter.queryRecords({})).resolves.toBeDefined();
+  });
+
   test('a server omitting nestedContentQuery is treated as not having it', async () => {
     const { nestedContentQuery: _drop, ...capabilities } = DISCOVERY.capabilities;
     const adapter = await openAdapter({ ...DISCOVERY, capabilities });
