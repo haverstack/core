@@ -1,5 +1,16 @@
 # @haverstack/blob-adapter-disk
 
+## 0.22.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`0c76cb7`](https://github.com/haverstack/core/commit/0c76cb7b51f2ea407521ae1df1ff0c8e5852d53e)]:
+  - @haverstack/core@0.24.0
+
 ## 0.21.0
 
 ### Minor Changes

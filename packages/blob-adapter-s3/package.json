@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/blob-adapter-s3",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "S3 (and S3-compatible) blob adapter for Haverstack",
   "type": "module",
   "exports": {

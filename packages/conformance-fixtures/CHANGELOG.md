@@ -1,5 +1,16 @@
 # @haverstack/conformance-fixtures
 
+## 0.17.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/wire-types`.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @haverstack/wire-types@0.23.0
+
 ## 0.16.0
 
 ### Minor Changes
