@@ -1034,6 +1034,16 @@ export interface StackClient {
   ): Promise<StackRecord & { content: T }>;
   get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
   query(query?: StackQuery): Promise<QueryResult>;
+  /**
+   * Resolve a DID to its `_entity` card — family-wide and soft-deleted
+   * inclusive, per docs/spec/identity.md § DID bindings. No caching.
+   *
+   * Under `ScopedStack`, `null` covers missing, unreadable, and (unless the
+   * owner is acting alone) unlisted — never evidence the card is absent.
+   */
+  getEntityByDid(did: EntityId): Promise<StackRecord | null>;
+  /** getEntityByDid() for the one DID every stack reserves: its own owner. */
+  getOwnerEntity(): Promise<StackRecord | null>;
   update(
     id: string,
     content: Record<string, unknown | null>,
@@ -1139,6 +1149,34 @@ async function findFirstMatch(
   return undefined;
 }
 
+/**
+ * Shared implementation behind Stack.getEntityByDid() and
+ * ScopedStack.getEntityByDid() — see docs/spec/identity.md § DID bindings
+ * for the matching rules. `includeUnlisted` is a parameter rather than
+ * hardcoded, so a caller not permitted to set it can omit it instead of
+ * having query() throw.
+ */
+async function lookupEntityByDid(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  did: EntityId,
+  contentFieldQuery: boolean,
+  includeUnlisted: boolean,
+): Promise<StackRecord | null> {
+  const record = await findFirstMatch(
+    run,
+    {
+      filter: {
+        baseId: SYSTEM_TYPES.ENTITY,
+        includeDeleted: true,
+        ...(includeUnlisted && { includeUnlisted: true }),
+        ...(contentFieldQuery && { content: { did } }),
+      },
+    },
+    (r) => (r.content as EntityContent).did === did,
+  );
+  return record ?? null;
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -1239,11 +1277,7 @@ export class Stack implements StackClient {
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
-    const existing = await findFirstMatch(
-      (q) => this.query(q),
-      { filter: { baseId: SYSTEM_TYPES.ENTITY, includeDeleted: true, includeUnlisted: true } },
-      (r) => (r.content as EntityContent).did === this.ownerEntityId,
-    );
+    const existing = await this.getEntityByDid(this.ownerEntityId);
     if (existing) return;
 
     await this.create<EntityContent>(entityTypeId, {
@@ -1255,6 +1289,14 @@ export class Stack implements StackClient {
 
   get ownerEntityId(): EntityId {
     return this.adapter.ownerEntityId;
+  }
+
+  async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
+    return lookupEntityByDid((q) => this.query(q), did, this.features.contentFieldQuery, true);
+  }
+
+  async getOwnerEntity(): Promise<StackRecord | null> {
+    return this.getEntityByDid(this.ownerEntityId);
   }
 
   get timezone(): string | undefined {
@@ -3914,6 +3956,25 @@ export class ScopedStack implements StackClient {
     if (!record) return null;
     if (!(await this.canRead(record))) return null;
     return presentDeleted(record);
+  }
+
+  /**
+   * Runs through this.query(), so canRead() still applies — this answers a
+   * question the caller asks on its own behalf. includeUnlisted is passed
+   * only when the request is the owner acting alone, per
+   * docs/spec/identity.md § DID bindings.
+   */
+  async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
+    return lookupEntityByDid(
+      (q) => this.query(q),
+      did,
+      this.stack.features.contentFieldQuery,
+      this.ownerActingAlone,
+    );
+  }
+
+  async getOwnerEntity(): Promise<StackRecord | null> {
+    return this.getEntityByDid(this.stack.ownerEntityId);
   }
 
   /**

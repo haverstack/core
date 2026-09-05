@@ -212,6 +212,75 @@ describe('Stack.create', () => {
       expect(ownerRecords[0].content).toMatchObject({ name: 'Original Name' });
     });
   });
+
+  describe('getEntityByDid / getOwnerEntity', () => {
+    test('resolves the card claiming a did', async () => {
+      const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+      const found = await stack.getEntityByDid('did:key:x');
+      expect(found?.id).toBe(created.id);
+    });
+
+    test('returns null when no card claims the did', async () => {
+      expect(await stack.getEntityByDid('did:key:nobody')).toBeNull();
+    });
+
+    // checkBindingUnique() enforces did uniqueness across the whole _entity
+    // family, so the lookup must too: filtering by typeId '_entity@1' alone
+    // would miss a card migrated to '_entity@2'.
+    test('matches a card migrated to a later type version', async () => {
+      await stack.defineType('_entity@2', 'Entity', {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+        pronouns: { kind: 'string' },
+      });
+      const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+      stack.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
+      await stack.migrateAll('_entity');
+
+      const found = await stack.getEntityByDid('did:key:x');
+      expect(found?.id).toBe(created.id);
+      expect(found?.typeId).toBe('_entity@2');
+    });
+
+    // A soft-deleted card still reserves its did (see docs/spec/identity.md
+    // § DID bindings), so the lookup must still find it.
+    test('includes a soft-deleted card', async () => {
+      const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+      await stack.delete(created.id);
+      const found = await stack.getEntityByDid('did:key:x');
+      expect(found?.id).toBe(created.id);
+      expect(found?.deletedAt).toBeInstanceOf(Date);
+    });
+
+    test('includes an unlisted card', async () => {
+      const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+      await stack.setUnlisted(created.id, true);
+      const found = await stack.getEntityByDid('did:key:x');
+      expect(found?.id).toBe(created.id);
+    });
+
+    // The content filter is capability-gated; the in-memory predicate must
+    // still find the match when it's unavailable.
+    test('resolves the card without the contentFieldQuery capability', async () => {
+      const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: 'owner-x' });
+      const s = await Stack.create(incapableAdapter);
+      const created = await s.create('_entity@1', { did: 'did:key:y', name: 'Y' });
+      const found = await s.getEntityByDid('did:key:y');
+      expect(found?.id).toBe(created.id);
+    });
+
+    test('getOwnerEntity resolves the card ownerProfile created', async () => {
+      const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
+      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const found = await s.getOwnerEntity();
+      expect(found?.content).toMatchObject({ did: 'did:key:owner', name: 'Jane Smith' });
+    });
+
+    test('getOwnerEntity returns null when no owner card exists', async () => {
+      expect(await stack.getOwnerEntity()).toBeNull();
+    });
+  });
 });
 
 // -------------------------------------------------------
