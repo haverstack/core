@@ -23,14 +23,19 @@ const DISCOVERY = {
   version: WIRE_PROTOCOL_VERSION,
   entityId: OWNER,
   capabilities: {
-    fullTextSearch: true,
-    contentFieldQuery: true,
-    nestedContentQuery: true,
-    contentPresenceQuery: true,
-    contentFieldSort: true,
-    sortableFields: ['createdAt'],
-    maxAttachmentBytes: null,
-    maxContentBytes: null,
+    filter: {
+      content: 'path',
+      contentPresent: true,
+      search: true,
+    },
+    sort: {
+      fields: ['createdAt'],
+      contentField: true,
+    },
+    limits: {
+      attachmentBytes: null,
+      contentBytes: null,
+    },
   },
   changes: { transports: ['sse'], resume: true, records: true },
 };

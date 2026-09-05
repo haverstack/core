@@ -259,7 +259,7 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
 
 /**
  * Build a `StackQuery` from `GET /records` search params — the inverse of
- * what `APIAdapter` encodes for a server without `contentFieldQuery`.
+ * what `APIAdapter` encodes for a server that reaches no content.
  * `parentId=null` is the literal string, the sentinel for "top level":
  * Crockford base-32 excludes `u` and `l`, so no record ID can collide
  * with it. See docs/spec/wire-format.md § Records.

@@ -24,21 +24,20 @@ import type { SubscribeChangesOptions } from '@haverstack/core/adapter';
 
 const BASE_URL = 'https://stack.example.com';
 
-const capabilities = (contentFieldQuery: boolean) => ({
-  fullTextSearch: true,
-  contentFieldQuery,
-  nestedContentQuery: true,
-  contentPresenceQuery: true,
-  contentFieldSort: true,
-  sortableFields: ['createdAt', 'updatedAt', 'version'],
-  maxAttachmentBytes: null,
-  maxContentBytes: null,
+const capabilities = (reachesContent: boolean) => ({
+  filter: {
+    content: reachesContent ? 'path' : 'none',
+    contentPresent: true,
+    search: true,
+  },
+  sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+  limits: { attachmentBytes: null, contentBytes: null },
 });
 
-const discovery = (contentFieldQuery: boolean) => ({
+const discovery = (reachesContent: boolean) => ({
   version: '1.0',
   entityId: 'did:key:zOwner',
-  capabilities: capabilities(contentFieldQuery),
+  capabilities: capabilities(reachesContent),
   changes: { transports: ['sse'], resume: true, records: true },
 });
 
@@ -63,19 +62,19 @@ afterEach(() => {
 
 /**
  * Dispatch a query through the adapter and hand back what core's parser
- * makes of the request it sent. `contentFieldQuery` picks the branch:
- * false takes GET /records' search params, true takes POST /records/query's
- * JSON body.
+ * makes of the request it sent. `reachesContent` picks the branch: false
+ * takes GET /records' search params, true takes POST /records/query's JSON
+ * body.
  */
-async function roundTrip(query: StackQuery, contentFieldQuery = false): Promise<StackQuery> {
-  mockFetch.mockResolvedValueOnce(jsonResponse(discovery(contentFieldQuery)));
+async function roundTrip(query: StackQuery, reachesContent = false): Promise<StackQuery> {
+  mockFetch.mockResolvedValueOnce(jsonResponse(discovery(reachesContent)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
 
   mockFetch.mockResolvedValueOnce(jsonResponse(EMPTY_PAGE));
   await adapter.queryRecords(query);
 
   const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
-  return contentFieldQuery
+  return reachesContent
     ? parseQueryBody(JSON.parse(init.body as string))
     : parseQueryParams(new URL(url));
 }

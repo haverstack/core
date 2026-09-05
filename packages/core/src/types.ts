@@ -459,7 +459,7 @@ export type RecordFilter = {
    * (`'emails.value'`). An array anywhere along the path is matched
    * element-wise, so the motivating question — which contact holds this
    * email address — is one filter. A multi-segment key needs the
-   * nestedContentQuery capability. POST /query only.
+   * `filter.content: 'path'` capability. POST /query only.
    * See docs/spec/data-model.md § Filter.
    */
   content?: Record<string, unknown>;
@@ -469,7 +469,7 @@ export type RecordFilter = {
    * since a filter value matches what is there rather than whether
    * anything is. Element-wise like `content`, so a path holds a value
    * when at least one non-null value is reachable at it. Needs the
-   * contentPresenceQuery capability. POST /query only.
+   * filter.contentPresent capability. POST /query only.
    * See docs/spec/data-model.md § Filter.
    */
   contentPresent?: string[];
@@ -547,64 +547,89 @@ export type Migration = {
 // Adapter capabilities / Stack features
 // -------------------------------------------------------
 
+/**
+ * How far into `content` a filter key may reach. The rungs nest —
+ * `'path'` is `'field'` plus traversal — so they are one ordered value
+ * rather than a pair of booleans that can spell a state no adapter can be
+ * in. A value a client does not recognize reads as `'none'`: refusing a
+ * query is recoverable, answering it with an unfiltered superset presented
+ * as a filtered result is not.
+ * See docs/spec/adapters.md § Adapter capabilities.
+ */
+export type ContentFilterReach =
+  /** No `filter.content` and no `filter.contentPresent` at all. */
+  | 'none'
+  /** Single-segment field names only (`'did'`). */
+  | 'field'
+  /** Multi-segment paths too (`'emails.value'`). */
+  | 'path';
+
+/**
+ * What an adapter honors, grouped by the query surface each entry gates:
+ * every flag under `filter`/`sort` is named for the query key it answers
+ * for, so the capability a query needs is derivable from the query rather
+ * than memorized. `limits` sits apart because a byte ceiling is not a
+ * feature to gate on but a number to pre-check against.
+ * See docs/spec/adapters.md § Adapter capabilities.
+ */
 export type AdapterCapabilities = {
-  fullTextSearch: boolean;
+  filter: {
+    /**
+     * Required `'path'` for local/in-process adapters; a wire adapter may
+     * report a shallower rung, driven by the server's discovery response.
+     * Stack.query() throws StackQueryError rather than silently widening.
+     */
+    content: ContentFilterReach;
+    /**
+     * Whether `filter.contentPresent` is honored. Beside the reach ladder
+     * rather than a rung on it: a server promising to match a content
+     * value has not thereby promised to answer whether one is there at
+     * all, and reading it as such hands a client the unfiltered superset
+     * that ignoring the filter produces. Meaningful only where `content`
+     * is not `'none'` — presence travels in the `POST /records/query`
+     * body, which a server reaching no content does not expose.
+     */
+    contentPresent: boolean;
+    /**
+     * Whether `filter.search` is honored. Not a rung on the ladder: a
+     * full-text index is a different mechanism from field matching, and
+     * neither implies the other. Local adapters may decline it.
+     */
+    search: boolean;
+  };
+  sort: {
+    /** Which native columns this adapter can order by; see NativeSortField. */
+    fields: NativeSortField[];
+    /**
+     * Whether `sort.contentField` is honored. A boolean rather than names
+     * in `fields`: content fields are app-defined and unbounded, and an
+     * adapter that indexes content for sorting indexes every top-level
+     * scalar, so there is nothing per-field left to declare. Independent
+     * of `filter.content` — a server may order by a content field without
+     * offering to filter on one, and filtering is a scan where ordering
+     * wants an index.
+     */
+    contentField: boolean;
+  };
   /**
-   * Required `true` for local/in-process adapters; wire adapters may
-   * report `false`, driven by the server's discovery response.
-   * Stack.query() throws StackQueryError rather than silently widening.
+   * Ceilings a client can check before spending a request, never a
+   * substitute for the server's own limit, which stays authoritative.
+   * `null` means this client cannot pre-check, not that nothing is
+   * enforced. Local adapters declare `null` for both: nothing at the
+   * storage layer imposes a ceiling, and a caller with in-process access
+   * to the database can spend its own memory however it likes.
    * See docs/spec/adapters.md § Adapter capabilities.
    */
-  contentFieldQuery: boolean;
-  /**
-   * Whether a content filter key may be a multi-segment path
-   * (`'emails.value'`) rather than a single field name. Separate from
-   * contentFieldQuery rather than folded into it: a foreign server
-   * declaring contentFieldQuery implements single-segment matching, and
-   * reading that as a promise of path traversal would hand a client an
-   * unfiltered superset presented as a filtered result — the failure
-   * assertQueryCapabilities() exists to prevent.
-   * See docs/spec/adapters.md § Adapter capabilities.
-   */
-  nestedContentQuery: boolean;
-  /**
-   * Whether `filter.contentPresent` is honored. A third flag on top of
-   * contentFieldQuery, on the same reasoning as nestedContentQuery: a
-   * server declaring content filtering promises to match a value, and
-   * reading that as a promise to answer whether one is there at all would
-   * hand a client an unfiltered superset presented as a filtered result.
-   * See docs/spec/adapters.md § Adapter capabilities.
-   */
-  contentPresenceQuery: boolean;
-  /**
-   * Whether `sort.contentField` is honored. A boolean rather than field
-   * names in sortableFields: the fields are app-defined and unbounded,
-   * and an adapter that indexes content for sorting indexes every
-   * top-level scalar, so there is nothing per-field to declare.
-   * See docs/spec/adapters.md § Adapter capabilities.
-   */
-  contentFieldSort: boolean;
-  /** Which native columns this adapter can order by; see NativeSortField. */
-  sortableFields: NativeSortField[];
-  /**
-   * Maximum attachment upload size in bytes, or `null` if unbounded. Lets
-   * apps pre-check and surface limits before burning an upload on a 413.
-   */
-  maxAttachmentBytes: number | null;
-  /**
-   * Maximum serialized size in bytes of a Record's content — a create body
-   * or a merge patch — or `null` if unbounded. The counterpart to
-   * maxAttachmentBytes for the JSON side of a write, which had no stated
-   * ceiling anywhere despite the spec bounding every other resource
-   * (validation depth, queryAllPages, GC grace).
-   *
-   * Local adapters declare `null`: nothing at the storage layer imposes
-   * one, and a caller with in-process access to the database can spend its
-   * own memory however it likes. A server declares its request-size limit
-   * here so apps can pre-check rather than discover it as a 413.
-   * See docs/spec/adapters.md § Adapter capabilities.
-   */
-  maxContentBytes: number | null;
+  limits: {
+    /** Maximum attachment upload size in bytes. */
+    attachmentBytes: number | null;
+    /**
+     * Maximum serialized size in bytes of a Record's content — a create
+     * body or a merge patch. Stack.create()/Stack.update() pre-check
+     * against it and throw StackPayloadTooLargeError before sending.
+     */
+    contentBytes: number | null;
+  };
 };
 
 /** What a Stack can do, as seen by app and plugin code. */

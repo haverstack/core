@@ -262,7 +262,7 @@ describe('Stack.create', () => {
 
     // The content filter is capability-gated; the in-memory predicate must
     // still find the match when it's unavailable.
-    test('resolves the card without the contentFieldQuery capability', async () => {
+    test('resolves the card on an adapter reaching no content', async () => {
       const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: 'owner-x' });
       const s = await Stack.create(incapableAdapter);
       const created = await s.create('_entity@1', { did: 'did:key:y', name: 'Y' });
@@ -971,12 +971,12 @@ describe('query — contentPresent', () => {
 // -------------------------------------------------------
 
 describe('query — capability fail-loud', () => {
-  test('filter.search against an adapter without fullTextSearch throws, not returns everything', async () => {
+  test('filter.search against an adapter without filter.search throws, not returns everything', async () => {
     await stack.create(NOTE_V1, { text: 'findable' });
     await expect(stack.query({ filter: { search: 'findable' } })).rejects.toThrow(StackQueryError);
   });
 
-  test('filter.content against an adapter without contentFieldQuery throws, not returns everything', async () => {
+  test('filter.content against an adapter reaching no content throws, not returns everything', async () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
@@ -1172,7 +1172,7 @@ describe('query — sorting by a content field', () => {
     ]);
   });
 
-  test('an adapter without contentFieldSort refuses rather than reordering', async () => {
+  test('an adapter without sort.contentField refuses rather than reordering', async () => {
     const incapable = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }),
     );
@@ -1183,7 +1183,7 @@ describe('query — sorting by a content field', () => {
 
   test('a native sort an adapter does not declare is refused too', async () => {
     const adapter = new MemoryAdapter({ ownerEntityId: 'owner-123' });
-    adapter.capabilities.sortableFields = ['createdAt'];
+    adapter.capabilities.sort.fields = ['createdAt'];
     const limited = await Stack.create(adapter);
     await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(StackQueryError);
     await expect(limited.query({ sort: { field: 'createdAt' } })).resolves.toBeDefined();
@@ -3642,25 +3642,30 @@ describe('nested content paths', () => {
     );
   });
 
-  test('a nested path needs the nestedContentQuery capability', async () => {
+  test('a nested path needs filter.content: "path"', async () => {
     const narrow = Object.assign(
       new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
       {
         capabilities: {
-          fullTextSearch: false,
-          contentFieldQuery: true,
-          nestedContentQuery: false,
-          contentPresenceQuery: false,
-          contentFieldSort: false,
-          sortableFields: ['createdAt', 'updatedAt', 'version'],
-          maxAttachmentBytes: null,
-          maxContentBytes: null,
+          filter: {
+            content: 'field',
+            contentPresent: false,
+            search: false,
+          },
+          sort: {
+            fields: ['createdAt', 'updatedAt', 'version'],
+            contentField: false,
+          },
+          limits: {
+            attachmentBytes: null,
+            contentBytes: null,
+          },
         },
       },
     );
     const narrowStack = await Stack.create(narrow as StackAdapter);
 
-    // A single-segment filter is still served by contentFieldQuery alone.
+    // A single-segment filter is still served by the 'field' rung.
     await expect(
       narrowStack.query({ filter: { content: { name: 'ada' } } }),
     ).resolves.toBeDefined();
@@ -3671,28 +3676,23 @@ describe('nested content paths', () => {
 });
 
 // -------------------------------------------------------
-// maxContentBytes pre-check: the content half of the attachment
+// limits.contentBytes pre-check: the content half of the attachment
 // ceiling below. Local adapters declare null; a server declares its
 // request-size limit so apps can fail before the round trip.
 // -------------------------------------------------------
 
-describe('maxContentBytes pre-check', () => {
-  const withContentCeiling = (maxContentBytes: number): StackAdapter =>
+describe('limits.contentBytes pre-check', () => {
+  const withContentCeiling = (contentBytes: number): StackAdapter =>
     Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
       capabilities: {
-        fullTextSearch: false,
-        contentFieldQuery: true,
-        nestedContentQuery: true,
-        contentPresenceQuery: true,
-        contentFieldSort: true,
-        sortableFields: ['createdAt', 'updatedAt', 'version'],
-        maxAttachmentBytes: null,
-        maxContentBytes,
+        filter: { content: 'path', contentPresent: true, search: false },
+        sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+        limits: { attachmentBytes: null, contentBytes },
       },
     });
 
-  const openLimited = async (maxContentBytes: number): Promise<Stack> => {
-    const limited = await Stack.create(withContentCeiling(maxContentBytes));
+  const openLimited = async (contentBytes: number): Promise<Stack> => {
+    const limited = await Stack.create(withContentCeiling(contentBytes));
     await limited.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     return limited;
   };
@@ -3718,29 +3718,24 @@ describe('maxContentBytes pre-check', () => {
     );
   });
 
-  test('null maxContentBytes never throws, regardless of size', async () => {
+  test('a null contentBytes never throws, regardless of size', async () => {
     await expect(stack.create(NOTE_V1, { text: 'x'.repeat(100000) })).resolves.toBeDefined();
   });
 });
 
 // -------------------------------------------------------
-// putAttachment — maxAttachmentBytes pre-check: fails fast before any
+// putAttachment — limits.attachmentBytes pre-check: fails fast before any
 // bytes reach the adapter. Local adapters declare null, so these tests
 // fake a finite ceiling via Object.assign over a MemoryAdapter instance.
 // -------------------------------------------------------
 
-describe('putAttachment — maxAttachmentBytes pre-check', () => {
-  const withCeiling = (maxAttachmentBytes: number): StackAdapter =>
+describe('putAttachment — limits.attachmentBytes pre-check', () => {
+  const withCeiling = (attachmentBytes: number): StackAdapter =>
     Object.assign(new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
       capabilities: {
-        fullTextSearch: false,
-        contentFieldQuery: false,
-        nestedContentQuery: false,
-        contentPresenceQuery: false,
-        contentFieldSort: false,
-        sortableFields: ['createdAt', 'updatedAt', 'version'],
-        maxAttachmentBytes,
-        maxContentBytes: null,
+        filter: { content: 'none', contentPresent: false, search: false },
+        sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: false },
+        limits: { attachmentBytes, contentBytes: null },
       },
     });
 
@@ -3764,7 +3759,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
     ).resolves.toMatchObject({ typeId: '_attachment@1' });
   });
 
-  test('null maxAttachmentBytes never throws, regardless of size', async () => {
+  test('a null attachmentBytes never throws, regardless of size', async () => {
     const data = new Uint8Array(1000);
     await expect(stack.putAttachment(data, 'image/png')).resolves.toMatchObject({
       typeId: '_attachment@1',
@@ -3982,10 +3977,10 @@ describe('Stack.getAttachmentRecords', () => {
     expect(records.some((r) => r.id === live.id)).toBe(true);
   });
 
-  // IncapableMemoryAdapter declares contentFieldQuery: false, so this
+  // IncapableMemoryAdapter reaches no content, so this
   // exercises the in-memory filter and the cursor walk rather than the
   // content-filtered query a compliant local adapter takes.
-  test('finds a record past the first page on an adapter without contentFieldQuery', async () => {
+  test('finds a record past the first page on an adapter reaching no content', async () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
@@ -4051,7 +4046,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     expect(message).not.toContain('text/plain');
   });
 
-  // forces contentFieldQuery: false so this exercises the
+  // forces filter.content: 'none' so this exercises the
   // cursor-walk fallback the test name describes, rather than the fast
   // content-filtered query a compliant local adapter (MemoryAdapter's
   // real-world default) would take.
@@ -4906,10 +4901,10 @@ describe('_entity.did bindings', () => {
     expect((restored.content as { did: string }).did).toBe(ALICE);
   });
 
-  // Without contentFieldQuery the check cursor-walks the family and stops at
+  // Reaching no content, the check cursor-walks the family and stops at
   // the first clash, so a colliding card past page one must still be found —
   // short-circuiting is what keeps the walk bounded, not a narrower scan.
-  test('finds a clash past page one on an adapter without contentFieldQuery', async () => {
+  test('finds a clash past page one on an adapter reaching no content', async () => {
     const incapable = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );

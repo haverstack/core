@@ -70,6 +70,7 @@ import {
   CHANGE_FRAME_RECORD,
   CHANGE_FRAME_RESET,
   WIRE_PROTOCOL_VERSION,
+  normalizeCapabilities,
 } from '@haverstack/wire-types';
 
 // -------------------------------------------------------
@@ -142,7 +143,7 @@ export class APIAdapterConnectionError extends APIAdapterError {
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
     /** `'changes'` names the feed, which discovery advertises beside `capabilities` rather than in it. */
-    public readonly capability: keyof AdapterCapabilities | 'changes',
+    public readonly capability: MissingCapability | 'changes',
     message: string,
   ) {
     super(message);
@@ -340,6 +341,19 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 
 // -------------------------------------------------------
 /**
+ * A capability a query can be refused for, as its path into
+ * AdapterCapabilities — the same name the spec and the discovery response
+ * use, so an error says which key to look at. `limits` never appears: a
+ * ceiling is not something a query can lack.
+ */
+export type MissingCapability =
+  | 'filter.content'
+  | 'filter.contentPresent'
+  | 'filter.search'
+  | 'sort.fields'
+  | 'sort.contentField';
+
+/**
  * Which declared capability a query needs and this server lacks, or
  * undefined when everything it asks for is supported — in which case the
  * StackQueryError was about the query's own shape, not the server's
@@ -348,31 +362,32 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 const missingQueryCapability = (
   query: StackQuery,
   capabilities: AdapterCapabilities,
-): keyof AdapterCapabilities | undefined => {
+): MissingCapability | undefined => {
   const filter = query.filter;
   // A query naming no sort claims no order, so it needs no sort
   // capability — mirroring assertSortCapability. Checking anyway would
-  // blame `sortableFields` for a failure the query's other reach caused,
+  // blame `sort.fields` for a failure the query's other reach caused,
   // against any server whose discovery omits the field.
   const sort = query.sort;
   if (sort) {
     if (sort.contentField !== undefined) {
-      if (!capabilities.contentFieldSort) return 'contentFieldSort';
-    } else if (!capabilities.sortableFields.includes(sort.field ?? 'createdAt')) {
-      return 'sortableFields';
+      if (!capabilities.sort.contentField) return 'sort.contentField';
+    } else if (!capabilities.sort.fields.includes(sort.field ?? 'createdAt')) {
+      return 'sort.fields';
     }
   }
-  if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
+  if (filter?.search && !capabilities.filter.search) return 'filter.search';
   const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
   if (!filter?.content && !present) return undefined;
-  if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
-  if (present && !capabilities.contentPresenceQuery) return 'contentPresenceQuery';
-  if (capabilities.nestedContentQuery) return undefined;
+  const reach = capabilities.filter.content;
+  if (reach === 'none') return 'filter.content';
+  if (present && !capabilities.filter.contentPresent) return 'filter.contentPresent';
+  if (reach === 'path') return undefined;
   // A key this server would refuse only because it is malformed is the
   // caller's error at any capability level, so it is parsed the same way
   // assertQueryCapabilities parses it rather than scanned for a dot.
   return [...Object.keys(filter?.content ?? {}), ...(present ?? [])].some(isNestedPath)
-    ? 'nestedContentQuery'
+    ? 'filter.content'
     : undefined;
 };
 
@@ -384,7 +399,7 @@ const isNestedPath = (key: string): boolean => {
   }
 };
 
-// Query parameter builder (used when contentFieldQuery is false)
+// Query parameter builder (used when the server reaches no content)
 // -------------------------------------------------------
 
 const buildQueryParams = (query: StackQuery): URLSearchParams => {
@@ -801,27 +816,9 @@ export class APIAdapter implements StackAdapter {
       // Passthrough metadata only — no 'UTC' default, which would claim
       // knowledge the discovery response didn't actually provide.
       discovery.timezone,
-      {
-        ...discovery.capabilities,
-        // A server predating this field, or one declining to publish its
-        // limit, means "you can't pre-check" — not "unbounded" and not
-        // undefined leaking into a numeric comparison. Its own
-        // request-size limit is authoritative either way.
-        maxContentBytes: discovery.capabilities?.maxContentBytes ?? null,
-        // An absent flag is a server that does not traverse content paths.
-        // Reading it as `true` would send a nested filter to a server that
-        // matches only whole field names, and present what came back as
-        // though the path had been applied.
-        nestedContentQuery: discovery.capabilities?.nestedContentQuery ?? false,
-        // The same reading for the rest of the content-reach set: silence
-        // is a server that does not offer it, never one that does. An
-        // absent sortableFields leaves nothing this client may name — a
-        // query that names no sort still works, since it asks for the
-        // server's own default order rather than a stated one.
-        contentPresenceQuery: discovery.capabilities?.contentPresenceQuery ?? false,
-        contentFieldSort: discovery.capabilities?.contentFieldSort ?? false,
-        sortableFields: discovery.capabilities?.sortableFields ?? [],
-      },
+      // One rule for every entry, applied once: absent, malformed or
+      // unrecognized reads as the least capable value it could stand for.
+      normalizeCapabilities(discovery.capabilities),
       // Kept whole rather than reduced to a flag: `resume` and `records`
       // are what subscribeChanges() promises its caller, and a client that
       // forgot them would assume both.
@@ -1062,11 +1059,11 @@ export class APIAdapter implements StackAdapter {
     assertValidRelatedTo(query.filter?.relatedTo);
 
     let raw: WireQueryResponse;
-    if (this.capabilities.contentFieldQuery) {
+    if (this.capabilities.filter.content !== 'none') {
       // POST /records/query supports the full query shape including content field filters
       raw = await this.request<WireQueryResponse>('POST', '/records/query', query);
     } else {
-      // Servers without contentFieldQuery support only expose GET /records
+      // A server reaching no content only exposes GET /records
       const params = buildQueryParams(query);
       const qs = params.toString();
       raw = await this.request<WireQueryResponse>('GET', qs ? `/records?${qs}` : '/records');

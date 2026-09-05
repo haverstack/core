@@ -11,6 +11,7 @@ export type {
   StackRecordAdapter,
   StackBlobAdapter,
   AdapterCapabilities,
+  ContentFilterReach,
   BlobFileInfo,
   ExpectedVersionOptions,
   SubscribeChangesOptions,

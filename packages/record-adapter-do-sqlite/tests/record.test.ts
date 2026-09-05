@@ -103,14 +103,19 @@ describe('construction', () => {
     const stub = getStub();
     const capabilities = await stub.getCapabilities();
     expect(capabilities).toEqual({
-      fullTextSearch: true,
-      contentFieldQuery: true,
-      nestedContentQuery: true,
-      contentPresenceQuery: true,
-      contentFieldSort: true,
-      sortableFields: ['createdAt', 'updatedAt', 'version'],
-      maxAttachmentBytes: null,
-      maxContentBytes: null,
+      filter: {
+        content: 'path',
+        contentPresent: true,
+        search: true,
+      },
+      sort: {
+        fields: ['createdAt', 'updatedAt', 'version'],
+        contentField: true,
+      },
+      limits: {
+        attachmentBytes: null,
+        contentBytes: null,
+      },
     });
   });
 

@@ -58,14 +58,19 @@ export type DoRecordCreateOptions = {
 
 export class DoSQLiteRecordAdapter implements StackRecordAdapter {
   readonly capabilities: AdapterCapabilities = {
-    fullTextSearch: true,
-    contentFieldQuery: true,
-    nestedContentQuery: true,
-    contentPresenceQuery: true,
-    contentFieldSort: true,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-    maxAttachmentBytes: null,
-    maxContentBytes: null,
+    filter: {
+      content: 'path',
+      contentPresent: true,
+      search: true,
+    },
+    sort: {
+      fields: ['createdAt', 'updatedAt', 'version'],
+      contentField: true,
+    },
+    limits: {
+      attachmentBytes: null,
+      contentBytes: null,
+    },
   };
 
   ownerEntityId!: string;

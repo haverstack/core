@@ -64,13 +64,9 @@ const DISCOVERY = {
   entityId: 'entity-owner-123',
   timezone: 'UTC',
   capabilities: {
-    fullTextSearch: true,
-    contentFieldQuery: true,
-    nestedContentQuery: true,
-    contentPresenceQuery: true,
-    contentFieldSort: true,
-    sortableFields: ['createdAt', 'updatedAt', 'version'],
-    maxAttachmentBytes: 52428800,
+    filter: { content: 'path', contentPresent: true, search: true },
+    sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+    limits: { attachmentBytes: 52428800 },
   },
 };
 
@@ -279,7 +275,10 @@ describe('createRecord fixtures', () => {
 describe('queryRecords fixtures', () => {
   const NATIVE_ONLY_DISCOVERY = {
     ...DISCOVERY,
-    capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    capabilities: {
+      ...DISCOVERY.capabilities,
+      filter: { ...DISCOVERY.capabilities.filter, content: 'none' },
+    },
   };
 
   for (const fixture of queryRecordsFixtures.filter((f) => f.method === 'POST')) {

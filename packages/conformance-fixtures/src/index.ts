@@ -104,14 +104,19 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       timezone: 'America/New_York',
       capabilities: {
-        fullTextSearch: true,
-        contentFieldQuery: true,
-        nestedContentQuery: true,
-        contentPresenceQuery: true,
-        contentFieldSort: true,
-        sortableFields: ['createdAt', 'updatedAt', 'version'],
-        maxAttachmentBytes: 52428800,
-        maxContentBytes: 1048576,
+        filter: {
+          content: 'path',
+          contentPresent: true,
+          search: true,
+        },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: true,
+        },
+        limits: {
+          attachmentBytes: 52428800,
+          contentBytes: 1048576,
+        },
       },
     },
   },
@@ -128,14 +133,19 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        fullTextSearch: false,
-        contentFieldQuery: false,
-        nestedContentQuery: false,
-        contentPresenceQuery: false,
-        contentFieldSort: false,
-        sortableFields: ['createdAt'],
-        maxAttachmentBytes: null,
-        maxContentBytes: null,
+        filter: {
+          content: 'none',
+          contentPresent: false,
+          search: false,
+        },
+        sort: {
+          fields: ['createdAt'],
+          contentField: false,
+        },
+        limits: {
+          attachmentBytes: null,
+          contentBytes: null,
+        },
       },
     },
   },
@@ -155,14 +165,19 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        fullTextSearch: true,
-        contentFieldQuery: true,
-        nestedContentQuery: true,
-        contentPresenceQuery: true,
-        contentFieldSort: true,
-        sortableFields: ['createdAt', 'updatedAt', 'version'],
-        maxAttachmentBytes: 52428800,
-        maxContentBytes: 1048576,
+        filter: {
+          content: 'path',
+          contentPresent: true,
+          search: true,
+        },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: true,
+        },
+        limits: {
+          attachmentBytes: 52428800,
+          contentBytes: 1048576,
+        },
       },
       auth: { methods: ['did-challenge'] },
     },
@@ -182,14 +197,19 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        fullTextSearch: true,
-        contentFieldQuery: true,
-        nestedContentQuery: true,
-        contentPresenceQuery: true,
-        contentFieldSort: true,
-        sortableFields: ['createdAt', 'updatedAt', 'version'],
-        maxAttachmentBytes: 52428800,
-        maxContentBytes: 1048576,
+        filter: {
+          content: 'path',
+          contentPresent: true,
+          search: true,
+        },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: true,
+        },
+        limits: {
+          attachmentBytes: 52428800,
+          contentBytes: 1048576,
+        },
       },
       auth: { methods: ['did-challenge'] },
       changes: { transports: ['sse'], resume: true, records: true },
@@ -209,14 +229,19 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        fullTextSearch: false,
-        contentFieldQuery: false,
-        nestedContentQuery: false,
-        contentPresenceQuery: false,
-        contentFieldSort: false,
-        sortableFields: ['createdAt'],
-        maxAttachmentBytes: null,
-        maxContentBytes: null,
+        filter: {
+          content: 'none',
+          contentPresent: false,
+          search: false,
+        },
+        sort: {
+          fields: ['createdAt'],
+          contentField: false,
+        },
+        limits: {
+          attachmentBytes: null,
+          contentBytes: null,
+        },
       },
       changes: { transports: ['sse'], resume: false, records: false },
     },
@@ -533,7 +558,7 @@ export const queryRecordsFixtures: ConformanceFixture<
   {
     name: 'query-get-records-uses-the-same-envelope',
     description:
-      'GET /records — the native-field query endpoint a server without contentFieldQuery ' +
+      'GET /records — the native-field query endpoint a server reaching no content ' +
       'exposes — returns the identical envelope, including the same total and cursor rules. ' +
       'The two endpoints differ in what they can filter by, not in what they return.',
     method: 'GET',
@@ -552,8 +577,8 @@ export const queryRecordsFixtures: ConformanceFixture<
       'filter value cannot ask, since a value matches what is there rather than whether ' +
       'anything is. Its counterpart is a null content filter, which matches "no value at the ' +
       'path, or a value that is null". Both are element-wise through arrays, so a path holding ' +
-      'both a null and a value satisfies each. A server declaring contentFieldQuery does NOT ' +
-      'thereby promise presence: it needs contentPresenceQuery, or it MUST refuse the filter ' +
+      'both a null and a value satisfies each. A server declaring a content reach does NOT ' +
+      'thereby promise presence: it needs filter.contentPresent, or it MUST refuse the filter ' +
       'rather than return the superset that ignoring it produces. ' +
       'See docs/spec/data-model.md § Filter.',
     method: 'POST',
@@ -1582,9 +1607,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       "A record body exceeding the server's request-size limit returns 413 with code " +
       '"payload_too_large" — the same code and class as an oversized attachment upload, since a ' +
-      'client acts on both identically. maxAttachmentBytes bounds attachment bytes only: a ' +
+      'client acts on both identically. limits.attachmentBytes bounds attachment bytes only: a ' +
       "record body and a PATCH body have no ceiling in core, so this one is the server's to " +
-      'set and to state (as maxContentBytes in discovery, letting Stack.create()/update() ' +
+      'set and to state (as limits.contentBytes in discovery, letting Stack.create()/update() ' +
       'pre-check rather than burn the round trip). The body below stands in for one that ' +
       'exceeds the limit; the fixture pins the error shape, not a specific size. See ' +
       'docs/spec/wire-format.md § Request size limits.',
@@ -2311,7 +2336,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
     name: 'attachment-upload-payload-too-large',
     description:
       "A body exceeding the server's configured MAX_ATTACHMENT_BYTES ceiling " +
-      '(exposed ahead of time as maxAttachmentBytes in discovery — see docs/spec/wire-format.md § Discovery) ' +
+      '(exposed ahead of time as limits.attachmentBytes in discovery — see docs/spec/wire-format.md § Discovery) ' +
       'returns 413 with code "payload_too_large" — reconstructed client-side as ' +
       'StackPayloadTooLargeError. 413 is unambiguous (no other wire code shares it), so this is ' +
       'also recoverable from status alone when the response has no parseable body — e.g. a ' +

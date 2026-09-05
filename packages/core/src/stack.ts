@@ -569,38 +569,47 @@ export class StackQueryError extends StackError {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<
-    StackFeatures,
-    'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery' | 'contentPresenceQuery'
-  >,
+  capabilities: Pick<StackFeatures, 'filter'>,
 ): void {
-  if (filter?.search && !capabilities.fullTextSearch) {
+  const { content: reach, contentPresent, search } = capabilities.filter;
+  if (filter?.search && !search) {
     throw new StackQueryError(
-      'Query uses filter.search, but this adapter does not declare the fullTextSearch capability.',
+      'Query uses filter.search, but this adapter does not declare the filter.search capability.',
     );
   }
   const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
   if (!filter?.content && !present) return;
-  if (!capabilities.contentFieldQuery) {
+  if (reach === 'none') {
     throw new StackQueryError(
       `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
-        'but this adapter does not declare the contentFieldQuery capability.',
+        'but this adapter declares filter.content: "none".',
     );
   }
-  if (present && !capabilities.contentPresenceQuery) {
+  if (present && !contentPresent) {
     throw new StackQueryError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
-        'contentPresenceQuery capability.',
+        'filter.contentPresent capability.',
     );
   }
   for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
-    if (parseContentFilterKey(key).length > 1 && !capabilities.nestedContentQuery) {
+    if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
       throw new StackQueryError(
-        `Query uses the nested content path "${key}", but this adapter does not declare ` +
-          'the nestedContentQuery capability.',
+        `Query uses the nested content path "${key}", but this adapter declares ` +
+          `filter.content: "${reach}".`,
       );
     }
   }
+}
+
+/**
+ * Whether a single-segment content filter can be pushed down to the
+ * adapter. Callers that read a content field pair this with an in-memory
+ * predicate over the wider result, so the query stays correct against an
+ * adapter that reaches no content at all — the rung comparison lives here
+ * rather than at each of them.
+ */
+function filtersContent(features: Pick<StackFeatures, 'filter'>): boolean {
+  return features.filter.content !== 'none';
 }
 
 /** The longest path both SQLite engines can execute — see the spec link below. */
@@ -692,22 +701,22 @@ export function assertValidSort(sort: QuerySort | undefined): void {
  */
 export function assertSortCapability(
   sort: QuerySort | undefined,
-  capabilities: Pick<StackFeatures, 'contentFieldSort' | 'sortableFields'>,
+  capabilities: Pick<StackFeatures, 'sort'>,
 ): void {
   if (!sort) return;
   if (sort.contentField !== undefined) {
-    if (!capabilities.contentFieldSort) {
+    if (!capabilities.sort.contentField) {
       throw new StackQueryError(
-        'Query uses sort.contentField, but this adapter does not declare the contentFieldSort ' +
+        'Query uses sort.contentField, but this adapter does not declare the sort.contentField ' +
           'capability.',
       );
     }
     return;
   }
   const field = sort.field ?? 'createdAt';
-  if (!capabilities.sortableFields.includes(field)) {
+  if (!capabilities.sort.fields.includes(field)) {
     throw new StackQueryError(
-      `Query sorts by "${field}", which this adapter does not declare in sortableFields.`,
+      `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
     );
   }
 }
@@ -796,8 +805,8 @@ export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void
 
 /**
  * Thrown when an attachment upload exceeds the adapter's declared
- * `maxAttachmentBytes` ceiling — checked client-side before any bytes are
- * sent; a server still enforces 413 authoritatively regardless. See
+ * `limits.attachmentBytes` ceiling — checked client-side before any bytes
+ * are sent; a server still enforces 413 authoritatively regardless. See
  * docs/spec/wire-format.md § Attachments.
  */
 export class StackPayloadTooLargeError extends StackError {
@@ -832,17 +841,17 @@ export class StackTimeoutError extends StackError {
 }
 
 /** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
-function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | null): void {
-  if (maxAttachmentBytes !== null && byteLength > maxAttachmentBytes) {
+function assertAttachmentSize(byteLength: number, attachmentBytes: number | null): void {
+  if (attachmentBytes !== null && byteLength > attachmentBytes) {
     throw new StackPayloadTooLargeError(
-      `Attachment (${byteLength} bytes) exceeds the ${maxAttachmentBytes}-byte limit.`,
+      `Attachment (${byteLength} bytes) exceeds the ${attachmentBytes}-byte limit.`,
     );
   }
 }
 
 /**
  * The content half of the same pre-check, on Stack.create() and
- * Stack.update(). Local adapters declare `maxContentBytes: null` and skip
+ * Stack.update(). Local adapters declare `limits.contentBytes: null` and skip
  * the serialization entirely; only a server declares a ceiling, and its
  * own request-size limit stays authoritative — this just spares an app the
  * round trip and gives it a typed failure instead of a 413 it has to
@@ -850,14 +859,14 @@ function assertAttachmentSize(byteLength: number, maxAttachmentBytes: number | n
  */
 function assertContentSize(
   content: Record<string, unknown>,
-  maxContentBytes: number | null,
+  contentBytes: number | null,
   what: 'Content' | 'Patch',
 ): void {
-  if (maxContentBytes === null) return;
+  if (contentBytes === null) return;
   const byteLength = new TextEncoder().encode(JSON.stringify(content)).length;
-  if (byteLength > maxContentBytes) {
+  if (byteLength > contentBytes) {
     throw new StackPayloadTooLargeError(
-      `${what} (${byteLength} bytes) exceeds the ${maxContentBytes}-byte limit.`,
+      `${what} (${byteLength} bytes) exceeds the ${contentBytes}-byte limit.`,
     );
   }
 }
@@ -1224,7 +1233,7 @@ async function findFirstMatch(
 async function lookupEntityByDid(
   run: (query: StackQuery) => Promise<QueryResult>,
   did: EntityId,
-  contentFieldQuery: boolean,
+  canFilterContent: boolean,
   includeUnlisted: boolean,
 ): Promise<StackRecord | null> {
   const record = await findFirstMatch(
@@ -1234,7 +1243,7 @@ async function lookupEntityByDid(
         baseId: SYSTEM_TYPES.ENTITY,
         includeDeleted: true,
         ...(includeUnlisted && { includeUnlisted: true }),
-        ...(contentFieldQuery && { content: { did } }),
+        ...(canFilterContent && { content: { did } }),
       },
     },
     (r) => (r.content as EntityContent).did === did,
@@ -1332,7 +1341,7 @@ export class Stack implements StackClient {
 
   /**
    * Idempotent bootstrap for StackOptions.ownerProfile. Filters by family
-   * only (contentFieldQuery is capability-gated) and matches `content.did`
+   * only (content filtering is capability-gated) and matches `content.did`
    * in memory, cursor-walking so an owner card past page one isn't missed
    * and duplicated. The probe must be blind to nothing the binding rules
    * see, or it mints a card they then refuse and the stack won't open with
@@ -1357,7 +1366,7 @@ export class Stack implements StackClient {
   }
 
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid((q) => this.query(q), did, this.features.contentFieldQuery, true);
+    return lookupEntityByDid((q) => this.query(q), did, filtersContent(this.features), true);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {
@@ -1685,7 +1694,7 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
-    assertContentSize(content, this.features.maxContentBytes, 'Content');
+    assertContentSize(content, this.features.limits.contentBytes, 'Content');
 
     if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
@@ -1839,7 +1848,7 @@ export class Stack implements StackClient {
 
     // The patch is what travels, so the patch is what's measured — a small
     // patch against a large record is not an oversized request.
-    assertContentSize(content, this.features.maxContentBytes, 'Patch');
+    assertContentSize(content, this.features.limits.contentBytes, 'Patch');
 
     // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
     const merged = applyMergePatch(existing.content, content);
@@ -2293,7 +2302,7 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
-    assertContentSize(content, this.features.maxContentBytes, 'Content');
+    assertContentSize(content, this.features.limits.contentBytes, 'Content');
 
     const fromFamily = baseIdOf(existing.typeId);
     const toFamily = baseIdOf(toTypeId);
@@ -2449,7 +2458,7 @@ export class Stack implements StackClient {
           baseId: family,
           includeDeleted: true,
           includeUnlisted: true,
-          ...(this.features.contentFieldQuery && { content: { [field]: value } }),
+          ...(filtersContent(this.features) && { content: { [field]: value } }),
         },
       },
       (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
@@ -2620,7 +2629,7 @@ export class Stack implements StackClient {
     appId?: AppId,
   ): Promise<StackRecord & { content: AttachmentContent }> {
     this.assertOpen();
-    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
+    assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       // The metadata record is written inside the adapter, so create()
       // never sees it and this is the only place it can be announced.
@@ -2667,7 +2676,7 @@ export class Stack implements StackClient {
         baseId: SYSTEM_TYPES.ATTACHMENT,
         includeDeleted: true,
         includeUnlisted: true,
-        ...(this.features.contentFieldQuery && { content: { fileId } }),
+        ...(filtersContent(this.features) && { content: { fileId } }),
       },
     });
     return results
@@ -3853,7 +3862,7 @@ export class ScopedStack implements StackClient {
 
     if (this.subjectEntityId === this.stack.ownerEntityId) return true;
 
-    return this.stack.features.contentFieldQuery
+    return filtersContent(this.stack.features)
       ? (
           await this.stack.query({
             filter: {
@@ -4059,7 +4068,7 @@ export class ScopedStack implements StackClient {
     return lookupEntityByDid(
       (q) => this.query(q),
       did,
-      this.stack.features.contentFieldQuery,
+      filtersContent(this.stack.features),
       this.ownerActingAlone,
     );
   }
@@ -4194,7 +4203,7 @@ export class ScopedStack implements StackClient {
           baseId: SYSTEM_TYPES.APP,
           includeDeleted: true,
           includeUnlisted: true,
-          ...(this.stack.features.contentFieldQuery && {
+          ...(filtersContent(this.stack.features) && {
             content: { did: this.principalEntityId },
           }),
         },
@@ -4463,7 +4472,7 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
     await this.requireAppIdMatchesPrincipal(appId);
-    assertAttachmentSize(data.byteLength, this.features.maxAttachmentBytes);
+    assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
     const fileId = await this.adapter.putAttachment(data);
     return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
