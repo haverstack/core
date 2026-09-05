@@ -3658,6 +3658,132 @@ describe('putAttachment — returned record', () => {
 // a conflicting later upload is rejected rather than silently coexisting.
 // -------------------------------------------------------
 
+// -------------------------------------------------------
+// Stack.getAttachmentRecords: the candidate set a download's metadata
+// comes from — family-wide, including soft-deleted and unlisted records.
+// -------------------------------------------------------
+
+/** The `_attachment@1` schema plus one added field, for migrating a record into `_attachment@2`. */
+const defineAttachmentV2 = (s: Stack): Promise<unknown> =>
+  s.defineType('_attachment@2', 'Attachment', {
+    fileId: { kind: 'string', required: true },
+    mimeType: { kind: 'string', required: true },
+    size: { kind: 'number', required: true },
+    filename: { kind: 'string' },
+    caption: { kind: 'string' },
+  });
+
+describe('Stack.getAttachmentRecords', () => {
+  test('returns an empty array for a fileId with no metadata records', async () => {
+    expect(await stack.getAttachmentRecords('no-such-file')).toEqual([]);
+  });
+
+  test('returns only the records for the requested fileId', async () => {
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'wanted.png');
+    await stack.putAttachment(new Uint8Array([2]), 'image/png', 'other.png');
+
+    const records = await stack.getAttachmentRecords(fileId);
+    expect(records.map((r) => r.content.filename)).toEqual(['wanted.png']);
+  });
+
+  // Sorted, so records[0] is the record that establishes the mimeType and
+  // a caller composing with firstRecordedAttachment() never re-sorts.
+  test('orders by earliest createdAt, ties broken by the lower id', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await adapter.putAttachment(data);
+    const sameInstant = new Date('2024-01-01T00:00:00.000Z');
+    const meta = (id: string, createdAt: Date): StackRecord => ({
+      id,
+      typeId: '_attachment@1',
+      createdAt,
+      updatedAt: createdAt,
+      content: { fileId, mimeType: 'image/png', size: 3 },
+      version: 1,
+    });
+    // Created out of order, so a scan-order-dependent result would differ.
+    await adapter.createRecord(meta('1hk153x00003', new Date('2024-06-01T00:00:00.000Z')));
+    await adapter.createRecord(meta('1hk153x00002', sameInstant));
+    await adapter.createRecord(meta('1hk153x00001', sameInstant));
+
+    const records = await stack.getAttachmentRecords(fileId);
+    expect(records.map((r) => r.id)).toEqual(['1hk153x00001', '1hk153x00002', '1hk153x00003']);
+    expect(records[0].id).toBe(firstRecordedAttachment(records)?.id);
+  });
+
+  test('includes a record migrated to a later version of the family', async () => {
+    const {
+      id,
+      content: { fileId, mimeType, size },
+    } = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'cover.png');
+    await defineAttachmentV2(stack);
+    await stack.commitMigration(id, '_attachment@2', {
+      fileId,
+      mimeType,
+      size,
+      filename: 'cover.png',
+      caption: 'a cover',
+    });
+
+    const records = await stack.getAttachmentRecords(fileId);
+    expect(records.map((r) => r.typeId)).toEqual(['_attachment@2']);
+  });
+
+  test('includes soft-deleted and unlisted records', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const fileId = await adapter.putAttachment(data);
+    const live = await stack.create('_attachment@1', {
+      fileId,
+      mimeType: 'image/png',
+      size: 3,
+      filename: 'live.png',
+    });
+    const soft = await stack.create('_attachment@1', {
+      fileId,
+      mimeType: 'image/png',
+      size: 3,
+      filename: 'soft.png',
+    });
+    await stack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'image/png', size: 3, filename: 'unlisted.png' },
+      { unlisted: true },
+    );
+    await stack.delete(soft.id);
+
+    const records = await stack.getAttachmentRecords(fileId);
+    expect(records.map((r) => r.content.filename).sort()).toEqual([
+      'live.png',
+      'soft.png',
+      'unlisted.png',
+    ]);
+    expect(records.some((r) => r.id === live.id)).toBe(true);
+  });
+
+  // IncapableMemoryAdapter declares contentFieldQuery: false, so this
+  // exercises the in-memory filter and the cursor walk rather than the
+  // content-filtered query a compliant local adapter takes.
+  test('finds a record past the first page on an adapter without contentFieldQuery', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    for (let i = 0; i < 55; i++) {
+      await incapableStack.create('_attachment@1', {
+        fileId: `filler-${i}`,
+        mimeType: 'image/png',
+        size: 1,
+      });
+    }
+    const {
+      content: { fileId },
+    } = await incapableStack.putAttachment(new Uint8Array([9, 9, 9]), 'text/markdown', 'late.md');
+
+    const records = await incapableStack.getAttachmentRecords(fileId);
+    expect(records.map((r) => r.content.filename)).toEqual(['late.md']);
+  });
+});
+
 describe('_attachment@1 mimeType conflict on create', () => {
   test('second upload of identical bytes with a matching mimeType succeeds', async () => {
     const data = new Uint8Array([1, 2, 3]);
@@ -3725,6 +3851,19 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await expect(incapableStack.putAttachment(data, 'text/plain')).rejects.toThrow(
       StackValidationError,
     );
+  });
+
+  test('a record migrated to a later family version still establishes the mimeType', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const {
+      id,
+      content: { fileId, size },
+    } = await stack.putAttachment(data, 'text/markdown');
+    await defineAttachmentV2(stack);
+    await stack.commitMigration(id, '_attachment@2', { fileId, mimeType: 'text/markdown', size });
+
+    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+    await expect(stack.putAttachment(data, 'text/markdown')).resolves.toBeDefined();
   });
 
   test('a soft-deleted earlier record still establishes the mimeType', async () => {
@@ -4000,17 +4139,36 @@ describe('deleteAttachment', () => {
     await expect(stack.deleteAttachment(fileId)).resolves.toBeUndefined();
   });
 
+  test('purges metadata records across the whole _attachment family', async () => {
+    const {
+      id,
+      content: { fileId, mimeType, size },
+    } = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    await defineAttachmentV2(stack);
+    await stack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
+
+    await stack.deleteAttachment(fileId);
+
+    const left = await stack.query({
+      filter: { baseId: '_attachment', includeDeleted: true, includeUnlisted: true },
+    });
+    expect(left.records).toEqual([]);
+    await expect(stack.getAttachment(fileId)).rejects.toThrow(StackNotFoundError);
+  });
+
   test('prefers the adapter atomic path over the fallback when the adapter implements it', async () => {
     const calls: string[] = [];
     class AtomicAdapter extends MemoryAdapter {
       async deleteUnreferencedAttachmentRecords(
         fileId: string,
-        metadataTypeId: string,
+        metadataTypeIds: string[],
       ): Promise<StackRecord[]> {
         calls.push('atomic');
+        calls.push(...metadataTypeIds);
         const toDelete = [...this.records.values()].filter(
           (r) =>
-            r.typeId === metadataTypeId && (r.content as Record<string, unknown>).fileId === fileId,
+            metadataTypeIds.includes(r.typeId) &&
+            (r.content as Record<string, unknown>).fileId === fileId,
         );
         for (const r of toDelete) {
           this.records.delete(r.id);
@@ -4029,7 +4187,9 @@ describe('deleteAttachment', () => {
     } = await atomicStack.putAttachment(new Uint8Array([9]), 'image/png');
     await atomicStack.deleteAttachment(fileId);
 
-    expect(calls).toEqual(['atomic']);
+    // The family, not just @1 — core resolves the baseId so the adapter
+    // never has to.
+    expect(calls).toEqual(['atomic', '_attachment@1']);
   });
 });
 
@@ -4179,6 +4339,28 @@ describe('collectAttachmentGarbage', () => {
     const {
       content: { fileId },
     } = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+
+    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+
+    expect(result.deleted).toEqual([fileId]);
+  });
+
+  // Without listFiles() the sweep's only way to discover a file is its
+  // metadata, so a record migrated past @1 must still be found — otherwise
+  // its bytes are unreachable by any sweep.
+  test('finds a file whose only metadata record is in a later family version', async () => {
+    class NoListFilesAdapter extends MemoryAdapter {
+      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+    }
+    const noListFilesStack = await Stack.create(
+      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    const {
+      id,
+      content: { fileId, mimeType, size },
+    } = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+    await defineAttachmentV2(noListFilesStack);
+    await noListFilesStack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
 

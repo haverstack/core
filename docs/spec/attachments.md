@@ -11,7 +11,10 @@ const record = await stack.putAttachment(data: Uint8Array, mimeType: string, fil
 // Fetch the binary
 const data: Uint8Array = await stack.getAttachment(record.content.fileId)
 
-// Delete the binary and its _attachment@1 metadata record(s)
+// Every metadata record describing those bytes, earliest-recorded first
+const meta = await stack.getAttachmentRecords(record.content.fileId)
+
+// Delete the binary and its _attachment metadata record(s)
 // Throws StackConflictError if any record still references the file
 await stack.deleteAttachment(fileId)
 ```
@@ -35,20 +38,7 @@ The optional `appId` is stamped onto that record, so an upload is attributable t
 
 **`putAttachment()` returns the record it created**, matching what `POST /attachments` returns on the wire — the uploader's own metadata record is never something they have to go looking for. The `id` is the part that matters: `filename` is the only mutable field on an `_attachment@1` record, and setting it later needs an id. Without this, every caller wanting one would have to query by `fileId` and disambiguate among the several records a shared `fileId` can have.
 
-To read metadata for a `fileId` uploaded by _someone else_, query `_attachment@1` records — note that a `fileId` may have several, one per upload:
-
-```ts
-const results = await stack.query({
-  filter: {
-    typeId: '_attachment@1',
-    content: { fileId },
-  },
-  limit: 1,
-});
-const meta = results.records[0]?.content as AttachmentContent | undefined;
-```
-
-**`mimeType` is a property of the `fileId`, not the uploader's perspective.** The first `_attachment@1` record created for a given `fileId` establishes its `mimeType`; this is the value later served as `Content-Type` when no override is given (see [Wire format § Attachments](./wire-format.md#attachments)). A later upload of the same bytes is free to declare a matching `mimeType` — it creates its own record with its own `filename` and `entityId`, same as always — but a **conflicting `mimeType` is rejected with `StackValidationError` (422)** rather than stored: a contradictory claim (one uploader's `image/png` against another's `text/html` for byte-identical content) should not survive in the data to confuse the next reader or a downstream cache. `filename` has no such rule — it stays per-uploader, and the requester's own record's `filename` is what's served to them on download.
+**`mimeType` is a property of the `fileId`, not the uploader's perspective.** The first `_attachment` record created for a given `fileId` establishes its `mimeType`; this is the value later served as `Content-Type` when no override is given (see [Wire format § Attachments](./wire-format.md#attachments)). A later upload of the same bytes is free to declare a matching `mimeType` — it creates its own record with its own `filename` and `entityId`, same as always — but a **conflicting `mimeType` is rejected with `StackValidationError` (422)** rather than stored: a contradictory claim (one uploader's `image/png` against another's `text/html` for byte-identical content) should not survive in the data to confuse the next reader or a downstream cache. `filename` has no such rule — it stays per-uploader, and the requester's own record's `filename` is what's served to them on download.
 
 **The rejection is best-effort; the resolution is not.** The check reads the existing records for the `fileId` and then writes, with no storage-level uniqueness constraint behind it, so two conflicting _first_ uploads racing on a concurrent server can both find nothing and both land. Unreachable in a single-process embedded Stack, reachable on a server. What that does **not** cost is determinism: "first-recorded" is a total order over the stored records — earliest `createdAt`, ties broken by the lower record `id` — so every reader resolving the served `Content-Type` picks the same record whether one conflicting record exists or two. Core applies the same order when deciding what a write conflicts with, so its rejection and a server's serving choice agree.
 
@@ -56,20 +46,37 @@ A lost race therefore leaves a contradiction in the data, not an exploitable one
 
 **Once created, an `_attachment@1` record's `fileId`, `size`, and `mimeType` are immutable — `filename` is the only field `update()` may change.** `fileId` and `size` describe the bytes themselves, so any attempted change is rejected (`StackValidationError`, 422). `mimeType` was already pinned to the `fileId`'s established type at create time, so `update()` rejects any patch that touches it at all, including one that restates the same value. To correct a wrongly-declared type, delete the attachment and re-upload: identical bytes hash to the same `fileId`, and the fresh first record establishes the corrected type.
 
+### Finding a `fileId`'s metadata records
+
+To read metadata for a `fileId` uploaded by _someone else_ — a download's filename and mime type, say — use `Stack.getAttachmentRecords(fileId)`, which returns every record describing the file:
+
+```ts
+const records = await stack.getAttachmentRecords(fileId);
+const meta = records[0]?.content; // the record that establishes the mimeType
+```
+
+**The candidate set is family-wide and includes soft-deleted and unlisted records.** Every record whose `baseId` is `_attachment` counts, not only `_attachment@1`: a record migrated to a later version of the family still describes the file, and uniqueness, immutability, and reference rules are all enforced across the family. Soft-deleted and unlisted records count too, for the reason they count as references — an unlisted record is hidden from enumeration, not from reach, and a soft-deleted one must find its attachments intact on `undelete()`.
+
+The result is sorted in the [first-recorded total order](#the-attachment-record-type), so `records[0]` is the record that establishes the `mimeType` and a caller composing with `firstRecordedAttachment()` never re-sorts. A caller narrowing the set first — the download route preferring the requester's own `filename`, for instance — passes what's left to `firstRecordedAttachment()` and gets the same rule applied to the narrower set.
+
+**The lookup is unscoped, and lives on `Stack` rather than `StackClient` for that reason.** By the time a download reads this metadata, `ScopedStack.getAttachment()` has already granted or denied the bytes; what remains is presentation for a decision that is over. A requester who reached the bytes through a grant on a record referencing the file may not be able to read the `_attachment` record itself, so scoping the lookup would impose a second, different permission check and silently drop the filename and mime type they are entitled to. That is a wrong answer that looks like a narrower correct one, which is why the scoped form does not exist to be reached by autocomplete.
+
+The distinction generalizes: a lookup answering a question the caller asks **on their own behalf** belongs on `StackClient` and stays scoped (`getEntityByDid()`); one answering a question **about a decision already made** stays on `Stack`.
+
 ## `Stack` vs `ScopedStack` methods
 
 - `Stack.putAttachment(data, mimeType, filename?, appId?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.
 - `ScopedStack.putAttachment(data, mimeType, filename?, appId?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `entityId` is the subject, and `principalId` the authenticated principal when the two differ — stamped exactly as `ScopedStack.create()` does (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)).
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves and it hasn't been associated with a record yet. Throws `StackPermissionError` otherwise. A referencing record that is [unlisted](./unlisted.md) counts exactly as a listed one does: unlisted governs enumeration, not reach, and the requester's ability to read the record is what the clause turns on.
-- `Stack.deleteAttachment(fileId)` — deletes bytes and all `_attachment@1` metadata records for the file (including soft-deleted ones). See [Deleting attachments](#deleting-attachments).
+- `Stack.deleteAttachment(fileId)` — deletes bytes and every `_attachment` metadata record for the file, family-wide and including soft-deleted and unlisted ones. See [Deleting attachments](#deleting-attachments).
 - `ScopedStack.deleteAttachment(fileId)` — owner only. Throws `StackPermissionError` for non-owners. Delegates to `Stack.deleteAttachment()`.
 
 ## Deleting attachments
 
 `deleteAttachment(fileId)` throws `StackConflictError` if any record — **live or soft-deleted** — still references the file, either via an `attachment` Association or via a top-level `file-ref` content field (see [Types](./data-model.md#types)). A soft-deleted record is recoverable via `undelete()` and must find its attachments intact, so it counts as a reference exactly like a live one. Throws `StackNotFoundError` if the file doesn't exist.
 
-**Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
+**Atomicity of the reference check.** The reference check and the metadata-record deletes must happen as one unit — otherwise a concurrent `associate()` can add a new reference in the gap between them, leaving a dangling association after the delete completes. Adapters MAY implement `StackRecordAdapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds)` to close this race (`Stack.deleteAttachment()` uses it when present, falling back to a non-atomic check-then-act sequence otherwise). `metadataTypeIds` is the resolved `_attachment` family: core turns the `baseId` into concrete typeIds before the call, so an adapter never needs a family concept of its own — the same split `query()` makes for `filter.baseId`. Byte deletion always happens after the metadata step commits: a crash in between leaves orphaned bytes, which is harmless and later reclaimed by garbage collection, rather than a dangling reference, which is not.
 
 ## Creating `_attachment@1` records directly
 
@@ -94,7 +101,7 @@ stack.collectAttachmentGarbage(opts?: {
 
 **What counts as garbage:** a file is collectable only when _no_ record — live or soft-deleted — references it via an `attachment` Association or a `file-ref` content field. This is the same reference definition `deleteAttachment()` uses, and the same recoverability principle: nothing reachable from a soft-deleted (undelete-able) state gets destroyed.
 
-**`_attachment@1` metadata records never themselves count as references** — otherwise nothing would ever be garbage — but a file's _newest_ metadata record (or, for bare bytes with no metadata record at all, the blob's own storage timestamp) must be older than `graceMs` to be collected. This protects the legitimate upload-then-associate window: a file just uploaded and not yet attached to anything is not yet garbage, just new.
+**`_attachment` metadata records never themselves count as references** — otherwise nothing would ever be garbage — but a file's _newest_ metadata record — family-wide, as everywhere else — (or, for bare bytes with no metadata record at all, the blob's own storage timestamp) must be older than `graceMs` to be collected. This protects the legitimate upload-then-associate window: a file just uploaded and not yet attached to anything is not yet garbage, just new.
 
 **Bare-bytes orphans** — bytes with no `_attachment@1` record at all (a `putAttachment()` that stored bytes on a non-atomic adapter but crashed before writing metadata) — are only discoverable by enumerating the blob store directly, via the optional `StackBlobAdapter.listFiles()` capability (see [Adapters](./adapters.md)). An adapter that doesn't implement it still gets full protection for the common case (metadata-tracked files with no remaining reference); it simply can't find this rarer orphan class.
 

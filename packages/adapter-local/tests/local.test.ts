@@ -256,10 +256,9 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
-      'file-1',
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [
       'com.example.test/_attachment@1',
-    );
+    ]);
     expect(deleted.map((r) => r.id)).toEqual(['meta1']);
     expect(await adapter.getRecord('meta1')).toBeNull();
   });

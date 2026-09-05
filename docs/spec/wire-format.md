@@ -477,7 +477,7 @@ One consequence: there is no bytes-only upload anywhere on the wire — this end
 
 ### Download
 
-Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment@1` database lookup entirely:
+Two optional query parameters control the response metadata and, when both are supplied, allow the server to skip the `_attachment` metadata lookup entirely:
 
 | Parameter      | Effect                                                                                                                               |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -492,7 +492,7 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 
 1. `?contentType`, if given.
 2. Extension inference from `?filename`, if given and the extension is recognized.
-3. The **first-recorded** `mimeType` on an `_attachment@1` record for the file — the record with the earliest `createdAt`, ties broken by the lower record `id`. That total order is what makes the served type deterministic regardless of how many records exist for the `fileId` or which requester is asking; a conflicting `mimeType` is rejected when a write detects it, but under concurrency two conflicting first-writes can both land, and this rule still names one winner (see [Attachments](./attachments.md#the-_attachment-record-type)).
+3. The **first-recorded** `mimeType` on an `_attachment` record for the file — the record with the earliest `createdAt`, ties broken by the lower record `id`. That total order is what makes the served type deterministic regardless of how many records exist for the `fileId` or which requester is asking; a conflicting `mimeType` is rejected when a write detects it, but under concurrency two conflicting first-writes can both land, and this rule still names one winner (see [Attachments](./attachments.md#the-_attachment-record-type)). The records it orders are the ones [`getAttachmentRecords()`](./attachments.md#finding-a-fileids-metadata-records) returns — family-wide, soft-deleted and unlisted included, and unscoped, since the access decision this metadata describes has already been made by the time it is read.
 4. `application/octet-stream`, if none of the above apply.
 
 **Dangerous-type forcing applies to the result of that resolution, not to whichever source produced it** — a server that forces only the `?contentType` case and leaves the other sources unguarded has a spec-conformance gap, not a defensible partial implementation. Compute the candidate first, _then_ apply the policy below to whatever came out:
@@ -508,7 +508,7 @@ The filename in `Content-Disposition` is taken from `?filename` if given, else t
 
 ### Delete
 
-Owner only. Returns `409 Conflict` if any record in the stack still references the file (via an `attachment` association or a `file-ref` content field). The bytes and all `_attachment@1` metadata records for the file are removed atomically on success.
+Owner only. Returns `409 Conflict` if any record in the stack still references the file (via an `attachment` association or a `file-ref` content field). The bytes and every `_attachment` metadata record for the file — family-wide — are removed atomically on success.
 
 ### Access
 

@@ -131,12 +131,25 @@ export function inferContentTypeFromFilename(filename: string): string | undefin
 export function firstRecordedAttachment<T extends { id: string; createdAt: Date }>(
   records: readonly T[],
 ): T | undefined {
-  return records.reduce<T | undefined>((first, record) => {
-    if (!first) return record;
-    const delta = record.createdAt.getTime() - first.createdAt.getTime();
-    if (delta !== 0) return delta < 0 ? record : first;
-    return record.id < first.id ? record : first;
-  }, undefined);
+  return records.reduce<T | undefined>(
+    (first, record) => (!first || compareRecordedAttachments(record, first) < 0 ? record : first),
+    undefined,
+  );
+}
+
+/**
+ * The same total order as a comparator, for a caller handing back the whole
+ * candidate set rather than the winner — sorted this way, the winner is
+ * element zero. Package-internal: `core/wire` exports the selection, since
+ * the ordering is only useful to something that already has every record.
+ */
+export function compareRecordedAttachments<T extends { id: string; createdAt: Date }>(
+  a: T,
+  b: T,
+): number {
+  const delta = a.createdAt.getTime() - b.createdAt.getTime();
+  if (delta !== 0) return delta;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 export type AttachmentDownloadContentType = {
