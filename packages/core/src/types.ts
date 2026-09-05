@@ -906,10 +906,14 @@ export interface StackRecordAdapter {
    * Throws StackConflictError if still referenced. Optional —
    * Stack.deleteAttachment() has a non-atomic fallback. See
    * docs/spec/attachments.md § Deleting attachments.
+   *
+   * `metadataTypeIds` is the resolved `_attachment` family, passed as
+   * concrete typeIds so an adapter never needs a baseId concept of its
+   * own — the same split Stack.query() makes for `filter.baseId`.
    */
   deleteUnreferencedAttachmentRecords?(
     fileId: FileId,
-    metadataTypeId: TypeId,
+    metadataTypeIds: TypeId[],
   ): Promise<StackRecord[]>;
 
   /**

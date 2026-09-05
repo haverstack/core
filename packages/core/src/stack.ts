@@ -47,7 +47,7 @@ import {
   validatePermissions,
 } from './access.js';
 import type { GroupRole } from './access.js';
-import { firstRecordedAttachment } from './attachment-download.js';
+import { compareRecordedAttachments } from './attachment-download.js';
 import {
   ChangeEmitter,
   RelayDelivery,
@@ -80,6 +80,7 @@ import type {
   GrantAction,
   GrantContent,
   AttachmentContent,
+  FileId,
   ConfigContent,
   EntityId,
   EntityContent,
@@ -2436,37 +2437,24 @@ export class Stack implements StackClient {
   /**
    * mimeType is a property of the fileId, not the uploader's perspective:
    * the first metadata record for a fileId fixes it, and a conflicting
-   * later upload is rejected. Cursor-walked so earlier records past page
-   * one are seen. See docs/spec/attachments.md § The `_attachment` record
-   * type.
+   * later upload is rejected. See docs/spec/attachments.md § The
+   * `_attachment` record type.
    *
    * Best-effort by construction — check-then-create with no storage-level
    * uniqueness behind it, so two racing first uploads can both land on a
-   * concurrent server. What survives that race is the *resolution*: which
-   * record establishes the type is firstRecordedAttachment()'s total
-   * order, the same one a server serving Content-Type applies, so both
-   * sides name the same winner however many records exist.
+   * concurrent server. What survives that race is the *resolution*:
+   * getAttachmentRecords() returns the candidates in the same total order
+   * a server serving Content-Type applies, so both sides name the same
+   * winner however many records exist.
    */
   private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
     const { fileId, mimeType } = content;
     if (typeof fileId !== 'string') return; // schema validation already rejected this
 
-    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
-    const results = await queryAllPages((q) => this.query(q), {
-      filter: {
-        typeId: metadataTypeId,
-        includeDeleted: true,
-        includeUnlisted: true,
-        ...(this.features.contentFieldQuery && { content: { fileId } }),
-      },
-    });
-    const existing = this.features.contentFieldQuery
-      ? results
-      : results.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+    const existing = await this.getAttachmentRecords(fileId);
     if (existing.length === 0) return;
 
-    const first = firstRecordedAttachment(existing)!;
-    const establishedMimeType = (first.content as AttachmentContent).mimeType;
+    const establishedMimeType = existing[0].content.mimeType;
     if (mimeType !== establishedMimeType) {
       // Deliberately does not name the established mimeType — that would
       // confirm a guessed fileId's content type. See the anti-oracle rule
@@ -2603,13 +2591,52 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Delete an attachment's bytes and its _attachment@1 metadata record(s).
-   * Throws StackConflictError if any record in the stack still references the file.
-   * Throws StackNotFoundError if neither metadata records nor bytes exist.
+   * Every `_attachment` record describing `fileId`, earliest-recorded
+   * first — so `records[0]` is the one that establishes the file's
+   * mimeType, and firstRecordedAttachment() is only needed by a caller
+   * narrowing the set further. See docs/spec/attachments.md § Finding a
+   * `fileId`'s metadata records.
+   *
+   * On `Stack` and not `StackClient`: the lookup answers a presentation
+   * question about an access decision already made, so a scoped version
+   * would impose a second, different permission check rather than a
+   * narrower correct answer.
+   */
+  async getAttachmentRecords(
+    fileId: FileId,
+  ): Promise<(StackRecord & { content: AttachmentContent })[]> {
+    this.assertOpen();
+    const results = await queryAllPages((q) => this.query(q), {
+      filter: {
+        baseId: SYSTEM_TYPES.ATTACHMENT,
+        includeDeleted: true,
+        includeUnlisted: true,
+        ...(this.features.contentFieldQuery && { content: { fileId } }),
+      },
+    });
+    return results
+      .filter((r) => (r.content as AttachmentContent).fileId === fileId)
+      .sort(compareRecordedAttachments) as (StackRecord & { content: AttachmentContent })[];
+  }
+
+  /**
+   * The `_attachment` family as concrete typeIds. Resolved here rather
+   * than in the adapter, which has no baseId concept of its own — see
+   * resolveBaseIdFilter().
+   */
+  private async attachmentTypeIds(): Promise<TypeId[]> {
+    const types = await this.adapter.listTypes();
+    return types.filter((t) => t.baseId === SYSTEM_TYPES.ATTACHMENT).map((t) => t.id);
+  }
+
+  /**
+   * Delete an attachment's bytes and every _attachment metadata record for
+   * it, family-wide. Throws StackConflictError if any record in the stack
+   * still references the file, StackNotFoundError if neither metadata
+   * records nor bytes exist.
    */
   async deleteAttachment(fileId: string, opts: ActorOptions = {}): Promise<void> {
     this.assertOpen();
-    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
     let deletedRecords: StackRecord[];
     if (this.adapter.deleteUnreferencedAttachmentRecords) {
       // Purged inside the adapter's own transaction, so these never reach
@@ -2617,18 +2644,14 @@ export class Stack implements StackClient {
       // hands back, which are the last copies that will ever exist.
       deletedRecords = await this.adapter.deleteUnreferencedAttachmentRecords(
         fileId,
-        metadataTypeId,
+        await this.attachmentTypeIds(),
       );
       const at = new Date();
       for (const record of deletedRecords) {
         this.emitChange('hard-delete', record, { actor: Stack.purgeActor(opts), at });
       }
     } else {
-      deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(
-        fileId,
-        metadataTypeId,
-        opts,
-      );
+      deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(fileId, opts);
     }
 
     if (!deletedRecords.length) {
@@ -2649,7 +2672,6 @@ export class Stack implements StackClient {
    */
   private async deleteUnreferencedAttachmentRecordsFallback(
     fileId: string,
-    metadataTypeId: string,
     opts: ActorOptions = {},
   ): Promise<StackRecord[]> {
     // A soft-deleted or unlisted record still counts as a reference — it
@@ -2663,20 +2685,9 @@ export class Stack implements StackClient {
       throw new StackConflictError('Attachment is still referenced by one or more records');
     }
 
-    // Cursor-walk with includeDeleted/includeUnlisted: metadata past page
-    // one, soft-deleted, or unlisted must be cleaned up too — not left
-    // pointing at deleted bytes.
-    const metaResults = await queryAllPages((q) => this.query(q), {
-      filter: {
-        typeId: metadataTypeId,
-        includeDeleted: true,
-        includeUnlisted: true,
-        ...(this.features.contentFieldQuery && { content: { fileId } }),
-      },
-    });
-    const metaRecords = this.features.contentFieldQuery
-      ? metaResults
-      : metaResults.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+    // Soft-deleted, unlisted, and later-version metadata is cleaned up
+    // too — none of it may be left pointing at deleted bytes.
+    const metaRecords = await this.getAttachmentRecords(fileId);
 
     for (const record of metaRecords) {
       await this.delete(record.id, { hard: true, ...opts });
@@ -2699,9 +2710,8 @@ export class Stack implements StackClient {
     const dryRun = opts.dryRun ?? false;
     const now = Date.now();
 
-    const metadataTypeId = `${SYSTEM_TYPES.ATTACHMENT}@1`;
     const metaRecords = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: metadataTypeId, includeDeleted: true, includeUnlisted: true },
+      filter: { baseId: SYSTEM_TYPES.ATTACHMENT, includeDeleted: true, includeUnlisted: true },
     });
 
     // Newest metadata record's createdAt per fileId, and its size (constant

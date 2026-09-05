@@ -489,13 +489,14 @@ export class SharedSqlRecordLogic {
 
   /**
    * Atomically verify fileId is unreferenced, then hard-delete its
-   * metadata records (see deleteUnreferencedAttachmentRecords on the
-   * adapter contract). A real SQL transaction of synchronous calls — no
-   * `await` between the check and the deletes, so nothing interleaves.
+   * metadata records across every typeId in `metadataTypeIds` (see
+   * deleteUnreferencedAttachmentRecords on the adapter contract). A real
+   * SQL transaction of synchronous calls — no `await` between the check
+   * and the deletes, so nothing interleaves.
    */
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeId: TypeId,
+    metadataTypeIds: TypeId[],
   ): Promise<StackRecord[]> {
     return this.exec.transaction(() => {
       const referenced = this.exec.all<{ found: number }>(
@@ -509,9 +510,16 @@ export class SharedSqlRecordLogic {
         throw new StackConflictError('Attachment is still referenced by one or more records');
       }
 
+      // An empty family still owes the caller the reference check above —
+      // the conflict is a fact about the file, not about which metadata
+      // types happen to be defined.
+      if (metadataTypeIds.length === 0) return [];
+
+      const placeholders = metadataTypeIds.map(() => '?').join(', ');
       const metaRows = this.exec.all<{ id: string }>(
-        `SELECT id FROM records WHERE type_id = ? AND json_extract(content, '$.fileId') = ?`,
-        [metadataTypeId, fileId],
+        `SELECT id FROM records
+         WHERE type_id IN (${placeholders}) AND json_extract(content, '$.fileId') = ?`,
+        [...metadataTypeIds, fileId],
       );
       const deleted: StackRecord[] = [];
       for (const row of metaRows) {

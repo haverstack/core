@@ -101,9 +101,9 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.queryRecords(query);
   }
 
-  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeId: TypeId) {
+  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeIds: TypeId[]) {
     await this.ready;
-    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
+    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
   async getVersions(id: string) {

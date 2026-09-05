@@ -49,8 +49,8 @@ export function combineAdapters(parts: {
     // absent on the combined adapter, rather than silently becoming
     // "supported" via a wrapper that forwards to a missing method.
     ...(parts.record.deleteUnreferencedAttachmentRecords && {
-      deleteUnreferencedAttachmentRecords: (fileId: string, metadataTypeId: string) =>
-        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeId),
+      deleteUnreferencedAttachmentRecords: (fileId: string, metadataTypeIds: string[]) =>
+        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeIds),
     }),
 
     // StackAdapter.putAttachmentWithMetadata is deliberately never

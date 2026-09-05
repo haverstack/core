@@ -226,9 +226,9 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
 
   deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeId: TypeId,
+    metadataTypeIds: TypeId[],
   ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeId);
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
   // -------------------------------------------------------
