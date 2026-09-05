@@ -77,6 +77,22 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, field)
   ) STRICT;
 
+  -- One row per top-level scalar content field on a record, rewritten
+  -- beside file_refs on every content/typeId write. Exactly one of
+  -- num_value / text_key+text_value is set, by the field's declared kind:
+  -- what a field orders as must not vary with the value a given record
+  -- happens to hold. text_key is the folded form ordering compares
+  -- (@haverstack/core's contentSortKey), text_value the stored one, which
+  -- breaks a tie between two values that fold together.
+  CREATE TABLE IF NOT EXISTS content_sort (
+    record_id  TEXT NOT NULL REFERENCES records(id),
+    field      TEXT NOT NULL,
+    num_value  REAL,
+    text_key   TEXT,
+    text_value TEXT,
+    PRIMARY KEY (record_id, field)
+  ) STRICT;
+
   -- Indexes
   CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
@@ -93,6 +109,8 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_related    ON associations(related_scope, related_ns, related_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
   CREATE INDEX IF NOT EXISTS idx_file_refs_file_id  ON file_refs(file_id);
+  CREATE INDEX IF NOT EXISTS idx_content_sort_num   ON content_sort(field, num_value, record_id);
+  CREATE INDEX IF NOT EXISTS idx_content_sort_text  ON content_sort(field, text_key, text_value, record_id);
 `;
 
 /**

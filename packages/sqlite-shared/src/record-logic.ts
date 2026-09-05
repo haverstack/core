@@ -30,7 +30,7 @@ import type {
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildWhereClause, buildOrderClause, getSortField } from './query.js';
+import { buildFromClause, buildWhereClause, buildOrderClause } from './query.js';
 import { fts5Strategy } from './fts5.js';
 import {
   rowToRecord,
@@ -41,6 +41,8 @@ import {
   associationKeyColumns,
 } from './mappers.js';
 import { makeCursor } from './cursor.js';
+import { contentSortEntry } from '@haverstack/core/adapter';
+import type { ScalarFieldKind } from '@haverstack/core';
 
 /**
  * Run a query statement, restating an engine parse error as the wire
@@ -72,6 +74,22 @@ export type SharedSqlRecordLogicDeps = {
 const fileRefFieldNames = (schema: Record<string, { kind?: string }>): string[] =>
   Object.keys(schema).filter((field) => schema[field].kind === 'file-ref');
 
+/**
+ * Top-level scalar fields, by name and declared kind — what the sort
+ * index covers. Arrays and objects are left out: a value inside one has
+ * no single position to order its record by.
+ */
+const sortableFieldKinds = (
+  schema: Record<string, { kind?: string }>,
+): Map<string, ScalarFieldKind> => {
+  const kinds = new Map<string, ScalarFieldKind>();
+  for (const [field, def] of Object.entries(schema)) {
+    if (!def.kind || def.kind === 'array' || def.kind === 'object') continue;
+    kinds.set(field, def.kind as ScalarFieldKind);
+  }
+  return kinds;
+};
+
 export class SharedSqlRecordLogic {
   /**
    * Per-typeId cache of file-ref field names, so syncFileRefs() doesn't
@@ -79,6 +97,9 @@ export class SharedSqlRecordLogic {
    * Populated eagerly in saveType() and lazily via getFileRefFields().
    */
   private readonly fileRefFieldsByType = new Map<string, string[]>();
+
+  /** Per-typeId cache of sortable field kinds, as fileRefFieldsByType is. */
+  private readonly sortFieldsByType = new Map<string, Map<string, ScalarFieldKind>>();
 
   constructor(private readonly deps: SharedSqlRecordLogicDeps) {}
 
@@ -180,6 +201,7 @@ export class SharedSqlRecordLogic {
 
     fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
     this.syncFileRefs(record.id, record.typeId, record.content);
+    this.syncContentSort(record.id, record.typeId, record.content);
     return record;
   }
 
@@ -233,6 +255,7 @@ export class SharedSqlRecordLogic {
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
       this.syncFileRefs(id, existing.typeId, merged);
+      this.syncContentSort(id, existing.typeId, merged);
     });
 
     const updated = await this.getRecord(id);
@@ -275,8 +298,8 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Deletes a record's FTS entry, associations, versions, file-refs, and
-   * row, returning the record as it stood — the last copy that will ever
+   * Deletes a record's FTS entry, associations, versions, file-refs, sort
+   * index rows, and row, returning the record as it stood — the last copy that will ever
    * exist, read here so that nothing can overtake it between the read and
    * the deletes. Null when there was no such record. No write() call —
    * callers batch it. expectedVersion is checked first so a lost CAS race
@@ -301,6 +324,7 @@ export class SharedSqlRecordLogic {
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [id]);
+    this.exec.run('DELETE FROM content_sort WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
     return purged;
   }
@@ -411,6 +435,7 @@ export class SharedSqlRecordLogic {
       }
       fts5Strategy.insert(this.exec, id, JSON.stringify(target.content));
       this.syncFileRefs(id, target.typeId, target.content);
+      this.syncContentSort(id, target.typeId, target.content);
     });
 
     const updated = await this.getRecord(id);
@@ -448,6 +473,7 @@ export class SharedSqlRecordLogic {
       );
       fts5Strategy.insert(this.exec, id, JSON.stringify(content));
       this.syncFileRefs(id, toTypeId, content);
+      this.syncContentSort(id, toTypeId, content);
     });
 
     const updated = await this.getRecord(id);
@@ -456,16 +482,22 @@ export class SharedSqlRecordLogic {
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
-    const { sql: where, params } = buildWhereClause(query);
+    // The sort index joins into both statements below, not just the
+    // ordered one: a content-sort cursor is a condition on the joined row,
+    // so a count taken without the join would be counting a different
+    // query.
+    const { sql: from, params: fromParams } = buildFromClause(query);
+    const { sql: where, params: whereParams } = buildWhereClause(query);
+    const params = [...fromParams, ...whereParams];
     const order = buildOrderClause(query);
     const limit = query.limit ?? 50;
 
     // Fetch one extra to determine if there's a next page
     const rows = asStackQueryError(query, () =>
-      this.exec.all<Record<string, unknown>>(
-        `SELECT r.* FROM records r ${where} ${order} LIMIT ?`,
-        [...params, limit + 1],
-      ),
+      this.exec.all<Record<string, unknown>>(`SELECT r.* FROM ${from} ${where} ${order} LIMIT ?`, [
+        ...params,
+        limit + 1,
+      ]),
     );
 
     const hasMore = rows.length > limit;
@@ -477,12 +509,15 @@ export class SharedSqlRecordLogic {
     });
 
     const countRows = asStackQueryError(query, () =>
-      this.exec.all<{ total: number }>(`SELECT COUNT(*) as total FROM records r ${where}`, params),
+      this.exec.all<{ total: number }>(`SELECT COUNT(*) as total FROM ${from} ${where}`, params),
     );
     const total = countRows[0]?.total ?? 0;
 
     const lastRecord = records[records.length - 1];
-    const cursor = hasMore && lastRecord ? makeCursor(lastRecord, getSortField(query)) : null;
+    const cursor =
+      hasMore && lastRecord
+        ? makeCursor(lastRecord, query.sort, (record, field) => this.sortFieldKind(record, field))
+        : null;
 
     return { records, cursor, total };
   }
@@ -657,10 +692,9 @@ export class SharedSqlRecordLogic {
         toMs(type.createdAt),
       ],
     );
-    this.fileRefFieldsByType.set(
-      type.id,
-      fileRefFieldNames(type.schema as Record<string, { kind?: string }>),
-    );
+    const schema = type.schema as Record<string, { kind?: string }>;
+    this.fileRefFieldsByType.set(type.id, fileRefFieldNames(schema));
+    this.sortFieldsByType.set(type.id, sortableFieldKinds(schema));
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
@@ -790,6 +824,51 @@ export class SharedSqlRecordLogic {
    * content or typeId, so the index never drifts. Only top-level scalars
    * are indexed; the schema lookup is cached (fileRefFieldsByType).
    */
+  private getSortFields(typeId: string): Map<string, ScalarFieldKind> {
+    const cached = this.sortFieldsByType.get(typeId);
+    if (cached) return cached;
+
+    const typeRow = this.exec.get<{ schema: string }>('SELECT schema FROM types WHERE id = ?', [
+      typeId,
+    ]);
+    const fields = typeRow
+      ? sortableFieldKinds(JSON.parse(typeRow.schema) as Record<string, { kind?: string }>)
+      : new Map<string, ScalarFieldKind>();
+    this.sortFieldsByType.set(typeId, fields);
+    return fields;
+  }
+
+  /**
+   * Replace a record's content_sort rows with what its content currently
+   * holds, on every write that can change content or typeId. A field
+   * holding no orderable value gets no row at all, which is what puts the
+   * record at the end of a sort on that field.
+   */
+  private syncContentSort(
+    recordId: string,
+    typeId: string,
+    content: Record<string, unknown>,
+  ): void {
+    this.exec.run('DELETE FROM content_sort WHERE record_id = ?', [recordId]);
+
+    for (const [field, kind] of this.getSortFields(typeId)) {
+      const entry = contentSortEntry(kind, content[field]);
+      if (!entry) continue;
+      this.exec.run(
+        `INSERT OR IGNORE INTO content_sort (record_id, field, num_value, text_key, text_value)
+         VALUES (?, ?, ?, ?, ?)`,
+        entry.kind === 'num'
+          ? [recordId, field, entry.num, null, null]
+          : [recordId, field, null, entry.key, entry.text],
+      );
+    }
+  }
+
+  /** The declared kind of a record's top-level `field`, if it has one. */
+  private sortFieldKind(record: StackRecord, field: string): ScalarFieldKind | undefined {
+    return this.getSortFields(record.typeId).get(field);
+  }
+
   private syncFileRefs(recordId: string, typeId: string, content: Record<string, unknown>): void {
     this.exec.run('DELETE FROM file_refs WHERE record_id = ?', [recordId]);
 
