@@ -1,10 +1,13 @@
 /**
  * @haverstack/core/wire
  * -------------------------------------------------------
- * The handshake and attachment-download policy shared by both sides of a
- * client/server connection — building a payload identically on both ends is
- * the whole point, so this is imported by clients (e.g. adapter-api) and
- * servers alike. See docs/spec/wire-format.md.
+ * The request encoding, the handshake and the attachment-download policy
+ * shared by both sides of a client/server connection — building a payload
+ * identically on both ends is the whole point, so this is imported by
+ * clients (e.g. adapter-api) and servers alike. The request encoding is
+ * carried here as both halves: adapter-api builds a query, and the parsers
+ * below decode it, so a server inherits the grammar rather than
+ * transcribing it. See docs/spec/wire-format.md.
  */
 
 export {
@@ -45,3 +48,27 @@ export { firstRecordedAttachment } from './attachment-download.js';
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.
 export type { StackTokenStore, TokenInfo } from './types.js';
+
+// No in-repo caller: the parse half of the request encoding adapter-api
+// builds, so a server decodes GET /records, POST /records/query and
+// GET /changes with these rather than transcribing the parameter table.
+// Contract, not internal — and the round trip against the builders is
+// pinned by a test, which is what having both halves here buys.
+export {
+  parseQueryParams,
+  parseQueryBody,
+  parseChangeParams,
+  parseIfMatch,
+  parseUploadFilename,
+  parsePositiveInt,
+} from './wire-request.js';
+export type { ParsedChangeParams } from './wire-request.js';
+
+// Re-exported by @haverstack/wire-types for the response side: one wire
+// date decoding, used by both halves.
+export { parseDate } from './wire-request.js';
+
+// Thrown by every parser above on malformed input, which a server maps to
+// 400 — already exported from @haverstack/core, and named here so the wire
+// entry point stands alone. See docs/spec/wire-format.md § Error responses.
+export { StackQueryError } from './stack.js';

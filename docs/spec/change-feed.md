@@ -36,6 +36,8 @@ Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 
 Response: `200 text/event-stream`, a stream of frames.
 
+`@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — filter, `include` and `includeUnlisted` in one object, since a server needs the last of those before the stream opens to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
+
 **Filtering is exact, not advisory**, exactly as it is [locally](./events.md#subscribing): a filtered connection never receives an event outside its filter. `typeId` is matched by `baseId`, as [grants are](./access-control.md#type-level-grants), so a type version bump never silently orphans a subscription. `entityId` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
 
 ## Frames
