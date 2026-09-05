@@ -6,6 +6,8 @@ Version history is managed by the library as a side channel — apps do not mana
 
 **One rule, no special cases:** every mutation of a Record — content (`update`), associations (`associate`/`dissociate`), permissions (`setPermissions`), soft delete, undelete — snapshots the Record's prior full state and bumps `version`. A mutation that changes nothing (re-adding an association that's already present, removing one that isn't there, setting a deep-equal permission set, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Hard delete is the one exception — it destroys the Record and its version history outright, so there's nothing to snapshot.
 
+**Every mutating method answers with the Record it produced.** `update()`, `associate()`, `dissociate()`, `setPermissions()`, `setUnlisted()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a hard delete leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
+
 ```ts
 type RecordVersion = {
   version: number;

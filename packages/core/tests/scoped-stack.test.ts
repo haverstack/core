@@ -373,6 +373,32 @@ describe('ScopedStack.setUnlisted', () => {
 });
 
 // -------------------------------------------------------
+// Mutators answer with the record they produced, through the scoped view
+// too — see docs/spec/versioning.md § Version history.
+// -------------------------------------------------------
+
+describe('ScopedStack mutators return the record they produced', () => {
+  test('associate, dissociate, setPermissions and setUnlisted all answer', async () => {
+    const record = await adapter.createRecord(makeRecord({ entityId: OWNER }));
+    const scoped = stack.asEntity(OWNER);
+
+    const associated = await scoped.associate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(associated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
+
+    const dissociated = await scoped.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(dissociated.associations).toBeUndefined();
+
+    const permissioned = await scoped.setPermissions(record.id, [{ access: 'public' }]);
+    expect(permissioned.permissions).toEqual([{ access: 'public' }]);
+
+    const unlisted = await scoped.setUnlisted(record.id, true);
+    expect(unlisted.unlistedAt).toBeInstanceOf(Date);
+    // Four mutations on top of the created record's version 1.
+    expect(unlisted.version).toBe(5);
+  });
+});
+
+// -------------------------------------------------------
 // Record-existence disclosure
 // -------------------------------------------------------
 

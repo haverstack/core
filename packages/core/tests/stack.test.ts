@@ -3000,6 +3000,64 @@ describe('setUnlisted', () => {
 });
 
 // -------------------------------------------------------
+// Mutators answer with the record they produced
+// -------------------------------------------------------
+
+describe('mutators return the record they produced', () => {
+  test('associate returns the record with the association applied', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const updated = await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(updated.version).toBe(2);
+    expect(updated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
+    expect(updated).toEqual(await adapter.getRecord(record.id));
+  });
+
+  test('dissociate returns the record with the association gone', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(updated.version).toBe(3);
+    expect(updated.associations).toBeUndefined();
+  });
+
+  test('setPermissions returns the record carrying the new permissions', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const updated = await stack.setPermissions(record.id, [{ access: 'public' }]);
+    expect(updated.version).toBe(2);
+    expect(updated.permissions).toEqual([{ access: 'public' }]);
+  });
+
+  test('setUnlisted returns the record carrying unlistedAt', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const unlisted = await stack.setUnlisted(record.id, true);
+    expect(unlisted.version).toBe(2);
+    expect(unlisted.unlistedAt).toBeInstanceOf(Date);
+
+    const relisted = await stack.setUnlisted(record.id, false);
+    expect(relisted.version).toBe(3);
+    expect(relisted.unlistedAt).toBeUndefined();
+  });
+
+  // A no-op is distinguished by the version that didn't move, not by an
+  // answer that never came — see docs/spec/versioning.md § Version history.
+  test('a no-op returns the record unchanged', async () => {
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      { permissions: [{ access: 'public' }] },
+    );
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const current = await adapter.getRecord(record.id);
+
+    expect(await stack.associate(record.id, { kind: 'tag', label: 'favourite' })).toEqual(current);
+    expect(await stack.dissociate(record.id, { kind: 'tag', label: 'absent' })).toEqual(current);
+    expect(await stack.setPermissions(record.id, [{ access: 'public' }])).toEqual(current);
+    expect(await stack.setUnlisted(record.id, false)).toEqual(current);
+    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+  });
+});
+
+// -------------------------------------------------------
 // putAttachment
 // -------------------------------------------------------
 
