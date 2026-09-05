@@ -1,7 +1,14 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { APIAdapter } from '../src/index.js';
-import { parseQueryParams, parseQueryBody, parseChangeParams } from '@haverstack/core/wire';
-import type { StackQuery } from '@haverstack/core';
+import {
+  parseQueryParams,
+  parseQueryBody,
+  parseChangeParams,
+  createOptionsFromWireRecord,
+} from '@haverstack/core/wire';
+import type { WireCreateRequest } from '@haverstack/core/wire';
+import { serializeRecord } from '@haverstack/wire-types';
+import type { StackQuery, StackRecord, TokenSession } from '@haverstack/core';
 import type { SubscribeChangesOptions } from '@haverstack/core/adapter';
 
 /**
@@ -294,5 +301,95 @@ describe('GET /changes round trip', () => {
       includeRecords: opts.includeRecords ?? false,
       includeUnlisted: opts.includeUnlisted ?? false,
     });
+  });
+});
+
+// -------------------------------------------------------
+// POST /records
+// -------------------------------------------------------
+
+/**
+ * Create a record through the adapter and hand back what core's helper makes
+ * of the body it sent — a whole record, server-assigned fields included.
+ */
+async function roundTripCreate(
+  record: StackRecord,
+  session: TokenSession,
+): Promise<WireCreateRequest> {
+  mockFetch.mockResolvedValueOnce(jsonResponse(discovery(false)));
+  const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
+
+  mockFetch.mockResolvedValueOnce(jsonResponse(serializeRecord(record)));
+  await adapter.createRecord(record);
+
+  const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+  return createOptionsFromWireRecord(JSON.parse(init.body as string), session, OWNER);
+}
+
+const OWNER = 'did:key:zOwner';
+const GRANTEE = 'did:key:zAlice';
+
+const recordToCreate = (overrides: Partial<StackRecord> = {}): StackRecord => ({
+  id: '0000000abcde',
+  typeId: 'com.example/note@1',
+  createdAt: new Date('2020-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2020-01-02T00:00:00.000Z'),
+  content: { text: 'hello' },
+  version: 1,
+  ...overrides,
+});
+
+describe('POST /records round trip', () => {
+  test('what the client sends is what the helper reads back', async () => {
+    const record = recordToCreate({
+      parentId: '0000000parnt',
+      appId: 'com.example.editor',
+      permissions: [{ access: 'public' }],
+      associations: [{ kind: 'tag', label: 'starred' }],
+    });
+    const { typeId, content, options } = await roundTripCreate(record, {
+      principalId: OWNER,
+      subjectId: OWNER,
+    });
+
+    expect(typeId).toBe(record.typeId);
+    expect(content).toEqual(record.content);
+    expect(options.id).toBe(record.id);
+    expect(options.parentId).toBe(record.parentId);
+    expect(options.appId).toBe(record.appId);
+    expect(options.permissions).toEqual(record.permissions);
+    expect(options.associations).toEqual(record.associations);
+    expect(options.createdAt).toEqual(record.createdAt);
+    expect(options.updatedAt).toEqual(record.updatedAt);
+  });
+
+  // A client cannot avoid sending these, so this is the body every server
+  // receives rather than a hostile one.
+  test('the identity fields the client serializes do not survive the trip', async () => {
+    const { options } = await roundTripCreate(
+      recordToCreate({ entityId: GRANTEE, principalId: 'did:key:zApp' }),
+      { principalId: OWNER, subjectId: OWNER },
+    );
+    expect('entityId' in options).toBe(false);
+    expect('principalId' in options).toBe(false);
+  });
+
+  test('an unlisted record travels as unlistedAt and arrives as unlisted', async () => {
+    const { options } = await roundTripCreate(
+      recordToCreate({ unlistedAt: new Date('2020-01-01T00:00:00.000Z') }),
+      { principalId: GRANTEE, subjectId: GRANTEE },
+    );
+    expect(options.unlisted).toBe(true);
+  });
+
+  // Both clock fields are on every body a client sends, and forwarding a
+  // grantee's earns a 403.
+  test('a grantee’s create arrives without the clock fields it could not use', async () => {
+    const { options } = await roundTripCreate(recordToCreate(), {
+      principalId: GRANTEE,
+      subjectId: GRANTEE,
+    });
+    expect('createdAt' in options).toBe(false);
+    expect('updatedAt' in options).toBe(false);
   });
 });

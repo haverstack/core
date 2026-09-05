@@ -150,3 +150,19 @@ export function groupRoleFromAssociations(
   }
   return role;
 }
+
+/**
+ * Whether a request is the stack owner acting alone — the tier behind every
+ * unconditional owner authority. Being the owner is never sufficient on its
+ * own, whichever side of a delegation the owner is on. Both identities are
+ * asked about by value rather than compared to each other, so a caller
+ * holding a session and `ScopedStack`, which holds the pair separately, get
+ * one answer. See docs/spec/access-control.md § Delegation: principal and
+ * subject.
+ */
+export function isOwnerActingAlone(
+  session: { principalId: EntityId | null; subjectId: EntityId | null },
+  ownerEntityId: EntityId,
+): boolean {
+  return session.principalId === ownerEntityId && session.subjectId === ownerEntityId;
+}
