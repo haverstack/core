@@ -1049,10 +1049,14 @@ export interface StackClient {
     content: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
-  associate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
-  dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<void>;
-  setPermissions(id: string, permissions: Permission[], opts?: IfVersionOptions): Promise<void>;
-  setUnlisted(id: string, unlisted: boolean, opts?: IfVersionOptions): Promise<void>;
+  associate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
+  dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
+  setPermissions(
+    id: string,
+    permissions: Permission[],
+    opts?: IfVersionOptions,
+  ): Promise<StackRecord>;
+  setUnlisted(id: string, unlisted: boolean, opts?: IfVersionOptions): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -1821,13 +1825,14 @@ export class Stack implements StackClient {
    * Add an association to a record. Snapshots the record's prior state and
    * bumps version, same as update() — associations are covered by the same
    * versioning rule as content.
-   * If the association already exists (same kind, label, and payload), this is a no-op.
+   * If the association already exists (same kind, label, and payload), this
+   * is a no-op. Returns the record as it now stands — unchanged on a no-op.
    */
   async associate(
     id: string,
     association: Association,
     opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     this.assertOpen();
     const errors = validateAssociation(association);
     if (errors.length > 0) throw new StackValidationError(errors);
@@ -1836,7 +1841,9 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if ((existing.associations ?? []).some((a) => associationEqual(a, association))) return;
+    if ((existing.associations ?? []).some((a) => associationEqual(a, association))) {
+      return existing;
+    }
 
     const updated = await this.adapter.associate(id, association, {
       expectedVersion: opts.ifVersion,
@@ -1845,17 +1852,19 @@ export class Stack implements StackClient {
       updatedVia: opts.updatedVia,
     });
     this.emitChange('associate', updated);
+    return updated;
   }
 
   /**
    * Remove an association from a record. Snapshots and bumps version, same
    * as associate(). Matched by kind, label, and payload. No-op if not found.
+   * Returns the record as it now stands — unchanged on a no-op.
    */
   async dissociate(
     id: string,
     association: Association,
     opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     this.assertOpen();
     const errors = validateAssociation(association);
     if (errors.length > 0) throw new StackValidationError(errors);
@@ -1864,7 +1873,9 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) return;
+    if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) {
+      return existing;
+    }
 
     const updated = await this.adapter.dissociate(id, association, {
       expectedVersion: opts.ifVersion,
@@ -1873,18 +1884,20 @@ export class Stack implements StackClient {
       updatedVia: opts.updatedVia,
     });
     this.emitChange('dissociate', updated);
+    return updated;
   }
 
   /**
    * Replace all permissions on a record. Snapshots and bumps version, same
    * as associate(). Pass an empty array to make the record private (the
-   * default). No-op if the new set is deep-equal to the current one.
+   * default). No-op if the new set is deep-equal to the current one. Returns
+   * the record as it now stands — unchanged on a no-op.
    */
   async setPermissions(
     id: string,
     permissions: Permission[],
     opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     this.assertOpen();
     const errors = validatePermissions(permissions);
     if (errors.length > 0) {
@@ -1895,7 +1908,7 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if (permissionsEqual(existing.permissions ?? [], permissions)) return;
+    if (permissionsEqual(existing.permissions ?? [], permissions)) return existing;
 
     const updated = await this.adapter.setPermissions(id, permissions, {
       expectedVersion: opts.ifVersion,
@@ -1904,13 +1917,15 @@ export class Stack implements StackClient {
       updatedVia: opts.updatedVia,
     });
     this.emitChange('permissions', updated);
+    return updated;
   }
 
   /**
    * Withhold a record from enumeration, or restore it. Orthogonal to
    * setPermissions(): it says nothing about who may read the record, only
    * whether `query()` and the change feed enumerate it by default. No-op if
-   * already in the requested state. See docs/spec/access-control.md §
+   * already in the requested state. Returns the record as it now stands —
+   * unchanged on a no-op. See docs/spec/access-control.md §
    * Unlisted records.
    *
    * The op passed to emitChange() carries the transition direction —
@@ -1922,14 +1937,14 @@ export class Stack implements StackClient {
     id: string,
     unlisted: boolean,
     opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if (Boolean(existing.unlistedAt) === unlisted) return;
+    if (Boolean(existing.unlistedAt) === unlisted) return existing;
 
     const updated = await this.adapter.setUnlisted(id, unlisted, {
       expectedVersion: opts.ifVersion,
@@ -1938,6 +1953,7 @@ export class Stack implements StackClient {
       updatedVia: opts.updatedVia,
     });
     this.emitChange(unlisted ? 'unlist' : 'list', updated);
+    return updated;
   }
 
   /**
@@ -4150,7 +4166,7 @@ export class ScopedStack implements StackClient {
     id: string,
     association: Association,
     opts: IfVersionOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
     await this.requireAssociationAccess(record.typeId, association);
     return this.stack.associate(id, association, { ...opts, ...this.actor });
@@ -4160,7 +4176,7 @@ export class ScopedStack implements StackClient {
     id: string,
     association: Association,
     opts: IfVersionOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     await this.requireUpdatable(id);
     return this.stack.dissociate(id, association, { ...opts, ...this.actor });
   }
@@ -4169,7 +4185,7 @@ export class ScopedStack implements StackClient {
     id: string,
     permissions: Permission[],
     opts: IfVersionOptions = {},
-  ): Promise<void> {
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     await this.requireOwnerForGrantRecord(record);
@@ -4204,7 +4220,11 @@ export class ScopedStack implements StackClient {
    * record rather than merely read it once found. See
    * docs/spec/unlisted.md.
    */
-  async setUnlisted(id: string, unlisted: boolean, opts: IfVersionOptions = {}): Promise<void> {
+  async setUnlisted(
+    id: string,
+    unlisted: boolean,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     await this.requireOwnerForGrantRecord(record);
