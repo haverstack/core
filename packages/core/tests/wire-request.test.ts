@@ -51,6 +51,25 @@ describe('parseQueryParams', () => {
     );
   });
 
+  test('?sortContent= names a content field, distinct from the native ?sort=', () => {
+    expect(parseQueryParams(url('?sortContent=publishedAt&direction=asc')).sort).toEqual({
+      contentField: 'publishedAt',
+      direction: 'asc',
+    });
+    // A content field may be named after a native column; which parameter
+    // carries it is what says which was meant.
+    expect(parseQueryParams(url('?sortContent=version')).sort).toEqual({
+      contentField: 'version',
+    });
+    expect(parseQueryParams(url('?sort=version')).sort).toEqual({ field: 'version' });
+  });
+
+  test('naming both sort parameters is refused rather than resolved', () => {
+    expect(() => parseQueryParams(url('?sort=createdAt&sortContent=publishedAt'))).toThrow(
+      StackQueryError,
+    );
+  });
+
   test('a non-integer limit is refused rather than coerced', () => {
     expect(() => parseQueryParams(url('?limit=2.7'))).toThrow(StackQueryError);
     expect(() => parseQueryParams(url('?limit=-5'))).toThrow(StackQueryError);
@@ -141,6 +160,17 @@ describe('parseQueryBody', () => {
     expect(() =>
       parseQueryBody({ filter: { relatedTo: { target: { scope: 'galaxy' } } } }),
     ).toThrow(StackQueryError);
+  });
+
+  test('sort.contentField travels beside sort.field, never with it', () => {
+    expect(
+      parseQueryBody({ sort: { contentField: 'publishedAt', direction: 'desc' } }).sort,
+    ).toEqual({ contentField: 'publishedAt', direction: 'desc' });
+    expect(() => parseQueryBody({ sort: { field: 'createdAt', contentField: 'x' } })).toThrow(
+      StackQueryError,
+    );
+    expect(() => parseQueryBody({ sort: { direction: 'asc' } })).toThrow(StackQueryError);
+    expect(() => parseQueryBody({ sort: { contentField: 7 } })).toThrow(StackQueryError);
   });
 
   test('filter.content carries multi-segment keys through untouched', () => {

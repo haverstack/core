@@ -86,6 +86,7 @@ export type {
   RelatedToFilter,
   RelationshipTargetPattern,
   QuerySort,
+  NativeSortField,
   QueryResult,
   DateRange,
   Migration,

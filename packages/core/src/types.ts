@@ -479,10 +479,20 @@ export type RecordFilter = {
   includeUnlisted?: boolean;
 };
 
-export type QuerySort = {
-  field: 'createdAt' | 'updatedAt' | 'version';
-  direction?: 'asc' | 'desc';
-};
+/** The Record columns every adapter stores natively, and can order by. */
+export type NativeSortField = 'createdAt' | 'updatedAt' | 'version';
+
+/**
+ * Order by a native column or by a top-level content field — two members
+ * rather than one widened `field`, because a content field named
+ * `version` would otherwise be indistinguishable from the native column.
+ * A `'content.'` prefix can't carry the distinction either: `.` is the
+ * path separator `parseContentFilterKey()` splits on.
+ * See docs/spec/data-model.md § Sorting by a content field.
+ */
+export type QuerySort =
+  | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
+  | { field?: never; contentField: string; direction?: 'asc' | 'desc' };
 
 export type StackQuery = {
   filter?: RecordFilter;
@@ -547,7 +557,16 @@ export type AdapterCapabilities = {
    * See docs/spec/adapters.md § Adapter capabilities.
    */
   nestedContentQuery: boolean;
-  sortableFields: Array<QuerySort['field']>;
+  /**
+   * Whether `sort.contentField` is honored. A boolean rather than field
+   * names in sortableFields: the fields are app-defined and unbounded,
+   * and an adapter that indexes content for sorting indexes every
+   * top-level scalar, so there is nothing per-field to declare.
+   * See docs/spec/adapters.md § Adapter capabilities.
+   */
+  contentFieldSort: boolean;
+  /** Which native columns this adapter can order by; see NativeSortField. */
+  sortableFields: NativeSortField[];
   /**
    * Maximum attachment upload size in bytes, or `null` if unbounded. Lets
    * apps pre-check and surface limits before burning an upload on a 413.

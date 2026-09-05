@@ -12,9 +12,12 @@ import type {
   Permission,
   AdapterCapabilities,
   BlobFileInfo,
+  QuerySort,
 } from './types.js';
 import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
+import { compareSortEntries, contentSortEntry } from './sort.js';
+import type { SortEntry } from './sort.js';
 import {
   StackVersionConflictError,
   StackConflictError,
@@ -64,6 +67,7 @@ export class MemoryAdapter implements StackAdapter {
     fullTextSearch: false,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
     maxContentBytes: null,
@@ -280,6 +284,8 @@ export class MemoryAdapter implements StackAdapter {
       );
     }
 
+    results = this.sortRecords(results, query.sort);
+
     const limit = query.limit ?? 50;
     const start = query.cursor ? Number(query.cursor) : 0;
     const page = results.slice(start, start + limit);
@@ -287,6 +293,46 @@ export class MemoryAdapter implements StackAdapter {
     const cursor = nextStart < results.length ? String(nextStart) : null;
 
     return { records: page, cursor, total: results.length };
+  }
+
+  /**
+   * Order a result set the way a materialized sort index does: absent
+   * values last in both directions, numbers before text, and `id` as the
+   * final tiebreak so a page boundary falls in the same place twice.
+   * The comparison itself is core's, not this double's
+   * (docs/spec/data-model.md § Sorting by a content field).
+   */
+  private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
+    const direction = sort?.direction ?? 'desc';
+    const sign = direction === 'asc' ? 1 : -1;
+    const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
+
+    if (sort?.contentField === undefined) {
+      const field = sort?.field ?? 'createdAt';
+      const value = (r: StackRecord) =>
+        field === 'version'
+          ? r.version
+          : (field === 'updatedAt' ? r.updatedAt : r.createdAt).getTime();
+      return [...records].sort((a, b) => sign * (value(a) - value(b)) || byId(a, b));
+    }
+
+    const field = sort.contentField;
+    const entries = new Map(records.map((r) => [r.id, this.sortEntry(r, field)]));
+    return [...records].sort(
+      (a, b) => compareSortEntries(entries.get(a.id)!, entries.get(b.id)!, direction) || byId(a, b),
+    );
+  }
+
+  /**
+   * The record's ordered value at `field`, or null when it holds none.
+   * Read through the declared schema — a field only orders as the kind
+   * its type says it is, and an undeclared or non-scalar field orders as
+   * nothing at all.
+   */
+  private sortEntry(record: StackRecord, field: string): SortEntry | null {
+    const def = this.types.get(record.typeId)?.schema[field];
+    if (!def || def.kind === 'array' || def.kind === 'object') return null;
+    return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
   async associate(
@@ -503,6 +549,7 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     fullTextSearch: false,
     contentFieldQuery: false,
     nestedContentQuery: false,
+    contentFieldSort: false,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
     maxContentBytes: null,

@@ -973,6 +973,141 @@ describe('query — sort validation', () => {
   test('an omitted direction is allowed (adapter default applies)', async () => {
     await expect(stack.query({ sort: { field: 'version' } })).resolves.toBeDefined();
   });
+
+  test('a content field is held to one segment', async () => {
+    await expect(inject({ contentField: 'author.name' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('a content field may not carry a filter-path metacharacter', async () => {
+    await expect(inject({ contentField: 'title[0]' })).rejects.toThrow(StackQueryError);
+    await expect(inject({ contentField: '' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('naming both a native and a content field is refused, not resolved', async () => {
+    await expect(inject({ field: 'createdAt', contentField: 'version' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a content field a type never declared is a legitimate sort, ordering nothing', async () => {
+    await stack.create(NOTE_V1, { text: 'a' });
+    const result = await stack.query({ sort: { contentField: 'nothingDeclaresThis' } });
+    expect(result.records).toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
+// query — sorting by a content field
+// -------------------------------------------------------
+
+describe('query — sorting by a content field', () => {
+  const ARTICLE = 'com.example.test/article@1';
+  const NUMBERED = 'com.example.test/numbered@1';
+
+  const titles = async (query: Parameters<typeof stack.query>[0]) =>
+    (await stack.query(query)).records.map((r) => r.content.title);
+
+  beforeEach(async () => {
+    await stack.defineType(ARTICLE, 'Article', {
+      title: { kind: 'string', required: true },
+      publishedAt: { kind: 'date' },
+    });
+    await stack.defineType(NUMBERED, 'Numbered', {
+      title: { kind: 'string', required: true },
+    });
+  });
+
+  test('orders by a date field as an instant, not as an ISO string', async () => {
+    await stack.create(ARTICLE, { title: 'b', publishedAt: '2021-06-01T00:00:00Z' });
+    await stack.create(ARTICLE, { title: 'a', publishedAt: '2020-12-31T23:00:00-05:00' });
+    await stack.create(ARTICLE, { title: 'c', publishedAt: '2021-01-01T00:00:00Z' });
+
+    // 'a' is 2021-01-01T04:00Z — later than 'c' as an instant, earlier as
+    // a string.
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'asc' } })).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+  });
+
+  test('a record with no value at the field sorts last in both directions', async () => {
+    await stack.create(ARTICLE, { title: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
+    await stack.create(ARTICLE, { title: 'undated' });
+    await stack.create(ARTICLE, { title: 'older', publishedAt: '2020-01-01T00:00:00Z' });
+
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'asc' } })).toEqual([
+      'older',
+      'dated',
+      'undated',
+    ]);
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'desc' } })).toEqual([
+      'dated',
+      'older',
+      'undated',
+    ]);
+  });
+
+  test('text orders by case- and accent-folded value, not by code point', async () => {
+    for (const title of ['Zebra', 'apple', 'Émile']) await stack.create(ARTICLE, { title });
+
+    expect(await titles({ sort: { contentField: 'title', direction: 'asc' } })).toEqual([
+      'apple',
+      'Émile',
+      'Zebra',
+    ]);
+  });
+
+  test('across types declaring one field name differently, numbers precede text', async () => {
+    await stack.defineType('com.example.test/ranked@1', 'Ranked', {
+      title: { kind: 'string', required: true },
+      key: { kind: 'number' },
+    });
+    await stack.defineType('com.example.test/named@1', 'Named', {
+      title: { kind: 'string', required: true },
+      key: { kind: 'string' },
+    });
+    await stack.create('com.example.test/named@1', { title: 'text', key: 'aaa' });
+    await stack.create('com.example.test/ranked@1', { title: 'number', key: 2 });
+
+    expect(await titles({ sort: { contentField: 'key', direction: 'asc' } })).toEqual([
+      'number',
+      'text',
+    ]);
+    expect(await titles({ sort: { contentField: 'key', direction: 'desc' } })).toEqual([
+      'text',
+      'number',
+    ]);
+  });
+
+  test('the field is read through the schema, not sniffed from the value', async () => {
+    // `title` is declared `string` on both types, so a numeric-looking
+    // title orders as the text it is.
+    await stack.create(ARTICLE, { title: '10' });
+    await stack.create(NUMBERED, { title: '9' });
+
+    expect(await titles({ sort: { contentField: 'title', direction: 'asc' } })).toEqual([
+      '10',
+      '9',
+    ]);
+  });
+
+  test('an adapter without contentFieldSort refuses rather than reordering', async () => {
+    const incapable = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }),
+    );
+    await expect(incapable.query({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a native sort an adapter does not declare is refused too', async () => {
+    const adapter = new MemoryAdapter({ ownerEntityId: 'owner-123' });
+    adapter.capabilities.sortableFields = ['createdAt'];
+    const limited = await Stack.create(adapter);
+    await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(StackQueryError);
+    await expect(limited.query({ sort: { field: 'createdAt' } })).resolves.toBeDefined();
+  });
 });
 
 // -------------------------------------------------------
@@ -3435,6 +3570,7 @@ describe('nested content paths', () => {
           fullTextSearch: false,
           contentFieldQuery: true,
           nestedContentQuery: false,
+          contentFieldSort: false,
           sortableFields: ['createdAt', 'updatedAt', 'version'],
           maxAttachmentBytes: null,
           maxContentBytes: null,
@@ -3466,6 +3602,7 @@ describe('maxContentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: null,
         maxContentBytes,
@@ -3517,6 +3654,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentFieldSort: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,
         maxContentBytes: null,

@@ -41,6 +41,7 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: 52428800,
   },
