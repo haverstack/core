@@ -29,6 +29,7 @@ import { StackQueryError } from './stack.js';
 import type {
   ChangeFilter,
   ChangeKind,
+  NativeSortField,
   QuerySort,
   RecordFilter,
   RelatedToFilter,
@@ -48,7 +49,7 @@ export function parseDate(val: unknown): Date | undefined {
 }
 
 const POSITIVE_INTEGER = /^\d+$/;
-const SORT_FIELDS: ReadonlySet<QuerySort['field']> = new Set(['createdAt', 'updatedAt', 'version']);
+const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(['createdAt', 'updatedAt', 'version']);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 const TARGET_SCOPES: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
@@ -69,10 +70,37 @@ function requireDate(raw: unknown, label: string): Date {
   return d;
 }
 
-function requireSortField(raw: unknown): QuerySort['field'] {
-  if (typeof raw !== 'string' || !SORT_FIELDS.has(raw as QuerySort['field']))
+function requireSortField(raw: unknown): NativeSortField {
+  if (typeof raw !== 'string' || !SORT_FIELDS.has(raw as NativeSortField))
     throw new StackQueryError(`Invalid sort field: ${JSON.stringify(raw)}`);
-  return raw as QuerySort['field'];
+  return raw as NativeSortField;
+}
+
+/**
+ * The two sort forms are mutually exclusive, and a request naming both is
+ * refused rather than resolved in one direction: a content field may be
+ * called `version`, so guessing which was meant is exactly the conflation
+ * the separate member exists to prevent.
+ */
+function buildSort(
+  field: unknown,
+  contentField: unknown,
+  direction: unknown,
+): QuerySort | undefined {
+  if (field !== undefined && field !== null && contentField !== undefined && contentField !== null)
+    throw new StackQueryError('A sort names either a native field or a content field, never both.');
+  const dir =
+    direction === undefined || direction === null ? undefined : requireSortDirection(direction);
+  if (contentField !== undefined && contentField !== null) {
+    return {
+      contentField: requireString(contentField, 'sort content field'),
+      ...(dir && { direction: dir }),
+    };
+  }
+  if (field !== undefined && field !== null) {
+    return { field: requireSortField(field), ...(dir && { direction: dir }) };
+  }
+  return undefined;
 }
 
 function requireSortDirection(raw: unknown): NonNullable<QuerySort['direction']> {
@@ -296,13 +324,12 @@ export function parseQueryParams(url: URL): StackQuery {
   const query: StackQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
 
-  const sort = url.searchParams.get('sort');
-  const direction = url.searchParams.get('direction');
-  if (sort)
-    query.sort = {
-      field: requireSortField(sort),
-      ...(direction && { direction: requireSortDirection(direction) }),
-    };
+  const sort = buildSort(
+    url.searchParams.get('sort'),
+    url.searchParams.get('sortContent'),
+    url.searchParams.get('direction'),
+  );
+  if (sort) query.sort = sort;
 
   const limit = url.searchParams.get('limit');
   if (limit) query.limit = parsePositiveInt(limit, 'limit');
@@ -356,6 +383,8 @@ export function parseQueryBody(raw: unknown): StackQuery {
       filter.attachmentFileId = requireString(f.attachmentFileId, 'filter.attachmentFileId');
     if (f.relatedTo !== undefined) filter.relatedTo = parseRelatedToBody(f.relatedTo);
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
+    if (f.contentPresent !== undefined)
+      filter.contentPresent = requireStringArray(f.contentPresent, 'filter.contentPresent');
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (f.includeDeleted) filter.includeDeleted = true;
     if (f.includeUnlisted) filter.includeUnlisted = true;
@@ -380,10 +409,9 @@ export function parseQueryBody(raw: unknown): StackQuery {
 
   if (body.sort) {
     const s = requirePlainObject(body.sort, 'sort');
-    query.sort = {
-      field: requireSortField(s.field),
-      ...(s.direction !== undefined && { direction: requireSortDirection(s.direction) }),
-    };
+    const sort = buildSort(s.field, s.contentField, s.direction);
+    if (!sort) throw new StackQueryError('Invalid sort: expected a field or a contentField.');
+    query.sort = sort;
   }
 
   if (body.limit !== undefined) query.limit = parseLimitValue(body.limit);

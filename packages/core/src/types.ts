@@ -464,6 +464,16 @@ export type RecordFilter = {
    */
   content?: Record<string, unknown>;
 
+  /**
+   * Paths that must hold a value: the question `content` cannot ask,
+   * since a filter value matches what is there rather than whether
+   * anything is. Element-wise like `content`, so a path holds a value
+   * when at least one non-null value is reachable at it. Needs the
+   * contentPresenceQuery capability. POST /query only.
+   * See docs/spec/data-model.md § Filter.
+   */
+  contentPresent?: string[];
+
   // Full-text search (capability varies by adapter)
   search?: string;
 
@@ -479,10 +489,20 @@ export type RecordFilter = {
   includeUnlisted?: boolean;
 };
 
-export type QuerySort = {
-  field: 'createdAt' | 'updatedAt' | 'version';
-  direction?: 'asc' | 'desc';
-};
+/** The Record columns every adapter stores natively, and can order by. */
+export type NativeSortField = 'createdAt' | 'updatedAt' | 'version';
+
+/**
+ * Order by a native column or by a top-level content field — two members
+ * rather than one widened `field`, because a content field named
+ * `version` would otherwise be indistinguishable from the native column.
+ * A `'content.'` prefix can't carry the distinction either: `.` is the
+ * path separator `parseContentFilterKey()` splits on.
+ * See docs/spec/data-model.md § Sorting by a content field.
+ */
+export type QuerySort =
+  | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
+  | { field?: never; contentField: string; direction?: 'asc' | 'desc' };
 
 export type StackQuery = {
   filter?: RecordFilter;
@@ -547,7 +567,25 @@ export type AdapterCapabilities = {
    * See docs/spec/adapters.md § Adapter capabilities.
    */
   nestedContentQuery: boolean;
-  sortableFields: Array<QuerySort['field']>;
+  /**
+   * Whether `filter.contentPresent` is honored. A third flag on top of
+   * contentFieldQuery, on the same reasoning as nestedContentQuery: a
+   * server declaring content filtering promises to match a value, and
+   * reading that as a promise to answer whether one is there at all would
+   * hand a client an unfiltered superset presented as a filtered result.
+   * See docs/spec/adapters.md § Adapter capabilities.
+   */
+  contentPresenceQuery: boolean;
+  /**
+   * Whether `sort.contentField` is honored. A boolean rather than field
+   * names in sortableFields: the fields are app-defined and unbounded,
+   * and an adapter that indexes content for sorting indexes every
+   * top-level scalar, so there is nothing per-field to declare.
+   * See docs/spec/adapters.md § Adapter capabilities.
+   */
+  contentFieldSort: boolean;
+  /** Which native columns this adapter can order by; see NativeSortField. */
+  sortableFields: NativeSortField[];
   /**
    * Maximum attachment upload size in bytes, or `null` if unbounded. Lets
    * apps pre-check and surface limits before burning an upload on a 413.

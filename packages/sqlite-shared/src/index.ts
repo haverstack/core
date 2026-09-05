@@ -5,7 +5,13 @@ export {
   PRAGMA_FOREIGN_KEYS_ON,
   PRAGMA_JOURNAL_MODE_WAL,
 } from './schema.js';
-export { buildWhereClause, buildOrderClause, getSortField, getSortColumn } from './query.js';
+export {
+  buildFromClause,
+  buildWhereClause,
+  buildOrderClause,
+  getSortField,
+  getSortColumn,
+} from './query.js';
 export {
   encodeCursor,
   decodeCursor,

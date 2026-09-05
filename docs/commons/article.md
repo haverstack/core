@@ -74,12 +74,13 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
   for the same URL (the bookmark is "I saved this link"; the article is "I captured this
   work") — apps that hold both should link them with a `relationship` labeled `capture`
   from the bookmark to the article.
-- **Querying published articles**: content filters are exact-match only, so "where
-  `publishedAt` exists, sorted by it" is not expressible as a query. Consumers (e.g. a
-  site generator) fetch articles and filter/sort app-side — the right trade at personal
-  scale (hundreds of posts, not millions), and why this type does not carry a redundant
-  required `draft` boolean. If real usage proves this painful, an additive optional
-  field can follow; starting with redundancy would be starting with the smell.
+- **Querying published articles**: `filter: { contentPresent: ['publishedAt'] }` with
+  `sort: { contentField: 'publishedAt', direction: 'desc' }` is the article listing —
+  published articles, newest first. Drafts are the counterpart,
+  `filter: { content: { publishedAt: null } }`, which matches an absent `publishedAt`
+  and a null one alike. Both questions are queries, which is why this type carries no
+  redundant required `draft` boolean: two fields for one fact can disagree, and the
+  date already holds it.
 
 ## Read-compat core
 

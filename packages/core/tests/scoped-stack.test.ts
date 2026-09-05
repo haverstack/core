@@ -761,15 +761,18 @@ describe('ScopedStack.query', () => {
   });
 
   test('a page may overshoot the requested limit rather than split mid-page', async () => {
-    // priv, priv, priv, pub, pub, pub — fetched 2 at a time with limit: 2.
-    // Page 1 (priv,priv): 0 visible. Page 2 (priv,pub): 1 visible, still
-    // under limit, so a 3rd page is fetched. Page 3 (pub,pub): both visible,
-    // pushing the total to 3 — over the requested limit of 2, by design.
+    // priv, priv, priv, pub, pub, pub — fetched 2 at a time with limit: 2,
+    // oldest first so the private ones are read first. Page 1 (priv,priv):
+    // 0 visible. Page 2 (priv,pub): 1 visible, still under limit, so a 3rd
+    // page is fetched. Page 3 (pub,pub): both visible, pushing the total to
+    // 3 — over the requested limit of 2, by design.
     for (let i = 0; i < 6; i++) {
       await adapter.createRecord(makeRecord(i >= 3 ? { permissions: [{ access: 'public' }] } : {}));
     }
 
-    const result = await stack.asEntity(null).query({ limit: 2 });
+    const result = await stack
+      .asEntity(null)
+      .query({ limit: 2, sort: { field: 'createdAt', direction: 'asc' } });
     expect(result.records).toHaveLength(3);
     expect(result.cursor).toBeNull();
   });

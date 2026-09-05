@@ -67,6 +67,8 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentPresenceQuery: true,
+    contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: 52428800,
   },
@@ -300,6 +302,21 @@ describe('queryRecords fixtures', () => {
       expect(result.total).toBeNull();
     });
   }
+
+  test('query-get-sorts-by-a-content-field', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-get-sorts-by-a-content-field',
+    )!;
+    mockFetch.mockResolvedValueOnce(jsonResponse(NATIVE_ONLY_DISCOVERY));
+    const adapter = await APIAdapter.open({ url: BASE_URL });
+    mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+    await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
+
+    const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}${fixture.path}`);
+    expect(init.method).toBe('GET');
+  });
 
   test('query-get-records-uses-the-same-envelope', async () => {
     const fixture = queryRecordsFixtures.find(
@@ -614,8 +631,18 @@ const ERROR_CLASS_FOR_CODE = {
   timeout: StackTimeoutError,
 } as const;
 
+/**
+ * Fixtures no conformant client can originate: `QuerySort` is a union, so
+ * a request naming both sort parameters is unrepresentable before it ever
+ * reaches the wire. The rule is a server's to enforce, and the fixture
+ * exists for server implementations to test against.
+ */
+const SERVER_ONLY_ERROR_FIXTURES = new Set(['error-bad-request-both-sort-parameters']);
+
 describe('error response fixtures', () => {
-  for (const fixture of errorResponseFixtures) {
+  for (const fixture of errorResponseFixtures.filter(
+    (f) => !SERVER_ONLY_ERROR_FIXTURES.has(f.name),
+  )) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));

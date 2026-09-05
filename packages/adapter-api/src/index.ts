@@ -36,6 +36,7 @@ import type {
 } from '@haverstack/core';
 import {
   assertQueryCapabilities,
+  assertSortCapability,
   assertValidRelatedTo,
   parseContentFilterKey,
 } from '@haverstack/core/adapter';
@@ -339,23 +340,40 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 
 // -------------------------------------------------------
 /**
- * Which declared capability a filter needs and this server lacks, or
- * undefined when every filter it uses is supported — in which case a
- * StackQueryError from assertQueryCapabilities was about the filter's own
- * shape, not the server's reach.
+ * Which declared capability a query needs and this server lacks, or
+ * undefined when everything it asks for is supported — in which case the
+ * StackQueryError was about the query's own shape, not the server's
+ * reach.
  */
 const missingQueryCapability = (
-  filter: StackQuery['filter'],
+  query: StackQuery,
   capabilities: AdapterCapabilities,
 ): keyof AdapterCapabilities | undefined => {
+  const filter = query.filter;
+  // A query naming no sort claims no order, so it needs no sort
+  // capability — mirroring assertSortCapability. Checking anyway would
+  // blame `sortableFields` for a failure the query's other reach caused,
+  // against any server whose discovery omits the field.
+  const sort = query.sort;
+  if (sort) {
+    if (sort.contentField !== undefined) {
+      if (!capabilities.contentFieldSort) return 'contentFieldSort';
+    } else if (!capabilities.sortableFields.includes(sort.field ?? 'createdAt')) {
+      return 'sortableFields';
+    }
+  }
   if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
-  if (!filter?.content) return undefined;
+  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
+  if (!filter?.content && !present) return undefined;
   if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
+  if (present && !capabilities.contentPresenceQuery) return 'contentPresenceQuery';
   if (capabilities.nestedContentQuery) return undefined;
   // A key this server would refuse only because it is malformed is the
   // caller's error at any capability level, so it is parsed the same way
   // assertQueryCapabilities parses it rather than scanned for a dot.
-  return Object.keys(filter.content).some(isNestedPath) ? 'nestedContentQuery' : undefined;
+  return [...Object.keys(filter?.content ?? {}), ...(present ?? [])].some(isNestedPath)
+    ? 'nestedContentQuery'
+    : undefined;
 };
 
 const isNestedPath = (key: string): boolean => {
@@ -417,6 +435,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
   if (f.includeUnlisted) p.set('includeUnlisted', 'true');
+  // Which parameter carries the name is what says whether it names a
+  // native column or a content field — the same "scope implied by the
+  // parameter" shape the relationship filter uses above.
+  if (query.sort?.contentField) p.set('sortContent', query.sort.contentField);
   if (query.sort?.field) p.set('sort', query.sort.field);
   if (query.sort?.direction) p.set('direction', query.sort.direction);
   if (query.limit) p.set('limit', String(query.limit));
@@ -791,6 +813,14 @@ export class APIAdapter implements StackAdapter {
         // matches only whole field names, and present what came back as
         // though the path had been applied.
         nestedContentQuery: discovery.capabilities?.nestedContentQuery ?? false,
+        // The same reading for the rest of the content-reach set: silence
+        // is a server that does not offer it, never one that does. An
+        // absent sortableFields leaves nothing this client may name — a
+        // query that names no sort still works, since it asks for the
+        // server's own default order rather than a stated one.
+        contentPresenceQuery: discovery.capabilities?.contentPresenceQuery ?? false,
+        contentFieldSort: discovery.capabilities?.contentFieldSort ?? false,
+        sortableFields: discovery.capabilities?.sortableFields ?? [],
       },
       // Kept whole rather than reduced to a flag: `resume` and `records`
       // are what subscribeChanges() promises its caller, and a client that
@@ -1014,13 +1044,14 @@ export class APIAdapter implements StackAdapter {
     // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
     try {
       assertQueryCapabilities(query.filter, this.capabilities);
+      assertSortCapability(query.sort, this.capabilities);
     } catch (err) {
       if (!(err instanceof StackQueryError)) throw err;
       // assertQueryCapabilities also rejects a malformed content path,
       // which is a caller error rather than a missing capability. Name the
       // capability only when one is actually absent, and let anything else
       // travel as the StackQueryError it is.
-      const capability = missingQueryCapability(query.filter, this.capabilities);
+      const capability = missingQueryCapability(query, this.capabilities);
       if (!capability) throw err;
       throw new APIAdapterCapabilityError(capability, err.message);
     }

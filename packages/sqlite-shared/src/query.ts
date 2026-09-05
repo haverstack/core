@@ -6,8 +6,14 @@
  */
 
 import { StackQueryError, type StackQuery } from '@haverstack/core';
-import { parseContentFilterKey } from '@haverstack/core/adapter';
-import { decodeCursor, getSortColumn, getSortField, type SortField } from './cursor.js';
+import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
+import {
+  decodeCursor,
+  getSortColumn,
+  getSortField,
+  type DecodedCursor,
+  type SortField,
+} from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
 export { getSortField, getSortColumn };
@@ -92,6 +98,85 @@ const contentPathExists = (
  */
 const equalsLeaf = (alias: string): string =>
   `${alias}.type NOT IN ('object', 'array') AND ${alias}.value = ?`;
+
+/** The join alias the sort index is read through. */
+const SORT_ALIAS = 'cs';
+
+/**
+ * The sort index row for each record, or none — the source of every
+ * `cs.*` term in the order and cursor clauses. A LEFT JOIN rather than an
+ * inner one: a record holding no value at the sort field still belongs in
+ * the result, at the end of it.
+ */
+export const buildFromClause = (query: StackQuery): { sql: string; params: unknown[] } => {
+  const field = query.sort?.contentField;
+  if (field === undefined) return { sql: 'records r', params: [] };
+  return {
+    sql: `records r LEFT JOIN content_sort ${SORT_ALIAS} ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?`,
+    params: [field],
+  };
+};
+
+/**
+ * A cursor names a position in one ordering; carrying it into another
+ * would silently resume somewhere arbitrary. The partition matters as
+ * much as the field name — a cursor from a numeric page can't be read
+ * against text values.
+ */
+const assertCursorMatchesSort = (cursor: DecodedCursor, query: StackQuery): void => {
+  const contentField = query.sort?.contentField;
+  if (cursor.kind === 'native') {
+    const sortField = getSortField(query);
+    if (contentField !== undefined || cursor.field !== sortField) {
+      throw new StackQueryError(
+        `Cursor sort field "${cursor.field}" does not match query sort field ` +
+          `"${contentField ?? sortField}"`,
+      );
+    }
+    return;
+  }
+  if (contentField === undefined || cursor.field !== contentField) {
+    throw new StackQueryError(
+      `Cursor sort field "${cursor.field}" does not match query sort field ` +
+        `"${contentField ?? getSortField(query)}"`,
+    );
+  }
+};
+
+/**
+ * Everything ordered after the cursor's record: a later partition, or the
+ * same partition past the cursor's value and id. `rank` counts up in the
+ * direction the query runs, so one comparison covers both directions and
+ * keeps absent values at the end of each.
+ */
+const contentCursorCondition = (
+  cursor: Exclude<DecodedCursor, { kind: 'native' }>,
+  op: '>' | '<',
+  params: unknown[],
+): string => {
+  const ascending = op === '>';
+  const numRank = ascending ? 0 : 1;
+  const textRank = ascending ? 1 : 0;
+  const rank = `CASE WHEN ${SORT_ALIAS}.record_id IS NULL THEN 2 WHEN ${SORT_ALIAS}.num_value IS NULL THEN ${textRank} ELSE ${numRank} END`;
+  const cursorRank = cursor.kind === 'absent' ? 2 : cursor.kind === 'num' ? numRank : textRank;
+
+  let tail: string;
+  if (cursor.kind === 'num') {
+    tail = `(${SORT_ALIAS}.num_value ${op} ? OR (${SORT_ALIAS}.num_value = ? AND r.id ${op} ?))`;
+    params.push(cursor.value, cursor.value, cursor.id);
+  } else if (cursor.kind === 'text') {
+    const key = contentSortKey(cursor.value);
+    tail =
+      `(${SORT_ALIAS}.text_key ${op} ? OR (${SORT_ALIAS}.text_key = ? AND ` +
+      `(${SORT_ALIAS}.text_value ${op} ? OR (${SORT_ALIAS}.text_value = ? AND r.id ${op} ?))))`;
+    params.push(key, key, cursor.value, cursor.value, cursor.id);
+  } else {
+    tail = `r.id ${op} ?`;
+    params.push(cursor.id);
+  }
+
+  return `((${rank}) > ${cursorRank} OR ((${rank}) = ${cursorRank} AND ${tail}))`;
+};
 
 export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
@@ -257,6 +342,25 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     }
   }
 
+  // Presence — the question an exact-match value cannot ask. Element-wise
+  // like the content filter above: a path holds a value when at least one
+  // non-null value is reachable at it. See docs/spec/data-model.md
+  // § Filter.
+  if (f.contentPresent?.length) {
+    let aliasSeq = 0;
+    const nextAlias = () => `pp${aliasSeq++}`;
+    for (const key of f.contentPresent) {
+      conditions.push(
+        contentPathExists(
+          parseContentFilterKey(key),
+          (a) => `${a}.value IS NOT NULL`,
+          params,
+          nextAlias,
+        ),
+      );
+    }
+  }
+
   if (f.search) {
     const sanitized = sanitizeFts5Query(f.search);
     if (sanitized) {
@@ -270,19 +374,18 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     }
   }
 
-  // Cursor (sort-field value + id for stable pagination)
+  // Cursor (sort value + id for stable pagination)
   if (query.cursor) {
-    const { field: cursorField, value: numericValue, id: cursorId } = decodeCursor(query.cursor);
-    const sortField = getSortField(query);
-    if (cursorField !== sortField) {
-      throw new StackQueryError(
-        `Cursor sort field "${cursorField}" does not match query sort field "${sortField}"`,
-      );
-    }
-    const col = getSortColumn(cursorField);
+    const cursor = decodeCursor(query.cursor);
+    assertCursorMatchesSort(cursor, query);
     const op = sqlDirection(query) === 'ASC' ? '>' : '<';
-    conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-    params.push(numericValue, numericValue, cursorId);
+    if (cursor.kind === 'native') {
+      const col = getSortColumn(cursor.field);
+      conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
+      params.push(cursor.value, cursor.value, cursor.id);
+    } else {
+      conditions.push(contentCursorCondition(cursor, op, params));
+    }
   }
 
   return {
@@ -292,7 +395,18 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
 };
 
 export const buildOrderClause = (query: StackQuery): string => {
-  const field = getSortField(query);
   const dir = sqlDirection(query);
-  return `ORDER BY r.${getSortColumn(field)} ${dir}, r.id ${dir}`;
+  if (query.sort?.contentField === undefined) {
+    return `ORDER BY r.${getSortColumn(getSortField(query))} ${dir}, r.id ${dir}`;
+  }
+  // Three leading terms before the value itself: absence last whichever
+  // way the sort runs, then the numeric partition against the text one,
+  // which does turn over with the direction because it is part of the
+  // order between values. See docs/spec/data-model.md § Sorting by a
+  // content field.
+  return (
+    `ORDER BY (${SORT_ALIAS}.record_id IS NULL) ASC, (${SORT_ALIAS}.num_value IS NULL) ${dir}, ` +
+    `${SORT_ALIAS}.num_value ${dir}, ${SORT_ALIAS}.text_key ${dir}, ` +
+    `${SORT_ALIAS}.text_value ${dir}, r.id ${dir}`
+  );
 };

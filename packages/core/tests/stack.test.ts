@@ -897,6 +897,74 @@ describe('query — content filter null semantics', () => {
 });
 
 // -------------------------------------------------------
+// contentPresent — the question a filter value cannot ask, since a value
+// matches what is there rather than whether anything is.
+// -------------------------------------------------------
+
+describe('query — contentPresent', () => {
+  test('matches records holding a value, and null matches the rest', async () => {
+    await stack.create(NOTE_V1, { text: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
+    await stack.create(NOTE_V1, { text: 'undated' });
+    await stack.create(NOTE_V1, { text: 'explicit null', publishedAt: null });
+
+    const present = await stack.query({ filter: { contentPresent: ['publishedAt'] } });
+    expect(present.records.map((r) => r.content.text)).toEqual(['dated']);
+
+    const absent = await stack.query({ filter: { content: { publishedAt: null } } });
+    expect(absent.records.map((r) => r.content.text).sort()).toEqual(['explicit null', 'undated']);
+  });
+
+  test('several paths are an intersection, as tags are', async () => {
+    await stack.create(NOTE_V1, { text: 'both', a: 1, b: 2 });
+    await stack.create(NOTE_V1, { text: 'one', a: 1 });
+
+    const result = await stack.query({ filter: { contentPresent: ['a', 'b'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['both']);
+  });
+
+  test('an empty list filters nothing, as an empty tag list does', async () => {
+    await stack.create(NOTE_V1, { text: 'a' });
+    expect((await stack.query({ filter: { contentPresent: [] } })).records).toHaveLength(1);
+  });
+
+  test('a path reaches through an array element-wise', async () => {
+    await stack.create(NOTE_V1, { text: 'has one', emails: [{ value: 'a@example.com' }] });
+    await stack.create(NOTE_V1, { text: 'has none', emails: [{ label: 'home' }] });
+
+    const result = await stack.query({ filter: { contentPresent: ['emails.value'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['has one']);
+  });
+
+  test('a path holding only nulls holds no value', async () => {
+    await stack.create(NOTE_V1, { text: 'nulls', tags: [null, null] });
+    await stack.create(NOTE_V1, { text: 'empty', tags: [] });
+    await stack.create(NOTE_V1, { text: 'one', tags: ['x'] });
+
+    const result = await stack.query({ filter: { contentPresent: ['tags'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['one']);
+  });
+
+  // Both filters can match one record where the path is multi-valued: each
+  // is element-wise, so an array holding a null and a value satisfies
+  // "something is null" and "something is present" alike.
+  test('a multi-valued path can satisfy both this and the null filter', async () => {
+    await stack.create(NOTE_V1, { text: 'mixed', tags: [null, 'x'] });
+
+    expect((await stack.query({ filter: { contentPresent: ['tags'] } })).records).toHaveLength(1);
+    expect((await stack.query({ filter: { content: { tags: null } } })).records).toHaveLength(1);
+  });
+
+  test('a malformed path is refused, as a content filter key is', async () => {
+    await expect(stack.query({ filter: { contentPresent: ['a..b'] } })).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(stack.query({ filter: { contentPresent: ['title[0]'] } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+});
+
+// -------------------------------------------------------
 // query() fails loud rather than silently widening: a filter
 // Stack can't honor against this adapter's declared capabilities must
 // throw before dispatching, not quietly return the unfiltered superset.
@@ -918,6 +986,18 @@ describe('query — capability fail-loud', () => {
     await expect(incapableStack.query({ filter: { content: { priority: 1 } } })).rejects.toThrow(
       StackQueryError,
     );
+  });
+
+  test('contentPresent against an adapter without the capability throws', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
+
+    await expect(
+      incapableStack.query({ filter: { contentPresent: ['priority'] } }),
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('a query with neither filter still works against an incapable adapter', async () => {
@@ -972,6 +1052,141 @@ describe('query — sort validation', () => {
 
   test('an omitted direction is allowed (adapter default applies)', async () => {
     await expect(stack.query({ sort: { field: 'version' } })).resolves.toBeDefined();
+  });
+
+  test('a content field is held to one segment', async () => {
+    await expect(inject({ contentField: 'author.name' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('a content field may not carry a filter-path metacharacter', async () => {
+    await expect(inject({ contentField: 'title[0]' })).rejects.toThrow(StackQueryError);
+    await expect(inject({ contentField: '' })).rejects.toThrow(StackQueryError);
+  });
+
+  test('naming both a native and a content field is refused, not resolved', async () => {
+    await expect(inject({ field: 'createdAt', contentField: 'version' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a content field a type never declared is a legitimate sort, ordering nothing', async () => {
+    await stack.create(NOTE_V1, { text: 'a' });
+    const result = await stack.query({ sort: { contentField: 'nothingDeclaresThis' } });
+    expect(result.records).toHaveLength(1);
+  });
+});
+
+// -------------------------------------------------------
+// query — sorting by a content field
+// -------------------------------------------------------
+
+describe('query — sorting by a content field', () => {
+  const ARTICLE = 'com.example.test/article@1';
+  const NUMBERED = 'com.example.test/numbered@1';
+
+  const titles = async (query: Parameters<typeof stack.query>[0]) =>
+    (await stack.query(query)).records.map((r) => r.content.title);
+
+  beforeEach(async () => {
+    await stack.defineType(ARTICLE, 'Article', {
+      title: { kind: 'string', required: true },
+      publishedAt: { kind: 'date' },
+    });
+    await stack.defineType(NUMBERED, 'Numbered', {
+      title: { kind: 'string', required: true },
+    });
+  });
+
+  test('orders by a date field as an instant, not as an ISO string', async () => {
+    await stack.create(ARTICLE, { title: 'b', publishedAt: '2021-06-01T00:00:00Z' });
+    await stack.create(ARTICLE, { title: 'a', publishedAt: '2020-12-31T23:00:00-05:00' });
+    await stack.create(ARTICLE, { title: 'c', publishedAt: '2021-01-01T00:00:00Z' });
+
+    // 'a' is 2021-01-01T04:00Z — later than 'c' as an instant, earlier as
+    // a string.
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'asc' } })).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+  });
+
+  test('a record with no value at the field sorts last in both directions', async () => {
+    await stack.create(ARTICLE, { title: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
+    await stack.create(ARTICLE, { title: 'undated' });
+    await stack.create(ARTICLE, { title: 'older', publishedAt: '2020-01-01T00:00:00Z' });
+
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'asc' } })).toEqual([
+      'older',
+      'dated',
+      'undated',
+    ]);
+    expect(await titles({ sort: { contentField: 'publishedAt', direction: 'desc' } })).toEqual([
+      'dated',
+      'older',
+      'undated',
+    ]);
+  });
+
+  test('text orders by case- and accent-folded value, not by code point', async () => {
+    for (const title of ['Zebra', 'apple', 'Émile']) await stack.create(ARTICLE, { title });
+
+    expect(await titles({ sort: { contentField: 'title', direction: 'asc' } })).toEqual([
+      'apple',
+      'Émile',
+      'Zebra',
+    ]);
+  });
+
+  test('across types declaring one field name differently, numbers precede text', async () => {
+    await stack.defineType('com.example.test/ranked@1', 'Ranked', {
+      title: { kind: 'string', required: true },
+      key: { kind: 'number' },
+    });
+    await stack.defineType('com.example.test/named@1', 'Named', {
+      title: { kind: 'string', required: true },
+      key: { kind: 'string' },
+    });
+    await stack.create('com.example.test/named@1', { title: 'text', key: 'aaa' });
+    await stack.create('com.example.test/ranked@1', { title: 'number', key: 2 });
+
+    expect(await titles({ sort: { contentField: 'key', direction: 'asc' } })).toEqual([
+      'number',
+      'text',
+    ]);
+    expect(await titles({ sort: { contentField: 'key', direction: 'desc' } })).toEqual([
+      'text',
+      'number',
+    ]);
+  });
+
+  test('the field is read through the schema, not sniffed from the value', async () => {
+    // `title` is declared `string` on both types, so a numeric-looking
+    // title orders as the text it is.
+    await stack.create(ARTICLE, { title: '10' });
+    await stack.create(NUMBERED, { title: '9' });
+
+    expect(await titles({ sort: { contentField: 'title', direction: 'asc' } })).toEqual([
+      '10',
+      '9',
+    ]);
+  });
+
+  test('an adapter without contentFieldSort refuses rather than reordering', async () => {
+    const incapable = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }),
+    );
+    await expect(incapable.query({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a native sort an adapter does not declare is refused too', async () => {
+    const adapter = new MemoryAdapter({ ownerEntityId: 'owner-123' });
+    adapter.capabilities.sortableFields = ['createdAt'];
+    const limited = await Stack.create(adapter);
+    await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(StackQueryError);
+    await expect(limited.query({ sort: { field: 'createdAt' } })).resolves.toBeDefined();
   });
 });
 
@@ -3435,6 +3650,8 @@ describe('nested content paths', () => {
           fullTextSearch: false,
           contentFieldQuery: true,
           nestedContentQuery: false,
+          contentPresenceQuery: false,
+          contentFieldSort: false,
           sortableFields: ['createdAt', 'updatedAt', 'version'],
           maxAttachmentBytes: null,
           maxContentBytes: null,
@@ -3466,6 +3683,8 @@ describe('maxContentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
+        contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: null,
         maxContentBytes,
@@ -3517,6 +3736,8 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
+        contentFieldSort: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,
         maxContentBytes: null,

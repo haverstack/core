@@ -19,6 +19,7 @@ import type {
   QueryResult,
   Association,
   RecordVersion,
+  StackType,
 } from '@haverstack/core';
 import type { AdapterCapabilities } from '@haverstack/core/adapter';
 
@@ -77,6 +78,7 @@ type TestStub = {
     content: Record<string, unknown>,
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
+  saveType(type: StackType): Promise<void>;
 };
 
 const getStub = (): TestStub => {
@@ -104,6 +106,8 @@ describe('construction', () => {
       fullTextSearch: true,
       contentFieldQuery: true,
       nestedContentQuery: true,
+      contentPresenceQuery: true,
+      contentFieldSort: true,
       sortableFields: ['createdAt', 'updatedAt', 'version'],
       maxAttachmentBytes: null,
       maxContentBytes: null,
@@ -358,6 +362,70 @@ describe('records — queries', () => {
     await stub.createRecord(makeRecord({ id: 'r1' }));
     const err = await stub.queryRecords({ cursor: '!!!not-a-cursor!!!' }).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
+  });
+});
+
+// The sort index's ORDER BY carries a LEFT JOIN and a CASE-ranked
+// partition term, and its keyset resumes across those partitions — all of
+// it executed by this build rather than by node:sqlite.
+describe('records — sorting by a content field', () => {
+  const SORTED_TYPE = 'com.example.test/sorted@1';
+
+  const withSortedType = async (stub: TestStub) => {
+    await stub.saveType({
+      id: SORTED_TYPE,
+      baseId: 'com.example.test/sorted',
+      version: 1,
+      name: 'Sorted',
+      schema: { title: { kind: 'string' }, priority: { kind: 'number' } },
+      schemaHash: 'sorted-hash',
+      createdAt: new Date(),
+    });
+  };
+
+  test('orders by a content field, absent values last', async () => {
+    const stub = getStub();
+    await withSortedType(stub);
+    await stub.createRecord(
+      makeRecord({ id: 'r1', typeId: SORTED_TYPE, content: { title: 'b', priority: 2 } }),
+    );
+    await stub.createRecord(
+      makeRecord({ id: 'r2', typeId: SORTED_TYPE, content: { title: 'a', priority: 1 } }),
+    );
+    await stub.createRecord(
+      makeRecord({ id: 'r3', typeId: SORTED_TYPE, content: { title: 'none' } }),
+    );
+
+    const asc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'asc' } });
+    expect(asc.records.map((r) => r.id)).toEqual(['r2', 'r1', 'r3']);
+    const desc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'desc' } });
+    expect(desc.records.map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  test('orders text by the folded key, and pages across the partitions', async () => {
+    const stub = getStub();
+    await withSortedType(stub);
+    await stub.createRecord(
+      makeRecord({ id: 'r1', typeId: SORTED_TYPE, content: { title: 'Zebra' } }),
+    );
+    await stub.createRecord(
+      makeRecord({ id: 'r2', typeId: SORTED_TYPE, content: { title: 'apple' } }),
+    );
+    await stub.createRecord(makeRecord({ id: 'r3', typeId: SORTED_TYPE, content: {} }));
+
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page: QueryResult = await stub.queryRecords({
+        sort: { contentField: 'title', direction: 'asc' },
+        limit: 1,
+        ...(cursor && { cursor }),
+      });
+      ids.push(...page.records.map((r) => r.id));
+      cursor = page.cursor ?? undefined;
+    } while (cursor);
+
+    expect(ids).toEqual(['r2', 'r1', 'r3']);
   });
 });
 

@@ -18,7 +18,10 @@ export type {
 export { combineAdapters } from './combine.js';
 export {
   assertQueryCapabilities,
+  assertSortCapability,
   assertValidSort,
   assertValidRelatedTo,
   parseContentFilterKey,
 } from './stack.js';
+export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';
+export type { SortEntry } from './sort.js';

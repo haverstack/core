@@ -41,6 +41,8 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentPresenceQuery: true,
+    contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: 52428800,
   },
@@ -984,6 +986,19 @@ describe('queryRecords', () => {
     expect(url).toContain('parentId=null');
   });
 
+  test('GET params carry a content sort as ?sortContent=, not ?sort=', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldQuery: false },
+    });
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
+    const [url] = mockFetch.mock.lastCall as [string];
+    expect(url).toContain('sortContent=publishedAt');
+    expect(url).toContain('direction=asc');
+    expect(url).not.toContain('sort=publishedAt');
+  });
+
   test('GET params include relatedToLabel alongside relatedTo', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,
@@ -1063,6 +1078,31 @@ describe('queryRecords', () => {
     ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
+  // Silence is not a claim — and an absent sortableFields must refuse a
+  // stated sort as the declared-capability error, rather than reading
+  // through undefined and raising a TypeError no caller can act on.
+  test('a server omitting the content-reach capabilities is treated as having none', async () => {
+    const {
+      contentPresenceQuery: _p,
+      contentFieldSort: _s,
+      sortableFields: _f,
+      ...capabilities
+    } = DISCOVERY.capabilities;
+    const adapter = await openAdapter({ ...DISCOVERY, capabilities });
+
+    expect(adapter.capabilities.contentPresenceQuery).toBe(false);
+    expect(adapter.capabilities.contentFieldSort).toBe(false);
+    expect(adapter.capabilities.sortableFields).toEqual([]);
+
+    await expect(adapter.queryRecords({ sort: { field: 'createdAt' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    // A query naming no sort asks for the server's own default order, so it
+    // claims nothing and still runs.
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(adapter.queryRecords({})).resolves.toBeDefined();
+  });
+
   test('a server omitting nestedContentQuery is treated as not having it', async () => {
     const { nestedContentQuery: _drop, ...capabilities } = DISCOVERY.capabilities;
     const adapter = await openAdapter({ ...DISCOVERY, capabilities });
@@ -1086,6 +1126,54 @@ describe('queryRecords', () => {
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
       APIAdapterCapabilityError,
     );
+  });
+
+  test('throws APIAdapterCapabilityError for contentPresent without the capability', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentPresenceQuery: false },
+    });
+    await expect(
+      adapter.queryRecords({ filter: { contentPresent: ['publishedAt'] } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('throws APIAdapterCapabilityError for a content sort without contentFieldSort', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentFieldSort: false },
+    });
+    await expect(adapter.queryRecords({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test('throws APIAdapterCapabilityError for a native field outside sortableFields', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, sortableFields: ['createdAt'] },
+    });
+    await expect(adapter.queryRecords({ sort: { field: 'version' } })).rejects.toThrow(
+      APIAdapterCapabilityError,
+    );
+  });
+
+  // The reported capability must be the one the query actually asked for.
+  // An unconditional sortableFields check would blame the absent field for
+  // a failure the search filter caused, against every server whose
+  // discovery omits sortableFields.
+  test('names the capability the query asked for, not an unrelated absent sort field', async () => {
+    const { sortableFields: _drop, ...rest } = DISCOVERY.capabilities;
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...rest, fullTextSearch: false },
+    });
+    expect(adapter.capabilities.sortableFields).toEqual([]);
+    await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toMatchObject({
+      capability: 'fullTextSearch',
+    });
   });
 
   test('throws APIAdapterCapabilityError for filter.search without fullTextSearch', async () => {

@@ -569,20 +569,31 @@ export class StackQueryError extends StackError {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery'>,
+  capabilities: Pick<
+    StackFeatures,
+    'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery' | 'contentPresenceQuery'
+  >,
 ): void {
   if (filter?.search && !capabilities.fullTextSearch) {
     throw new StackQueryError(
       'Query uses filter.search, but this adapter does not declare the fullTextSearch capability.',
     );
   }
-  if (!filter?.content) return;
+  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
+  if (!filter?.content && !present) return;
   if (!capabilities.contentFieldQuery) {
     throw new StackQueryError(
-      'Query uses filter.content, but this adapter does not declare the contentFieldQuery capability.',
+      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
+        'but this adapter does not declare the contentFieldQuery capability.',
     );
   }
-  for (const key of Object.keys(filter.content)) {
+  if (present && !capabilities.contentPresenceQuery) {
+    throw new StackQueryError(
+      'Query uses filter.contentPresent, but this adapter does not declare the ' +
+        'contentPresenceQuery capability.',
+    );
+  }
+  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
     if (parseContentFilterKey(key).length > 1 && !capabilities.nestedContentQuery) {
       throw new StackQueryError(
         `Query uses the nested content path "${key}", but this adapter does not declare ` +
@@ -645,14 +656,58 @@ const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
  */
 export function assertValidSort(sort: QuerySort | undefined): void {
   if (!sort) return;
+  if (sort.field !== undefined && sort.contentField !== undefined) {
+    throw new StackQueryError('A sort names either a native field or a content field, never both.');
+  }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
     throw new StackQueryError(
       `Invalid sort field "${sort.field}": expected one of createdAt, updatedAt, version.`,
     );
   }
+  if (sort.contentField !== undefined) {
+    // Parsed by the same rule a filter key is, so a name a filter could
+    // never address is not one a sort can either — then held to one
+    // segment, because a value inside an array or object has no single
+    // position to order its record by (docs/spec/data-model.md
+    // § Sorting by a content field).
+    if (parseContentFilterKey(sort.contentField).length > 1) {
+      throw new StackQueryError(
+        `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
+      );
+    }
+  }
   if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
     throw new StackQueryError(
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
+    );
+  }
+}
+
+/**
+ * Fail loud rather than silently reorder: an adapter that can't honor the
+ * requested sort would otherwise answer in some other order, which a
+ * caller paging a bounded window has no way to notice. The companion to
+ * assertQueryCapabilities(), split from it because a sort is not a filter
+ * — see docs/spec/data-model.md § Capability-gated filters.
+ */
+export function assertSortCapability(
+  sort: QuerySort | undefined,
+  capabilities: Pick<StackFeatures, 'contentFieldSort' | 'sortableFields'>,
+): void {
+  if (!sort) return;
+  if (sort.contentField !== undefined) {
+    if (!capabilities.contentFieldSort) {
+      throw new StackQueryError(
+        'Query uses sort.contentField, but this adapter does not declare the contentFieldSort ' +
+          'capability.',
+      );
+    }
+    return;
+  }
+  const field = sort.field ?? 'createdAt';
+  if (!capabilities.sortableFields.includes(field)) {
+    throw new StackQueryError(
+      `Query sorts by "${field}", which this adapter does not declare in sortableFields.`,
     );
   }
 }
@@ -2041,6 +2096,7 @@ export class Stack implements StackClient {
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(query.sort);
+    assertSortCapability(query.sort, this.adapter.capabilities);
     assertValidRelatedTo(filter?.relatedTo);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
@@ -4020,6 +4076,7 @@ export class ScopedStack implements StackClient {
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
+    assertSortCapability(query.sort, this.stack.features);
     assertValidRelatedTo(query.filter?.relatedTo);
     if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');

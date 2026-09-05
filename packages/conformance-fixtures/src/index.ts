@@ -107,6 +107,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
+        contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -129,6 +131,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
+        contentFieldSort: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
         maxContentBytes: null,
@@ -154,6 +158,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
+        contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -179,6 +185,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
+        contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
         maxContentBytes: 1048576,
@@ -204,6 +212,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
+        contentFieldSort: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
         maxContentBytes: null,
@@ -534,6 +544,138 @@ export const queryRecordsFixtures: ConformanceFixture<
       cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
       total: null,
     },
+  },
+  {
+    name: 'query-filters-by-content-presence',
+    description:
+      'filter.contentPresent names paths that must hold a value — the question an exact-match ' +
+      'filter value cannot ask, since a value matches what is there rather than whether ' +
+      'anything is. Its counterpart is a null content filter, which matches "no value at the ' +
+      'path, or a value that is null". Both are element-wise through arrays, so a path holding ' +
+      'both a null and a value satisfies each. A server declaring contentFieldQuery does NOT ' +
+      'thereby promise presence: it needs contentPresenceQuery, or it MUST refuse the filter ' +
+      'rather than return the superset that ignoring it produces. ' +
+      'See docs/spec/data-model.md § Filter.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { contentPresent: ['publishedAt'] }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00051',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Published', publishedAt: '2024-03-01T00:00:00.000Z' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-sorts-by-a-content-field',
+    description:
+      'sort.contentField orders by a top-level content field, and is a separate member from ' +
+      'sort.field rather than a widening of it: a content field may be named after a native ' +
+      'column, so a single field would leave `version` ambiguous. A Record holding no value at ' +
+      'the field sorts after every Record that has one, whichever direction the sort runs — an ' +
+      'undated post belongs at the end of a date-ordered listing either way. ' +
+      'See docs/spec/data-model.md § Sorting by a content field.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { sort: { contentField: 'publishedAt', direction: 'desc' }, limit: 3 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00031',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Newest', publishedAt: '2024-03-01T00:00:00.000Z' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00032',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Older', publishedAt: '2024-01-15T00:00:00.000Z' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00033',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Never published' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-content-sort-folds-case-and-accents',
+    description:
+      'Text orders by a folded key rather than by code point: compatibility-decompose, drop ' +
+      'combining marks, lowercase (locale-independently). So `apple` precedes `Émile` precedes ' +
+      '`Zebra`, where raw code-point order would file every capital ahead of every lowercase ' +
+      'letter and every accented word after both. A server implementing this wire protocol ' +
+      'MUST reproduce that fold, or two implementations answer one query in two orders. What ' +
+      'the fold does not promise — locale tailoring, and the orderings that depend on it — is ' +
+      'in docs/spec/data-model.md § Text ordering.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { sort: { contentField: 'title', direction: 'asc' }, limit: 3 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00041',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'apple' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00042',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Émile' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00043',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Zebra' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+      total: null,
+    },
+  },
+  {
+    name: 'query-get-sorts-by-a-content-field',
+    description:
+      'On GET /records the content sort travels as ?sortContent=, a parameter of its own rather ' +
+      'than a value of ?sort= — the same "which parameter appears says which was meant" shape ' +
+      'the relationship filter uses, and the only way to keep a content field named `version` ' +
+      'distinct from the native column on a raw query string. A server MUST reject a request ' +
+      'carrying both with 400. See docs/spec/wire-format.md § Records.',
+    method: 'GET',
+    path: '/records?sortContent=publishedAt&direction=asc',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null, total: null },
   },
   {
     name: 'query-related-to-record-target',
@@ -1401,15 +1543,36 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       "doesn't recognize is a second, distinct 400 bad_request branch from the malformed-" +
       'base64 case above (see error-bad-request-malformed-cursor) — both map to the same code, ' +
       'but a server that only implements one of the two decode failures is only half-conformant. ' +
-      'The cursor here is the base64 encoding of "badfield|123|1hk153x00001".',
+      "A cursor payload is a server's own to shape — this one carries the sort position this " +
+      'implementation writes, and what the fixture pins is the branch, not the encoding.',
     method: 'POST',
     path: '/records/query',
-    requestBody: { cursor: 'YmFkZmllbGR8MTIzfDFoazE1M3gwMDAwMQ==' },
+    requestBody: {
+      cursor: 'eyJrIjoibmF0aXZlIiwiZiI6ImJhZGZpZWxkIiwiaSI6IjFoazE1M3gwMDAwMSIsInYiOjEyM30=',
+    },
     responseStatus: 400,
     responseBody: {
       error: {
         code: 'bad_request',
         message: 'Invalid cursor: unknown sort field "badfield"',
+      },
+    },
+  },
+
+  {
+    name: 'error-bad-request-both-sort-parameters',
+    description:
+      'A request naming both ?sort= and ?sortContent= returns 400 with code "bad_request" ' +
+      'rather than resolving one of them: a content field may be named after a native column, ' +
+      'so there is no correct way to guess which was meant — the same posture as a request ' +
+      'mixing two relationship scopes. See docs/spec/wire-format.md § Records.',
+    method: 'GET',
+    path: '/records?sort=createdAt&sortContent=publishedAt',
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'A sort names either a native field or a content field, never both.',
       },
     },
   },
