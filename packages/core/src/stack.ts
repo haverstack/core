@@ -1039,12 +1039,6 @@ export interface StackClient {
     content: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
-  // The four mutators below answer with the record they produced, like
-  // update() and undelete() — so a caller can report what it wrote without a
-  // second read, matching the Record body their wire endpoints return (see
-  // docs/spec/wire-format.md § Records). A no-op answers with the record
-  // unchanged: what marks it a no-op is the version that didn't move, not an
-  // answer that never came.
   associate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
   dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
   setPermissions(
