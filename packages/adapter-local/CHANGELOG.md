@@ -1,5 +1,18 @@
 # @haverstack/adapter-local
 
+## 0.21.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/blob-adapter-disk`, `@haverstack/core`, `@haverstack/record-adapter-sqlite`.
+
+### Patch Changes
+
+- Updated dependencies [[`d945ded`](https://github.com/haverstack/core/commit/d945ded1ead75e6e3e11a6088afa72dd889c8342), [`65476bd`](https://github.com/haverstack/core/commit/65476bd3f7aa025cec0790653bcc9cdb691bfce1)]:
+  - @haverstack/blob-adapter-disk@0.20.0
+  - @haverstack/record-adapter-sqlite@0.14.0
+  - @haverstack/core@0.22.0
+
 ## 0.20.0
 
 ### Minor Changes
