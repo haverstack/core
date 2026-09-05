@@ -1,5 +1,27 @@
 # @haverstack/core
 
+## 0.22.0
+
+### Minor Changes
+
+- [#243](https://github.com/haverstack/core/pull/243) [`d945ded`](https://github.com/haverstack/core/commit/d945ded1ead75e6e3e11a6088afa72dd889c8342) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `getEntityByDid()` and `getOwnerEntity()` to `StackClient`, resolving a DID to its `_entity` card with the rules that make the answer single-valued: family-wide by `baseId` (so a card migrated to a later type version still resolves), including soft-deleted cards (which still reserve their `did`), and matched in memory when the adapter doesn't declare `contentFieldQuery`. Every caller that needed this lookup was re-deriving it, and two existing implementations (`Stack.ensureOwnerEntity()` in this repo, `entityRoutes`'s `resolveOwnerRecordId()` in the server) disagreed on the rules.
+
+  `getOwnerEntity()` is `getEntityByDid()` for the one DID every stack reserves — the owner's own, named by `ownerEntityId`.
+
+  Under `ScopedStack`, the result is filtered to what the request may read, and `includeUnlisted` is honored only for the owner acting alone — matching what `query()` itself permits rather than throwing. `null` therefore covers three cases that share one answer (missing, unreadable, or unlisted-and-not-permitted) and is never evidence a card is absent, per the anti-oracle rule.
+
+  `Stack.ensureOwnerEntity()`'s bootstrap probe is now implemented in terms of `getEntityByDid()`, so there is one lookup rather than two.
+
+- [#244](https://github.com/haverstack/core/pull/244) [`65476bd`](https://github.com/haverstack/core/commit/65476bd3f7aa025cec0790653bcc9cdb691bfce1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `associate()`, `dissociate()`, `setPermissions()` and `setUnlisted()` now return the record they produced
+
+  All four returned `Promise<void>` while every other version-bumping method on `StackClient` — `update()`, `undelete()`, `restoreVersion()`, `commitMigration()` — returns the record. Their wire endpoints already answer with a Record body (`docs/spec/wire-format.md` § Records) and `APIAdapter` already parses it, so the record was being fetched and then discarded. Callers can now report what they wrote without a second read.
+
+  A no-op (a duplicate association, removing one that isn't there, a deep-equal permission set, setting `unlistedAt` to the state it already holds) returns the record unchanged: what marks it a no-op is the version that didn't move, not an answer that never came.
+
+  `delete()` is deliberately unchanged — a hard delete leaves no record and no version to return.
+
+  This is source-compatible for callers that ignore the return value; it is breaking only for code that structurally implements `StackClient` itself.
+
 ## 0.21.1
 
 ### Patch Changes
