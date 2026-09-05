@@ -138,12 +138,12 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   return w;
 }
 
-/** Parse an ISO date string from a wire body, returns undefined if absent or invalid. */
-export function parseDate(val: unknown): Date | undefined {
-  if (typeof val !== 'string') return undefined;
-  const d = new Date(val);
-  return isNaN(d.getTime()) ? undefined : d;
-}
+/**
+ * Re-exported from `@haverstack/core/wire`, which decodes wire dates on the
+ * request side too — one definition, the same way `WireErrorCode` aliases
+ * core's `StackErrorCode` rather than restating it.
+ */
+export { parseDate } from '@haverstack/core/wire';
 
 // -------------------------------------------------------
 // Error responses
