@@ -1035,17 +1035,11 @@ export interface StackClient {
   get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
   query(query?: StackQuery): Promise<QueryResult>;
   /**
-   * Resolve a DID to its `_entity` card, family-wide and including
-   * soft-deleted cards — the same rules `checkBindingUnique()` and the DID
-   * binding's immutability enforce, so this never reports "no card" for a
-   * DID that has one. See docs/spec/identity.md § DID bindings.
+   * Resolve a DID to its `_entity` card — family-wide and soft-deleted
+   * inclusive, per docs/spec/identity.md § DID bindings. No caching.
    *
-   * Returns `null` for missing, unreadable, or (under a scoped caller other
-   * than the owner acting alone) unlisted-and-not-permitted — three
-   * distinct reasons that share one answer. Under `ScopedStack`, `null` is
-   * therefore never evidence the card is absent, per the anti-oracle rule.
-   *
-   * No caching: callers that want one keep it themselves.
+   * Under `ScopedStack`, `null` covers missing, unreadable, and (unless the
+   * owner is acting alone) unlisted — never evidence the card is absent.
    */
   getEntityByDid(did: EntityId): Promise<StackRecord | null>;
   /** getEntityByDid() for the one DID every stack reserves: its own owner. */
@@ -1157,20 +1151,10 @@ async function findFirstMatch(
 
 /**
  * Shared implementation behind Stack.getEntityByDid() and
- * ScopedStack.getEntityByDid(). Family-wide by baseId (not typeId), so a
- * card migrated to a later version still resolves, and includeDeleted:
- * true, since a soft-deleted card still reserves its did — see
- * docs/spec/identity.md § DID bindings. The content filter is applied only
- * where the adapter declares contentFieldQuery, with an in-memory re-check
- * either way via findFirstMatch's predicate, so the helper works on an
- * adapter that hasn't declared the capability.
- *
- * `includeUnlisted` is a parameter rather than hardcoded: passing it
- * unconditionally would make ScopedStack.query() throw for every caller but
- * the owner acting alone, which a hand-written query would never do either
- * (it would simply omit the flag). The invariant this buys: the helper is
- * never more capable, and never less capable, than writing the query by
- * hand. See #239.
+ * ScopedStack.getEntityByDid() — see docs/spec/identity.md § DID bindings
+ * for the matching rules. `includeUnlisted` is a parameter rather than
+ * hardcoded, so a caller not permitted to set it can omit it instead of
+ * having query() throw.
  */
 async function lookupEntityByDid(
   run: (query: StackQuery) => Promise<QueryResult>,
@@ -3975,13 +3959,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Runs through this.query(), not this.stack.query(): unlike
-   * getAttachmentRecords()-style lookups, this answers a question the
-   * caller is asking on their own behalf, so it stays subject to canRead()
-   * like any other query. includeUnlisted is passed only when this request
-   * is the owner acting alone — the one tier query() honors it for — rather
-   * than unconditionally, which would throw StackPermissionError for
-   * everyone else. See docs/spec/identity.md § DID bindings and #239.
+   * Runs through this.query(), so canRead() still applies — this answers a
+   * question the caller asks on its own behalf. includeUnlisted is passed
+   * only when the request is the owner acting alone, per
+   * docs/spec/identity.md § DID bindings.
    */
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
     return lookupEntityByDid(
