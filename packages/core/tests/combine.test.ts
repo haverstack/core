@@ -27,6 +27,7 @@ const capabilities: AdapterCapabilities = {
   fullTextSearch: false,
   contentFieldQuery: false,
   nestedContentQuery: false,
+  contentPresenceQuery: false,
   contentFieldSort: false,
   sortableFields: ['createdAt', 'updatedAt', 'version'],
   maxAttachmentBytes: null,

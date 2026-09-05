@@ -41,6 +41,7 @@ const DISCOVERY = {
     fullTextSearch: true,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentPresenceQuery: true,
     contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: 52428800,
@@ -1100,6 +1101,17 @@ describe('queryRecords', () => {
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
       APIAdapterCapabilityError,
     );
+  });
+
+  test('throws APIAdapterCapabilityError for contentPresent without the capability', async () => {
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...DISCOVERY.capabilities, contentPresenceQuery: false },
+    });
+    await expect(
+      adapter.queryRecords({ filter: { contentPresent: ['publishedAt'] } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
   test('throws APIAdapterCapabilityError for a content sort without contentFieldSort', async () => {

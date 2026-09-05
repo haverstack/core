@@ -313,6 +313,7 @@ type Filter = {
 
   // Content fields (exact match; the key is a dot-separated path)
   content?: { [key: string]: unknown };
+  contentPresent?: string[]; // paths that must hold a value
 
   // Full-text search (capability varies by adapter)
   search?: string;
@@ -327,6 +328,12 @@ type DateRange = {
 **`relatedTo` names a label, a target, or both — never neither**, and a filter naming neither is rejected with `StackQueryError` rather than widening to every Record carrying a relationship. Its target follows the same naming rules as a stored one (above), checked the same way. A `RelationshipTargetPattern` is the association's own target shape with the parts a query may leave open. Each half is a pattern: a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a scope and never across scopes.
 
 **"Carries any relationship at all" is deliberately not expressible.** `tags` and `hasAttachment` have no match-any form either, so a relationship one would be the odd exception rather than a missing convenience — and a filter that can encode to nothing is a filter that can silently widen a query when it crosses the wire. The type refuses the empty filter rather than defining it, and `Stack.query()` refuses it again at runtime, where a filter decoded from query parameters is a plain object the type never saw.
+
+**`contentPresent` asks whether a path holds a value at all**, which a filter value cannot: a value matches what is there, never whether anything is. It lists paths, all of which must hold a value — an intersection, like `tags` — and an empty list filters nothing, like an empty `tags`. A path holds a value when **at least one non-null value is reachable at it**, so it reads an array element-wise exactly as a `content` filter does: `{ contentPresent: ['emails.value'] }` matches a contact with an address in any of its `emails`, and a path reaching only nulls, an empty array, or nothing at all holds no value.
+
+`contentPresent` and a `null` `content` filter answer opposite questions but are **not strict complements where a path is multi-valued**: `tags: [null, 'x']` satisfies "something there is null" and "something there is present" alike. That falls out of element-wise matching rather than being a special case, and the alternative — making one of them quantify over every element while the other quantifies over some — would make the pair harder to reason about than the overlap does.
+
+The motivating query is a listing: an article's `publishedAt` is optional, so drafts are `{ content: { publishedAt: null } }` and published articles are `{ contentPresent: ['publishedAt'] }`. Neither is a value match, and a redundant `draft` boolean beside the date — two fields that can disagree — is what a type would otherwise have to carry.
 
 #### Nested content paths
 
@@ -412,6 +419,8 @@ Locale-correct ordering is out of reach for a stored key regardless of effort, b
 ### Capability-gated filters
 
 `content` filtering and `search` depend on adapter capabilities (see [Adapter capabilities](./adapters.md#adapter-capabilities)). `query()` fails loud rather than silently widening: `Stack.query()` checks `filter.content`/`filter.search` against `adapter.capabilities` before dispatching, and throws `StackQueryError` (`bad_request`/400) if the adapter hasn't declared the matching capability — local and remote behave identically.
+
+**`contentPresent` needs `contentPresenceQuery` on top of `contentFieldQuery`**, a third flag on the same reasoning as `nestedContentQuery`: a server promising to match a content value has not thereby promised to answer whether one is there, and reading it as such would hand a client the unfiltered superset that ignoring the filter produces. A multi-segment presence path needs `nestedContentQuery` too, exactly as a filter key does.
 
 **A sort is gated the same way.** `sort.contentField` needs `contentFieldSort`, and a native `sort.field` must appear in the adapter's `sortableFields`; a sort an adapter hasn't declared throws `StackQueryError` rather than being answered in some other order — which a caller reading one bounded page has no way to notice. `contentFieldSort` and `contentFieldQuery` are independent: a server may order by a content field without offering to filter on one, or the reverse.
 

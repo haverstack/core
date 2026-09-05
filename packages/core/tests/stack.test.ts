@@ -897,6 +897,74 @@ describe('query — content filter null semantics', () => {
 });
 
 // -------------------------------------------------------
+// contentPresent — the question a filter value cannot ask, since a value
+// matches what is there rather than whether anything is.
+// -------------------------------------------------------
+
+describe('query — contentPresent', () => {
+  test('matches records holding a value, and null matches the rest', async () => {
+    await stack.create(NOTE_V1, { text: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
+    await stack.create(NOTE_V1, { text: 'undated' });
+    await stack.create(NOTE_V1, { text: 'explicit null', publishedAt: null });
+
+    const present = await stack.query({ filter: { contentPresent: ['publishedAt'] } });
+    expect(present.records.map((r) => r.content.text)).toEqual(['dated']);
+
+    const absent = await stack.query({ filter: { content: { publishedAt: null } } });
+    expect(absent.records.map((r) => r.content.text).sort()).toEqual(['explicit null', 'undated']);
+  });
+
+  test('several paths are an intersection, as tags are', async () => {
+    await stack.create(NOTE_V1, { text: 'both', a: 1, b: 2 });
+    await stack.create(NOTE_V1, { text: 'one', a: 1 });
+
+    const result = await stack.query({ filter: { contentPresent: ['a', 'b'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['both']);
+  });
+
+  test('an empty list filters nothing, as an empty tag list does', async () => {
+    await stack.create(NOTE_V1, { text: 'a' });
+    expect((await stack.query({ filter: { contentPresent: [] } })).records).toHaveLength(1);
+  });
+
+  test('a path reaches through an array element-wise', async () => {
+    await stack.create(NOTE_V1, { text: 'has one', emails: [{ value: 'a@example.com' }] });
+    await stack.create(NOTE_V1, { text: 'has none', emails: [{ label: 'home' }] });
+
+    const result = await stack.query({ filter: { contentPresent: ['emails.value'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['has one']);
+  });
+
+  test('a path holding only nulls holds no value', async () => {
+    await stack.create(NOTE_V1, { text: 'nulls', tags: [null, null] });
+    await stack.create(NOTE_V1, { text: 'empty', tags: [] });
+    await stack.create(NOTE_V1, { text: 'one', tags: ['x'] });
+
+    const result = await stack.query({ filter: { contentPresent: ['tags'] } });
+    expect(result.records.map((r) => r.content.text)).toEqual(['one']);
+  });
+
+  // Both filters can match one record where the path is multi-valued: each
+  // is element-wise, so an array holding a null and a value satisfies
+  // "something is null" and "something is present" alike.
+  test('a multi-valued path can satisfy both this and the null filter', async () => {
+    await stack.create(NOTE_V1, { text: 'mixed', tags: [null, 'x'] });
+
+    expect((await stack.query({ filter: { contentPresent: ['tags'] } })).records).toHaveLength(1);
+    expect((await stack.query({ filter: { content: { tags: null } } })).records).toHaveLength(1);
+  });
+
+  test('a malformed path is refused, as a content filter key is', async () => {
+    await expect(stack.query({ filter: { contentPresent: ['a..b'] } })).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(stack.query({ filter: { contentPresent: ['title[0]'] } })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+});
+
+// -------------------------------------------------------
 // query() fails loud rather than silently widening: a filter
 // Stack can't honor against this adapter's declared capabilities must
 // throw before dispatching, not quietly return the unfiltered superset.
@@ -918,6 +986,18 @@ describe('query — capability fail-loud', () => {
     await expect(incapableStack.query({ filter: { content: { priority: 1 } } })).rejects.toThrow(
       StackQueryError,
     );
+  });
+
+  test('contentPresent against an adapter without the capability throws', async () => {
+    const incapableStack = await Stack.create(
+      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    );
+    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
+
+    await expect(
+      incapableStack.query({ filter: { contentPresent: ['priority'] } }),
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('a query with neither filter still works against an incapable adapter', async () => {
@@ -3570,6 +3650,7 @@ describe('nested content paths', () => {
           fullTextSearch: false,
           contentFieldQuery: true,
           nestedContentQuery: false,
+          contentPresenceQuery: false,
           contentFieldSort: false,
           sortableFields: ['createdAt', 'updatedAt', 'version'],
           maxAttachmentBytes: null,
@@ -3602,6 +3683,7 @@ describe('maxContentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
         contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: null,
@@ -3654,6 +3736,7 @@ describe('putAttachment — maxAttachmentBytes pre-check', () => {
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
         contentFieldSort: false,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes,

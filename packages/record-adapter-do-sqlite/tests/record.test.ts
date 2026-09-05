@@ -106,6 +106,7 @@ describe('construction', () => {
       fullTextSearch: true,
       contentFieldQuery: true,
       nestedContentQuery: true,
+      contentPresenceQuery: true,
       contentFieldSort: true,
       sortableFields: ['createdAt', 'updatedAt', 'version'],
       maxAttachmentBytes: null,

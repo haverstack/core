@@ -645,6 +645,56 @@ describe('records — queries', () => {
     expect(result.records[0].id).toBe('r1');
   });
 
+  // Presence is what an exact-match value cannot ask: a value matches what
+  // is there, never whether anything is.
+  test('contentPresent matches records holding a value at the path', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'dated', at: '2021' } }));
+    await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'undated' } }));
+    await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'null', at: null } }));
+
+    const present = await adapter.queryRecords({ filter: { contentPresent: ['at'] } });
+    expect(present.records.map((r) => r.id)).toEqual(['r1']);
+
+    const absent = await adapter.queryRecords({ filter: { content: { at: null } } });
+    expect(absent.records.map((r) => r.id).sort()).toEqual(['r2', 'r3']);
+  });
+
+  test('contentPresent reaches through an array, and empty holds nothing', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'has one', emails: [{ value: 'a@b.c' }] } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'has none', emails: [{ label: 'home' }] } }),
+    );
+    await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'empty', emails: [] } }));
+
+    const result = await adapter.queryRecords({ filter: { contentPresent: ['emails.value'] } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('contentPresent combines with a content filter and with a sort', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'r1', content: { text: 'a', at: '2021', kind: 'post' } }),
+    );
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'b', at: '2020', kind: 'post' } }),
+    );
+    await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'c', kind: 'post' } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r4', content: { text: 'd', at: '2022', kind: 'page' } }),
+    );
+
+    const result = await adapter.queryRecords({
+      filter: { contentPresent: ['at'], content: { kind: 'post' } },
+      sort: { contentField: 'text', direction: 'asc' },
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r1', 'r2']);
+    expect(result.total).toBe(2);
+  });
+
   test('content filter matches an element of a top-level array', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(

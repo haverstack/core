@@ -162,6 +162,16 @@ describe('parseQueryBody', () => {
     ).toThrow(StackQueryError);
   });
 
+  test('filter.contentPresent travels as an array of paths', () => {
+    expect(parseQueryBody({ filter: { contentPresent: ['publishedAt'] } })).toEqual({
+      filter: { contentPresent: ['publishedAt'] },
+    });
+    expect(() => parseQueryBody({ filter: { contentPresent: 'publishedAt' } })).toThrow(
+      StackQueryError,
+    );
+    expect(() => parseQueryBody({ filter: { contentPresent: [7] } })).toThrow(StackQueryError);
+  });
+
   test('sort.contentField travels beside sort.field, never with it', () => {
     expect(
       parseQueryBody({ sort: { contentField: 'publishedAt', direction: 'desc' } }).sort,

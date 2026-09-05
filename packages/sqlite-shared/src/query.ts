@@ -342,6 +342,25 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     }
   }
 
+  // Presence — the question an exact-match value cannot ask. Element-wise
+  // like the content filter above: a path holds a value when at least one
+  // non-null value is reachable at it. See docs/spec/data-model.md
+  // § Filter.
+  if (f.contentPresent?.length) {
+    let aliasSeq = 0;
+    const nextAlias = () => `pp${aliasSeq++}`;
+    for (const key of f.contentPresent) {
+      conditions.push(
+        contentPathExists(
+          parseContentFilterKey(key),
+          (a) => `${a}.value IS NOT NULL`,
+          params,
+          nextAlias,
+        ),
+      );
+    }
+  }
+
   if (f.search) {
     const sanitized = sanitizeFts5Query(f.search);
     if (sanitized) {

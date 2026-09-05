@@ -358,13 +358,17 @@ const missingQueryCapability = (
   )
     return 'sortableFields';
   if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
-  if (!filter?.content) return undefined;
+  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
+  if (!filter?.content && !present) return undefined;
   if (!capabilities.contentFieldQuery) return 'contentFieldQuery';
+  if (present && !capabilities.contentPresenceQuery) return 'contentPresenceQuery';
   if (capabilities.nestedContentQuery) return undefined;
   // A key this server would refuse only because it is malformed is the
   // caller's error at any capability level, so it is parsed the same way
   // assertQueryCapabilities parses it rather than scanned for a dot.
-  return Object.keys(filter.content).some(isNestedPath) ? 'nestedContentQuery' : undefined;
+  return [...Object.keys(filter?.content ?? {}), ...(present ?? [])].some(isNestedPath)
+    ? 'nestedContentQuery'
+    : undefined;
 };
 
 const isNestedPath = (key: string): boolean => {

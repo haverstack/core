@@ -107,6 +107,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
         contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
@@ -130,6 +131,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
         contentFieldSort: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
@@ -156,6 +158,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
         contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
@@ -182,6 +185,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: true,
         contentFieldQuery: true,
         nestedContentQuery: true,
+        contentPresenceQuery: true,
         contentFieldSort: true,
         sortableFields: ['createdAt', 'updatedAt', 'version'],
         maxAttachmentBytes: 52428800,
@@ -208,6 +212,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         fullTextSearch: false,
         contentFieldQuery: false,
         nestedContentQuery: false,
+        contentPresenceQuery: false,
         contentFieldSort: false,
         sortableFields: ['createdAt'],
         maxAttachmentBytes: null,
@@ -537,6 +542,36 @@ export const queryRecordsFixtures: ConformanceFixture<
     responseBody: {
       records: [],
       cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
+      total: null,
+    },
+  },
+  {
+    name: 'query-filters-by-content-presence',
+    description:
+      'filter.contentPresent names paths that must hold a value — the question an exact-match ' +
+      'filter value cannot ask, since a value matches what is there rather than whether ' +
+      'anything is. Its counterpart is a null content filter, which matches "no value at the ' +
+      'path, or a value that is null". Both are element-wise through arrays, so a path holding ' +
+      'both a null and a value satisfies each. A server declaring contentFieldQuery does NOT ' +
+      'thereby promise presence: it needs contentPresenceQuery, or it MUST refuse the filter ' +
+      'rather than return the superset that ignoring it produces. ' +
+      'See docs/spec/data-model.md § Filter.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { contentPresent: ['publishedAt'] }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00051',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Published', publishedAt: '2024-03-01T00:00:00.000Z' },
+          version: 1,
+        },
+      ],
+      cursor: null,
       total: null,
     },
   },

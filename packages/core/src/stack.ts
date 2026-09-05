@@ -569,20 +569,31 @@ export class StackQueryError extends StackError {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery'>,
+  capabilities: Pick<
+    StackFeatures,
+    'fullTextSearch' | 'contentFieldQuery' | 'nestedContentQuery' | 'contentPresenceQuery'
+  >,
 ): void {
   if (filter?.search && !capabilities.fullTextSearch) {
     throw new StackQueryError(
       'Query uses filter.search, but this adapter does not declare the fullTextSearch capability.',
     );
   }
-  if (!filter?.content) return;
+  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
+  if (!filter?.content && !present) return;
   if (!capabilities.contentFieldQuery) {
     throw new StackQueryError(
-      'Query uses filter.content, but this adapter does not declare the contentFieldQuery capability.',
+      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
+        'but this adapter does not declare the contentFieldQuery capability.',
     );
   }
-  for (const key of Object.keys(filter.content)) {
+  if (present && !capabilities.contentPresenceQuery) {
+    throw new StackQueryError(
+      'Query uses filter.contentPresent, but this adapter does not declare the ' +
+        'contentPresenceQuery capability.',
+    );
+  }
+  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
     if (parseContentFilterKey(key).length > 1 && !capabilities.nestedContentQuery) {
       throw new StackQueryError(
         `Query uses the nested content path "${key}", but this adapter does not declare ` +

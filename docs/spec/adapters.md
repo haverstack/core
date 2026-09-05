@@ -86,6 +86,7 @@ type AdapterCapabilities = {
   fullTextSearch: boolean;
   contentFieldQuery: boolean;
   nestedContentQuery: boolean; // content filter keys may be multi-segment paths
+  contentPresenceQuery: boolean; // filter.contentPresent is honored
   contentFieldSort: boolean; // sort.contentField is honored
   sortableFields: ('createdAt' | 'updatedAt' | 'version')[];
   maxAttachmentBytes: number | null; // upload size ceiling, or null = unbounded
@@ -98,6 +99,8 @@ type AdapterCapabilities = {
 **`contentFieldQuery` is required-`true` for local adapters, optional and discovery-driven for wire adapters.** "Local" means an adapter that reads/writes its storage in-process, with no network hop to a server that could have its own opinion — `record-adapter-sqlite`, `record-adapter-do-sqlite` (a Durable Object's storage is in-process from that DO's own point of view, even though the DO itself is reached over the network), any future JSON-file adapter, and first-party test doubles standing in for one. For storage a local adapter already owns and reads directly, filtering by `content` is just a linear scan over resident data — there's no architectural reason a local adapter can't support it, so declaring `false` is never legitimate there. A remote server reached through `adapter-api` is the one legitimate `false` case: native fields (`typeId`, `parentId`, `entityId`, dates) are a fixed, indexable schema every server needs anyway, but `content` is an arbitrary, app-defined JSON blob, and a server serving many stacks may reasonably decline to index or full-scan it. `fullTextSearch` has no such local-required rule — a local adapter may legitimately decline it (see the JSON adapter note below).
 
 `Stack.query()` enforces this before dispatching — see [Capability-gated filters](./data-model.md#capability-gated-filters). That check is a backstop for the rule above, not a substitute for it: a local adapter that (incorrectly) declared `false` would otherwise return an unfiltered superset for every `content` query.
+
+**`contentPresenceQuery` is a third content flag**, gating `filter.contentPresent`, and required-`true` for local adapters on the same reasoning as the two above: a local adapter already walks resident data, and asking whether a path holds a value is the same walk with a weaker predicate. A remote server is again the one legitimate `false`, and it is meaningful only alongside `contentFieldQuery` — presence travels in the `POST /records/query` body, which a server declaring `contentFieldQuery: false` does not expose.
 
 **`contentFieldSort` is a boolean, and `sortableFields` names native columns only.** Content fields are app-defined and unbounded, so an adapter cannot enumerate them; and an adapter that indexes content for sorting indexes [every top-level scalar](./data-model.md#sorting-by-a-content-field), so there is nothing per-field left to declare. It is required-`true` for local adapters on the same reasoning as `contentFieldQuery`, and independent of it: the two describe ordering and filtering, and a server may offer either without the other. Both are enforced — `Stack.query()` refuses a sort the adapter hasn't declared rather than letting it be answered in some other order, which a caller reading one bounded page cannot detect.
 

@@ -383,6 +383,8 @@ export function parseQueryBody(raw: unknown): StackQuery {
       filter.attachmentFileId = requireString(f.attachmentFileId, 'filter.attachmentFileId');
     if (f.relatedTo !== undefined) filter.relatedTo = parseRelatedToBody(f.relatedTo);
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
+    if (f.contentPresent !== undefined)
+      filter.contentPresent = requireStringArray(f.contentPresent, 'filter.contentPresent');
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (f.includeDeleted) filter.includeDeleted = true;
     if (f.includeUnlisted) filter.includeUnlisted = true;

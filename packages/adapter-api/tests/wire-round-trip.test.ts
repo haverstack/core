@@ -28,6 +28,7 @@ const capabilities = (contentFieldQuery: boolean) => ({
   fullTextSearch: true,
   contentFieldQuery,
   nestedContentQuery: true,
+  contentPresenceQuery: true,
   contentFieldSort: true,
   sortableFields: ['createdAt', 'updatedAt', 'version'],
   maxAttachmentBytes: null,

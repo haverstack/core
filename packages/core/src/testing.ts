@@ -67,6 +67,7 @@ export class MemoryAdapter implements StackAdapter {
     fullTextSearch: false,
     contentFieldQuery: true,
     nestedContentQuery: true,
+    contentPresenceQuery: true,
     contentFieldSort: true,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
@@ -285,6 +286,19 @@ export class MemoryAdapter implements StackAdapter {
     }
 
     results = this.sortRecords(results, query.sort);
+
+    // Element-wise like the content filter above: a path holds a value
+    // when at least one non-null value is reachable at it.
+    if (f.contentPresent?.length) {
+      const paths = f.contentPresent.map((key) => parseContentFilterKey(key));
+      results = results.filter((r) =>
+        paths.every((segments) =>
+          valuesAtContentPath(r.content as Record<string, unknown>, segments).some(
+            (v) => v !== null && v !== undefined,
+          ),
+        ),
+      );
+    }
 
     const limit = query.limit ?? 50;
     const start = query.cursor ? Number(query.cursor) : 0;
@@ -549,6 +563,7 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     fullTextSearch: false,
     contentFieldQuery: false,
     nestedContentQuery: false,
+    contentPresenceQuery: false,
     contentFieldSort: false,
     sortableFields: ['createdAt', 'updatedAt', 'version'],
     maxAttachmentBytes: null,
