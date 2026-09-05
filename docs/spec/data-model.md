@@ -394,6 +394,8 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 **A field orders as the kind its schema declares, not as the value a Record happens to hold.** `number` and `boolean` order numerically (false before true), `date` as epoch milliseconds — so a date field orders the way `createdAt` does rather than by ISO string collation — and every string-shaped kind as text. A value that doesn't match its declared kind orders as nothing. Deriving from the schema is what keeps an order stable across Records that spell a field differently.
 
+**A `date` holding no UTC offset is read as UTC.** The offset is optional in the [shape a `date` accepts](#types), and resolving an offset-less date-time in whatever zone the host runs in would make the order depend on the machine: an index written on one host and a cursor re-derived on another would disagree, dropping or repeating a Record at a page boundary. UTC is also what a date-only value already resolves to, so `2020-03-01` and `2020-03-01T00:00:00` order alike.
+
 **A Record with no value at the sort field sorts after every Record that has one, in both directions.** An undated post belongs at the end of a date-ordered listing whichever way it runs; a rule that flipped with `direction` would put undated posts in the middle of the first page as often as not. Absence is not a value: `direction` reverses the order _between values_ and never moves absence.
 
 **Where a query spans Types that declare one field name differently, numbers sort before text**, and `direction` reverses that with everything else. Stating it here rather than leaving it to each engine's collation is what stops two adapters answering one query in two orders.
@@ -405,6 +407,8 @@ Sorting by an association — a relationship target, or a tag — is a different
 #### Text ordering
 
 Text orders by a **folded key**, not by code point: compatibility-decompose (NFKD), drop combining marks, lowercase. `apple` precedes `Émile` precedes `Zebra`, where raw code-point order files every capital ahead of every lowercase letter and every accented word after both. Two values that fold together (`Emile`, `Émile`) are then ordered by the stored value itself, so the order is total and a page boundary falls in the same place on every read.
+
+Both comparisons — the folded key, and the stored value that breaks its ties — run **by code point**. The distinction is not academic: UTF-16 code units, which a JavaScript `<` compares, file every character above U+FFFF below the U+E000–U+FFFF range, while a SQLite adapter compares the same text as UTF-8 bytes, whose order is code-point order. Comparing by code point is what lets an in-memory adapter and an indexed one answer one query in one order.
 
 The lowercasing is **locale-independent**. A locale-sensitive fold orders Turkish `İstanbul` differently from every other runtime's, and the key is stored in an index — the divergence would be baked in rather than merely observed.
 

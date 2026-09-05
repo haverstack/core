@@ -350,13 +350,18 @@ const missingQueryCapability = (
   capabilities: AdapterCapabilities,
 ): keyof AdapterCapabilities | undefined => {
   const filter = query.filter;
-  if (query.sort?.contentField !== undefined && !capabilities.contentFieldSort)
-    return 'contentFieldSort';
-  if (
-    query.sort?.contentField === undefined &&
-    !capabilities.sortableFields.includes(query.sort?.field ?? 'createdAt')
-  )
-    return 'sortableFields';
+  // A query naming no sort claims no order, so it needs no sort
+  // capability — mirroring assertSortCapability. Checking anyway would
+  // blame `sortableFields` for a failure the query's other reach caused,
+  // against any server whose discovery omits the field.
+  const sort = query.sort;
+  if (sort) {
+    if (sort.contentField !== undefined) {
+      if (!capabilities.contentFieldSort) return 'contentFieldSort';
+    } else if (!capabilities.sortableFields.includes(sort.field ?? 'createdAt')) {
+      return 'sortableFields';
+    }
+  }
   if (filter?.search && !capabilities.fullTextSearch) return 'fullTextSearch';
   const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
   if (!filter?.content && !present) return undefined;

@@ -1160,6 +1160,22 @@ describe('queryRecords', () => {
     );
   });
 
+  // The reported capability must be the one the query actually asked for.
+  // An unconditional sortableFields check would blame the absent field for
+  // a failure the search filter caused, against every server whose
+  // discovery omits sortableFields.
+  test('names the capability the query asked for, not an unrelated absent sort field', async () => {
+    const { sortableFields: _drop, ...rest } = DISCOVERY.capabilities;
+    const adapter = await openAdapter({
+      ...DISCOVERY,
+      capabilities: { ...rest, fullTextSearch: false },
+    });
+    expect(adapter.capabilities.sortableFields).toEqual([]);
+    await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toMatchObject({
+      capability: 'fullTextSearch',
+    });
+  });
+
   test('throws APIAdapterCapabilityError for filter.search without fullTextSearch', async () => {
     const limitedDiscovery = {
       ...DISCOVERY,

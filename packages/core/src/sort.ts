@@ -35,6 +35,17 @@ export const contentSortKey = (value: string): string =>
   value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
 
 /**
+ * A `date` field may hold an offset-less date-time — the offset is
+ * optional in the shape validate.ts pins — and bare `Date.parse` resolves
+ * one of those in the *host's* zone. The stored index value and a cursor
+ * value re-derived elsewhere would then disagree, skipping or repeating a
+ * record at a page boundary, and two adapters in two zones would answer
+ * one query in two orders. A zone-less date-time is read as UTC, which is
+ * what `Date.parse` already does for a date-only string.
+ */
+const ZONELESS_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/;
+
+/**
  * The ordered form of `value` held in a field of the declared `kind`, or
  * null when there is nothing to order by. The kind comes from the schema
  * rather than from the value's runtime type: a field that is numeric on
@@ -55,7 +66,7 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
       return typeof value === 'boolean' ? { kind: 'num', num: value ? 1 : 0 } : null;
     case 'date': {
       if (typeof value !== 'string') return null;
-      const ms = Date.parse(value);
+      const ms = Date.parse(ZONELESS_DATE_TIME_RE.test(value) ? `${value}Z` : value);
       return Number.isNaN(ms) ? null : { kind: 'num', num: ms };
     }
     default:
@@ -65,14 +76,33 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
   }
 }
 
+/**
+ * Order two strings by code point. JS `<` compares UTF-16 code units,
+ * which files every supplementary character (U+10000 and above, stored as
+ * a surrogate pair) below U+E000–U+FFFF; SQLite compares the same text as
+ * UTF-8 bytes, and UTF-8 byte order *is* code-point order. Comparing by
+ * code point is what makes an in-memory order and an indexed one agree.
+ */
+const compareCodePoints = (a: string, b: string): number => {
+  if (a === b) return 0;
+  const ai = a[Symbol.iterator]();
+  const bi = b[Symbol.iterator]();
+  for (;;) {
+    const x = ai.next();
+    const y = bi.next();
+    if (x.done || y.done) return x.done === y.done ? 0 : x.done ? -1 : 1;
+    if (x.value !== y.value) return x.value.codePointAt(0)! - y.value.codePointAt(0)!;
+  }
+};
+
 /** Numbers before text; within text, the folded key, then the value itself. */
 const compareValues = (a: SortEntry, b: SortEntry): number => {
   if (a.kind !== b.kind) return a.kind === 'num' ? -1 : 1;
   if (a.kind === 'num' && b.kind === 'num') return a.num - b.num;
   const x = a as { key: string; text: string };
   const y = b as { key: string; text: string };
-  if (x.key !== y.key) return x.key < y.key ? -1 : 1;
-  return x.text === y.text ? 0 : x.text < y.text ? -1 : 1;
+  const byKey = compareCodePoints(x.key, y.key);
+  return byKey !== 0 ? byKey : compareCodePoints(x.text, y.text);
 };
 
 /**
