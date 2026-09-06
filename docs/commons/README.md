@@ -20,9 +20,9 @@ second app queries the first app's records and just works.
 
 ## The commons namespace
 
-The namespace **`org.haverstack`** is reserved for commons types. Every type under it is
-defined in this directory and governed by the process below — no app may mint types in
-this namespace.
+The exact namespace **`org.haverstack`** is reserved for commons types. Every type whose
+id has the form `org.haverstack/<name>@<version>` is defined in this directory and
+governed by the process below — no app may mint one.
 
 ```
 org.haverstack/note@1
@@ -42,9 +42,14 @@ org.haverstack/vote@1    (proposed)
 org.haverstack/folder@1  (proposed)
 ```
 
-Everything outside `org.haverstack` (and the `_`-prefixed system types, which belong to
-the library) remains app territory, exactly as the spec defines: reverse-DNS namespace,
-app author is the authority.
+Everything outside the exact `org.haverstack` namespace (and the `_`-prefixed system
+types, which belong to the library) is app territory, exactly as the spec defines:
+reverse-DNS namespace, app author is the authority. A longer namespace that merely
+starts with `org.haverstack.` — `org.haverstack.eleventy`, say — is one of these: a
+distinct namespace under the same authority as the commons but outside its governance,
+the form a first-party Haverstack package uses for types it defines itself (the Eleventy
+integration's `org.haverstack.eleventy/page-meta@1` is one). Only a bare
+`org.haverstack/<name>` is a commons type.
 
 **Canonical definitions.** The schema in each type's file here is the type. Apps must
 register commons types exactly as written — a modified copy under the same ID is schema
