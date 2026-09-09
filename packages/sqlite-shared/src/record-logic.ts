@@ -30,7 +30,7 @@ import type {
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildQueryPlan } from './query.js';
+import { buildQueryPlan, withBudget } from './query.js';
 import { fts5Strategy } from './fts5.js';
 import {
   rowToRecord,
@@ -484,10 +484,12 @@ export class SharedSqlRecordLogic {
     // boundary between them.
     const rows: Record<string, unknown>[] = [];
     for (const page of plan.pages) {
-      if (rows.length >= fetch) break;
+      const budget = fetch - rows.length;
+      if (budget <= 0) break;
+      const statement = budget === fetch ? page : withBudget(page, budget);
       rows.push(
         ...asStackQueryError(query, () =>
-          this.exec.all<Record<string, unknown>>(page.sql, page.params),
+          this.exec.all<Record<string, unknown>>(statement.sql, statement.params),
         ),
       );
     }

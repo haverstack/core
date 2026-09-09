@@ -27,8 +27,22 @@ import { sanitizeFts5Query } from './fts5.js';
 export { getSortField, getSortColumn };
 export type { SortField };
 
-/** One statement plus the parameters it binds, in textual order. */
+/**
+ * One statement plus the parameters it binds, in textual order. For a
+ * page statement the last parameter is its row budget, which a caller
+ * that has already filled part of the page may lower — see withBudget.
+ */
 export type QueryStatement = { sql: string; params: unknown[] };
+
+/**
+ * The same page statement with a smaller row budget. The second partition
+ * of a content sort only has to top up whatever the first one left, and
+ * reading a full page it then discards is the difference between the two.
+ */
+export const withBudget = (page: QueryStatement, budget: number): QueryStatement => ({
+  sql: page.sql,
+  params: [...page.params.slice(0, -1), budget],
+});
 
 /**
  * The statements behind one StackQuery. `pages` are read in order and

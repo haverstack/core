@@ -69,7 +69,10 @@ const OUTSIDE_PHRASE_DISALLOWED = /[^\p{L}\p{N}\p{M}_\s()"]/gu;
  * paren spells "beside" as `\s*`, and a `\s*` with a long run to chew on
  * re-tries the whole run once per starting position — quadratic in the
  * run, on text a caller types into a box. Keeping runs collapsed bounds
- * what any of them can backtrack over to a single character.
+ * what any of them can backtrack over to a single character. What it does
+ * not buy is linearity overall: the rewrite still costs a little more
+ * than proportionally as the text grows, which is why bounding a search's
+ * length belongs to whoever accepts it.
  *
  * Nothing is lost by it: FTS5's tokenizer splits on whitespace, so a
  * collapsed run tokenizes exactly as the original did — inside a phrase
@@ -168,13 +171,13 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   let prev: string;
   do {
     prev = result;
-    // An empty phrase matches nothing and is the one construct whose
-    // quotes can re-pair differently once a rule inserts text beside it.
-    result = result.replace(/""/g, ' ');
-    result = result.replace(/\(\s*\)/g, ' ');
-    // The two rules above replace what they remove with a space, so a run
-    // re-forms here even though the input arrived collapsed.
-    result = collapseWhitespace(result);
+    // Empty phrases and empty paren pairs, each of which matches nothing,
+    // in one rule so that a run of them collapses to a single space
+    // rather than to one space apiece — a run of spaces is what the rules
+    // below would have to backtrack over. An empty phrase is also the one
+    // construct whose quotes can re-pair differently once a rule inserts
+    // text beside it, which is why this repeats to a fixpoint.
+    result = result.replace(/(?:""|\(\s*\))+/g, ' ');
     result = dropDanglingOperators(result);
     result = restoreImplicitAnd(result);
   } while (result !== prev);

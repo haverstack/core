@@ -173,14 +173,16 @@ describe('sanitizeFts5Query', () => {
   });
 
   /**
-   * Search text is whatever a caller typed, so every rule that reasons
-   * about what sits beside an operator or a paren has to stay linear in
-   * its length. Each shape below drove a quantifier to re-scan the same
-   * run once per starting position, which is quadratic: at this size the
-   * old cost ran from seven seconds to four minutes, against the tens of
-   * milliseconds each takes now.
+   * Search text is whatever a caller typed, so no rule may re-scan the
+   * same run of it once per starting position inside that run. Each shape
+   * below did: at this size the cost ran from seven seconds to four
+   * minutes, against the tens of milliseconds each takes now.
+   *
+   * The bound is against that collapse, not a linearity claim — cost
+   * still grows a little faster than length here, as it does on ordinary
+   * input.
    */
-  describe('adversarial input stays linear', () => {
+  describe('adversarial input does not blow up', () => {
     test.each([
       ['a NEAR( that never closes', 'NEAR(' + ' '.repeat(200_000)],
       ['nested NEAR( with no closing paren', 'NEAR('.repeat(40_000)],

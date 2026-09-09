@@ -139,7 +139,7 @@ export class MemoryAdapter implements StackAdapter {
   /**
    * True if any top-level file-ref field in the record's registered type
    * schema currently holds this fileId — the content-reference half of
-   * attachmentFileId matching. Mirrors sqlite-shared's file_refs index,
+   * attachmentFileId matching. Mirrors sqlite-shared's content_index,
    * computed on the fly since MemoryAdapter has no persisted index.
    */
   private hasFileRefTo(record: StackRecord, fileId: string): boolean {

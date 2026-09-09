@@ -70,25 +70,14 @@ export const RECORD_SCHEMA_SQL = `
     created_at    INTEGER NOT NULL
   ) STRICT;
 
-  -- One row per top-level scalar content field a record holds a value at,
-  -- rewritten whole on every content/typeId write. It answers two
-  -- questions that the JSON in records.content cannot answer through an
-  -- index: what a record orders as under a given field, and which records
-  -- reference a given file.
-  --
-  -- Exactly one of num_value / text_key+text_value is set, chosen by the
-  -- field's declared kind rather than by the value a given record happens
-  -- to hold: what a field orders as must not vary per record. text_key is
-  -- the folded form ordering compares (@haverstack/core's contentSortKey),
-  -- text_value the stored one, which breaks a tie between two values that
-  -- fold together. file_id is set only for a 'file-ref' field, so the
-  -- partial index below cannot match a plain string that merely looks like
-  -- a file id.
+  -- One row per top-level scalar content field a record holds a value at:
+  -- what it orders as, and the file it references. See
+  -- docs/spec/adapters.md § File compatibility and
+  -- docs/spec/data-model.md § Sorting by a content field.
   --
   -- value_rank is 0 for a numeric value and 1 for a text one — the same
-  -- split as "num_value IS NULL", but as a non-null column so that one
-  -- index can carry the whole ordering. See docs/spec/data-model.md
-  -- § Sorting by a content field.
+  -- split as "num_value IS NULL", but non-null, so one index can carry
+  -- the whole ordering. file_id is set only for a 'file-ref' field.
   CREATE TABLE IF NOT EXISTS content_index (
     record_id  TEXT NOT NULL REFERENCES records(id),
     field      TEXT NOT NULL,
@@ -100,22 +89,14 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, field)
   ) STRICT;
 
-  -- Indexes
+  -- Indexes. Each filter column continues into (created_at, id) — the
+  -- default ordering and its tiebreak — because these columns are
+  -- low-cardinality by design, and a narrow index on one leaves the
+  -- planner sorting the whole matching set before it can honor LIMIT.
   --
-  -- Every records index below leads with a filter column and continues
-  -- into (created_at, id) — the default ordering and its tiebreak. A
-  -- narrow index on the filter column alone still finds the rows, but the
-  -- planner then has to sort the whole matching set before it can honor
-  -- LIMIT, and these columns are low-cardinality by design: a stack has a
-  -- handful of types and apps, often a single entity, and most records
-  -- have no parent. Carrying the sort key turns that sort into an ordered
-  -- index walk that stops at the page boundary.
-  --
-  -- deleted_at and unlisted_at deliberately have no index. Nothing ever
-  -- searches for the rows that have them set; every query asks for
-  -- "IS NULL", which nearly every row satisfies, so such an index can only
-  -- mislead the planner into walking it in place of one that answers the
-  -- ORDER BY.
+  -- deleted_at and unlisted_at deliberately have none: nothing searches
+  -- for the rows they mark, and an index on a column every query tests
+  -- for IS NULL only lures the planner off the one answering ORDER BY.
   CREATE INDEX IF NOT EXISTS idx_records_type_id      ON records(type_id, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id    ON records(parent_id, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_records_entity_id    ON records(entity_id, created_at, id);
