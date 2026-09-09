@@ -732,15 +732,6 @@ describe('ScopedStack.query', () => {
     expect(result.records.map((r) => r.id)).toEqual([pub.id]);
   });
 
-  test('total is always null on scoped queries, even though the adapter reports a real count', async () => {
-    await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
-    const unscoped = await stack.query();
-    expect(unscoped.total).toBe(1);
-
-    const scoped = await stack.asEntity(null).query();
-    expect(scoped.total).toBeNull();
-  });
-
   test('refills across multiple adapter pages without skipping records, even if the result lands under the requested limit', async () => {
     // 6 records fetched 2-at-a-time (limit: 2), only the last one is public.
     // Pages 1 and 2 contain zero visible records, so the loop must refetch

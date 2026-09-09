@@ -469,24 +469,25 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
 // Records: query — POST /records/query, GET /records
 // -------------------------------------------------------
 //
-// What these pin is the *envelope*, not the filtering: `total` is never a
-// number, and `cursor` — not `records.length` — is what says whether the
-// result set is exhausted. Both are rules a server can satisfy by
-// accident on a small test Stack and violate the moment a requester with
-// partial visibility pages through a large one.
+// What these pin is the *envelope*, not the filtering: `cursor` — not
+// `records.length` — is what says whether the result set is exhausted.
+// That is a rule a server can satisfy by accident on a small test Stack
+// and violate the moment a requester with partial visibility pages
+// through a large one.
 
 export const queryRecordsFixtures: ConformanceFixture<
   Record<string, unknown>,
   WireQueryResponse
 >[] = [
   {
-    name: 'query-reports-null-total',
+    name: 'query-envelope-is-records-and-cursor',
     description:
-      'The query envelope reports total: null. Every request a server serves is authenticated ' +
-      'as some requester, so a count that ignores pagination would report how many Records ' +
-      'exist beyond what that requester may read — the cardinality the permission check just ' +
-      'hid. A server MUST NOT populate this field on any response, and APIAdapter discards a ' +
-      'number if one arrives anyway. See docs/spec/wire-format.md § Response envelope.',
+      'The query envelope carries records and cursor, and no count of the whole match. Every ' +
+      'request a server serves is authenticated as some requester, so a count that ignores ' +
+      'pagination would report how many Records exist beyond what that requester may read — ' +
+      'the cardinality the permission check just hid. A server that sends one anyway is ' +
+      'describing a Stack this protocol does not have, and a client ignores it rather than ' +
+      'failing. See docs/spec/wire-format.md § Response envelope.',
     method: 'POST',
     path: '/records/query',
     requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },
@@ -503,7 +504,6 @@ export const queryRecordsFixtures: ConformanceFixture<
         },
       ],
       cursor: null,
-      total: null,
     },
   },
   {
@@ -523,7 +523,6 @@ export const queryRecordsFixtures: ConformanceFixture<
     responseBody: {
       records: [],
       cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
-      total: null,
     },
   },
   {
@@ -552,14 +551,13 @@ export const queryRecordsFixtures: ConformanceFixture<
         },
       ],
       cursor: null,
-      total: null,
     },
   },
   {
     name: 'query-get-records-uses-the-same-envelope',
     description:
       'GET /records — the native-field query endpoint a server reaching no content ' +
-      'exposes — returns the identical envelope, including the same total and cursor rules. ' +
+      'exposes — returns the identical envelope, under the same cursor rule. ' +
       'The two endpoints differ in what they can filter by, not in what they return.',
     method: 'GET',
     path: '/records?typeId=com.example%2Fnote%401&limit=2',
@@ -567,7 +565,6 @@ export const queryRecordsFixtures: ConformanceFixture<
     responseBody: {
       records: [],
       cursor: 'eyJjcmVhdGVkQXQiOjE3MDQwNjcyMDAwMDAsImlkIjoiMWhrMTUzeDAwMDIwIn0',
-      total: null,
     },
   },
   {
@@ -597,7 +594,6 @@ export const queryRecordsFixtures: ConformanceFixture<
         },
       ],
       cursor: null,
-      total: null,
     },
   },
   {
@@ -641,7 +637,6 @@ export const queryRecordsFixtures: ConformanceFixture<
         },
       ],
       cursor: null,
-      total: null,
     },
   },
   {
@@ -686,7 +681,6 @@ export const queryRecordsFixtures: ConformanceFixture<
         },
       ],
       cursor: null,
-      total: null,
     },
   },
   {
@@ -700,7 +694,7 @@ export const queryRecordsFixtures: ConformanceFixture<
     method: 'GET',
     path: '/records?sortContent=publishedAt&direction=asc',
     responseStatus: 200,
-    responseBody: { records: [], cursor: null, total: null },
+    responseBody: { records: [], cursor: null },
   },
   {
     name: 'query-related-to-record-target',
@@ -716,7 +710,7 @@ export const queryRecordsFixtures: ConformanceFixture<
     method: 'GET',
     path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
     responseStatus: 200,
-    responseBody: { records: [], cursor: null, total: null },
+    responseBody: { records: [], cursor: null },
   },
   {
     name: 'query-related-to-entity-target',
@@ -728,7 +722,7 @@ export const queryRecordsFixtures: ConformanceFixture<
     method: 'GET',
     path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
     responseStatus: 200,
-    responseBody: { records: [], cursor: null, total: null },
+    responseBody: { records: [], cursor: null },
   },
   {
     name: 'query-related-to-external-namespace',
@@ -742,7 +736,7 @@ export const queryRecordsFixtures: ConformanceFixture<
     method: 'GET',
     path: '/records?relatedToNs=atproto',
     responseStatus: 200,
-    responseBody: { records: [], cursor: null, total: null },
+    responseBody: { records: [], cursor: null },
   },
 ];
 
@@ -2836,7 +2830,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       "of the owner's. The owner edits it, and the contributor receives nothing — not an empty " +
       'frame, not a redacted one. The existence of a change is itself a disclosure: a frame ' +
       'stripped of its content still reports that a record exists and that someone is working ' +
-      "on it, which is the same reasoning that keeps a scoped query's total null. The predicate " +
+      'on it, which is the same reasoning that keeps a count of the whole match off the query ' +
+      'envelope. The predicate ' +
       'is canRead applied per event, so a feed cannot disagree with get() and query() about ' +
       'what this session sees. Assumes the second edit, to a note the contributor may read, so ' +
       'that the fixture distinguishes filtering from a server that simply emits nothing.',

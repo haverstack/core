@@ -1323,7 +1323,7 @@ describe('query — baseId filter', () => {
 
   test('returns empty results for an unknown baseId rather than throwing', async () => {
     const result = await stack.query({ filter: { baseId: 'com.example.test/nonexistent' } });
-    expect(result).toEqual({ records: [], cursor: null, total: 0 });
+    expect(result).toEqual({ records: [], cursor: null });
   });
 
   test('intersects with typeId when both are given', async () => {

@@ -351,7 +351,6 @@ describe('records — queries', () => {
     });
     expect(page1.records.length).toBe(3);
     expect(page1.cursor).not.toBeNull();
-    expect(page1.total).toBe(5);
 
     const page2 = await stub.queryRecords({
       sort: { field: 'createdAt', direction: 'asc' },

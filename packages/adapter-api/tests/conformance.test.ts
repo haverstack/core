@@ -298,7 +298,6 @@ describe('queryRecords fixtures', () => {
       // The cursor survives even when the page is empty — it is the only
       // end-of-results signal, and dropping it would truncate the walk.
       expect(result.cursor).toBe(fixture.responseBody!.cursor);
-      expect(result.total).toBeNull();
     });
   }
 
@@ -335,7 +334,6 @@ describe('queryRecords fixtures', () => {
     expect(init.method).toBe('GET');
     expect(result.records).toEqual([]);
     expect(result.cursor).toBe(fixture.responseBody!.cursor);
-    expect(result.total).toBeNull();
   });
 
   // The scope is implied by which parameters appear, so a client that
@@ -373,16 +371,16 @@ describe('queryRecords fixtures', () => {
     });
   }
 
-  test('discards a total a non-conforming server populates anyway', async () => {
+  test('ignores a count a non-conforming server sends anyway', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ records: [], cursor: null, total: 142 }, 200));
 
     const result = await adapter.queryRecords({});
 
-    // 142 counts records this requester may never have been allowed to
-    // see. An app reading `total` must get the same answer here as it does
-    // from ScopedStack, which always reports null.
-    expect(result.total).toBeNull();
+    // 142 would count records this requester may never have been allowed
+    // to see. The envelope has no such member, and a server describing a
+    // Stack this protocol does not have is ignored, not rejected.
+    expect(result).toEqual({ records: [], cursor: null });
   });
 });
 

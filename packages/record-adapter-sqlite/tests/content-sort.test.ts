@@ -170,12 +170,16 @@ describe('sorting by a content field', () => {
     ]);
   });
 
-  test('total counts records, not joined index rows', async () => {
+  // One record holding a value at the sort field is one row out, however
+  // many index rows the join has to walk to find it.
+  test('a record appears once, not once per index row', async () => {
     for (const title of ['a', 'b', 'c']) await create(ARTICLE, { title, order: 1 });
 
-    const result = await adapter.queryRecords({ sort: { contentField: 'order' } });
-    expect(result.total).toBe(3);
-    expect(result.records).toHaveLength(3);
+    const result = await adapter.queryRecords({
+      sort: { contentField: 'order', direction: 'asc' },
+    });
+    // All three tie on the sort field, so the id tiebreak orders them.
+    expect(result.records.map((r) => r.content.title)).toEqual(['a', 'b', 'c']);
   });
 });
 
@@ -205,24 +209,6 @@ describe('paginating a content sort', () => {
         await pagedTitles({ sort: { contentField: 'order', direction: 'desc' }, limit }),
       ).toEqual(['text-b', 'text-a', 'num-2', 'num-1', 'absent-2', 'absent-1']);
     }
-  });
-
-  test('total counts what is left after the cursor, across both partitions', async () => {
-    await create(ARTICLE, { title: 'num-1', order: 1 });
-    await create(RANKED, { title: 'text-a', order: 'a' });
-    await create(ARTICLE, { title: 'absent-1' });
-    await create(ARTICLE, { title: 'absent-2' });
-
-    const query: StackQuery = { sort: { contentField: 'order', direction: 'asc' }, limit: 1 };
-    const totals: (number | null)[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await adapter.queryRecords({ ...query, ...(cursor && { cursor }) });
-      totals.push(page.total);
-      cursor = page.cursor ?? undefined;
-    } while (cursor);
-
-    expect(totals).toEqual([4, 3, 2, 1]);
   });
 
   test('two values that fold together page in a stable order', async () => {

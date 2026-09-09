@@ -48,9 +48,8 @@ export const withBudget = (page: QueryStatement, budget: number): QueryStatement
  * The statements behind one StackQuery. `pages` are read in order and
  * their rows concatenated: the first statement that fills the page ends
  * the read, so the second is never run for a page that doesn't reach it.
- * `count` is the query's total.
  */
-export type QueryPlan = { pages: QueryStatement[]; count: QueryStatement };
+export type QueryPlan = { pages: QueryStatement[] };
 
 /**
  * Reduce `sort.direction` to a keyword this module may interpolate into
@@ -397,49 +396,6 @@ const presentCursorCondition = (
   );
 };
 
-/**
- * The same "ordered after the cursor" test, but over the whole ordering
- * at once rather than one partition of it — what counting the remainder
- * needs, since a total is one number and a second statement to reach it
- * would cost a second pass over the table.
- *
- * `position` numbers the partitions in the direction the query runs, so a
- * single comparison spans them: absence is 2 either way, and the two
- * value ranks turn over with the direction because that is part of the
- * order between values.
- */
-const joinedCursorCondition = (
-  cursor: Exclude<DecodedCursor, { kind: 'native' }>,
-  dir: 'ASC' | 'DESC',
-  op: '>' | '<',
-  params: unknown[],
-): string => {
-  const ascending = dir === 'ASC';
-  const rankOf = (kind: 'num' | 'text'): number =>
-    kind === 'num' ? (ascending ? 0 : 1) : ascending ? 1 : 0;
-  const position =
-    `CASE WHEN ${SORT_ALIAS}.record_id IS NULL THEN 2 ELSE ` +
-    `${ascending ? `${SORT_ALIAS}.value_rank` : `1 - ${SORT_ALIAS}.value_rank`} END`;
-
-  let tail: string;
-  if (cursor.kind === 'num') {
-    tail = `(${SORT_ALIAS}.num_value ${op} ? OR (${SORT_ALIAS}.num_value = ? AND r.id ${op} ?))`;
-    params.push(cursor.value, cursor.value, cursor.id);
-  } else if (cursor.kind === 'text') {
-    const key = contentSortKey(cursor.value);
-    tail =
-      `(${SORT_ALIAS}.text_key ${op} ? OR (${SORT_ALIAS}.text_key = ? AND ` +
-      `(${SORT_ALIAS}.text_value ${op} ? OR (${SORT_ALIAS}.text_value = ? AND r.id ${op} ?))))`;
-    params.push(key, key, cursor.value, cursor.value, cursor.id);
-  } else {
-    tail = `r.id ${op} ?`;
-    params.push(cursor.id);
-  }
-
-  const cursorRank = cursor.kind === 'absent' ? 2 : rankOf(cursor.kind);
-  return `((${position}) > ${cursorRank} OR ((${position}) = ${cursorRank} AND ${tail}))`;
-};
-
 const statement = (
   select: string,
   from: string,
@@ -480,7 +436,6 @@ export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
           ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`,
         ),
       ],
-      count: statement('COUNT(*) AS total', 'records r', conditions, params),
     };
   }
 
@@ -530,19 +485,5 @@ export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
     );
   }
 
-  // Counting needs no partitioning: every matching record sits in exactly
-  // one of them. Without a cursor that makes the total a plain count of
-  // the records table; with one, the index has to be joined back in to
-  // say which records the cursor has already passed, and it joins once
-  // rather than once per partition.
-  const { conditions, params } = recordConditions(query);
-  if (!cursor) {
-    return { pages, count: statement('COUNT(*) AS total', 'records r', conditions, params) };
-  }
-  const from =
-    `records r LEFT JOIN content_index ${SORT_ALIAS} ` +
-    `ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?`;
-  const joinParams = [contentField, ...params];
-  conditions.push(joinedCursorCondition(cursor, dir, op, joinParams));
-  return { pages, count: statement('COUNT(*) AS total', from, conditions, joinParams) };
+  return { pages };
 };

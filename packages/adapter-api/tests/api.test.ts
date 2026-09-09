@@ -931,7 +931,6 @@ describe('queryRecords', () => {
   const queryEnvelope = {
     records: [RECORD_RAW],
     cursor: null,
-    total: 1,
   };
 
   test('uses POST /records/query when the server reaches content', async () => {
@@ -954,17 +953,13 @@ describe('queryRecords', () => {
     expect(url).toContain('typeId=com.example%2Fnote%401');
   });
 
-  test('parses records and cursor from response, and never reports a total', async () => {
+  test('parses records and cursor from response', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse({ ...queryEnvelope, cursor: 'page2', total: 10 }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...queryEnvelope, cursor: 'page2' }));
     const result = await adapter.queryRecords({});
     expect(result.records).toHaveLength(1);
     expect(result.records[0].createdAt).toBeInstanceOf(Date);
     expect(result.cursor).toBe('page2');
-    // Every wire response has passed a permission boundary, so a count
-    // ignoring pagination reports records the requester can't read. A
-    // server MUST NOT send one; this adapter discards it if one arrives.
-    expect(result.total).toBeNull();
   });
 
   test('passes query body to POST /records/query', async () => {

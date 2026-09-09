@@ -502,18 +502,13 @@ export class SharedSqlRecordLogic {
       return rowToRecord(row, associations);
     });
 
-    const total =
-      asStackQueryError(query, () =>
-        this.exec.get<{ total: number }>(plan.count.sql, plan.count.params),
-      )?.total ?? 0;
-
     const lastRecord = records[records.length - 1];
     const cursor =
       hasMore && lastRecord
         ? makeCursor(lastRecord, query.sort, (record, field) => this.sortFieldKind(record, field))
         : null;
 
-    return { records, cursor, total };
+    return { records, cursor };
   }
 
   /**

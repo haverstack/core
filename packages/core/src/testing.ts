@@ -310,7 +310,7 @@ export class MemoryAdapter implements StackAdapter {
     const nextStart = start + limit;
     const cursor = nextStart < results.length ? String(nextStart) : null;
 
-    return { records: page, cursor, total: results.length };
+    return { records: page, cursor };
   }
 
   /**

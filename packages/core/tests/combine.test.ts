@@ -54,7 +54,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     undeleteRecord: async () => {
       throw new Error('not implemented');
     },
-    queryRecords: async () => ({ records: [], cursor: null, total: 0 }),
+    queryRecords: async () => ({ records: [], cursor: null }),
     associate: async () => {
       throw new Error('not implemented');
     },

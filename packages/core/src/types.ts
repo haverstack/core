@@ -518,17 +518,13 @@ export type StackQuery = {
   presentAt?: 'stored' | 'latest';
 };
 
+/**
+ * A page of results and where the next one resumes. There is no count of
+ * the whole match: see docs/spec/data-model.md § Sorting and pagination.
+ */
 export type QueryResult = {
   records: StackRecord[];
   cursor: string | null;
-  /**
-   * Total count of matching records, ignoring pagination. `null` when the
-   * count cannot be reported without leaking information across a
-   * permission boundary — e.g. a permission-scoped query (see
-   * `Stack.asEntity()`) never reports an unfiltered total, since that would
-   * reveal the existence/cardinality of records the requester can't read.
-   */
-  total: number | null;
 };
 
 // -------------------------------------------------------
