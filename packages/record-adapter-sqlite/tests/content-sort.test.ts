@@ -207,6 +207,24 @@ describe('paginating a content sort', () => {
     }
   });
 
+  test('total counts what is left after the cursor, across both partitions', async () => {
+    await create(ARTICLE, { title: 'num-1', order: 1 });
+    await create(RANKED, { title: 'text-a', order: 'a' });
+    await create(ARTICLE, { title: 'absent-1' });
+    await create(ARTICLE, { title: 'absent-2' });
+
+    const query: StackQuery = { sort: { contentField: 'order', direction: 'asc' }, limit: 1 };
+    const totals: (number | null)[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await adapter.queryRecords({ ...query, ...(cursor && { cursor }) });
+      totals.push(page.total);
+      cursor = page.cursor ?? undefined;
+    } while (cursor);
+
+    expect(totals).toEqual([4, 3, 2, 1]);
+  });
+
   test('two values that fold together page in a stable order', async () => {
     for (const title of ['Emile', 'Émile', 'emile']) await create(ARTICLE, { title });
 
@@ -301,7 +319,7 @@ describe('the sort index tracks the record', () => {
 
     const db = new DatabaseSync(dbPath);
     const rows = db
-      .prepare('SELECT COUNT(*) AS n FROM content_sort WHERE record_id = ?')
+      .prepare('SELECT COUNT(*) AS n FROM content_index WHERE record_id = ?')
       .get(record.id) as { n: number };
     db.close();
     expect(rows.n).toBe(0);

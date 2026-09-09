@@ -6,11 +6,11 @@ export {
   PRAGMA_JOURNAL_MODE_WAL,
 } from './schema.js';
 export {
-  buildFromClause,
-  buildWhereClause,
-  buildOrderClause,
+  buildQueryPlan,
   getSortField,
   getSortColumn,
+  type QueryPlan,
+  type QueryStatement,
 } from './query.js';
 export {
   encodeCursor,

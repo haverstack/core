@@ -1,8 +1,16 @@
 /**
- * WHERE/ORDER clause building for StackQuery. Engine-independent SQL —
- * shared verbatim between SQLite-backed record adapters. The one caveat is
- * full-text search: `f.search` here assumes a `records_fts` virtual table
- * with a MATCH-able `content` column (see fts5.ts).
+ * StackQuery -> SQL. Engine-independent — shared verbatim between
+ * SQLite-backed record adapters. The one caveat is full-text search:
+ * `f.search` here assumes a `records_fts` virtual table with a MATCH-able
+ * `content` column (see fts5.ts).
+ *
+ * A query compiles to a plan rather than to a single statement, because a
+ * content-field sort is two orderings end to end: the records that hold a
+ * value at the field, ordered by it, then the records that hold none,
+ * ordered by id. Reading them as two statements lets each one walk an
+ * index in order and stop at the page boundary; the LEFT JOIN that would
+ * express the same result in one statement can only be sorted after the
+ * fact, which costs a full pass over the table for every page.
  */
 
 import { StackQueryError, type StackQuery } from '@haverstack/core';
@@ -18,6 +26,17 @@ import { sanitizeFts5Query } from './fts5.js';
 
 export { getSortField, getSortColumn };
 export type { SortField };
+
+/** One statement plus the parameters it binds, in textual order. */
+export type QueryStatement = { sql: string; params: unknown[] };
+
+/**
+ * The statements behind one StackQuery. `pages` are read in order and
+ * their rows concatenated: the first statement that fills the page ends
+ * the read, so the second is never run for a page that doesn't reach it.
+ * `count` is the query's total.
+ */
+export type QueryPlan = { pages: QueryStatement[]; count: QueryStatement };
 
 /**
  * Reduce `sort.direction` to a keyword this module may interpolate into
@@ -99,86 +118,37 @@ const contentPathExists = (
 const equalsLeaf = (alias: string): string =>
   `${alias}.type NOT IN ('object', 'array') AND ${alias}.value = ?`;
 
-/** The join alias the sort index is read through. */
+/** The join alias the content index is read through. */
 const SORT_ALIAS = 'cs';
-
-/**
- * The sort index row for each record, or none — the source of every
- * `cs.*` term in the order and cursor clauses. A LEFT JOIN rather than an
- * inner one: a record holding no value at the sort field still belongs in
- * the result, at the end of it.
- */
-export const buildFromClause = (query: StackQuery): { sql: string; params: unknown[] } => {
-  const field = query.sort?.contentField;
-  if (field === undefined) return { sql: 'records r', params: [] };
-  return {
-    sql: `records r LEFT JOIN content_sort ${SORT_ALIAS} ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?`,
-    params: [field],
-  };
-};
 
 /**
  * A cursor names a position in one ordering; carrying it into another
  * would silently resume somewhere arbitrary. The partition matters as
  * much as the field name — a cursor from a numeric page can't be read
- * against text values.
+ * against text values — so each ordering below accepts only the cursors
+ * it can read, and rejecting the rest is what narrows the cursor to them.
  */
-const assertCursorMatchesSort = (cursor: DecodedCursor, query: StackQuery): void => {
-  const contentField = query.sort?.contentField;
-  if (cursor.kind === 'native') {
-    const sortField = getSortField(query);
-    if (contentField !== undefined || cursor.field !== sortField) {
-      throw new StackQueryError(
-        `Cursor sort field "${cursor.field}" does not match query sort field ` +
-          `"${contentField ?? sortField}"`,
-      );
-    }
-    return;
-  }
-  if (contentField === undefined || cursor.field !== contentField) {
-    throw new StackQueryError(
-      `Cursor sort field "${cursor.field}" does not match query sort field ` +
-        `"${contentField ?? getSortField(query)}"`,
-    );
-  }
+const cursorMismatch = (cursor: DecodedCursor, field: string): StackQueryError =>
+  new StackQueryError(
+    `Cursor sort field "${cursor.field}" does not match query sort field "${field}"`,
+  );
+
+const nativeCursor = (cursor: DecodedCursor, field: SortField) => {
+  if (cursor.kind !== 'native' || cursor.field !== field) throw cursorMismatch(cursor, field);
+  return cursor;
+};
+
+const contentCursor = (cursor: DecodedCursor, field: string) => {
+  if (cursor.kind === 'native' || cursor.field !== field) throw cursorMismatch(cursor, field);
+  return cursor;
 };
 
 /**
- * Everything ordered after the cursor's record: a later partition, or the
- * same partition past the cursor's value and id. `rank` counts up in the
- * direction the query runs, so one comparison covers both directions and
- * keeps absent values at the end of each.
+ * Every condition on the records row itself — everything a query asks
+ * except where in the ordering to resume, which is per-partition and gets
+ * appended by the caller.
  */
-const contentCursorCondition = (
-  cursor: Exclude<DecodedCursor, { kind: 'native' }>,
-  op: '>' | '<',
-  params: unknown[],
-): string => {
-  const ascending = op === '>';
-  const numRank = ascending ? 0 : 1;
-  const textRank = ascending ? 1 : 0;
-  const rank = `CASE WHEN ${SORT_ALIAS}.record_id IS NULL THEN 2 WHEN ${SORT_ALIAS}.num_value IS NULL THEN ${textRank} ELSE ${numRank} END`;
-  const cursorRank = cursor.kind === 'absent' ? 2 : cursor.kind === 'num' ? numRank : textRank;
-
-  let tail: string;
-  if (cursor.kind === 'num') {
-    tail = `(${SORT_ALIAS}.num_value ${op} ? OR (${SORT_ALIAS}.num_value = ? AND r.id ${op} ?))`;
-    params.push(cursor.value, cursor.value, cursor.id);
-  } else if (cursor.kind === 'text') {
-    const key = contentSortKey(cursor.value);
-    tail =
-      `(${SORT_ALIAS}.text_key ${op} ? OR (${SORT_ALIAS}.text_key = ? AND ` +
-      `(${SORT_ALIAS}.text_value ${op} ? OR (${SORT_ALIAS}.text_value = ? AND r.id ${op} ?))))`;
-    params.push(key, key, cursor.value, cursor.value, cursor.id);
-  } else {
-    tail = `r.id ${op} ?`;
-    params.push(cursor.id);
-  }
-
-  return `((${rank}) > ${cursorRank} OR ((${rank}) = ${cursorRank} AND ${tail}))`;
-};
-
-export const buildWhereClause = (query: StackQuery): { sql: string; params: unknown[] } => {
+const recordConditions = (query: StackQuery): { conditions: string[]; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
@@ -243,10 +213,12 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
 
   // Every association filter below is a semi-join rather than a correlated
   // EXISTS, so the planner drives from the association side — reading the
-  // matching rows through idx_assoc_kind_label / idx_assoc_kind_file_id /
-  // idx_file_refs_file_id and looking up those records — instead of
-  // scanning every record and probing for each. The work is proportional
-  // to how many records match, not to how many the stack holds.
+  // matching record ids straight out of idx_assoc_kind_label /
+  // idx_assoc_kind_file_id / idx_assoc_related / idx_content_index_file,
+  // each of which ends with record_id and so needs no table read at all —
+  // instead of scanning every record and probing for each. The work is
+  // proportional to how many records match, not to how many the stack
+  // holds.
 
   // Tag filter — record must have ALL specified tags
   if (f.tags?.length) {
@@ -271,7 +243,7 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   if (f.attachmentFileId) {
     conditions.push(
       `(r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.file_id = ?)
-        OR r.id IN (SELECT fr.record_id FROM file_refs fr WHERE fr.file_id = ?))`,
+        OR r.id IN (SELECT ci.record_id FROM content_index ci WHERE ci.file_id = ?))`,
     );
     params.push(f.attachmentFileId, f.attachmentFileId);
   }
@@ -279,8 +251,11 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
   // Relationship filter — each clause is an optional pattern, so a bare
   // label matches every target under it and an external target with no
   // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
-  // A target-bearing pattern reads through idx_assoc_related; a bare label
-  // through idx_assoc_kind_label.
+  //
+  // A record- or entity-scoped target always stores '' in related_ns
+  // (see associationKeyColumns). Saying so turns idx_assoc_related's
+  // (scope, ns, id) prefix into a contiguous equality run for those
+  // scopes instead of leaving the planner to seek on scope alone.
   if (f.relatedTo) {
     const clauses: string[] = [];
     const target = f.relatedTo.target;
@@ -292,11 +267,11 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
       clauses.push('a.related_scope = ?');
       params.push(target.scope);
       if (target.scope === 'record') {
-        clauses.push('a.related_id = ?', 'a.related_stack = ?');
-        params.push(target.recordId, target.stackUrl ?? '');
+        clauses.push('a.related_ns = ?', 'a.related_id = ?', 'a.related_stack = ?');
+        params.push('', target.recordId, target.stackUrl ?? '');
       } else if (target.scope === 'entity') {
-        clauses.push('a.related_id = ?');
-        params.push(target.entityId);
+        clauses.push('a.related_ns = ?', 'a.related_id = ?');
+        params.push('', target.entityId);
       } else {
         clauses.push('a.related_ns = ?');
         params.push(target.ns);
@@ -374,39 +349,186 @@ export const buildWhereClause = (query: StackQuery): { sql: string; params: unkn
     }
   }
 
-  // Cursor (sort value + id for stable pagination)
-  if (query.cursor) {
-    const cursor = decodeCursor(query.cursor);
-    assertCursorMatchesSort(cursor, query);
-    const op = sqlDirection(query) === 'ASC' ? '>' : '<';
-    if (cursor.kind === 'native') {
-      const col = getSortColumn(cursor.field);
-      conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-      params.push(cursor.value, cursor.value, cursor.id);
-    } else {
-      conditions.push(contentCursorCondition(cursor, op, params));
-    }
-  }
-
-  return {
-    sql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
-    params,
-  };
+  return { conditions, params };
 };
 
-export const buildOrderClause = (query: StackQuery): string => {
-  const dir = sqlDirection(query);
-  if (query.sort?.contentField === undefined) {
-    return `ORDER BY r.${getSortColumn(getSortField(query))} ${dir}, r.id ${dir}`;
+/**
+ * Everything ordered after the cursor's record within the partition that
+ * holds a value: a later value rank, or the same rank past the cursor's
+ * value and id. `op` runs the comparison the same way the ORDER BY does,
+ * so one form covers both directions — in the direction where the
+ * cursor's rank is the last one, the leading disjunct is simply never
+ * true.
+ */
+const presentCursorCondition = (
+  cursor: Extract<DecodedCursor, { kind: 'num' | 'text' }>,
+  op: '>' | '<',
+  params: unknown[],
+): string => {
+  if (cursor.kind === 'num') {
+    params.push(cursor.value, cursor.value, cursor.id);
+    return (
+      `(${SORT_ALIAS}.value_rank ${op} 0 OR (${SORT_ALIAS}.value_rank = 0 AND ` +
+      `(${SORT_ALIAS}.num_value ${op} ? OR (${SORT_ALIAS}.num_value = ? AND ` +
+      `${SORT_ALIAS}.record_id ${op} ?))))`
+    );
   }
-  // Three leading terms before the value itself: absence last whichever
-  // way the sort runs, then the numeric partition against the text one,
-  // which does turn over with the direction because it is part of the
-  // order between values. See docs/spec/data-model.md § Sorting by a
-  // content field.
+  const key = contentSortKey(cursor.value);
+  params.push(key, key, cursor.value, cursor.value, cursor.id);
   return (
-    `ORDER BY (${SORT_ALIAS}.record_id IS NULL) ASC, (${SORT_ALIAS}.num_value IS NULL) ${dir}, ` +
-    `${SORT_ALIAS}.num_value ${dir}, ${SORT_ALIAS}.text_key ${dir}, ` +
-    `${SORT_ALIAS}.text_value ${dir}, r.id ${dir}`
+    `(${SORT_ALIAS}.value_rank ${op} 1 OR (${SORT_ALIAS}.value_rank = 1 AND ` +
+    `(${SORT_ALIAS}.text_key ${op} ? OR (${SORT_ALIAS}.text_key = ? AND ` +
+    `(${SORT_ALIAS}.text_value ${op} ? OR (${SORT_ALIAS}.text_value = ? AND ` +
+    `${SORT_ALIAS}.record_id ${op} ?))))))`
   );
+};
+
+/**
+ * The same "ordered after the cursor" test, but over the whole ordering
+ * at once rather than one partition of it — what counting the remainder
+ * needs, since a total is one number and a second statement to reach it
+ * would cost a second pass over the table.
+ *
+ * `position` numbers the partitions in the direction the query runs, so a
+ * single comparison spans them: absence is 2 either way, and the two
+ * value ranks turn over with the direction because that is part of the
+ * order between values.
+ */
+const joinedCursorCondition = (
+  cursor: Exclude<DecodedCursor, { kind: 'native' }>,
+  dir: 'ASC' | 'DESC',
+  op: '>' | '<',
+  params: unknown[],
+): string => {
+  const ascending = dir === 'ASC';
+  const rankOf = (kind: 'num' | 'text'): number =>
+    kind === 'num' ? (ascending ? 0 : 1) : ascending ? 1 : 0;
+  const position =
+    `CASE WHEN ${SORT_ALIAS}.record_id IS NULL THEN 2 ELSE ` +
+    `${ascending ? `${SORT_ALIAS}.value_rank` : `1 - ${SORT_ALIAS}.value_rank`} END`;
+
+  let tail: string;
+  if (cursor.kind === 'num') {
+    tail = `(${SORT_ALIAS}.num_value ${op} ? OR (${SORT_ALIAS}.num_value = ? AND r.id ${op} ?))`;
+    params.push(cursor.value, cursor.value, cursor.id);
+  } else if (cursor.kind === 'text') {
+    const key = contentSortKey(cursor.value);
+    tail =
+      `(${SORT_ALIAS}.text_key ${op} ? OR (${SORT_ALIAS}.text_key = ? AND ` +
+      `(${SORT_ALIAS}.text_value ${op} ? OR (${SORT_ALIAS}.text_value = ? AND r.id ${op} ?))))`;
+    params.push(key, key, cursor.value, cursor.value, cursor.id);
+  } else {
+    tail = `r.id ${op} ?`;
+    params.push(cursor.id);
+  }
+
+  const cursorRank = cursor.kind === 'absent' ? 2 : rankOf(cursor.kind);
+  return `((${position}) > ${cursorRank} OR ((${position}) = ${cursorRank} AND ${tail}))`;
+};
+
+const statement = (
+  select: string,
+  from: string,
+  conditions: string[],
+  params: unknown[],
+  tail = '',
+): QueryStatement => ({
+  sql: `SELECT ${select} FROM ${from} WHERE ${conditions.join(' AND ')}${tail}`,
+  params,
+});
+
+/**
+ * Compile a query into the statements that answer it. `fetch` is the row
+ * budget for a single page statement — the caller's page size plus the
+ * one extra row it reads to learn whether another page follows.
+ */
+export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
+  const dir = sqlDirection(query);
+  const op = dir === 'ASC' ? '>' : '<';
+  const decoded = query.cursor ? decodeCursor(query.cursor) : null;
+  const contentField = query.sort?.contentField;
+
+  if (contentField === undefined) {
+    const { conditions, params } = recordConditions(query);
+    const col = getSortColumn(getSortField(query));
+    if (decoded) {
+      const cursor = nativeCursor(decoded, getSortField(query));
+      conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
+      params.push(cursor.value, cursor.value, cursor.id);
+    }
+    return {
+      pages: [
+        statement(
+          'r.*',
+          'records r',
+          conditions,
+          [...params, fetch],
+          ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`,
+        ),
+      ],
+      count: statement('COUNT(*) AS total', 'records r', conditions, params),
+    };
+  }
+
+  const cursor = decoded ? contentCursor(decoded, contentField) : null;
+  const pages: QueryStatement[] = [];
+
+  // Records holding a value at the field, in that value's order. A cursor
+  // sitting in the absent partition has already passed every one of them.
+  if (cursor?.kind !== 'absent') {
+    const { conditions, params } = recordConditions(query);
+    const from = `content_index ${SORT_ALIAS} JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
+    conditions.push(`${SORT_ALIAS}.field = ?`);
+    params.push(contentField);
+    if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
+    // Ordered exactly as idx_content_index_sort stores it, so the page is
+    // an ordered walk of the index rather than a sort of the matches.
+    const order =
+      `${SORT_ALIAS}.value_rank ${dir}, ${SORT_ALIAS}.num_value ${dir}, ` +
+      `${SORT_ALIAS}.text_key ${dir}, ${SORT_ALIAS}.text_value ${dir}, ` +
+      `${SORT_ALIAS}.record_id ${dir}`;
+    pages.push(
+      statement('r.*', from, conditions, [...params, fetch], ` ORDER BY ${order} LIMIT ?`),
+    );
+  }
+
+  // Records holding nothing there, which trail the others whichever way
+  // the sort runs (docs/spec/data-model.md § Sorting by a content field).
+  {
+    const { conditions, params } = recordConditions(query);
+    conditions.push(
+      `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
+        `WHERE ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?)`,
+    );
+    params.push(contentField);
+    if (cursor?.kind === 'absent') {
+      conditions.push(`r.id ${op} ?`);
+      params.push(cursor.id);
+    }
+    pages.push(
+      statement(
+        'r.*',
+        'records r',
+        conditions,
+        [...params, fetch],
+        ` ORDER BY r.id ${dir} LIMIT ?`,
+      ),
+    );
+  }
+
+  // Counting needs no partitioning: every matching record sits in exactly
+  // one of them. Without a cursor that makes the total a plain count of
+  // the records table; with one, the index has to be joined back in to
+  // say which records the cursor has already passed, and it joins once
+  // rather than once per partition.
+  const { conditions, params } = recordConditions(query);
+  if (!cursor) {
+    return { pages, count: statement('COUNT(*) AS total', 'records r', conditions, params) };
+  }
+  const from =
+    `records r LEFT JOIN content_index ${SORT_ALIAS} ` +
+    `ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?`;
+  const joinParams = [contentField, ...params];
+  conditions.push(joinedCursorCondition(cursor, dir, op, joinParams));
+  return { pages, count: statement('COUNT(*) AS total', from, conditions, joinParams) };
 };
