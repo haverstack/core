@@ -485,9 +485,8 @@ export const queryRecordsFixtures: ConformanceFixture<
       'The query envelope carries records and cursor, and no count of the whole match. Every ' +
       'request a server serves is authenticated as some requester, so a count that ignores ' +
       'pagination would report how many Records exist beyond what that requester may read — ' +
-      'the cardinality the permission check just hid. A server that sends one anyway is ' +
-      'describing a Stack this protocol does not have, and a client ignores it rather than ' +
-      'failing. See docs/spec/wire-format.md § Response envelope.',
+      'the cardinality the permission check just hid. See docs/spec/wire-format.md ' +
+      '§ Response envelope.',
     method: 'POST',
     path: '/records/query',
     requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },

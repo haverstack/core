@@ -53,9 +53,8 @@ export type WireRecord = {
  * `cursor` is non-null, since a server filters a bounded window of stored
  * Records per request against the requester's permissions.
  *
- * There is no count of the whole match. A server that sends one anyway is
- * describing a Stack this protocol does not have; the field is ignored
- * rather than rejected. See docs/spec/wire-format.md § Response envelope.
+ * There is no count of the whole match — see docs/spec/wire-format.md
+ * § Response envelope.
  */
 export type WireQueryResponse = {
   records: WireRecord[];

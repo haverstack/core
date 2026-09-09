@@ -30,6 +30,3 @@ arrives — the only number that was ever true for that requester.
 field meant: the documented "ignoring pagination" (which `MemoryAdapter`
 implemented) against the count of what remained after the cursor (which the
 SQL adapters returned). Removing the field settles it.
-
-A server that sends a count anyway is ignored rather than rejected, as with
-any unrecognized member.

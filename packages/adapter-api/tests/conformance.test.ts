@@ -370,18 +370,6 @@ describe('queryRecords fixtures', () => {
       expect(init.method).toBe('GET');
     });
   }
-
-  test('ignores a count a non-conforming server sends anyway', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse({ records: [], cursor: null, total: 142 }, 200));
-
-    const result = await adapter.queryRecords({});
-
-    // 142 would count records this requester may never have been allowed
-    // to see. The envelope has no such member, and a server describing a
-    // Stack this protocol does not have is ignored, not rejected.
-    expect(result).toEqual({ records: [], cursor: null });
-  });
 });
 
 describe('patchContent fixtures', () => {

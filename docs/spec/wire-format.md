@@ -318,7 +318,7 @@ Both query endpoints return:
 }
 ```
 
-**The envelope carries no count of the whole match.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary, and a count that ignores pagination would report how many Records exist beyond what that requester may read. A server MUST NOT send one. A server that does is describing a Stack this protocol does not have, and a client ignores the member rather than failing on it — the same tolerance it extends to any other field it does not recognize. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
+**The envelope carries no count of the whole match.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary, and a count that ignores pagination would report how many Records exist beyond what that requester may read. A server MUST NOT send one. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
 
 **An empty `records` array with a non-null `cursor` is a valid response, and does not mean the result set is exhausted.** `cursor: null` is the only end-of-results signal; a client that stops paging on an empty page silently truncates its own results. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination) for why the case is reachable rather than theoretical.
 
