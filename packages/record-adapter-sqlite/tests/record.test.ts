@@ -1139,9 +1139,10 @@ describe('file-ref indexing', () => {
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
 
-  // File-ref field names are cached per typeId (keyed off saveType()) so that
-  // syncFileRefs() doesn't re-query and re-parse the schema on every write —
-  // this guards against that cache going stale if a type is redefined.
+  // The fields content_index covers are cached per typeId (keyed off
+  // saveType()) so that syncContentIndex() doesn't re-query and re-parse the
+  // schema on every write — this pins that redefining a type reaches the
+  // cache.
   test('redefining a type via saveType updates which fields are treated as file-ref', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(FILE_REF_TYPE);

@@ -27,29 +27,20 @@ import { sanitizeFts5Query } from './fts5.js';
 export { getSortField, getSortColumn };
 export type { SortField };
 
-/**
- * One statement plus the parameters it binds, in textual order. For a
- * page statement the last parameter is its row budget, which a caller
- * that has already filled part of the page may lower — see withBudget.
- */
+/** One statement plus the parameters it binds, in textual order. */
 export type QueryStatement = { sql: string; params: unknown[] };
 
 /**
- * The same page statement with a smaller row budget. The second partition
- * of a content sort only has to top up whatever the first one left, and
- * reading a full page it then discards is the difference between the two.
+ * A page statement with the row budget its trailing `LIMIT ?` binds.
+ * buildQueryPlan leaves that parameter off, so the budget is never one of
+ * the parameters the query itself bound: the second partition of a
+ * content sort asks for what the first left of the page rather than for a
+ * page it then discards.
  */
-export const withBudget = (page: QueryStatement, budget: number): QueryStatement => ({
+export const atBudget = (page: QueryStatement, rows: number): QueryStatement => ({
   sql: page.sql,
-  params: [...page.params.slice(0, -1), budget],
+  params: [...page.params, rows],
 });
-
-/**
- * The statements behind one StackQuery. `pages` are read in order and
- * their rows concatenated: the first statement that fills the page ends
- * the read, so the second is never run for a page that doesn't reach it.
- */
-export type QueryPlan = { pages: QueryStatement[] };
 
 /**
  * Reduce `sort.direction` to a keyword this module may interpolate into
@@ -408,11 +399,12 @@ const statement = (
 });
 
 /**
- * Compile a query into the statements that answer it. `fetch` is the row
- * budget for a single page statement — the caller's page size plus the
- * one extra row it reads to learn whether another page follows.
+ * Compile a query into the statements that answer it, read in order and
+ * their rows concatenated: the first that fills the page ends the read,
+ * so the second is never run for a page that doesn't reach it. Each still
+ * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
+export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
@@ -426,17 +418,15 @@ export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
       conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
       params.push(cursor.value, cursor.value, cursor.id);
     }
-    return {
-      pages: [
-        statement(
-          'r.*',
-          'records r',
-          conditions,
-          [...params, fetch],
-          ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`,
-        ),
-      ],
-    };
+    return [
+      statement(
+        'r.*',
+        'records r',
+        conditions,
+        params,
+        ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`,
+      ),
+    ];
   }
 
   const cursor = decoded ? contentCursor(decoded, contentField) : null;
@@ -456,9 +446,7 @@ export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
       `${SORT_ALIAS}.value_rank ${dir}, ${SORT_ALIAS}.num_value ${dir}, ` +
       `${SORT_ALIAS}.text_key ${dir}, ${SORT_ALIAS}.text_value ${dir}, ` +
       `${SORT_ALIAS}.record_id ${dir}`;
-    pages.push(
-      statement('r.*', from, conditions, [...params, fetch], ` ORDER BY ${order} LIMIT ?`),
-    );
+    pages.push(statement('r.*', from, conditions, params, ` ORDER BY ${order} LIMIT ?`));
   }
 
   // Records holding nothing there, which trail the others whichever way
@@ -474,16 +462,8 @@ export const buildQueryPlan = (query: StackQuery, fetch: number): QueryPlan => {
       conditions.push(`r.id ${op} ?`);
       params.push(cursor.id);
     }
-    pages.push(
-      statement(
-        'r.*',
-        'records r',
-        conditions,
-        [...params, fetch],
-        ` ORDER BY r.id ${dir} LIMIT ?`,
-      ),
-    );
+    pages.push(statement('r.*', 'records r', conditions, params, ` ORDER BY r.id ${dir} LIMIT ?`));
   }
 
-  return { pages };
+  return pages;
 };

@@ -7,9 +7,9 @@ export {
 } from './schema.js';
 export {
   buildQueryPlan,
+  atBudget,
   getSortField,
   getSortColumn,
-  type QueryPlan,
   type QueryStatement,
 } from './query.js';
 export {

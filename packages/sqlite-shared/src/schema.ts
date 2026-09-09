@@ -72,7 +72,7 @@ export const RECORD_SCHEMA_SQL = `
 
   -- One row per top-level scalar content field a record holds a value at:
   -- what it orders as, and the file it references. See
-  -- docs/spec/adapters.md § File compatibility and
+  -- docs/spec/adapters.md § Adapter backends and
   -- docs/spec/data-model.md § Sorting by a content field.
   --
   -- value_rank is 0 for a numeric value and 1 for a text one — the same
@@ -143,13 +143,8 @@ export const TOKENS_SCHEMA_SQL = `
 
 /**
  * The full-text index behind `StackQuery.filter.search` (see fts5.ts).
- *
- * `columnsize=0` drops the per-row token-count shadow table, which only
- * the columnsize() and bm25() functions read. Search here is a membership
- * test — the caller orders by a records column, never by relevance — so
- * that table would be written on every record write and never read.
- *
- * The tokenizer stays at the default `detail=full`: sanitizeFts5Query
+ * What `columnsize=0` costs a reader is in docs/spec/adapters.md
+ * § Adapter backends. `detail` stays at its default: sanitizeFts5Query
  * passes phrase queries through, and a phrase needs the token positions
  * only that setting records.
  */

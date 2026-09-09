@@ -30,7 +30,7 @@ import type {
 } from '@haverstack/core';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildQueryPlan, withBudget } from './query.js';
+import { buildQueryPlan, atBudget } from './query.js';
 import { fts5Strategy } from './fts5.js';
 import {
   rowToRecord,
@@ -475,18 +475,17 @@ export class SharedSqlRecordLogic {
     const limit = query.limit ?? 50;
     // One extra row, to learn whether a further page follows.
     const fetch = limit + 1;
-    const plan = buildQueryPlan(query, fetch);
 
     // A content-field sort answers from two statements, the records that
     // hold a value at the field and then the records that hold none. They
-    // read in order and the second is skipped once the first has filled
-    // the page — the common case, since a page rarely straddles the
-    // boundary between them.
+    // read in order, each asking only for the rows the ones before it left
+    // of the page, and the second is skipped once the first has filled it —
+    // the common case, since a page rarely straddles the boundary.
     const rows: Record<string, unknown>[] = [];
-    for (const page of plan.pages) {
+    for (const page of buildQueryPlan(query)) {
       const budget = fetch - rows.length;
       if (budget <= 0) break;
-      const statement = budget === fetch ? page : withBudget(page, budget);
+      const statement = atBudget(page, budget);
       rows.push(
         ...asStackQueryError(query, () =>
           this.exec.all<Record<string, unknown>>(statement.sql, statement.params),

@@ -56,7 +56,7 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
- * the full RecordFilter shape (mirroring sqlite-shared's buildWhereClause)
+ * the full RecordFilter shape (mirroring sqlite-shared's recordConditions)
  * so permission logic under test exercises real predicates. Declares
  * `filter.content: 'path'`, as every local adapter must; tests needing
  * the capability-gated paths use IncapableMemoryAdapter below.

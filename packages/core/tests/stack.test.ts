@@ -843,7 +843,8 @@ describe('type cache', () => {
 
 // -------------------------------------------------------
 // content filter null semantics — MemoryAdapter's own
-// implementation, mirroring the SQL adapters' shared buildWhereClause fix.
+// implementation, holding the same rule the SQL adapters' shared
+// recordConditions applies.
 // -------------------------------------------------------
 
 describe('query — content filter null semantics', () => {

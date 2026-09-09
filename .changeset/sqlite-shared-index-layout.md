@@ -35,5 +35,5 @@ what costs those bytes, and what makes a filter on a low-cardinality
 column — one entity, a handful of types, most records without a parent —
 an ordered index walk rather than a sort of everything it matched.
 
-Query results, ordering, totals and cursors are unchanged. The stack file
-layout is not — an existing database is not readable by this version.
+Query results, ordering and cursors are unchanged. The stack file layout is
+not — an existing database is not readable by this version.
