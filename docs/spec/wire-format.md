@@ -376,7 +376,7 @@ Request body: `{ "parentId": string | null }`. Answers `200` with the updated **
 
 This is the only endpoint that changes `parentId`; `PATCH /records/:id` is content-only, so a `parentId` key in a patch body is a content field of that name, never this. Orthogonal to `PUT .../permissions` in exactly the way `PUT .../unlisted` is: it decides which listings enumerate the record, never who may read it. A server built on `ScopedStack` serves it to any requester holding write on the record **and** read on the destination, and answers `403` otherwise.
 
-A move that would make the record its own ancestor answers **409** (code `conflict`), as does one whose ancestor chain is too deep to verify. See [Data model § Reparenting](./data-model.md#reparenting).
+A move that would make the record its own ancestor answers **409** (code `conflict`), as does one naming a container that does not exist. A malformed `parentId` — one that is not a well-formed record id, the empty string included — answers **400** (code `bad_request`). A chain too deep to walk is **not** refused: the check stops and the move proceeds. `POST /records/:id/restore/:version` is exempt from the existence check, so a snapshot naming a since-deleted container restores rather than 409s. See [Data model § Reparenting](./data-model.md#reparenting).
 
 **The one unsafe path is a server mapping a request body straight onto an unscoped `Stack`.** Unscoped `Stack` honors `includeUnlisted` unconditionally, the same as `includeDeleted` — it is fully trusted by definition — so a server that forwards a request's filter verbatim onto one must strip `includeUnlisted` itself before dispatching, exactly as it already must for `entityId`/`principalId` on a create body (see [Records](#records)). Routing the request through `ScopedStack` instead makes this the library's problem rather than the server's, which is the shape every example in this document assumes.
 
@@ -392,7 +392,9 @@ POST /records/:id/restore/:version    — restore a version (creates new version
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Snapshot `permissions` are additionally omitted from the response body for any non-owner requester, including a write-holder who passes the gate. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records).
+A snapshot body carries `parentId` exactly as the Record body above does: present names the container the record sat in, **absent is the root**. `null` is an input spelling — what `PUT /records/:id/parent` and `?parentId=null` accept — and never appears on a response. A restore therefore always settles containment: a snapshot with no `parentId` puts the record at the root rather than leaving it where it sits, so a server that omits the field from snapshots it writes is claiming every record was at the root. A client reading a `null` here treats it as the root, so a server that mirrors the input spelling is understood rather than misread.
+
+`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals `PUT .../parent` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **That same exhaustive list is what the [change feed](./change-feed.md) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
 

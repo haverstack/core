@@ -994,6 +994,25 @@ const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
  * pagination cursor a StackQueryError rather than a content-validation
  * failure. See StackQueryError's doc comment.
  */
+/**
+ * The same format rule applied to a `parentId` a caller names. Separate
+ * from validateRecordId() only for its message: the id under discussion is
+ * the destination, not the record being written, and a shared message would
+ * report the wrong one. See docs/spec/data-model.md § Reparenting.
+ */
+function validateParentId(parentId: string): void {
+  if (parentId.startsWith(RESERVED_ID_PREFIX)) {
+    throw new StackQueryError(
+      `Invalid parentId "${parentId}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
+    );
+  }
+  if (!isValidIdFormat(parentId)) {
+    throw new StackQueryError(
+      `Invalid parentId "${parentId}": expected 12 lowercase Crockford base-32 characters.`,
+    );
+  }
+}
+
 function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
     throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
@@ -1724,8 +1743,8 @@ export class Stack implements StackClient {
       // A generated id names nothing, so a create under a parent cannot
       // close a loop. A caller-supplied one can: existing records may
       // already point at it, and the chain above the parent can lead back
-      // to it. Asked only for that combination, so an ordinary create pays
-      // no reads. See docs/spec/data-model.md § Reparenting.
+      // to it — so the walk is asked only for that combination.
+      // See docs/spec/data-model.md § Reparenting.
       if (opts.parentId !== undefined) await this.assertNoParentCycle(opts.id, opts.parentId);
     }
 
@@ -1748,6 +1767,22 @@ export class Stack implements StackClient {
       (opts.createdAt !== undefined
         ? generateIdForTimestamp(createdAt.getTime())
         : generateId(createdAt.getTime()));
+
+    // An id field a caller supplies is a value or it is absent — never the
+    // empty string, which names nobody. Refused rather than dropped: an
+    // ignored field is the silent-normalization this mapper family was just
+    // fixed for, one layer up.
+    for (const field of ['entityId', 'appId', 'principalId'] as const) {
+      if (opts[field] === '') {
+        throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
+      }
+    }
+
+    // Every create naming a parent owes the reference check, whether or not
+    // it supplied an id: a destination a caller names has to be one that
+    // exists. This is the read an ordinary create used to skip.
+    if (opts.parentId !== undefined) await this.assertParentExists(id, opts.parentId);
+
     const record: StackRecord = {
       id,
       typeId,
@@ -1755,10 +1790,14 @@ export class Stack implements StackClient {
       updatedAt,
       content,
       version: 1,
-      ...(opts.parentId && { parentId: opts.parentId }),
-      ...(opts.entityId && { entityId: opts.entityId }),
-      ...(opts.appId && { appId: opts.appId }),
-      ...(opts.principalId && { principalId: opts.principalId }),
+      // Read for presence, not truthiness — every one of these is checked
+      // above, so '' never reaches here and absence is the only thing a
+      // falsy value could mean. Presence says that outright instead of
+      // relying on it.
+      ...(opts.parentId !== undefined && { parentId: opts.parentId }),
+      ...(opts.entityId !== undefined && { entityId: opts.entityId }),
+      ...(opts.appId !== undefined && { appId: opts.appId }),
+      ...(opts.principalId !== undefined && { principalId: opts.principalId }),
       // A create's actor is its author, so these are derived rather than
       // taken: stamping them here keeps "absent means an unscoped write"
       // true of version 1 as it is of every later version.
@@ -2065,7 +2104,10 @@ export class Stack implements StackClient {
     const previousParentId = existing.parentId ?? null;
     if (previousParentId === parentId) return existing;
 
-    if (parentId !== null) await this.assertNoParentCycle(id, parentId);
+    if (parentId !== null) {
+      await this.assertParentExists(id, parentId);
+      await this.assertNoParentCycle(id, parentId);
+    }
 
     const updated = await this.adapter.setParent(id, parentId, {
       expectedVersion: opts.ifVersion,
@@ -2078,10 +2120,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Refuse an edge that would make a record its own ancestor — the two
-   * sites that add one, setParent() and a create naming both its own id
-   * and a parent. Nothing downstream (a generator deriving a page path, a
-   * folder view) is written to survive a cycle.
+   * Refuse an edge that would make a record its own ancestor — asked at
+   * every site that adds one: setParent(), a restore putting a container
+   * back, and a create naming both its own id and a parent. Nothing
+   * downstream (a generator deriving a page path, a folder view) is
+   * written to survive a cycle.
    *
    * Walks with the unscoped adapter deliberately: a walk that skipped the
    * links a requester cannot read would let a cycle be assembled through
@@ -2097,6 +2140,27 @@ export class Stack implements StackClient {
    * the same posture applied here.
    * See docs/spec/data-model.md § Reparenting.
    */
+  /**
+   * The checks a *caller-named* destination owes, before the cycle walk:
+   * `parentId` is a real, well-formed record id. Format first, so a
+   * malformed one is a 400 naming the problem rather than a read that
+   * cannot match. Existence closes the gap between the owner path and a
+   * non-owner's, where canReadReferent() already refuses a parent that
+   * isn't there.
+   *
+   * restoreVersion() deliberately does not call this — see its own comment.
+   * See docs/spec/data-model.md § Reparenting.
+   */
+  private async assertParentExists(id: string, parentId: string): Promise<void> {
+    validateParentId(parentId);
+    if (!(await this.adapter.getRecord(parentId))) {
+      throw new StackConflictError(
+        `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
+          'exist when it is named.',
+      );
+    }
+  }
+
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
     let cursor: string | undefined = parentId;
     for (let depth = 0; cursor !== undefined; depth++) {
@@ -2106,12 +2170,11 @@ export class Stack implements StackClient {
             'and the move would make the record its own ancestor.',
         );
       }
-      if (depth >= MAX_PARENT_DEPTH) {
-        throw new StackConflictError(
-          `Cannot parent record "${id}" to "${parentId}": the ancestor chain exceeds ` +
-            `${MAX_PARENT_DEPTH} levels, so it cannot be shown to be acyclic.`,
-        );
-      }
+      // The cap bounds work, and guarantees this terminates on a chain that
+      // is already cyclic. It does not refuse the move: a chain this long is
+      // past what the check can speak to, not evidence of a loop, and
+      // refusing it would claim an invariant core does not maintain.
+      if (depth >= MAX_PARENT_DEPTH) return;
       cursor = (await this.adapter.getRecord(cursor))?.parentId;
     }
   }
@@ -2258,9 +2321,10 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
-   * stored typeId (not the record's current type), restores associations,
-   * and never restores permissions. See docs/spec/versioning.md § Restore
-   * semantics.
+   * stored typeId (not the record's current type), restores associations
+   * and `parentId` (absent on the snapshot is the root, so a restore
+   * always settles containment), and never restores permissions. See
+   * docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -2310,13 +2374,30 @@ export class Stack implements StackClient {
       );
     }
 
+    // A restore that puts a container back is an edge-adding site like
+    // setParent(), and the chain above that container may have moved since
+    // the snapshot was taken. The cycle walk therefore applies — but
+    // assertParentExists() deliberately does not: a restore is not a caller
+    // naming a destination, it is history being put back, and the container
+    // may have been hard-deleted since. Refusing here would make an
+    // unrelated deletion cost the record its content rollback, which is the
+    // recoverability this whole verb exists for. A dangling parentId is
+    // legal at rest anyway — deleting a container never touches its
+    // children. See docs/spec/versioning.md § Restore semantics.
+    const previousParentId = existing.parentId ?? null;
+    const targetParentId = target.parentId ?? null;
+    const moves = targetParentId !== previousParentId;
+    if (moves && targetParentId !== null) {
+      await this.assertNoParentCycle(id, targetParentId);
+    }
+
     const restored = await this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
-    this.emitChange('restore', restored);
+    this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
   }
 
@@ -3272,8 +3353,9 @@ export class Stack implements StackClient {
   /**
    * Snapshot of a record's prior state, passed with the mutating adapter
    * call so snapshot and mutation land in one atomic write. `associations`
-   * is always present ([] when empty) so restore can distinguish "cleared"
-   * from a snapshot that omits the key entirely ("leave as-is"). See
+   * and `parentId` are always present (`[]` and `null` where the record has
+   * neither) so restore can distinguish "cleared" and "at the root" from a
+   * snapshot that omits the key entirely ("leave as-is"). See
    * docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
@@ -3285,6 +3367,7 @@ export class Stack implements StackClient {
       ...(record.entityId && { entityId: record.entityId }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
+      ...(record.parentId !== undefined && { parentId: record.parentId }),
       associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
@@ -4502,9 +4585,11 @@ export class ScopedStack implements StackClient {
   /**
    * Re-runs the reference-creation checks against the snapshot, so a
    * restore can't re-convey access to a file or record the subject can no
-   * longer reach today. Only the owner acting alone is exempt: under
-   * delegation the checks resolve against the subject, which is whose reach
-   * the restore would widen. See docs/spec/versioning.md § Restore semantics.
+   * longer reach today — the snapshot's `parentId` among them, gated
+   * exactly as setParent() gates a destination named directly. Only the
+   * owner acting alone is exempt: under delegation the checks resolve
+   * against the subject, which is whose reach the restore would widen.
+   * See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -4523,6 +4608,18 @@ export class ScopedStack implements StackClient {
             (target.content as Record<string, unknown>)[field] !==
             (record.content as Record<string, unknown>)[field],
         );
+        // Only a restore that moves the record *into* a container creates a
+        // reference. A snapshot at the root names nothing, and a parentId
+        // the restore would not change is not re-gated: the record is
+        // already there, so a content rollback is not refused over a move
+        // it isn't making.
+        if (
+          target.parentId !== undefined &&
+          target.parentId !== record.parentId &&
+          !(await this.canReadReferent(target.parentId))
+        ) {
+          throw new StackPermissionError();
+        }
         await this.requireFileRefAccess(target.typeId, target.content);
         for (const association of target.associations ?? []) {
           await this.requireAssociationAccess(target.typeId, association);

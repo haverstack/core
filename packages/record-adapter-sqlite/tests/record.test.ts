@@ -1469,6 +1469,59 @@ describe('setUnlisted', () => {
   });
 });
 
+// SQL NULL is the only spelling of an absent field. The empty string and
+// the epoch are values, and the query predicates beside the mapper read
+// `IS NULL` — so a mapper reading truthiness would answer one way to
+// getRecord() and another to the filter that should have found it.
+describe('absent fields are read by presence, not truthiness', () => {
+  test('an empty-string parentId survives the round trip instead of reading as the root', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ parentId: '' });
+    await adapter.createRecord(record);
+    expect((await adapter.getRecord(record.id))?.parentId).toBe('');
+    // And it is not at the root, which is what the filter already said.
+    const roots = await adapter.queryRecords({ filter: { parentId: null } });
+    expect(roots.records.map((r) => r.id)).not.toContain(record.id);
+  });
+
+  test('setParent to an empty string stores it rather than clearing the parent', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ parentId: box.id });
+    await adapter.createRecord(record);
+    await adapter.setParent(record.id, '');
+    expect((await adapter.getRecord(record.id))?.parentId).toBe('');
+  });
+
+  test('a deletedAt at the epoch reads back as a tombstone', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ deletedAt: new Date(0) });
+    await adapter.createRecord(record);
+    expect((await adapter.getRecord(record.id))?.deletedAt).toEqual(new Date(0));
+    // The query predicate already excluded it; now getRecord() agrees.
+    const live = await adapter.queryRecords({});
+    expect(live.records.map((r) => r.id)).not.toContain(record.id);
+  });
+
+  test('an unlistedAt at the epoch reads back as unlisted', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ unlistedAt: new Date(0) });
+    await adapter.createRecord(record);
+    expect((await adapter.getRecord(record.id))?.unlistedAt).toEqual(new Date(0));
+  });
+
+  test('empty-string authorship fields survive the round trip', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ entityId: '', appId: '', updatedBy: '' });
+    await adapter.createRecord(record);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.entityId).toBe('');
+    expect(retrieved?.appId).toBe('');
+    expect(retrieved?.updatedBy).toBe('');
+  });
+});
+
 describe('setParent', () => {
   test('sets parent_id and bumps version', async () => {
     const adapter = await initAdapter();
@@ -1555,6 +1608,59 @@ describe('versions', () => {
     expect(retrieved?.entityId).toBe('entity-123');
   });
 
+  // Absent is the root, exactly as on a record, so the column is a plain
+  // nullable TEXT rather than JSON. See sqlite-shared/src/schema.ts.
+  test('a snapshot round-trips the root, a container, and an empty-string id', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const base = { typeId: record.typeId, content: {}, updatedAt: new Date('2024-01-01') };
+    await adapter.saveVersion(record.id, { ...base, version: 1 });
+    await adapter.saveVersion(record.id, { ...base, version: 2, parentId: 'box-1' });
+    await adapter.saveVersion(record.id, { ...base, version: 3, parentId: '' });
+
+    expect((await adapter.getVersion(record.id, 1))?.parentId).toBeUndefined();
+    expect((await adapter.getVersion(record.id, 2))?.parentId).toBe('box-1');
+    expect((await adapter.getVersion(record.id, 3))?.parentId).toBe('');
+  });
+
+  test('restoreVersion writes the snapshot parentId back', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ version: 2 });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date('2024-01-01'),
+      parentId: box.id,
+    });
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.parentId).toBe(box.id);
+    expect((await adapter.queryRecords({ filter: { parentId: box.id } })).records).toHaveLength(1);
+  });
+
+  // A snapshot always settles containment, so a snapshot with no parentId
+  // restores the record to the root rather than leaving it where it sits.
+  test('restoreVersion clears parentId for a snapshot taken at the root', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ version: 2, parentId: box.id });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date('2024-01-01'),
+    });
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.parentId).toBeUndefined();
+    expect((await adapter.queryRecords({ filter: { parentId: null } })).records).toHaveLength(2);
+  });
+
   test('saveVersion throws on a (record, version) collision instead of silently dropping the snapshot', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
@@ -1608,6 +1714,51 @@ describe('versions', () => {
       const versions = await adapter.getVersions(record.id);
       expect(versions).toHaveLength(1); // healed, not duplicated
       expect(versions[0].content).toEqual({ text: 'original' });
+    });
+
+    // The overwrite has to replace every column the insert writes. A column
+    // left behind keeps the orphan's value and surfaces later as a restore
+    // putting the record somewhere the healing snapshot never said.
+    test('healing an orphan replaces every snapshot field, not just content', async () => {
+      const adapter = await initAdapter();
+      const box = makeRecord();
+      await adapter.createRecord(box);
+      const record = makeRecord({ version: 1, content: { text: 'original' } });
+      await adapter.createRecord(record);
+      // The orphan claims a container the record was never in, plus an
+      // actor trail of its own.
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: record.typeId,
+        content: { text: 'stale' },
+        updatedAt: record.updatedAt,
+        parentId: box.id,
+        updatedBy: 'entity-stale',
+        updatedVia: 'app-stale',
+      });
+
+      await adapter.patchContent(
+        record.id,
+        { text: 'healed' },
+        {
+          snapshot: {
+            version: 1,
+            typeId: record.typeId,
+            content: { text: 'original' },
+            updatedAt: record.updatedAt,
+          },
+        },
+      );
+
+      const healed = await adapter.getVersion(record.id, 1);
+      expect(healed?.content).toEqual({ text: 'original' });
+      expect(healed?.parentId).toBeUndefined();
+      expect(healed?.updatedBy).toBeUndefined();
+      expect(healed?.updatedVia).toBeUndefined();
+
+      // And the restore that reads it leaves the record at the root.
+      const restored = await adapter.restoreVersion(record.id, 1);
+      expect(restored.parentId).toBeUndefined();
     });
 
     test('a snapshot for a version the record has already moved past is a genuine conflict, rejected with no partial apply', async () => {

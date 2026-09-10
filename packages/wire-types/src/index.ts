@@ -72,6 +72,13 @@ export type WireType = {
   createdAt: string;
 };
 
+/**
+ * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
+ * root. A snapshot is state, not an instruction, so it takes the same
+ * shape the record it describes takes — `null` is an input spelling
+ * (`PUT /records/:id/parent`, a `parentId=null` filter) and never appears
+ * on a response. See docs/spec/wire-format.md § Versions.
+ */
 export type WireVersion = {
   version: number;
   typeId: string;
@@ -80,6 +87,7 @@ export type WireVersion = {
   entityId?: string;
   updatedBy?: string;
   updatedVia?: string;
+  parentId?: string;
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -130,6 +138,7 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.entityId !== undefined) w.entityId = v.entityId;
   if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
+  if (v.parentId !== undefined) w.parentId = v.parentId;
   if (v.associations !== undefined) w.associations = v.associations;
   if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;

@@ -1279,6 +1279,40 @@ describe('getVersions', () => {
     expect(versions[0].updatedAt).toBeInstanceOf(Date);
     expect(versions[0].entityId).toBe('entity-owner-123');
   });
+
+  // A snapshot spells the root the way a record does — by omission. A
+  // foreign server that sends the input spelling instead means the same
+  // thing, so it lands as absent rather than as a literal null.
+  test('a null parentId from a foreign server parses as the root', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: null }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect('parentId' in parsed).toBe(false);
+  });
+
+  test('an omitted parentId stays omitted', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect('parentId' in parsed).toBe(false);
+  });
+
+  // Validation lives in Stack, not on the wire: a foreign server can send
+  // anything, and the parse must carry it through rather than read '' as a
+  // spelling of absence.
+  test('an empty-string parentId survives the parse', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: '' }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect(parsed.parentId).toBe('');
+  });
+
+  test('a container parentId parses through', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: 'rec-box' }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect(parsed.parentId).toBe('rec-box');
+  });
 });
 
 describe('getVersion', () => {

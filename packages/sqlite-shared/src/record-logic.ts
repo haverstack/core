@@ -438,13 +438,14 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
-        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
+        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ?, parent_id = ? WHERE id = ?`,
         [
           target.typeId,
           JSON.stringify(target.content),
           toMs(new Date()),
           opts.updatedBy ?? null,
           opts.updatedVia ?? null,
+          target.parentId ?? null,
           id,
         ],
       );
@@ -612,8 +613,8 @@ export class SharedSqlRecordLogic {
       this.exec.run(
         `INSERT INTO versions
           (record_id, version, type_id, content, updated_at, entity_id,
-           updated_by, updated_via, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           updated_by, updated_via, parent_id, associations, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           version.version,
@@ -623,6 +624,7 @@ export class SharedSqlRecordLogic {
           version.entityId ?? null,
           version.updatedBy ?? null,
           version.updatedVia ?? null,
+          version.parentId ?? null,
           version.associations ? JSON.stringify(version.associations) : null,
           version.permissions ? JSON.stringify(version.permissions) : null,
         ],
@@ -638,16 +640,26 @@ export class SharedSqlRecordLogic {
     }
   }
 
+  /**
+   * Replaces every column insertVersionRow writes, so an overwritten row is
+   * indistinguishable from a freshly inserted one — a column left out here
+   * would keep the replaced row's value and surface later as a restore
+   * putting back something the snapshot never said.
+   */
   private overwriteVersionRow(id: string, version: RecordVersion): void {
     this.exec.run(
       `UPDATE versions
-         SET type_id = ?, content = ?, updated_at = ?, entity_id = ?, associations = ?, permissions = ?
+         SET type_id = ?, content = ?, updated_at = ?, entity_id = ?,
+             updated_by = ?, updated_via = ?, parent_id = ?, associations = ?, permissions = ?
        WHERE record_id = ? AND version = ?`,
       [
         version.typeId,
         JSON.stringify(version.content),
         toMs(version.updatedAt),
         version.entityId ?? null,
+        version.updatedBy ?? null,
+        version.updatedVia ?? null,
+        version.parentId ?? null,
         version.associations ? JSON.stringify(version.associations) : null,
         version.permissions ? JSON.stringify(version.permissions) : null,
         id,

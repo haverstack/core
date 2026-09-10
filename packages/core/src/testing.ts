@@ -506,8 +506,13 @@ export class MemoryAdapter implements StackAdapter {
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const merged = { ...record, typeId: target.typeId, content: target.content };
+    // A snapshot always settles containment: absent is the root, so a
+    // restore moves the record there rather than leaving it where it sits.
+    const withParent = withParentId(merged, target.parentId ?? null);
     const withAssoc =
-      target.associations !== undefined ? withAssociations(merged, target.associations) : merged;
+      target.associations !== undefined
+        ? withAssociations(withParent, target.associations)
+        : withParent;
     const updated = this.bump(withAssoc, opts);
     this.records.set(id, updated);
     return updated;
@@ -605,6 +610,15 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
 function withAssociations(record: StackRecord, associations: Association[]): StackRecord {
   const { associations: _drop, ...rest } = record;
   return associations.length ? { ...rest, associations } : (rest as StackRecord);
+}
+
+/**
+ * Sets a record's container, omitting the key at the root — the same shape
+ * setParent() leaves behind, and the one rowToRecord produces.
+ */
+function withParentId(record: StackRecord, parentId: string | null): StackRecord {
+  const { parentId: _drop, ...rest } = record;
+  return parentId === null ? (rest as StackRecord) : { ...rest, parentId };
 }
 
 /**
