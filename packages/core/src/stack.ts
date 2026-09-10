@@ -1721,6 +1721,12 @@ export class Stack implements StackClient {
           'createdAt',
         );
       }
+      // A generated id names nothing, so a create under a parent cannot
+      // close a loop. A caller-supplied one can: existing records may
+      // already point at it, and the chain above the parent can lead back
+      // to it. Asked only for that combination, so an ordinary create pays
+      // no reads. See docs/spec/data-model.md § Reparenting.
+      if (opts.parentId !== undefined) await this.assertNoParentCycle(opts.id, opts.parentId);
     }
 
     const associations =
@@ -2072,16 +2078,23 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Refuse a move that would make a record its own ancestor. Create can
-   * never produce one — a new record's id names nothing yet — so this is
-   * the single site where the hierarchy could stop being a tree, and
-   * nothing downstream (a generator deriving a page path, a folder view)
-   * is written to survive one.
+   * Refuse an edge that would make a record its own ancestor — the two
+   * sites that add one, setParent() and a create naming both its own id
+   * and a parent. Nothing downstream (a generator deriving a page path, a
+   * folder view) is written to survive a cycle.
    *
    * Walks with the unscoped adapter deliberately: a walk that skipped the
    * links a requester cannot read would let a cycle be assembled through
    * them and break the invariant for every reader. The walk is bounded
    * because a chain long enough to exhaust it is already pathological.
+   *
+   * Read-then-write, so two moves racing on opposite ends of one chain can
+   * both pass — closing that means the invariant lives in the adapter,
+   * where the write is atomic, which puts a graph constraint in the
+   * storage contract every adapter then implements. Same deferral as
+   * checkBindingUnique() above. Consumers that walk `parentId` should
+   * carry a visited set rather than trust this alone; MAX_PARENT_DEPTH is
+   * the same posture applied here.
    * See docs/spec/data-model.md § Reparenting.
    */
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {

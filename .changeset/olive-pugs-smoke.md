@@ -26,10 +26,12 @@ gates a move as an ordinary write on the record plus read access to the destinat
 the same reference gate `create()` applies to a `parentId`. The origin is ungated,
 since naming it requires reading the record.
 
-A move that would make a record its own ancestor is refused with `StackConflictError`
-(wire: 409). `create()` can never produce a cycle, so this is the single site where
-the hierarchy could stop being a tree, and consumers do walk it — a site generator
-derives a page's path from its `parentId` ancestors.
+An edge that would make a record its own ancestor is refused with `StackConflictError`
+(wire: 409), at both sites that add one: `setParent()`, and a `create()` supplying both
+`id` and `parentId` — a generated id names nothing, but a caller-supplied one may already
+have records pointing at it. Dangling parents stay legal. The check is read-then-write, so
+it is advisory under concurrency, the same posture as DID binding uniqueness; consumers
+that walk `parentId` should carry a visited set.
 
 The change feed gains a `reparent` op (kind `changed`), matched against both
 containers a move concerns so a subscription filtered on the origin learns the record

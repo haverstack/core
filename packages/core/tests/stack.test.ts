@@ -1337,6 +1337,48 @@ describe('Stack.setParent', () => {
     await expect(stack.setParent(root.id, previous.id)).rejects.toThrow(StackConflictError);
   });
 
+  // A create supplying both id and parentId is the second edge-adding
+  // site: existing records may already point at the id it names.
+  test('a create naming its own id under a descendant is refused', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
+    const minted = idWithTimestamp(Date.now());
+    await stack.setParent(a.id, minted);
+    await expect(
+      stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('two creates with mutually-referencing minted ids are refused', async () => {
+    const first = idWithTimestamp(Date.now());
+    const second = idWithTimestamp(Date.now() + 60_000);
+    await stack.create(NOTE_V1, { text: 'x' }, { id: first, parentId: second });
+    await expect(
+      stack.create(NOTE_V1, { text: 'y' }, { id: second, parentId: first }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('a create naming its own id as its own parent is refused', async () => {
+    const minted = idWithTimestamp(Date.now());
+    await expect(
+      stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: minted }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // A generated id names nothing, so this pays no reads and never refuses.
+  test('a create with a generated id under any parent is allowed', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
+    expect(b.parentId).toBe(a.id);
+  });
+
+  test('a minted id under an unrelated parent is allowed', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const minted = idWithTimestamp(Date.now());
+    const made = await stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: box.id });
+    expect(made.parentId).toBe(box.id);
+  });
+
   test('parenting to a missing record is allowed, as at create', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const moved = await stack.setParent(note.id, 'nonexistent');
