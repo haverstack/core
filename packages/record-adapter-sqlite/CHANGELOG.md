@@ -1,5 +1,88 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.19.0
+
+### Minor Changes
+
+- [#258](https://github.com/haverstack/core/pull/258) [`e40e814`](https://github.com/haverstack/core/commit/e40e8143cda1b4a97ce930cd4e7f6d7b6b3f077f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Remove `total` from `QueryResult`. A query answers with `records` and
+  `cursor`.
+
+  The count was only ever a number on one of the three paths a query can
+  take. A permission-scoped query could not report one — the count of
+  matching Records reveals the cardinality the permission check just hid —
+  and neither could any response on the wire, for the same reason. That left
+  it populated on a direct unscoped `Stack.query()` in process and `null`
+  everywhere else, so an app reading it saw a number locally and `null` the
+  moment the same code ran scoped or against a server.
+
+  Meanwhile every path paid for it. `ScopedStack.query()` filters and refills
+  by calling the adapter per page, so one scoped query at `limit: 50` ran
+  eleven `COUNT(*)`s and discarded all eleven. Measured over 20k records, the
+  count was 74% of a scoped query and 77% of an `asEntity(null)` one.
+
+  A caller that needs a count follows `cursor` to exhaustion and counts what
+  arrives — the only number that was ever true for that requester.
+
+  `MemoryAdapter` and the SQL adapters had also disagreed about what the
+  field meant: the documented "ignoring pagination" (which `MemoryAdapter`
+  implemented) against the count of what remained after the cursor (which the
+  SQL adapters returned). Removing the field settles it.
+
+- [#258](https://github.com/haverstack/core/pull/258) [`053b53e`](https://github.com/haverstack/core/commit/053b53e016d7af16a207e940de111bcfa0eab032) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rework the shared SQLite storage layout so reads are index-driven,
+  trading index bytes for read latency and write throughput.
+
+  `content_sort` and `file_refs` held one row per top-level content field
+  each, on the same key and with the same lifecycle; they are now one
+  `content_index`, halving the per-write index maintenance and removing a
+  table and its implicit index from the file. A `value_rank` column
+  replaces the "is num_value null" partitioning, so a single index carries
+  the whole content ordering where two carried none the planner would use.
+
+  A content-field sort now reads as two ordered index walks — the records
+  holding a value at the field, then the records holding none — instead of
+  a LEFT JOIN the planner could only sort after the fact. Filter indexes on
+  `records` carry `(created_at, id)` so a filtered listing walks the index
+  in order and stops at the page boundary; the `deleted_at` and
+  `unlisted_at` indexes are gone, since every query asks for `IS NULL` and
+  their presence steered the planner away from the ordering index. The
+  redundant `idx_assoc_record_id` and `idx_tokens_hash` are gone too — the
+  primary key and the UNIQUE constraint already index those columns.
+
+  `records_fts` is declared `columnsize=0`: search here is a membership
+  test, never a relevance ranking, so the per-row token-count shadow table
+  was written on every record write and never read. A foreign reader can no
+  longer rank against `records_fts` with `bm25()`.
+
+  Measured over 20k records: listings and content sorts 5-7x faster, writes
+  ~19% faster, table bytes ~7% smaller, index bytes ~7% larger, and the
+  file ~2% larger overall. Carrying the sort key on the filter indexes is
+  what costs those bytes, and what makes a filter on a low-cardinality
+  column — one entity, a handful of types, most records without a parent —
+  an ordered index walk rather than a sort of everything it matched.
+
+  Query results, ordering and cursors are unchanged. The stack file layout is
+  not — an existing database is not readable by this version.
+
+### Patch Changes
+
+- [#258](https://github.com/haverstack/core/pull/258) [`5463fc1`](https://github.com/haverstack/core/commit/5463fc13e7e0f3e55c6c17bbab87ed6f4d7da7f4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Stop `sanitizeFts5Query` collapsing on adversarial search text.
+
+  Several rules re-scanned the same run of input once per starting position
+  inside it, which is quadratic in that run — on text a caller types into a
+  search box. A few hundred kilobytes of the right shape held the thread for
+  seconds to minutes; the same inputs now take tens of milliseconds.
+
+  This bounds the collapse, not the growth: sanitizing still costs a little
+  more than proportionally as the search text grows, so bounding that text's
+  length remains the caller's.
+
+  The rewrites are unchanged for every input FTS5 would accept. A paren
+  inside a `NEAR(...)` call now reads as grouping rather than being
+  swallowed with the wrapper, since no input FTS5 accepts puts one there.
+
+- Updated dependencies [[`e40e814`](https://github.com/haverstack/core/commit/e40e8143cda1b4a97ce930cd4e7f6d7b6b3f077f)]:
+  - @haverstack/core@0.27.0
+
 ## 0.18.0
 
 ### Minor Changes
