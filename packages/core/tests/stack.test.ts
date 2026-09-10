@@ -4046,6 +4046,19 @@ describe('content field names', () => {
     );
   });
 
+  // A schema off the wire is parsed JSON, so defineType() reports a
+  // malformed one rather than throwing out of the machinery that reads it.
+  test.each([
+    ['an object declaring neither properties nor open', '{"meta": {"kind": "object"}}'],
+    ['an array declaring neither items nor open', '{"tags": {"kind": "array"}}'],
+    ['an unknown kind', '{"meta": {"kind": "blorp"}}'],
+    ['a definition that is not an object', '{"meta": "string"}'],
+  ])('defineType() refuses %s', async (_label, json) => {
+    await expect(
+      stack.defineType('com.example.test/malformed@1', 'Malformed', JSON.parse(json)),
+    ).rejects.toThrow(StackValidationError);
+  });
+
   test('defineType() refuses a schema declaring a field no filter could name', async () => {
     await expect(
       stack.defineType('com.example.test/dotted@1', 'Dotted', {

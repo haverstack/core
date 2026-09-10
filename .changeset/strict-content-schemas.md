@@ -83,6 +83,18 @@ refused as a missing required field. This is the argument `defineType()` already
 makes for a field name no filter could address: a schema is a promise that a field is
 meaningful.
 
+**Fixed: `defineType()` reports a malformed schema instead of failing inside the
+machinery that reads it.** It takes a `TypeSchema`, but a schema arriving at
+`POST /types` is parsed JSON no compiler has seen, so a definition that is not an
+object, one naming no `kind` or an unrecognized one, a non-boolean `required`/`open`,
+a container declaring neither its interior nor `open`, and a container declaring both
+were all reachable. Two of them threw a raw `TypeError` out of schema hashing; the
+rest were accepted and defined a field whose every write failed against an
+expectation the schema never stated (`Expected undefined, got string`), sending the
+caller looking through their content for a bug that was in their type. All of them
+now answer `StackValidationError` (wire: 422) naming each bad field and what is wrong
+with it, checked recursively through `properties` and `items`.
+
 **For server authors:** this is a `Stack` invariant that a server built on core
 inherits through ordinary record validation, and a third content-key rule for a
 server mapping request bodies onto storage directly to apply itself. It answers

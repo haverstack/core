@@ -456,6 +456,8 @@ POST /types        — register a type, or evolve an existing one in place
 
 `POST /types` on an `id` that already has a stored Type runs the same [schema drift check](./data-model.md#schema-drift-detection) as `Stack.defineType()` — the server-side storage layer never blindly overwrites a Type definition; legality is decided once, in the same invariant layer both the local and wire paths share.
 
+**A malformed schema answers 422** (code `validation`) rather than failing inside the server: a body here is parsed JSON, so a definition that is not an object, one naming no `kind` or an unrecognized one, a non-boolean `required`/`open`, and a container declaring neither its interior nor `open` — or both — are each reported against the field they sit on. See [Data model § Types](./data-model.md#types).
+
 **A schema is held to the same field-name rules records are**, answering **422** (code `validation`): a declared name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth, and `__proto__`, `constructor` or `prototype` is refused as a top-level declared name. A schema arriving here is parsed from JSON, which is the one route by which a `__proto__` key becomes an ordinary declared field rather than reaching the prototype setter. Both rules refuse a declaration no record could ever satisfy — see [Data model § Content field names](./data-model.md#content-field-names) and [§ Reserved content keys](./data-model.md#reserved-content-keys).
 
 ## Attachments

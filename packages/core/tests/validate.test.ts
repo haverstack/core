@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import {
   validateContent,
+  validateSchemaShape,
   validatePatchValues,
   validateReservedKeys,
   isValid,
@@ -192,6 +193,96 @@ describe('undeclared content fields', () => {
 
   test('every undeclared key is reported, not just the first', () => {
     expect(paths({ a: 1, b: 2, c: 3 }, {})).toEqual(['a', 'b', 'c']);
+  });
+});
+
+// -------------------------------------------------------
+// Schema shape: defineType() takes a TypeSchema, but a schema off the wire
+// is parsed JSON no compiler has seen.
+// -------------------------------------------------------
+
+describe('validateSchemaShape', () => {
+  const shapeOf = (json: string) => validateSchemaShape(JSON.parse(json));
+  const messages = (json: string) => shapeOf(json).map((e) => e.message);
+
+  test('a well-formed schema produces no errors', () => {
+    expect(
+      shapeOf(`{
+        "title": {"kind": "string", "required": true},
+        "meta": {"kind": "object", "open": true},
+        "tags": {"kind": "array", "items": {"kind": "string"}},
+        "address": {"kind": "object", "properties": {"city": {"kind": "string"}}}
+      }`),
+    ).toEqual([]);
+  });
+
+  test('a container declaring neither its interior nor open is refused', () => {
+    expect(messages('{"meta": {"kind": "object"}}')).toEqual([
+      'An object must declare "properties", or "open": true to leave its keys unvalidated',
+    ]);
+    expect(messages('{"tags": {"kind": "array"}}')).toEqual([
+      'An array must declare "items", or "open": true to leave its elements unvalidated',
+    ]);
+  });
+
+  // Contradictory rather than merely redundant: one of the two has to be
+  // ignored, and nothing says which.
+  test('a container declaring both is refused', () => {
+    expect(messages('{"meta": {"kind": "object", "open": true, "properties": {}}}')).toEqual([
+      'An open object cannot also declare "properties"',
+    ]);
+    expect(
+      messages('{"tags": {"kind": "array", "open": true, "items": {"kind": "string"}}}'),
+    ).toEqual(['An open array cannot also declare "items"']);
+  });
+
+  test('an unknown or missing kind is refused', () => {
+    expect(messages('{"meta": {"kind": "blorp"}}')).toEqual(['"blorp" is not a field kind']);
+    expect(messages('{"meta": {"label": "x"}}')).toEqual(['A field definition must name a "kind"']);
+  });
+
+  test('a definition that is not an object is refused', () => {
+    expect(messages('{"meta": "string"}')).toEqual([
+      'A field definition must be an object, got string',
+    ]);
+    expect(messages('{"meta": null}')).toEqual([
+      'A field definition must be an object, got object',
+    ]);
+  });
+
+  test('a schema that is not an object is refused at the root', () => {
+    expect(validateSchemaShape('nope')).toEqual([
+      {
+        path: '(root)',
+        message: 'A schema must be an object mapping field names to definitions, got string',
+      },
+    ]);
+  });
+
+  test('non-boolean required and open are refused', () => {
+    expect(messages('{"meta": {"kind": "string", "required": "yes"}}')).toEqual([
+      '"required" must be a boolean',
+    ]);
+    expect(messages('{"meta": {"kind": "object", "open": "yes", "properties": {}}}')).toEqual([
+      '"open" must be a boolean',
+    ]);
+  });
+
+  test('nested definitions are checked, and report their path', () => {
+    expect(
+      shapeOf('{"address": {"kind": "object", "properties": {"city": {"kind": "blorp"}}}}'),
+    ).toEqual([{ path: 'address.city', message: '"blorp" is not a field kind' }]);
+    expect(shapeOf('{"tags": {"kind": "array", "items": {"kind": "object"}}}')).toEqual([
+      {
+        path: 'tags[]',
+        message:
+          'An object must declare "properties", or "open": true to leave its keys unvalidated',
+      },
+    ]);
+  });
+
+  test('every malformed field is reported, not just the first', () => {
+    expect(messages('{"a": {"kind": "blorp"}, "b": {"kind": "array"}}')).toHaveLength(2);
   });
 });
 

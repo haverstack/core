@@ -216,6 +216,132 @@ export const validateReservedKeys = (content: Record<string, unknown>): Validati
   }));
 
 /**
+ * Every scalar kind, as a total Record so adding one to ScalarFieldKind
+ * fails to compile until it is listed here.
+ */
+const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
+  string: true,
+  number: true,
+  boolean: true,
+  date: true,
+  text: true,
+  'record-ref': true,
+  'file-ref': true,
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const validateFieldDefShape = (
+  def: unknown,
+  path: string,
+  errors: ValidationError[],
+  depth: number,
+): void => {
+  if (!isPlainObject(def)) {
+    errors.push({ path, message: `A field definition must be an object, got ${typeof def}` });
+    return;
+  }
+
+  if (def.required !== undefined && typeof def.required !== 'boolean') {
+    errors.push({ path, message: '"required" must be a boolean' });
+  }
+  if (def.open !== undefined && typeof def.open !== 'boolean') {
+    errors.push({ path, message: '"open" must be a boolean' });
+  }
+  const isOpen = def.open === true;
+
+  if (typeof def.kind !== 'string') {
+    errors.push({ path, message: 'A field definition must name a "kind"' });
+    return;
+  }
+
+  if (def.kind === 'array') {
+    if (isOpen) {
+      if (def.items !== undefined) {
+        errors.push({ path, message: 'An open array cannot also declare "items"' });
+      }
+      return;
+    }
+    if (def.items === undefined) {
+      errors.push({
+        path,
+        message: 'An array must declare "items", or "open": true to leave its elements unvalidated',
+      });
+      return;
+    }
+    validateFieldDefShape(def.items, `${path}[]`, errors, depth + 1);
+    return;
+  }
+
+  if (def.kind === 'object') {
+    if (isOpen) {
+      if (def.properties !== undefined) {
+        errors.push({ path, message: 'An open object cannot also declare "properties"' });
+      }
+      return;
+    }
+    if (def.properties === undefined) {
+      errors.push({
+        path,
+        message:
+          'An object must declare "properties", or "open": true to leave its keys unvalidated',
+      });
+      return;
+    }
+    validateSchemaShape(def.properties, path, errors, depth + 1);
+    return;
+  }
+
+  if (!Object.hasOwn(SCALAR_KINDS, def.kind)) {
+    errors.push({
+      path,
+      message: `"${def.kind}" is not a field kind`,
+    });
+  }
+};
+
+/**
+ * Check that a schema is actually a schema, before anything reads it as
+ * one. `defineType()` takes a TypeSchema, but a schema off the wire is
+ * parsed JSON that TypeScript never saw, so every shape below is reachable
+ * at runtime: a container declaring neither its interior nor `open` throws
+ * out of hashSchema() rather than reporting anything, and a definition with
+ * an unknown `kind` — or none — defines a field whose every write fails
+ * against an expectation the schema never actually stated, sending the
+ * caller looking through their content for a bug that is in their type.
+ *
+ * Refused at definition time for the reason a field name no filter could
+ * address is: a schema is a promise, and one nothing can satisfy is worth
+ * catching where it is written. See docs/spec/data-model.md § Types.
+ */
+export const validateSchemaShape = (
+  schema: unknown,
+  prefix = '',
+  errors: ValidationError[] = [],
+  depth = 0,
+): ValidationError[] => {
+  if (depth > MAX_VALIDATION_DEPTH) {
+    errors.push({
+      path: prefix || '(root)',
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
+    return errors;
+  }
+  if (!isPlainObject(schema)) {
+    errors.push({
+      path: prefix || '(root)',
+      message: `A schema must be an object mapping field names to definitions, got ${typeof schema}`,
+    });
+    return errors;
+  }
+  for (const [key, def] of Object.entries(schema)) {
+    validateFieldDefShape(def, prefix ? `${prefix}.${key}` : key, errors, depth);
+  }
+  return errors;
+};
+
+/**
  * The same three names, refused where a schema declares them. Top-level
  * only, exactly matching the content rule's scope above: a nested
  * declaration names a field a record can actually carry, so refusing one
