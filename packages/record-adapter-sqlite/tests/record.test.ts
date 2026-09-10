@@ -549,7 +549,6 @@ describe('records — queries', () => {
     await adapter.deleteRecord(r3.id);
     const result = await adapter.queryRecords({});
     expect(result.records.length).toBe(2);
-    expect(result.total).toBe(2);
   });
 
   test('includeDeleted returns soft-deleted records', async () => {
@@ -692,7 +691,6 @@ describe('records — queries', () => {
       sort: { contentField: 'text', direction: 'asc' },
     });
     expect(result.records.map((r) => r.id)).toEqual(['r1', 'r2']);
-    expect(result.total).toBe(2);
   });
 
   test('content filter matches an element of a top-level array', async () => {
@@ -1000,7 +998,6 @@ describe('records — queries', () => {
     });
     expect(page1.records.length).toBe(3);
     expect(page1.cursor).not.toBeNull();
-    expect(page1.total).toBe(5);
 
     const page2 = await adapter.queryRecords({
       sort: { field: 'createdAt', direction: 'asc' },
@@ -1142,9 +1139,10 @@ describe('file-ref indexing', () => {
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
 
-  // File-ref field names are cached per typeId (keyed off saveType()) so that
-  // syncFileRefs() doesn't re-query and re-parse the schema on every write —
-  // this guards against that cache going stale if a type is redefined.
+  // The fields content_index covers are cached per typeId (keyed off
+  // saveType()) so that syncContentIndex() doesn't re-query and re-parse the
+  // schema on every write — this pins that redefining a type reaches the
+  // cache.
   test('redefining a type via saveType updates which fields are treated as file-ref', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(FILE_REF_TYPE);

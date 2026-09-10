@@ -214,7 +214,7 @@ interface StackClient {
 
 **A scoped view of a stack that relays refuses to subscribe**, with `StackRelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./change-feed.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
 
-- **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that makes `ScopedStack.query()`'s `total` always `null`.
+- **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that keeps a count of the whole match off a [query result](./data-model.md#sorting-and-pagination).
 - **A `purged` record is evaluated at mutation time**, on the record as it stood, because after the write there is nothing left to check.
 - **The check fails closed.** A permission decision that cannot be made is not a yes: the event is dropped and the error goes to `onError`.
 - **Delivery is serialized per subscription.** The permission check is asynchronous, so without a queue two changes to one record could be decided out of order and delivered newest-first, breaking the ordering guarantee below.

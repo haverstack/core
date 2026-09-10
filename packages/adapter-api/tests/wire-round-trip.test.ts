@@ -47,7 +47,7 @@ const jsonResponse = (body: unknown): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-const EMPTY_PAGE = { records: [], cursor: null, total: null };
+const EMPTY_PAGE = { records: [], cursor: null };
 
 let mockFetch: ReturnType<typeof vi.fn>;
 

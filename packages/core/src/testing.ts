@@ -56,7 +56,7 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
- * the full RecordFilter shape (mirroring sqlite-shared's buildWhereClause)
+ * the full RecordFilter shape (mirroring sqlite-shared's recordConditions)
  * so permission logic under test exercises real predicates. Declares
  * `filter.content: 'path'`, as every local adapter must; tests needing
  * the capability-gated paths use IncapableMemoryAdapter below.
@@ -139,7 +139,7 @@ export class MemoryAdapter implements StackAdapter {
   /**
    * True if any top-level file-ref field in the record's registered type
    * schema currently holds this fileId — the content-reference half of
-   * attachmentFileId matching. Mirrors sqlite-shared's file_refs index,
+   * attachmentFileId matching. Mirrors sqlite-shared's content_index,
    * computed on the fly since MemoryAdapter has no persisted index.
    */
   private hasFileRefTo(record: StackRecord, fileId: string): boolean {
@@ -310,7 +310,7 @@ export class MemoryAdapter implements StackAdapter {
     const nextStart = start + limit;
     const cursor = nextStart < results.length ? String(nextStart) : null;
 
-    return { records: page, cursor, total: results.length };
+    return { records: page, cursor };
   }
 
   /**

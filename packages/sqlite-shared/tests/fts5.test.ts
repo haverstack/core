@@ -158,6 +158,45 @@ describe('sanitizeFts5Query', () => {
     });
   });
 
+  // A NEAR call's terms and its distance never hold a paren in any input
+  // FTS5 accepts, so a span that does is not a NEAR call. The parens stay
+  // as grouping rather than being swallowed with the wrapper.
+  describe('a paren inside NEAR(...)', () => {
+    test('is read as grouping, not as part of the call', () => {
+      expect(sanitizeFts5Query('NEAR(cats (dogs), 5)')).toBe('(cats AND (dogs) AND 5)');
+      expect(sanitizeFts5Query('NEAR((cats), 5)')).toBe('((cats) AND 5)');
+    });
+
+    test('leaves a parenthesised distance as a term to search for', () => {
+      expect(sanitizeFts5Query('NEAR(cats, (5))')).toBe('(cats AND (5))');
+    });
+  });
+
+  /**
+   * Search text is whatever a caller typed, so no rule may re-scan the
+   * same run of it once per starting position inside that run. Each shape
+   * below did: at this size the cost ran from seven seconds to four
+   * minutes, against the tens of milliseconds each takes now.
+   *
+   * The bound is against that collapse, not a linearity claim — cost
+   * still grows a little faster than length here, as it does on ordinary
+   * input.
+   */
+  describe('adversarial input does not blow up', () => {
+    test.each([
+      ['a NEAR( that never closes', 'NEAR(' + ' '.repeat(200_000)],
+      ['nested NEAR( with no closing paren', 'NEAR('.repeat(40_000)],
+      ['a long word before a paren', 'a'.repeat(200_000) + '('],
+      ['empty paren pairs', '()'.repeat(100_000)],
+      ['characters the allow-list drops', '+-{}:'.repeat(40_000)],
+      ['operators, parens and quotes together', 'NEAR( "a AND ('.repeat(20_000)],
+    ])('%s', (_label, input) => {
+      const started = Date.now();
+      sanitizeFts5Query(input);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    });
+  });
+
   describe('unbalanced quotes', () => {
     test('closes an odd trailing quote', () => {
       expect(sanitizeFts5Query('5" nails')).toBe('5" nails"');

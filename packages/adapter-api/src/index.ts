@@ -1072,13 +1072,6 @@ export class APIAdapter implements StackAdapter {
     return {
       records: raw.records.map(parseRecord),
       cursor: raw.cursor,
-      // Always null, whatever the server sent. Every wire response has
-      // passed a permission boundary, so a count that ignores pagination
-      // reports records the requester can't read — a server MUST NOT
-      // populate this, and an app that reads `total` must behave the same
-      // here as it does under ScopedStack, which also always reports null.
-      // See docs/spec/wire-format.md § Response envelope.
-      total: null,
     };
   }
 

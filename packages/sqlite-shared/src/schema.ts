@@ -29,6 +29,10 @@ export const RECORD_SCHEMA_SQL = `
   -- qualifier: related_stack for a record in another stack, related_ns for
   -- a foreign namespace. All four are in the primary key, so two targets
   -- differing only by namespace are two associations.
+  --
+  -- The primary key leads with record_id, so its implicit index already
+  -- serves every by-record read and delete; the indexes below exist only
+  -- for the filter directions it cannot answer.
   CREATE TABLE IF NOT EXISTS associations (
     record_id     TEXT NOT NULL REFERENCES records(id),
     kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
@@ -66,51 +70,58 @@ export const RECORD_SCHEMA_SQL = `
     created_at    INTEGER NOT NULL
   ) STRICT;
 
-  -- One row per top-level file-ref content field on a record, kept in sync
-  -- on every content/typeId write. Lets the attachmentFileId query filter
-  -- and deleteAttachment()'s reference check see content-held file
-  -- references, not just attachment associations.
-  CREATE TABLE IF NOT EXISTS file_refs (
-    record_id TEXT NOT NULL REFERENCES records(id),
-    field     TEXT NOT NULL,
-    file_id   TEXT NOT NULL,
-    PRIMARY KEY (record_id, field)
-  ) STRICT;
-
-  -- One row per top-level scalar content field on a record, rewritten
-  -- beside file_refs on every content/typeId write. Exactly one of
-  -- num_value / text_key+text_value is set, by the field's declared kind:
-  -- what a field orders as must not vary with the value a given record
-  -- happens to hold. text_key is the folded form ordering compares
-  -- (@haverstack/core's contentSortKey), text_value the stored one, which
-  -- breaks a tie between two values that fold together.
-  CREATE TABLE IF NOT EXISTS content_sort (
+  -- One row per top-level scalar content field a record holds a value at:
+  -- what it orders as, and the file it references. See
+  -- docs/spec/adapters.md § Adapter backends and
+  -- docs/spec/data-model.md § Sorting by a content field.
+  --
+  -- value_rank is 0 for a numeric value and 1 for a text one — the same
+  -- split as "num_value IS NULL", but non-null, so one index can carry
+  -- the whole ordering. file_id is set only for a 'file-ref' field.
+  CREATE TABLE IF NOT EXISTS content_index (
     record_id  TEXT NOT NULL REFERENCES records(id),
     field      TEXT NOT NULL,
+    value_rank INTEGER NOT NULL CHECK (value_rank IN (0, 1)),
     num_value  REAL,
     text_key   TEXT,
     text_value TEXT,
+    file_id    TEXT,
     PRIMARY KEY (record_id, field)
   ) STRICT;
 
-  -- Indexes
-  CREATE INDEX IF NOT EXISTS idx_records_type_id    ON records(type_id);
-  CREATE INDEX IF NOT EXISTS idx_records_parent_id  ON records(parent_id);
-  CREATE INDEX IF NOT EXISTS idx_records_entity_id  ON records(entity_id);
-  CREATE INDEX IF NOT EXISTS idx_records_app_id     ON records(app_id);
-  CREATE INDEX IF NOT EXISTS idx_records_principal_id ON records(principal_id);
-  CREATE INDEX IF NOT EXISTS idx_records_deleted_at ON records(deleted_at);
-  CREATE INDEX IF NOT EXISTS idx_records_unlisted_at ON records(unlisted_at);
-  CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at);
-  CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at);
-  CREATE INDEX IF NOT EXISTS idx_assoc_record_id    ON associations(record_id);
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label);
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id);
-  CREATE INDEX IF NOT EXISTS idx_assoc_related    ON associations(related_scope, related_ns, related_id);
-  CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id);
-  CREATE INDEX IF NOT EXISTS idx_file_refs_file_id  ON file_refs(file_id);
-  CREATE INDEX IF NOT EXISTS idx_content_sort_num   ON content_sort(field, num_value, record_id);
-  CREATE INDEX IF NOT EXISTS idx_content_sort_text  ON content_sort(field, text_key, text_value, record_id);
+  -- Indexes. Each filter column continues into (created_at, id) — the
+  -- default ordering and its tiebreak — because these columns are
+  -- low-cardinality by design, and a narrow index on one leaves the
+  -- planner sorting the whole matching set before it can honor LIMIT.
+  --
+  -- deleted_at and unlisted_at deliberately have none: nothing searches
+  -- for the rows they mark, and an index on a column every query tests
+  -- for IS NULL only lures the planner off the one answering ORDER BY.
+  CREATE INDEX IF NOT EXISTS idx_records_type_id      ON records(type_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_parent_id    ON records(parent_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_entity_id    ON records(entity_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_app_id       ON records(app_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_principal_id ON records(principal_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_created_at   ON records(created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_updated_at   ON records(updated_at, id);
+  CREATE INDEX IF NOT EXISTS idx_records_version      ON records(version, id);
+
+  -- Each association index ends with record_id so the semi-joins in
+  -- query.ts read the matching record ids out of the index alone.
+  -- idx_assoc_related carries related_ns ahead of related_id because a
+  -- record- or entity-scoped target always stores '' there, which
+  -- buildQueryPlan states explicitly to keep the prefix contiguous.
+  CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label, record_id);
+  CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id, record_id);
+  CREATE INDEX IF NOT EXISTS idx_assoc_related      ON associations(kind, related_scope, related_ns, related_id, record_id);
+  CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id, version);
+
+  -- The whole content ordering, in index order, for one field at a time:
+  -- a content-sorted page is an ordered walk of a slice of this index.
+  CREATE INDEX IF NOT EXISTS idx_content_index_sort
+    ON content_index(field, value_rank, num_value, text_key, text_value, record_id);
+  CREATE INDEX IF NOT EXISTS idx_content_index_file
+    ON content_index(file_id, record_id) WHERE file_id IS NOT NULL;
 `;
 
 /**
@@ -128,16 +139,21 @@ export const TOKENS_SCHEMA_SQL = `
     created_at   INTEGER NOT NULL,
     expires_at   INTEGER
   ) STRICT;
-
-  CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
 `;
 
-/** The full-text index behind `StackQuery.filter.search` (see fts5.ts). */
+/**
+ * The full-text index behind `StackQuery.filter.search` (see fts5.ts).
+ * What `columnsize=0` costs a reader is in docs/spec/adapters.md
+ * § Adapter backends. `detail` stays at its default: sanitizeFts5Query
+ * passes phrase queries through, and a phrase needs the token positions
+ * only that setting records.
+ */
 export const FTS5_SCHEMA_SQL = `
   CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     content,
     content='records',
-    content_rowid='rowid'
+    content_rowid='rowid',
+    columnsize=0
   );
 `;
 

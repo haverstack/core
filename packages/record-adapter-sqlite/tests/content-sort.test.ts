@@ -170,12 +170,16 @@ describe('sorting by a content field', () => {
     ]);
   });
 
-  test('total counts records, not joined index rows', async () => {
+  // One record holding a value at the sort field is one row out, however
+  // many index rows the join has to walk to find it.
+  test('a record appears once, not once per index row', async () => {
     for (const title of ['a', 'b', 'c']) await create(ARTICLE, { title, order: 1 });
 
-    const result = await adapter.queryRecords({ sort: { contentField: 'order' } });
-    expect(result.total).toBe(3);
-    expect(result.records).toHaveLength(3);
+    const result = await adapter.queryRecords({
+      sort: { contentField: 'order', direction: 'asc' },
+    });
+    // All three tie on the sort field, so the id tiebreak orders them.
+    expect(result.records.map((r) => r.content.title)).toEqual(['a', 'b', 'c']);
   });
 });
 
@@ -301,7 +305,7 @@ describe('the sort index tracks the record', () => {
 
     const db = new DatabaseSync(dbPath);
     const rows = db
-      .prepare('SELECT COUNT(*) AS n FROM content_sort WHERE record_id = ?')
+      .prepare('SELECT COUNT(*) AS n FROM content_index WHERE record_id = ?')
       .get(record.id) as { n: number };
     db.close();
     expect(rows.n).toBe(0);

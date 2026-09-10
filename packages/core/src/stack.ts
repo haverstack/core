@@ -2111,7 +2111,7 @@ export class Stack implements StackClient {
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
     if (resolvedFilter === EMPTY_FAMILY) {
-      return { records: [], cursor: null, total: 0 };
+      return { records: [], cursor: null };
     }
 
     const result = await this.adapter.queryRecords({
@@ -4080,8 +4080,8 @@ export class ScopedStack implements StackClient {
   /**
    * Query records, filtered to those this request can read. Pages are
    * filtered then refilled, so a page may slightly overshoot `limit` but
-   * never skips a record. `total` is always null (see QueryResult.total).
-   * Grants are prefetched once, cursor-walked to exhaustion.
+   * never skips a record. Grants are prefetched once, cursor-walked to
+   * exhaustion.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
@@ -4105,7 +4105,7 @@ export class ScopedStack implements StackClient {
     // is carried into the next operation.
     const groupRoles = new Map<string, GroupRole | null>();
 
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null, total: null };
+    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
       totalFetched += page.records.length;
@@ -4119,7 +4119,7 @@ export class ScopedStack implements StackClient {
       }
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
-    return { records, cursor: page.cursor, total: null };
+    return { records, cursor: page.cursor };
   }
 
   async update(
@@ -4531,8 +4531,8 @@ export class ScopedStack implements StackClient {
    *
    * A record the subscriber cannot read produces no event at all, rather
    * than an empty or redacted one: the existence of a change is itself a
-   * disclosure, the same reasoning that keeps query()'s `total` null.
-   * See docs/spec/events.md § Permission scoping.
+   * disclosure, the same reasoning that keeps a count of the whole match
+   * off a query result. See docs/spec/events.md § Permission scoping.
    */
   async subscribe(
     handler: (change: RecordChange) => void,

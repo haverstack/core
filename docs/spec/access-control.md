@@ -295,7 +295,7 @@ This is the same closure [reference-creation gating](#reference-creation-gating)
 
 **The closure is in the answer, not in the timing.** Refusing an existing Record does strictly more work than refusing a missing one — a fetch, then a read check that may walk grants and a Group roster — so a caller measuring closely enough can still tell the two apart. Constant-time refusal is not attempted: it would mean paying the read check on every miss, and the deployments this spec targets are not where that trade pays.
 
-`ScopedStack.query()`'s `total` is always `null`, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination). Computing an exact _filtered_ count instead would mean evaluating every match rather than just the returned page, so that is not attempted either.
+A query result carries no count of the whole match, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination). Reporting an exact _filtered_ count instead would mean evaluating every match rather than just the returned page, so that is not offered either.
 
 ### Known limitation
 

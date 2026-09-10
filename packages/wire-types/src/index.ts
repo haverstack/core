@@ -53,16 +53,12 @@ export type WireRecord = {
  * `cursor` is non-null, since a server filters a bounded window of stored
  * Records per request against the requester's permissions.
  *
- * `total` is typed `null` rather than `number | null` because every wire
- * response has passed a permission boundary, and an unfiltered count would
- * report how many Records exist beyond what the requester may read. A
- * server MUST NOT populate it; `APIAdapter` discards a number if one
- * arrives anyway. See docs/spec/wire-format.md § Response envelope.
+ * There is no count of the whole match — see docs/spec/wire-format.md
+ * § Response envelope.
  */
 export type WireQueryResponse = {
   records: WireRecord[];
   cursor: string | null;
-  total: null;
 };
 
 export type WireType = {

@@ -77,6 +77,12 @@ SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON
 
 **File compatibility:** the adapter produces a standard SQLite file with an FTS5 `records_fts` index. Any adapter reading it needs FTS5, not merely SQLite.
 
+`records_fts` is an external-content index (`content='records'`) declared `columnsize=0`. It carries no copy of the indexed text and no per-row token counts, so it answers `MATCH` — which is all `filter.search` asks of it — but a foreign reader cannot rank against it: `bm25()` and `columnsize()` have no column sizes to read. Ordering a search is a records-column sort here, never a relevance sort. A reader wanting relevance has to build its own index over `records.content` rather than borrow this one.
+
+**Content ordering is materialized, not derived.** A `sort.contentField` query reads `content_index`, one row per top-level scalar field a Record holds a value at, carrying the ordered forms in [Sorting by a content field](./data-model.md#sorting-by-a-content-field) — the numeric value, or the folded key and the stored text — plus the file id when the field is a `file-ref`. It is written from `content` on every write that can change content or `typeId`, so a foreign writer that updates a Record without rewriting the row leaves the ordering and the `attachmentFileId` filter stale. Nothing reads it as a source of truth: `content` is.
+
+A missing row is not only a stale read. `deleteUnreferencedAttachmentRecords()` decides whether a file is still referenced by looking for one, so a `file-ref` field with no row makes a referenced file look unreferenced, and the attachment's metadata Records are hard-deleted rather than refused. A writer that touches `content` without rewriting the row is the one way to reach that.
+
 ## Adapter capabilities
 
 Adapters expose a capabilities object so apps can check what's supported before relying on a feature:

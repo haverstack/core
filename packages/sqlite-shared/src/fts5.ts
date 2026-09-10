@@ -62,6 +62,25 @@ import type { SqlExecutor } from './executor.js';
  */
 const OUTSIDE_PHRASE_DISALLOWED = /[^\p{L}\p{N}\p{M}_\s()"]/gu;
 
+/**
+ * Collapse every whitespace run to a single space.
+ *
+ * Every rule below that reasons about what sits beside an operator or a
+ * paren spells "beside" as `\s*`, and a `\s*` with a long run to chew on
+ * re-tries the whole run once per starting position — quadratic in the
+ * run, on text a caller types into a box. Keeping runs collapsed bounds
+ * what any of them can backtrack over to a single character. What it does
+ * not buy is linearity overall: the rewrite still costs a little more
+ * than proportionally as the text grows, which is why bounding a search's
+ * length belongs to whoever accepts it.
+ *
+ * Nothing is lost by it: FTS5's tokenizer splits on whitespace, so a
+ * collapsed run tokenizes exactly as the original did — inside a phrase
+ * as well as outside, since a phrase matches a sequence of tokens rather
+ * than the spacing between them.
+ */
+const collapseWhitespace = (query: string): string => query.replace(/\s+/g, ' ');
+
 export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   if (!query) return '';
 
@@ -75,7 +94,21 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   clean = clean.replace(/\*/g, '');
 
   // Replace NEAR(terms, distance) with just its terms — see note above.
-  clean = clean.replace(/\bNEAR\s*\(\s*([^,)]*)(?:,[^)]*)?\)/gi, '$1');
+  //
+  // Two things here are about what the engine does when the closing paren
+  // never arrives, on text a caller types into a box.
+  //
+  // No `\s*` after the paren, though the terms it captures may open with
+  // whitespace: `[^,()]*` already matches a space, so a second quantifier
+  // that also does gives the engine an ambiguous split to backtrack
+  // through. The captured space is collapsed with all the rest on the way
+  // out.
+  //
+  // And neither run crosses a `(`, which bounds where the failure is
+  // found: `NEAR(NEAR(NEAR(` used to re-scan to the end of the string once
+  // per occurrence. A NEAR's terms are words and phrases and its distance
+  // is a number, so neither holds a paren in any input FTS5 would accept.
+  clean = clean.replace(/\bNEAR\s*\(([^,()]*)(?:,[^()]*)?\)/gi, '$1');
 
   // A NEAR( with no closing paren isn't the function-call form the rule
   // above rewrites, and the paren auto-close below would hand FTS5 a NEAR
@@ -88,6 +121,10 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   clean = clean.replace(/"[^"]*"|[^"]+/g, (span) =>
     span.startsWith('"') ? span : span.replace(OUTSIDE_PHRASE_DISALLOWED, ' '),
   );
+
+  // The reduction above turns every disallowed character into a space, so
+  // this is where the long runs come from.
+  clean = collapseWhitespace(clean);
 
   // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not "NOT term"
   clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
@@ -134,15 +171,18 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   let prev: string;
   do {
     prev = result;
-    // An empty phrase matches nothing and is the one construct whose
-    // quotes can re-pair differently once a rule inserts text beside it.
-    result = result.replace(/""/g, ' ');
-    result = result.replace(/\(\s*\)/g, ' ');
+    // Empty phrases and empty paren pairs, each of which matches nothing,
+    // in one rule so that a run of them collapses to a single space
+    // rather than to one space apiece — a run of spaces is what the rules
+    // below would have to backtrack over. An empty phrase is also the one
+    // construct whose quotes can re-pair differently once a rule inserts
+    // text beside it, which is why this repeats to a fixpoint.
+    result = result.replace(/(?:""|\(\s*\))+/g, ' ');
     result = dropDanglingOperators(result);
     result = restoreImplicitAnd(result);
   } while (result !== prev);
 
-  return result.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+  return collapseWhitespace(result).replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
 };
 
 /** An operator FTS5 requires a term on both sides of. */
@@ -182,7 +222,10 @@ const dropDanglingOperators = (query: string): string =>
       // No left operand: at the start of the query or straight after "(".
       out = out.replace(new RegExp(String.raw`(^|\()\s*\b${OPERATOR}\b\s*`, 'gi'), '$1');
       // No right operand: at the end of the query or straight before ")".
-      out = out.replace(new RegExp(String.raw`\s*\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
+      // No leading `\s*` — whitespace before the operator is left for the
+      // collapse on the way out, and a `\s*` here would re-scan a run of
+      // spaces once per position in it before failing to find an operator.
+      out = out.replace(new RegExp(String.raw`\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
     } while (out !== prev);
     return out;
   });
@@ -234,8 +277,13 @@ const restoreImplicitAnd = (query: string): string =>
         },
       )
       // An operand then "(", unless the operand is an operator.
-      .replace(new RegExp(String.raw`(${OPERAND_CHAR}+)\s*(?=\()`, 'gu'), (match, word: string) =>
-        isOperator(word) ? match : `${word} AND `,
+      // The lookbehind pins the match to the start of the operand run.
+      // Without it every position inside a run is a start position, and
+      // each one re-scans the rest of the run before the lookahead
+      // rejects it — quadratic in a long word before a paren.
+      .replace(
+        new RegExp(String.raw`(?<!${OPERAND_CHAR})(${OPERAND_CHAR}+)\s*(?=\()`, 'gu'),
+        (match, word: string) => (isOperator(word) ? match : `${word} AND `),
       ),
   );
 
