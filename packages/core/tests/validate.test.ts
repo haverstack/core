@@ -1,11 +1,12 @@
 import { describe, test, expect } from 'vitest';
 import {
   validateContent,
+  validateSchemaShape,
   validatePatchValues,
   validateReservedKeys,
   isValid,
 } from '../src/validate.js';
-import type { TypeSchema } from '../src/types.js';
+import type { TypeSchema, FieldDef } from '../src/types.js';
 
 // -------------------------------------------------------
 // Helpers
@@ -155,6 +156,182 @@ describe('scalar field validation', () => {
 });
 
 // -------------------------------------------------------
+// Undeclared fields: the schema is the record's shape, so a key outside it
+// is refused rather than stored.
+// See docs/spec/data-model.md § Undeclared content fields.
+// -------------------------------------------------------
+
+describe('undeclared content fields', () => {
+  test('a top-level key the schema does not declare is an error naming it', () => {
+    const schema: TypeSchema = { name: { kind: 'string', required: true } };
+    const errors = errorsFor({ name: 'Alice', nickname: 'Al' }, schema);
+    expect(errors).toEqual([
+      { path: 'nickname', message: '"nickname" is not declared by this type' },
+    ]);
+  });
+
+  test('an undeclared key inside a declared object reports its full path', () => {
+    const schema: TypeSchema = {
+      address: { kind: 'object', properties: { city: { kind: 'string' } } },
+    };
+    expect(paths({ address: { city: 'Lisbon', postcode: '1100' } }, schema)).toEqual([
+      'address.postcode',
+    ]);
+  });
+
+  test('an undeclared key inside an array item reports its indexed path', () => {
+    const schema: TypeSchema = {
+      emails: {
+        kind: 'array',
+        items: { kind: 'object', properties: { value: { kind: 'string' } } },
+      },
+    };
+    expect(paths({ emails: [{ value: 'a@b.c' }, { label: 'home' }] }, schema)).toEqual([
+      'emails[1].label',
+    ]);
+  });
+
+  test('every undeclared key is reported, not just the first', () => {
+    expect(paths({ a: 1, b: 2, c: 3 }, {})).toEqual(['a', 'b', 'c']);
+  });
+});
+
+// -------------------------------------------------------
+// Schema shape: defineType() takes a TypeSchema, but a schema off the wire
+// is parsed JSON no compiler has seen.
+// -------------------------------------------------------
+
+describe('validateSchemaShape', () => {
+  const shapeOf = (json: string) => validateSchemaShape(JSON.parse(json));
+  const messages = (json: string) => shapeOf(json).map((e) => e.message);
+
+  test('a well-formed schema produces no errors', () => {
+    expect(
+      shapeOf(`{
+        "title": {"kind": "string", "required": true},
+        "meta": {"kind": "object", "open": true},
+        "tags": {"kind": "array", "items": {"kind": "string"}},
+        "address": {"kind": "object", "properties": {"city": {"kind": "string"}}}
+      }`),
+    ).toEqual([]);
+  });
+
+  test('a container declaring neither its interior nor open is refused', () => {
+    expect(messages('{"meta": {"kind": "object"}}')).toEqual([
+      'An object must declare "properties", or "open": true to leave its keys unvalidated',
+    ]);
+    expect(messages('{"tags": {"kind": "array"}}')).toEqual([
+      'An array must declare "items", or "open": true to leave its elements unvalidated',
+    ]);
+  });
+
+  // Contradictory rather than merely redundant: one of the two has to be
+  // ignored, and nothing says which.
+  test('a container declaring both is refused', () => {
+    expect(messages('{"meta": {"kind": "object", "open": true, "properties": {}}}')).toEqual([
+      'An open object cannot also declare "properties"',
+    ]);
+    expect(
+      messages('{"tags": {"kind": "array", "open": true, "items": {"kind": "string"}}}'),
+    ).toEqual(['An open array cannot also declare "items"']);
+  });
+
+  test('an unknown or missing kind is refused', () => {
+    expect(messages('{"meta": {"kind": "blorp"}}')).toEqual(['"blorp" is not a field kind']);
+    expect(messages('{"meta": {"label": "x"}}')).toEqual(['A field definition must name a "kind"']);
+  });
+
+  test('a definition that is not an object is refused', () => {
+    expect(messages('{"meta": "string"}')).toEqual([
+      'A field definition must be an object, got string',
+    ]);
+    expect(messages('{"meta": null}')).toEqual([
+      'A field definition must be an object, got object',
+    ]);
+  });
+
+  test('a schema that is not an object is refused at the root', () => {
+    expect(validateSchemaShape('nope')).toEqual([
+      {
+        path: '(root)',
+        message: 'A schema must be an object mapping field names to definitions, got string',
+      },
+    ]);
+  });
+
+  test('non-boolean required and open are refused', () => {
+    expect(messages('{"meta": {"kind": "string", "required": "yes"}}')).toEqual([
+      '"required" must be a boolean',
+    ]);
+    expect(messages('{"meta": {"kind": "object", "open": "yes", "properties": {}}}')).toEqual([
+      '"open" must be a boolean',
+    ]);
+  });
+
+  test('nested definitions are checked, and report their path', () => {
+    expect(
+      shapeOf('{"address": {"kind": "object", "properties": {"city": {"kind": "blorp"}}}}'),
+    ).toEqual([{ path: 'address.city', message: '"blorp" is not a field kind' }]);
+    expect(shapeOf('{"tags": {"kind": "array", "items": {"kind": "object"}}}')).toEqual([
+      {
+        path: 'tags[]',
+        message:
+          'An object must declare "properties", or "open": true to leave its keys unvalidated',
+      },
+    ]);
+  });
+
+  test('every malformed field is reported, not just the first', () => {
+    expect(messages('{"a": {"kind": "blorp"}, "b": {"kind": "array"}}')).toHaveLength(2);
+  });
+});
+
+describe('open containers', () => {
+  // Opacity is declared, never inferred from a missing `items`/`properties`:
+  // a schema that forgets to describe its interior does not compile, so it
+  // cannot become an unchecked field by accident. @ts-expect-error fails the
+  // build if these ever start type-checking.
+  test('a container that declares neither its interior nor `open` is a type error', () => {
+    // @ts-expect-error - an object must declare `properties` or `open`
+    const objectDef: FieldDef = { kind: 'object' };
+    // @ts-expect-error - an array must declare `items` or `open`
+    const arrayDef: FieldDef = { kind: 'array' };
+
+    // The assertion that matters is above, and `pnpm run typecheck` is what
+    // makes it: @ts-expect-error fails the build if either line ever starts
+    // type-checking. These two keep the values used.
+    expect(objectDef.kind).toBe('object');
+    expect(arrayDef.kind).toBe('array');
+  });
+
+  test('an open object accepts any interior', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    expect(errorsFor({ meta: { anything: 'goes', nested: { deep: [1, 2] } } }, schema)).toEqual([]);
+  });
+
+  test('an open object still has to be an object', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    expect(paths({ meta: 'not-an-object' }, schema)).toEqual(['meta']);
+    expect(paths({ meta: [1, 2] }, schema)).toEqual(['meta']);
+  });
+
+  test('an open array accepts heterogeneous and null elements', () => {
+    const schema: TypeSchema = { tags: { kind: 'array', open: true } };
+    expect(errorsFor({ tags: [null, 'x', 3, { a: 1 }] }, schema)).toEqual([]);
+  });
+
+  test('an open array still has to be an array', () => {
+    const schema: TypeSchema = { tags: { kind: 'array', open: true } };
+    expect(paths({ tags: { 0: 'x' } }, schema)).toEqual(['tags']);
+  });
+
+  test('a required open container is still required', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true, required: true } };
+    expect(paths({}, schema)).toEqual(['meta']);
+  });
+});
+
+// -------------------------------------------------------
 // Array fields
 // -------------------------------------------------------
 
@@ -291,8 +468,9 @@ describe('isValid', () => {
     expect(isValid({}, schema)).toBe(false);
   });
 
-  test('returns true for empty schema', () => {
-    expect(isValid({ anything: 'goes' }, {})).toBe(true);
+  test('an empty schema declares no fields, so it accepts no content', () => {
+    expect(isValid({}, {})).toBe(true);
+    expect(isValid({ anything: 'goes' }, {})).toBe(false);
   });
 });
 

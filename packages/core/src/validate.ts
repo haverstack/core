@@ -72,7 +72,11 @@ const validateField = (
       errors.push({ path, message: `Expected array, got ${typeof value}` });
       return;
     }
-    value.forEach((item, i) => validateField(item, def.items, `${path}[${i}]`, errors, depth + 1));
+    // An open array is the list-shaped counterpart of an open object: the
+    // schema places a list here and says nothing about what it holds.
+    if (def.open) return;
+    const items = def.items;
+    value.forEach((item, i) => validateField(item, items, `${path}[${i}]`, errors, depth + 1));
     return;
   }
 
@@ -81,6 +85,9 @@ const validateField = (
       errors.push({ path, message: `Expected object, got ${typeof value}` });
       return;
     }
+    // An open object says "an object lives here" and nothing about its
+    // interior, so there is no set of declared keys to hold it to.
+    if (def.open) return;
     validateContent(value as Record<string, unknown>, def.properties, path, errors, depth + 1);
     return;
   }
@@ -145,6 +152,20 @@ export const validateContent = (
     return errors;
   }
 
+  // A field the schema does not declare is refused rather than stored.
+  // The schema is the record's shape; a key outside it is a typo, a stale
+  // writer, or a caller reaching for something that isn't content at all,
+  // and storing it makes all three look like a write that worked. Declare
+  // an `object` field `open` for a shape a schema cannot describe.
+  // See docs/spec/data-model.md § Undeclared content fields.
+  for (const key of Object.keys(content)) {
+    if (Object.hasOwn(schema, key)) continue;
+    errors.push({
+      path: prefix ? `${prefix}.${key}` : key,
+      message: `"${key}" is not declared by this type`,
+    });
+  }
+
   // Check all schema fields
   for (const [key, def] of Object.entries(schema)) {
     const path = prefix ? `${prefix}.${key}` : key;
@@ -192,6 +213,153 @@ export const validateReservedKeys = (content: Record<string, unknown>): Validati
   RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(content, key)).map((key) => ({
     path: key,
     message: `"${key}" is a reserved content key and cannot be used as a field name`,
+  }));
+
+/**
+ * Every scalar kind, as a total Record so adding one to ScalarFieldKind
+ * fails to compile until it is listed here.
+ */
+const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
+  string: true,
+  number: true,
+  boolean: true,
+  date: true,
+  text: true,
+  'record-ref': true,
+  'file-ref': true,
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const validateFieldDefShape = (
+  def: unknown,
+  path: string,
+  errors: ValidationError[],
+  depth: number,
+): void => {
+  if (!isPlainObject(def)) {
+    errors.push({ path, message: `A field definition must be an object, got ${typeof def}` });
+    return;
+  }
+
+  if (def.required !== undefined && typeof def.required !== 'boolean') {
+    errors.push({ path, message: '"required" must be a boolean' });
+  }
+  if (def.open !== undefined && typeof def.open !== 'boolean') {
+    errors.push({ path, message: '"open" must be a boolean' });
+  }
+  const isOpen = def.open === true;
+
+  if (typeof def.kind !== 'string') {
+    errors.push({ path, message: 'A field definition must name a "kind"' });
+    return;
+  }
+
+  if (def.kind === 'array') {
+    if (isOpen) {
+      if (def.items !== undefined) {
+        errors.push({ path, message: 'An open array cannot also declare "items"' });
+      }
+      return;
+    }
+    if (def.items === undefined) {
+      errors.push({
+        path,
+        message: 'An array must declare "items", or "open": true to leave its elements unvalidated',
+      });
+      return;
+    }
+    validateFieldDefShape(def.items, `${path}[]`, errors, depth + 1);
+    return;
+  }
+
+  if (def.kind === 'object') {
+    if (isOpen) {
+      if (def.properties !== undefined) {
+        errors.push({ path, message: 'An open object cannot also declare "properties"' });
+      }
+      return;
+    }
+    if (def.properties === undefined) {
+      errors.push({
+        path,
+        message:
+          'An object must declare "properties", or "open": true to leave its keys unvalidated',
+      });
+      return;
+    }
+    validateSchemaShape(def.properties, path, errors, depth + 1);
+    return;
+  }
+
+  if (!Object.hasOwn(SCALAR_KINDS, def.kind)) {
+    errors.push({
+      path,
+      message: `"${def.kind}" is not a field kind`,
+    });
+  }
+};
+
+/**
+ * Check that a schema is actually a schema, before anything reads it as
+ * one. `defineType()` takes a TypeSchema, but a schema off the wire is
+ * parsed JSON that TypeScript never saw, so every shape below is reachable
+ * at runtime: a container declaring neither its interior nor `open` throws
+ * out of hashSchema() rather than reporting anything, and a definition with
+ * an unknown `kind` — or none — defines a field whose every write fails
+ * against an expectation the schema never actually stated, sending the
+ * caller looking through their content for a bug that is in their type.
+ *
+ * Refused at definition time for the reason a field name no filter could
+ * address is: a schema is a promise, and one nothing can satisfy is worth
+ * catching where it is written. See docs/spec/data-model.md § Types.
+ */
+export const validateSchemaShape = (
+  schema: unknown,
+  prefix = '',
+  errors: ValidationError[] = [],
+  depth = 0,
+): ValidationError[] => {
+  if (depth > MAX_VALIDATION_DEPTH) {
+    errors.push({
+      path: prefix || '(root)',
+      message: `Schema nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
+    return errors;
+  }
+  if (!isPlainObject(schema)) {
+    errors.push({
+      path: prefix || '(root)',
+      message: `A schema must be an object mapping field names to definitions, got ${typeof schema}`,
+    });
+    return errors;
+  }
+  for (const [key, def] of Object.entries(schema)) {
+    validateFieldDefShape(def, prefix ? `${prefix}.${key}` : key, errors, depth);
+  }
+  return errors;
+};
+
+/**
+ * The same three names, refused where a schema declares them. Top-level
+ * only, exactly matching the content rule's scope above: a nested
+ * declaration names a field a record can actually carry, so refusing one
+ * would deny a writable shape.
+ *
+ * A declaration cannot license what the content rule refuses, so accepting
+ * one would define a field no record could ever hold — and, where the
+ * declaration is `required`, a type no record could satisfy at all: supply
+ * the field and the write is refused as a reserved key, omit it and the
+ * write is refused as a missing required field. Refused at definition time
+ * for the reason a field name no filter could address is
+ * (validateSchemaFieldNames): a schema is a promise that a field is
+ * meaningful. See docs/spec/data-model.md § Reserved content keys.
+ */
+export const validateSchemaReservedNames = (schema: TypeSchema): ValidationError[] =>
+  RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(schema, key)).map((key) => ({
+    path: key,
+    message: `"${key}" is a reserved content key and cannot be declared as a field name`,
   }));
 
 /**
@@ -310,8 +478,8 @@ export const validateSchemaFieldNames = (
       });
     }
     let inner: FieldDef = def;
-    while (inner.kind === 'array') inner = inner.items;
-    if (inner.kind === 'object')
+    while (inner.kind === 'array' && !inner.open) inner = inner.items;
+    if (inner.kind === 'object' && !inner.open)
       validateSchemaFieldNames(inner.properties, path, errors, depth + 1);
   }
   return errors;

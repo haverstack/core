@@ -21,6 +21,8 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
+import type { TypeSchema } from '../src/types.js';
+import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
@@ -848,6 +850,17 @@ describe('type cache', () => {
 // -------------------------------------------------------
 
 describe('query — content filter null semantics', () => {
+  // Additive on top of the shared Note: these tests store shapes the query
+  // engine has to walk, and content outside the schema is not storable.
+  beforeEach(async () => {
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      priority: { kind: 'number' },
+      a: { kind: 'object', open: true },
+      n: { kind: 'object', open: true },
+    });
+  });
+
   test('a null content filter matches records where the field is absent', async () => {
     await stack.create(NOTE_V1, { text: 'no priority set' });
     await stack.create(NOTE_V1, { text: 'has one', priority: 1 });
@@ -903,6 +916,19 @@ describe('query — content filter null semantics', () => {
 // -------------------------------------------------------
 
 describe('query — contentPresent', () => {
+  beforeEach(async () => {
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      publishedAt: { kind: 'date' },
+      a: { kind: 'number' },
+      b: { kind: 'number' },
+      // Open: these hold nulls and bare objects, which is the content
+      // whose presence semantics these tests are about.
+      emails: { kind: 'array', open: true },
+      tags: { kind: 'array', open: true },
+    });
+  });
+
   test('matches records holding a value, and null matches the rest', async () => {
     await stack.create(NOTE_V1, { text: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
     await stack.create(NOTE_V1, { text: 'undated' });
@@ -981,7 +1007,10 @@ describe('query — capability fail-loud', () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      priority: { kind: 'number' },
+    });
     await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
 
     await expect(incapableStack.query({ filter: { content: { priority: 1 } } })).rejects.toThrow(
@@ -993,7 +1022,10 @@ describe('query — capability fail-loud', () => {
     const incapableStack = await Stack.create(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      priority: { kind: 'number' },
+    });
     await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
 
     await expect(
@@ -1630,15 +1662,17 @@ describe('records at rest', () => {
     expect((raw?.content as Record<string, unknown>).text).toBe('updated');
   });
 
-  test("update() validates only against v1's schema — a v2-only field passes through unchecked, and the record stays at v1", async () => {
+  test("update() validates against v1's schema — a v2-only field is refused, and the record stays at v1", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    // "title" isn't declared in v1's schema, so validateContent() doesn't
-    // check it (additive fields are ignored, not rejected) — but this is
-    // still a v1 record; only migrateAll() can move it to v2.
-    const updated = await stack.update(record.id, { title: 'not part of v1' });
-    expect(updated.typeId).toBe(NOTE_V1);
+    // "title" is declared by v2 and not by v1. The record is a v1 record
+    // until migrateAll() moves it, so v1's schema is what the patch answers
+    // to — validating against the latest would accept this.
+    await expect(stack.update(record.id, { title: 'not part of v1' })).rejects.toThrow(
+      StackValidationError,
+    );
     const raw = await adapter.getRecord(record.id);
     expect(raw?.typeId).toBe(NOTE_V1);
+    expect(raw?.content).toEqual({ text: 'hello' });
   });
 });
 
@@ -3724,6 +3758,99 @@ describe('putAttachment', () => {
 // same key through create() stored as an ordinary property.
 // -------------------------------------------------------
 
+describe('undeclared content fields', () => {
+  test('create() refuses a field the schema does not declare, naming it', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'hi', extra: 'kept' })).rejects.toThrow(
+      /"extra" is not declared by this type/,
+    );
+  });
+
+  test('update() refuses an undeclared patch key and writes nothing', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+    await expect(stack.update(record.id, { extra: 'kept' })).rejects.toThrow(StackValidationError);
+
+    const after = await stack.get(record.id);
+    expect(after?.content).toEqual({ text: 'hi' });
+    expect(after?.version).toBe(1);
+  });
+
+  // The case that motivated the rule: a native field name in a patch was
+  // filed as content, so the write succeeded and moved nothing. It is
+  // refused now for the same reason any other undeclared name is — there
+  // is nothing special about the name, only about the schema.
+  test('a native field name in a patch is refused, and the native field is untouched', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+
+    await expect(stack.update(note.id, { parentId: box.id })).rejects.toThrow(
+      /"parentId" is not declared by this type/,
+    );
+
+    const after = await stack.get(note.id);
+    expect(after?.parentId).toBeUndefined();
+    expect(after?.content).toEqual({ text: 'note' });
+  });
+
+  // ...and it is the schema that decides, not the name: a type declaring
+  // `parentId` as content patches it like any other field.
+  test('a type that declares the name patches it as the content field it is', async () => {
+    const BOOKMARK = 'com.example.test/bookmark@1';
+    await stack.defineType(BOOKMARK, 'Bookmark', {
+      url: { kind: 'string', required: true },
+      parentId: { kind: 'record-ref' },
+    });
+    const bookmark = await stack.create(BOOKMARK, { url: 'https://example.com' });
+
+    const updated = await stack.update(bookmark.id, { parentId: 'abcdefghjkmn' });
+
+    expect(updated.content.parentId).toBe('abcdefghjkmn');
+    expect(updated.parentId).toBeUndefined();
+  });
+
+  test('commitMigration() holds its content to the destination schema', async () => {
+    await stack.defineType(
+      NOTE_V2,
+      'Note',
+      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      { migratesFrom: NOTE_V1 },
+    );
+    const record = await stack.create(NOTE_V1, { text: 'hi' });
+
+    await expect(
+      stack.commitMigration(record.id, NOTE_V2, { text: 'hi', subtitle: 'nope' }),
+    ).rejects.toThrow(/"subtitle" is not declared by this type/);
+  });
+
+  test('an open object is the way to store a shape the schema cannot describe', async () => {
+    const BLOB = 'com.example.test/blob@1';
+    await stack.defineType(BLOB, 'Blob', {
+      name: { kind: 'string', required: true },
+      meta: { kind: 'object', open: true },
+    });
+
+    const record = await stack.create(BLOB, {
+      name: 'import',
+      meta: { source: 'csv', rows: 12, nested: { anything: true } },
+    });
+
+    expect(record.content.meta).toEqual({ source: 'csv', rows: 12, nested: { anything: true } });
+  });
+
+  // The two rules are independent: an opaque object is exempt from the
+  // schema, not from what a content field may be named.
+  test('the field-name rule still reaches inside an open object', async () => {
+    const BLOB = 'com.example.test/blob@1';
+    await stack.defineType(BLOB, 'Blob', {
+      name: { kind: 'string', required: true },
+      meta: { kind: 'object', open: true },
+    });
+
+    const content = JSON.parse('{"name": "x", "meta": {"a.b": 1}}') as Record<string, unknown>;
+    await expect(stack.create(BLOB, content)).rejects.toThrow(StackValidationError);
+  });
+});
+
 describe('reserved content keys', () => {
   const withKey = (key: string, value: unknown): Record<string, unknown> =>
     JSON.parse(`{"text": "hi", "${key}": ${JSON.stringify(value)}}`) as Record<string, unknown>;
@@ -3759,13 +3886,57 @@ describe('reserved content keys', () => {
     },
   );
 
-  test('ordinary undeclared fields still pass — permitted by design', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
+  // Built by parsing, as one off the wire is: `__proto__` in an object
+  // literal reaches the prototype setter rather than declaring a field, and
+  // `constructor` there collides with `Object.prototype.constructor`.
+  const schemaWith = (key: string, def: unknown): TypeSchema =>
+    JSON.parse(`{${JSON.stringify(key)}: ${JSON.stringify(def)}}`) as TypeSchema;
 
-    expect(record.content).toEqual({ text: 'hi', extra: 'kept' });
+  test.each(RESERVED_CONTENT_KEYS)(
+    'defineType() refuses a schema declaring %s as a top-level field',
+    async (key) => {
+      await expect(
+        stack.defineType(
+          'com.example.test/reserved@1',
+          'Reserved',
+          schemaWith(key, { kind: 'string' }),
+        ),
+      ).rejects.toThrow(/cannot be declared as a field name/);
+    },
+  );
+
+  // The declaration cannot license what the write rule refuses, so
+  // accepting one would define a type no record could ever satisfy:
+  // supplying the field is a reserved key, omitting it is a missing
+  // required field.
+  test('a required declaration would be a type no record could satisfy', async () => {
+    await expect(
+      stack.defineType(
+        'com.example.test/reserved@1',
+        'Reserved',
+        schemaWith('constructor', { kind: 'string', required: true }),
+      ),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // Scoped to the write rule's own scope: a nested one names a field a
+  // record can actually carry.
+  test('a nested declaration is left alone, and the field it names is writable', async () => {
+    const NESTED = 'com.example.test/nested-reserved@1';
+    await stack.defineType(NESTED, 'Nested', {
+      meta: { kind: 'object', properties: schemaWith('constructor', { kind: 'string' }) },
+    });
+
+    const record = await stack.create(NESTED, JSON.parse('{"meta": {"constructor": "ok"}}'));
+
+    expect(record.content.meta).toEqual(JSON.parse('{"constructor": "ok"}'));
   });
 
   test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      meta: { kind: 'object', open: true },
+    });
     const content = JSON.parse('{"text": "hi", "meta": {"__proto__": {"x": 1}}}') as Record<
       string,
       unknown
@@ -3783,6 +3954,14 @@ describe('reserved content keys', () => {
 // -------------------------------------------------------
 
 describe('undefined patch values', () => {
+  beforeEach(async () => {
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      extra: { kind: 'string' },
+      meta: { kind: 'object', open: true },
+    });
+  });
+
   test('update() rejects a patch key whose value is undefined', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
 
@@ -3867,31 +4046,75 @@ describe('content field names', () => {
     );
   });
 
-  test('defineType() refuses a schema declaring a field no filter could name', async () => {
+  // A schema off the wire is parsed JSON, so defineType() reports a
+  // malformed one rather than throwing out of the machinery that reads it.
+  test.each([
+    ['an object declaring neither properties nor open', '{"meta": {"kind": "object"}}'],
+    ['an array declaring neither items nor open', '{"tags": {"kind": "array"}}'],
+    ['an unknown kind', '{"meta": {"kind": "blorp"}}'],
+    ['a definition that is not an object', '{"meta": "string"}'],
+  ])('defineType() refuses %s', async (_label, json) => {
     await expect(
-      stack.defineType('com.example.test/dotted@1', 'Dotted', {
-        'a.b': { kind: 'string' },
-      }),
+      stack.defineType('com.example.test/malformed@1', 'Malformed', JSON.parse(json)),
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('defineType() checks nested object properties as well', async () => {
-    await expect(
-      stack.defineType('com.example.test/nested@1', 'Nested', {
-        outer: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
-      }),
-    ).rejects.toThrow(StackValidationError);
-    await expect(
-      stack.defineType('com.example.test/arr@1', 'Arr', {
+  // Every reserved character, at every shape the declared-name walk has to
+  // reach. Driven off the constant rather than a copy of it, so reserving
+  // another character extends this rather than quietly leaving it behind —
+  // and so the walk's recursion through `items` and `properties` is pinned
+  // at more than the single array-of-objects case.
+  const nameShapes: Record<string, (key: string) => TypeSchema> = {
+    'top level': (key) => ({ [key]: { kind: 'string' } }),
+    'nested object': (key) => ({
+      outer: { kind: 'object', properties: { [key]: { kind: 'string' } } },
+    }),
+    'array of objects': (key) => ({
+      list: { kind: 'array', items: { kind: 'object', properties: { [key]: { kind: 'string' } } } },
+    }),
+    'array of arrays': (key) => ({
+      grid: {
+        kind: 'array',
         items: {
           kind: 'array',
-          items: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
+          items: { kind: 'object', properties: { [key]: { kind: 'string' } } },
         },
-      }),
+      },
+    }),
+    'object within an object': (key) => ({
+      outer: {
+        kind: 'object',
+        properties: { inner: { kind: 'object', properties: { [key]: { kind: 'string' } } } },
+      },
+    }),
+  };
+
+  test.each(
+    Object.entries(nameShapes).flatMap(([shape, build]) =>
+      CONTENT_KEY_PATH_METACHARACTERS.map((char) => [char, shape, build] as const),
+    ),
+  )('defineType() refuses a declared name containing %s at the %s', async (char, _shape, build) => {
+    await expect(
+      stack.defineType('com.example.test/named@1', 'Named', build(`a${char}b`)),
     ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a declared name at each of those shapes is otherwise fine', async () => {
+    for (const [shape, build] of Object.entries(nameShapes)) {
+      await expect(
+        stack.defineType(`com.example.test/ok-${shape.replace(/ /g, '-')}@1`, 'Ok', build('plain')),
+      ).resolves.toBeDefined();
+    }
   });
 
   test('ordinary names, including unicode and reverse-DNS-ish ones, still pass', async () => {
+    await stack.defineType(NOTE_V1, 'Note', {
+      text: { kind: 'text', required: true },
+      com_example_field: { kind: 'number' },
+      çé: { kind: 'number' },
+      'with space': { kind: 'number' },
+      '@context': { kind: 'number' },
+    });
     const record = await stack.create(NOTE_V1, {
       text: 'hi',
       com_example_field: 1,
@@ -3917,8 +4140,13 @@ describe('nested content paths', () => {
       name: { kind: 'string', required: true },
       emails: {
         kind: 'array',
-        items: { kind: 'object', properties: { value: { kind: 'string' } } },
+        items: {
+          kind: 'object',
+          properties: { value: { kind: 'string' }, label: { kind: 'string' } },
+        },
       },
+      address: { kind: 'object', properties: { city: { kind: 'string' } } },
+      tags: { kind: 'array', items: { kind: 'string' } },
     });
     await stack.create(CONTACT, {
       name: 'ada',

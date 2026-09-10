@@ -156,8 +156,10 @@ type ScalarFieldKind =
 
 type FieldDef =
   | { kind: ScalarFieldKind; required?: boolean }
-  | { kind: 'array'; items: FieldDef; required?: boolean } // recursive
-  | { kind: 'object'; properties: TypeSchema; required?: boolean }; // recursive
+  | { kind: 'array'; items: FieldDef; open?: false; required?: boolean } // recursive
+  | { kind: 'array'; open: true; required?: boolean } // elements unvalidated
+  | { kind: 'object'; properties: TypeSchema; open?: false; required?: boolean } // recursive
+  | { kind: 'object'; open: true; required?: boolean }; // keys unvalidated
 
 type TypeSchema = {
   [fieldName: string]: FieldDef;
@@ -175,11 +177,15 @@ type StackType = {
 };
 ```
 
-**Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)).
+**Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)). **`open: true` declares the container open** — a list or object whose interior the schema does not describe, and the one way to store content the schema cannot name. A container declares either its interior or `open`, never neither: opacity is a claim the schema makes, not something inferred from a missing `items`/`properties`, so a schema that forgets to describe its elements is a mistake rather than a silently unchecked field. Query reach is unaffected: a path still walks into an open container, since the query engine reads the content rather than the schema. See [Undeclared content fields](#undeclared-content-fields).
 
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
 
 **`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`attachmentFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. **Indexing a content field, whether as a reference or [for sorting](#sorting-by-a-content-field), reaches top-level scalars only**, while query reach extends to depth: they are separate mechanisms, and one rule covers both.
+
+**A schema is checked for being a schema before anything reads it as one.** `defineType()` refuses a malformed one with `StackValidationError` (422), naming each field and what is wrong with it: a definition that isn't an object, one naming no `kind` or a `kind` that isn't a field kind, a non-boolean `required`/`open`, a container declaring neither its interior nor `open`, and a container declaring both (one of the two would have to be ignored, and nothing says which). The check recurses through `properties` and `items`, and reports every malformed field rather than the first.
+
+This matters because `defineType()` takes a `TypeSchema` but a schema arriving at [`POST /types`](./wire-format.md#types) is parsed JSON that no compiler has seen, so every one of those shapes is reachable. Unchecked, they fail in two unhelpful ways: a container with no interior throws out of schema hashing rather than reporting anything, and an unrecognized `kind` defines a field whose every write fails against an expectation the schema never stated — sending the caller looking through their content for a bug that is in their Type. It is the argument [Content field names](#content-field-names) makes for declared names, applied to the definition as a whole: a schema is a promise, and one nothing can satisfy is worth catching where it is written.
 
 **Type identity:** two Types are the same if their `id` matches (including version). Two stacks running the same app will have the same Type IDs and can rely on that for interop.
 
@@ -189,7 +195,7 @@ type StackType = {
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType('...@n+1', ...)` + `registerMigration()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, and no container [opened or closed](#undeclared-content-fields). An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType('...@n+1', ...)` + `registerMigration()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -264,10 +270,10 @@ The migration registry is **per-stack-instance** — different stacks can be at 
 
 Not every schema change needs a version bump. **Additive-in-place** changes — new optional fields only — can be added to a Type's schema without minting a new version, and are the default path for evolving a type family:
 
-- **Readers ignore unknown fields** — validation already permits undeclared content fields.
-- **Writers preserve unknown fields** — the merge-patch semantics of `update()` retain any field the caller didn't touch.
+- **Readers ignore fields they don't know about** — validation runs on write, so a consumer holding an older idea of the type reads a Record carrying a field it was never taught about without complaint.
+- **Writers preserve fields they don't touch** — the merge-patch semantics of `update()` retain any field the caller didn't name.
 
-This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it.
+This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it. Adding the field to the schema is what licenses writing it — see [Undeclared content fields](#undeclared-content-fields) — and that is a `defineType()` call, not a version bump.
 
 **A version bump is a consolidation point**, warranted when:
 
@@ -281,13 +287,29 @@ The boundary between "accept in place" and "bump the version" is exactly what `d
 
 > **Not yet implemented:** validation of migration function output against the target schema at _registration_ time (write-time validation, in `migrateAll()`, is the enforced backstop today).
 
+### Undeclared content fields
+
+**A content field the Record's Type does not declare is rejected with `StackValidationError` (422)** — on `create()`, in an `update()` patch, and on `commitMigration()` against the destination Type — naming the field and the path it sits at. The schema is the Record's shape, and it holds at every depth: an undeclared key inside a declared `object`, or inside an `object` an `array` declares as its items, is refused with its full path (`address.postcode`, `emails[1].label`).
+
+A key outside the schema is a typo, a stale writer, or a caller reaching for something that is not content at all, and accepting it would make all three look like a write that worked. The last is the load-bearing case: content is its own namespace, so a `parentId` in a patch is a content field of that name and never the native one, and it would sit beside a native `parentId` holding something else with nothing downstream reading it. Refusing says which of the two the caller reached for, while they can still choose the other verb — the argument [reserved content keys](#reserved-content-keys) makes for `__proto__`, applied to every name a schema doesn't claim.
+
+This is a rule about the schema, not about the names. A Type is free to declare `parentId`, `version` or `createdAt` as content — a bookmark's `parentId` naming the upstream Record it was clipped from is an ordinary field — and once declared it is patched like any other. Nothing is reserved by resemblance to a native field.
+
+**An `object` or `array` field declared `open: true` is not validated inside**: the schema places a container there and says nothing about its interior. That is the deliberate way to store a shape a schema cannot describe — an imported blob, a heterogeneous list, a payload whose keys are data. An open container is still held to its own kind (an open `object` refuses an array, an open `array` refuses an object), which is why `open` is a flag on the container kinds rather than a "any JSON here" kind of its own — a Type that means "a list, contents unspecified" can still say so. It is exempt from the schema only: [content field names](#content-field-names) are still checked at every depth inside one, since that rule is about what a filter path can address rather than about what the Type promised.
+
+Open and declared are different shapes, not degrees of the same one: a container that accepts anything and one that accepts a named set hash differently, and changing a Type from one to the other is [schema drift](#schema-drift-detection) in both directions — closing an open container refuses content it used to accept, and opening a declared one accepts content it used to refuse. Neither is additive. For the same reason an open container satisfies `isCompatible()` only where the required side asks nothing of its interior: a bag promises a consumer nothing to read.
+
+This is a `Stack` invariant, so every adapter and `ScopedStack` inherit it, and a server mapping request bodies onto storage directly has to apply it itself — see [Wire format § Records](./wire-format.md#records).
+
 ### Reserved content keys
 
-Undeclared content fields are permitted by design (above), with three exceptions: **`__proto__`, `constructor`, and `prototype` are rejected as top-level content keys** — on `create()` and in an `update()` patch alike — with `StackValidationError` (422).
+**`__proto__`, `constructor`, and `prototype` are rejected as top-level content keys** — on `create()` and in an `update()` patch alike — with `StackValidationError` (422), independently of whether the Type declares them.
 
 They name JavaScript's object machinery rather than a field, and the two write paths disagree about them: a merge patch to `__proto__` reaches the prototype setter instead of setting a field, so the write silently does nothing, while the same key through `create()` stores as an ordinary property. Refusing all three makes the two paths agree, and says so out loud instead of accepting a write that will quietly vanish.
 
-This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter.
+This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter — including inside an [open container](#undeclared-content-fields), which is exempt from the schema and not from this.
+
+**A schema may not declare one of the three as a top-level field name either** — `defineType()` refuses it with `StackValidationError` (422), the same answer `POST /types` gives. A declaration cannot license what the write rule refuses, so accepting one would define a field no Record could ever carry; where the declaration is `required`, it would define a Type no Record could satisfy at all, since supplying the field is refused as a reserved key and omitting it is refused as a missing required field. This is the argument [content field names](#content-field-names) makes for declared names too — a schema is a promise that a field is meaningful — and it applies at exactly the scope the write rule does: a **nested** declaration names a field a Record can actually carry, so it is left alone.
 
 ### Undefined values in a patch
 
@@ -301,7 +323,7 @@ This is a `Stack` invariant, so every adapter inherits it. `ScopedStack.update()
 
 A content filter key is a **dot-separated path** (see [Filter](#filter)), so a field named `emails.value` and a path reaching `value` inside `emails` would be the same string asking two different questions. The ambiguity is removed from the field name rather than from the path: **a content field name may not contain `.`, `[`, `]`, `$`, `"`, `*`, or `#`** — rejected with `StackValidationError` (422) on `create()`, in an `update()` patch, and on `commitMigration()`.
 
-**This holds at every depth**, unlike the three reserved keys above: a nested field named `b.c` makes the path `a.b.c` ambiguous exactly as a top-level `a.b` does. The check therefore walks undeclared subtrees too — they are precisely the fields no schema promised anything about — bounded by the same nesting depth validation already applies.
+**This holds at every depth**, unlike the three reserved keys above: a nested field named `b.c` makes the path `a.b.c` ambiguous exactly as a top-level `a.b` does. The check walks the content itself rather than the schema, so it reaches inside [open containers](#undeclared-content-fields) — precisely the subtrees no schema promised anything about — bounded by the same nesting depth validation already applies.
 
 `defineType()` applies the same rule to **declared** field names, recursively through `object` properties and `array` items, with the same error. A schema is a promise that a field is meaningful; declaring one no filter could ever name breaks that promise at definition time rather than at query time.
 

@@ -38,6 +38,8 @@ import {
   validatePatchValues,
   validateReservedKeys,
   validateSchemaFieldNames,
+  validateSchemaReservedNames,
+  validateSchemaShape,
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import {
@@ -1480,7 +1482,18 @@ export class Stack implements StackClient {
     const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
     if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
-    const nameErrors = validateSchemaFieldNames(schema);
+    // Shape first: the name checks and hashSchema() below both read the
+    // schema as a well-formed one, and a schema off the wire is parsed
+    // JSON that no compiler has seen.
+    const shapeErrors = validateSchemaShape(schema);
+    if (shapeErrors.length > 0) {
+      throw new StackValidationError(shapeErrors);
+    }
+
+    const nameErrors = [
+      ...validateSchemaReservedNames(schema),
+      ...validateSchemaFieldNames(schema),
+    ];
     if (nameErrors.length > 0) {
       throw new StackValidationError(nameErrors);
     }
