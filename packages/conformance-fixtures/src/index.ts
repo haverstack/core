@@ -1037,6 +1037,54 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
 ];
 
 // -------------------------------------------------------
+// Parent
+// -------------------------------------------------------
+
+export const setParentFixtures: ConformanceFixture<{ parentId: string | null }, WireRecord>[] = [
+  {
+    name: 'set-parent-moves-a-record-into-a-container',
+    description:
+      'PUT /records/:id/parent moves a record between containers. It bumps version like any ' +
+      'other mutation and touches nothing else — content, permissions and associations come ' +
+      'back as they were. Containment decides which listings enumerate the record, never who ' +
+      'may read it, so the response is not a permission change. See ' +
+      'docs/spec/data-model.md § Reparenting.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
+    requestBody: { parentId: '1hk153x0000f' },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      parentId: '1hk153x0000f',
+    },
+  },
+  {
+    name: 'set-parent-null-moves-a-record-to-the-root',
+    description:
+      'A null parentId is the root sentinel, matching the "null" spelling GET /records accepts ' +
+      'for the same field: the record comes back with parentId absent. Assumes prior state from ' +
+      'set-parent-moves-a-record-into-a-container.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
+    requestBody: { parentId: null },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
+    },
+  },
+];
+
+// -------------------------------------------------------
 // Versions: read
 // -------------------------------------------------------
 //
@@ -2633,6 +2681,59 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     ],
   },
   {
+    name: 'change-feed-reparent-reaches-the-container-a-record-left',
+    description:
+      'A subscription filtered on parentId is told when a record leaves that container, not ' +
+      'only when one arrives. The frame carries the destination in parentId, as every frame ' +
+      'carries the record’s state at the moment of the change, so a subscriber compares it to ' +
+      'its own filter to tell a departure from an arrival. The record’s post-change state ' +
+      'alone would answer only for the destination, which is why this transition is matched ' +
+      'against both containers. Kind is "changed", not "deleted": the record is still there ' +
+      'and still readable — only its container moved. See ' +
+      'docs/spec/events.md § The reparent transition.',
+    path: '/changes?parentId=1hk153x0000f',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-reparent-frame-mutation',
+          description: 'The owner moves the note out of the container the subscriber watches.',
+          method: 'PUT',
+          path: '/records/1hk153x00001/parent',
+          requestBody: { parentId: '1hk153x0000g' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            content: { title: 'Hello' },
+            version: 3,
+            entityId: FEED_OWNER,
+            parentId: '1hk153x0000g',
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1U',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              op: 'reparent',
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 3,
+              updatedAt: '2024-01-03T00:00:00.000Z',
+              parentId: '1hk153x0000g',
+              actor: { entityId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
     name: 'change-feed-list-frame-is-a-changed-kind',
     description:
       'Relisting a previously-unlisted record arrives as kind "changed" / op "list" — the ' +
@@ -3181,6 +3282,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...dissociateFixtures,
   ...setPermissionsFixtures,
   ...setUnlistedFixtures,
+  ...setParentFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,

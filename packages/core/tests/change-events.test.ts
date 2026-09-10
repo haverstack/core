@@ -461,6 +461,85 @@ describe('filtering is exact', () => {
     expect(seen.map((c) => c.recordId)).toEqual([root.id]);
   });
 
+  test('a reparent reaches the container the record left', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: from.id } });
+
+    await stack.setParent(note.id, to.id);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.op).toBe('reparent');
+    // The destination, so a subscriber comparing it to its own filter
+    // reads this as a departure.
+    expect(seen[0]!.parentId).toBe(to.id);
+  });
+
+  test('a reparent reaches the container the record arrived in', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: to.id } });
+
+    await stack.setParent(note.id, to.id);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.parentId).toBe(to.id);
+  });
+
+  test('a reparent between two other containers reaches neither', async () => {
+    const watched = await stack.create(NOTE, { text: 'watched' });
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: watched.id } });
+
+    await stack.setParent(note.id, to.id);
+
+    expect(seen).toHaveLength(0);
+  });
+
+  test('a move to the root reaches a parentId: null subscription', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
+
+    await stack.setParent(note.id, null);
+
+    expect(seen.map((c) => c.recordId)).toEqual([note.id]);
+  });
+
+  test('a move off the root reaches a parentId: null subscription', async () => {
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
+
+    await stack.setParent(note.id, to.id);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.recordId).toBe(note.id);
+    expect(seen[0]!.parentId).toBe(to.id);
+  });
+
+  // A reparented record is still there and still readable — only its
+  // container moved — so the frame is an upsert, not a "drop your copy".
+  test('a reparent is kind changed, not deleted', async () => {
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler);
+
+    await stack.setParent(note.id, to.id);
+
+    expect(seen.at(-1)).toMatchObject({ kind: 'changed', op: 'reparent' });
+  });
+
   test('entityId filters on the record author, not the actor', async () => {
     await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
     const authored = await stack.asEntity(AUTHOR).create(NOTE, { text: 'a' });

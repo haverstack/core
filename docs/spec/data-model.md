@@ -102,6 +102,20 @@ type RelationshipTarget =
 
 `parentId` is a separate native field (not an Association) because hierarchical containment is fundamental enough to warrant indexing at the library level. Associations are for metadata and cross-references.
 
+### Reparenting
+
+**`parentId` is the one native field a write-holder may change after creation**, through `setParent(id, parentId | null)` — `null` moves the record to the root. It is a mutation like any other: it bumps `version`, snapshots the prior state, takes `ifVersion`, and emits a change event. Every other native field is either create-only (`id`, `createdAt`, `entityId`, `appId`, `principalId`), stamped by the write itself (`version`, `updatedAt`, `updatedBy`, `updatedVia`), or reached through a verb carrying its own authority (`permissions`, `unlistedAt`, `deletedAt`, `typeId`).
+
+**Moving a record confers nothing.** Containment is not an access-control edge — permissions are per-record, [type-level grants](./access-control.md#type-level-grants) are per-type, and a group's roster is read from associations — so nothing is inherited from a container and nothing cascades out of one. A move changes which queries and feeds enumerate the record and nothing about who may read it, which is why `setParent()` is gated as an ordinary write plus [read access to the destination](./access-control.md#reference-creation-gating), rather than reshare-gated the way `setPermissions()` and `setUnlisted()` are. The origin is ungated: knowing what it was requires reading the record, which the caller has already had to do.
+
+**A record may not become its own ancestor.** Both sites that add a containment edge walk the proposed ancestor chain and refuse with `StackConflictError` (wire: **409**) on arriving back at the record: `setParent()`, and a `create()` supplying **both** `id` and `parentId`. A generated ID names nothing, so an ordinary create cannot close a loop and pays no reads for the check; a caller-supplied one can, since existing records may already point at it. Dangling parents stay legal at both sites — a `parentId` naming no record is a reference that resolves to nothing, like any other.
+
+The walk uses unscoped storage reads, so it sees links the requester cannot: a walk that skipped them would let a cycle be assembled through unreadable records and break the invariant for every reader. The requester learns only that some chain exists between two records they can already reach — `setParent()` having first required read access to the destination — and integrity is worth that much more than the inference is worth closing. The walk is bounded at 64 levels; a chain longer than that is refused with the same error, since it is past what `parentId` is for and each level costs a read.
+
+**The check is read-then-write, so it is advisory under concurrency**: two moves racing on opposite ends of one chain can each pass their own check and both land. Closing it properly means the invariant lives in the adapter, where the write is atomic — a graph constraint in the storage contract that every adapter would then implement, which is a decision about where acyclicity lives rather than a local fix. Same posture as [DID binding uniqueness](./identity.md#did-bindings). **A consumer that walks `parentId` should carry a visited set or a depth bound of its own** rather than trust the invariant alone: core never walks the hierarchy, but a static-site generator derives a page's path from its `parentId` ancestors ([commons § `page`](../commons/page.md)) and a folder view recurses, and a cycle hangs both.
+
+**A reparent is not rollback-able.** A snapshot captures no `parentId`, so `restoreVersion()` restores a record's contents where it currently sits — see [Versioning § Version history](./versioning.md#version-history).
+
 ### Relationship targets
 
 A relationship's `scope` names **which identifier space its value belongs to**. The three are not interchangeable: the same string can be a Record ID in one and a DID in another, and matching across them would make a group roster look like a record reference.

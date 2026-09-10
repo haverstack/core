@@ -38,7 +38,8 @@ type ChangeOp =
   | 'undelete'
   | 'hard-delete'
   | 'unlist'
-  | 'list';
+  | 'list'
+  | 'reparent';
 
 type RecordChange = {
   kind: ChangeKind;
@@ -56,16 +57,16 @@ type RecordChange = {
 
 `kind` and `op` map deterministically:
 
-| `kind`    | `op`                                                                                         |
-| --------- | -------------------------------------------------------------------------------------------- |
-| `created` | `create`                                                                                     |
-| `changed` | `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list` |
-| `deleted` | `delete` (soft), `unlist`                                                                    |
-| `purged`  | `hard-delete`                                                                                |
+| `kind`    | `op`                                                                                                     |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| `created` | `create`                                                                                                 |
+| `changed` | `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
+| `deleted` | `delete` (soft), `unlist`                                                                                |
+| `purged`  | `hard-delete`                                                                                            |
 
 **Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `op` is the precise verb, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
 
-Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other seven verbs, and the bug is invisible until an index drifts from the records it describes.
+Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other ten verbs, and the bug is invisible until an index drifts from the records it describes.
 
 **`record` is shared, and a handler must not mutate it.** One emission is delivered to every subscription, and they receive the same record object rather than a copy each — copying per subscriber would cost every consumer for a defect none of them have. A handler that needs to alter what it received copies first; mutating in place corrupts what the other subscribers on that stack see.
 
@@ -240,6 +241,16 @@ An unlisted record that emits a change event to a default subscriber is not unli
 Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which op produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated `op` (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `permissions`'s pattern of one op for both directions.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
+
+## The reparent transition
+
+A `parentId` filter is answered by the record, not the envelope, so a record that moves between containers would otherwise be announced only to the container it arrived in — the departure would be silent, and a subscriber watching the origin would keep a record that is no longer there. `reparent` is matched against **both** sides of the move: the record's post-change `parentId` for the destination, and the pre-change one for the origin. Same shape as the [`unlist` transition](#the-unlisted-transition), which likewise cannot be decided from the post-change record alone.
+
+**A frame carries only the destination.** `parentId` on a frame means what it means everywhere — the record's state at the moment of the change — and a subscriber tells the two cases apart by comparing it to the filter it subscribed with: equal is an arrival, unequal is a departure. Nothing more is needed, and adding a `previousParentId` to the wire would give every subscriber a second container's ID to reason about for the sake of a comparison they can already make.
+
+**Kind is `changed`, not `deleted`.** `unlist` maps to `deleted` because the record genuinely leaves the subscriber's view and must be dropped. A reparented record is still there and still readable; only its container moved, and the same frame reaches the destination's subscribers, for whom "drop your copy" would be exactly wrong. A subscriber maintaining a list of one container's children therefore has to read `parentId` rather than treating every `changed` as an upsert — the one place where kind alone under-determines what to do, and the reason a filtered subscription is [guaranteed `parentId` in the stub](#the-event-shape).
+
+An unscoped `parentId` filter (`null`, for root records) participates on the same terms: a record moved to the root is an arrival there, and one moved off it a departure.
 
 ## Delivery
 

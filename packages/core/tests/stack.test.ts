@@ -1242,6 +1242,159 @@ describe('update', () => {
 });
 
 // -------------------------------------------------------
+// setParent: the one native field a write reaches after create.
+// -------------------------------------------------------
+
+describe('Stack.setParent', () => {
+  test('moves a record into a container', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.setParent(note.id, box.id);
+    expect(moved.parentId).toBe(box.id);
+  });
+
+  test('null moves a record to the root', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    const moved = await stack.setParent(note.id, null);
+    expect(moved.parentId).toBeUndefined();
+  });
+
+  test('bumps version and snapshots the prior state', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.setParent(note.id, box.id);
+    expect(moved.version).toBe(2);
+    const versions = await stack.getVersions(note.id);
+    expect(versions.length).toBe(1);
+    expect(versions[0].content).toEqual({ text: 'note' });
+  });
+
+  test('leaves content untouched', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.setParent(note.id, box.id);
+    expect(moved.content).toEqual({ text: 'note' });
+  });
+
+  // A no-op must not bump version or write a snapshot, matching
+  // setUnlisted() and setPermissions().
+  test('moving to the parent it already has is a no-op', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    const same = await stack.setParent(note.id, box.id);
+    expect(same.version).toBe(1);
+    expect(await stack.getVersions(note.id)).toEqual([]);
+  });
+
+  test('a root record set to null is a no-op', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const same = await stack.setParent(note.id, null);
+    expect(same.version).toBe(1);
+  });
+
+  test('throws for unknown record', async () => {
+    await expect(stack.setParent('nonexistent', null)).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('honors ifVersion', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await expect(stack.setParent(note.id, box.id, { ifVersion: 99 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+  });
+
+  test('the record itself is refused as its own parent', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await expect(stack.setParent(note.id, note.id)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a descendant is refused as a parent', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
+    const c = await stack.create(NOTE_V1, { text: 'c' }, { parentId: b.id });
+    await expect(stack.setParent(a.id, c.id)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a sibling subtree is not a descendant, and is allowed', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' });
+    const bChild = await stack.create(NOTE_V1, { text: 'b-child' }, { parentId: b.id });
+    const moved = await stack.setParent(a.id, bChild.id);
+    expect(moved.parentId).toBe(bChild.id);
+  });
+
+  // The walk reads storage directly rather than the caller's view, so a
+  // chain assembled through records a requester cannot read is still
+  // refused. Exercised here through the unscoped layer that owns the rule.
+  test('a cycle through a deep chain is refused', async () => {
+    let previous = await stack.create(NOTE_V1, { text: 'root' });
+    const root = previous;
+    for (let i = 0; i < 10; i++) {
+      previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
+    }
+    await expect(stack.setParent(root.id, previous.id)).rejects.toThrow(StackConflictError);
+  });
+
+  // A create supplying both id and parentId is the second edge-adding
+  // site: existing records may already point at the id it names.
+  test('a create naming its own id under a descendant is refused', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
+    const minted = idWithTimestamp(Date.now());
+    await stack.setParent(a.id, minted);
+    await expect(
+      stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('two creates with mutually-referencing minted ids are refused', async () => {
+    const first = idWithTimestamp(Date.now());
+    const second = idWithTimestamp(Date.now() + 60_000);
+    await stack.create(NOTE_V1, { text: 'x' }, { id: first, parentId: second });
+    await expect(
+      stack.create(NOTE_V1, { text: 'y' }, { id: second, parentId: first }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('a create naming its own id as its own parent is refused', async () => {
+    const minted = idWithTimestamp(Date.now());
+    await expect(
+      stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: minted }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // A generated id names nothing, so this pays no reads and never refuses.
+  test('a create with a generated id under any parent is allowed', async () => {
+    const a = await stack.create(NOTE_V1, { text: 'a' });
+    const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
+    expect(b.parentId).toBe(a.id);
+  });
+
+  test('a minted id under an unrelated parent is allowed', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const minted = idWithTimestamp(Date.now());
+    const made = await stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: box.id });
+    expect(made.parentId).toBe(box.id);
+  });
+
+  test('parenting to a missing record is allowed, as at create', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.setParent(note.id, 'nonexistent');
+    expect(moved.parentId).toBe('nonexistent');
+  });
+
+  test('a parentId filter finds the record at its new home', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.setParent(note.id, box.id);
+    const result = await stack.query({ filter: { parentId: box.id } });
+    expect(result.records.map((r) => r.id)).toEqual([note.id]);
+  });
+});
+
+// -------------------------------------------------------
 // Records at rest: get()/query() are stored-version by default,
 // migrateAll() is the only thing that ever changes disk state.
 // -------------------------------------------------------

@@ -27,7 +27,7 @@ Authorization: Bearer <token>
 Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 
 ?typeId=          (repeatable; baseId or versioned, matched by baseId)
-?parentId=        ("null" for root records, as GET /records)
+?parentId=        ("null" for root records, as GET /records; see Events § The reparent transition)
 ?entityId=        (the record's author, not the actor)
 ?kind=            (repeatable: created|changed|deleted|purged)
 ?include=record   (ignored for kind=purged)

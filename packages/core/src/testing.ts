@@ -415,6 +415,24 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
+  async setParent(
+    id: string,
+    parentId: string | null,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+  ) {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Not found: ${id}`);
+    this.checkExpectedVersion(record, opts.expectedVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    const { parentId: _parentId, ...rest } = record;
+    const updated = this.bump(
+      parentId === null ? (rest as StackRecord) : { ...rest, parentId },
+      opts,
+    );
+    this.records.set(id, updated);
+    return updated;
+  }
+
   async getVersions(id: string) {
     return this.versions.get(id) ?? [];
   }

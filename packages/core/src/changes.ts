@@ -38,6 +38,15 @@ export type EmittedChange = {
    * whose frames must not carry it.
    */
   record: StackRecord;
+  /**
+   * The container a `reparent` moved the record out of, `null` for the
+   * root. Emitter-side only, like `record`: it exists so a `parentId`
+   * filter can answer for the origin as well as the destination, and no
+   * frame carries it — a subscriber compares the frame's `parentId` to
+   * its own filter to tell an arrival from a departure. Absent on every
+   * other op. See docs/spec/events.md § The reparent transition.
+   */
+  previousParentId?: string | null;
 };
 
 /** The `baseId@version` split, as grants and query filters read it. */
@@ -62,7 +71,12 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
 
   if (filter.parentId !== undefined) {
     const parentId = record.parentId ?? null;
-    if (parentId !== filter.parentId) return false;
+    // A move is announced to both containers it concerns: the record's
+    // post-change state answers for the destination, and the origin has
+    // only `previousParentId` to be found by. See docs/spec/events.md
+    // § The reparent transition.
+    const origin = change.op === 'reparent' ? (emitted.previousParentId ?? null) : parentId;
+    if (parentId !== filter.parentId && origin !== filter.parentId) return false;
   }
 
   if (filter.entityId !== undefined && record.entityId !== filter.entityId) return false;
@@ -234,7 +248,7 @@ class UnscopedSubscription extends Subscription {
 export function buildEmission(
   op: ChangeOp,
   record: StackRecord,
-  opts: { actor?: ChangeActor; at?: Date } = {},
+  opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
 ): EmittedChange {
   const kind = CHANGE_KINDS[op];
 
@@ -256,6 +270,7 @@ export function buildEmission(
   const actor = actorOf(record, kind);
   return {
     record,
+    ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
     change: {
       kind,
       op,
@@ -333,4 +348,5 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   'hard-delete': 'purged',
   list: 'changed',
   unlist: 'deleted',
+  reparent: 'changed',
 };

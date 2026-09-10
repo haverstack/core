@@ -41,6 +41,7 @@ const KIND_OF_OP: Record<string, string> = {
   'hard-delete': 'purged',
   list: 'changed',
   unlist: 'deleted',
+  reparent: 'changed',
 };
 
 describe('change feed fixture names', () => {
