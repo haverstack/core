@@ -155,6 +155,75 @@ describe('scalar field validation', () => {
 });
 
 // -------------------------------------------------------
+// Undeclared fields: the schema is the record's shape, so a key outside it
+// is refused rather than stored.
+// See docs/spec/data-model.md § Undeclared content fields.
+// -------------------------------------------------------
+
+describe('undeclared content fields', () => {
+  test('a top-level key the schema does not declare is an error naming it', () => {
+    const schema: TypeSchema = { name: { kind: 'string', required: true } };
+    const errors = errorsFor({ name: 'Alice', nickname: 'Al' }, schema);
+    expect(errors).toEqual([
+      { path: 'nickname', message: '"nickname" is not declared by this type' },
+    ]);
+  });
+
+  test('an undeclared key inside a declared object reports its full path', () => {
+    const schema: TypeSchema = {
+      address: { kind: 'object', properties: { city: { kind: 'string' } } },
+    };
+    expect(paths({ address: { city: 'Lisbon', postcode: '1100' } }, schema)).toEqual([
+      'address.postcode',
+    ]);
+  });
+
+  test('an undeclared key inside an array item reports its indexed path', () => {
+    const schema: TypeSchema = {
+      emails: {
+        kind: 'array',
+        items: { kind: 'object', properties: { value: { kind: 'string' } } },
+      },
+    };
+    expect(paths({ emails: [{ value: 'a@b.c' }, { label: 'home' }] }, schema)).toEqual([
+      'emails[1].label',
+    ]);
+  });
+
+  test('every undeclared key is reported, not just the first', () => {
+    expect(paths({ a: 1, b: 2, c: 3 }, {})).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('opaque containers', () => {
+  test('an object field with no properties accepts any interior', () => {
+    const schema: TypeSchema = { meta: { kind: 'object' } };
+    expect(errorsFor({ meta: { anything: 'goes', nested: { deep: [1, 2] } } }, schema)).toEqual([]);
+  });
+
+  test('an opaque object still has to be an object', () => {
+    const schema: TypeSchema = { meta: { kind: 'object' } };
+    expect(paths({ meta: 'not-an-object' }, schema)).toEqual(['meta']);
+    expect(paths({ meta: [1, 2] }, schema)).toEqual(['meta']);
+  });
+
+  test('an array field with no items accepts heterogeneous and null elements', () => {
+    const schema: TypeSchema = { tags: { kind: 'array' } };
+    expect(errorsFor({ tags: [null, 'x', 3, { a: 1 }] }, schema)).toEqual([]);
+  });
+
+  test('an opaque array still has to be an array', () => {
+    const schema: TypeSchema = { tags: { kind: 'array' } };
+    expect(paths({ tags: { 0: 'x' } }, schema)).toEqual(['tags']);
+  });
+
+  test('a required opaque container is still required', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', required: true } };
+    expect(paths({}, schema)).toEqual(['meta']);
+  });
+});
+
+// -------------------------------------------------------
 // Array fields
 // -------------------------------------------------------
 
@@ -291,8 +360,9 @@ describe('isValid', () => {
     expect(isValid({}, schema)).toBe(false);
   });
 
-  test('returns true for empty schema', () => {
-    expect(isValid({ anything: 'goes' }, {})).toBe(true);
+  test('an empty schema declares no fields, so it accepts no content', () => {
+    expect(isValid({}, {})).toBe(true);
+    expect(isValid({ anything: 'goes' }, {})).toBe(false);
   });
 });
 

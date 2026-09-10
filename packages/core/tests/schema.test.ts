@@ -478,6 +478,84 @@ describe('diffSchemas', () => {
 // parseTypeId
 // -------------------------------------------------------
 
+describe('opaque containers', () => {
+  test('an opaque object and one declaring no properties hash differently', async () => {
+    const opaque = await hashSchema({ meta: { kind: 'object' } });
+    const empty = await hashSchema({ meta: { kind: 'object', properties: {} } });
+    expect(opaque).not.toBe(empty);
+  });
+
+  test('an opaque array and one declaring no items hash differently', async () => {
+    const opaque = await hashSchema({ tags: { kind: 'array' } });
+    const declared = await hashSchema({ tags: { kind: 'array', items: { kind: 'string' } } });
+    expect(opaque).not.toBe(declared);
+  });
+
+  // A bag promises nothing a consumer can read, so it cannot stand in for
+  // a required shape — but it satisfies a requirement that asks for none.
+  test('an opaque candidate does not satisfy a required declared shape', () => {
+    const required: TypeSchema = {
+      address: {
+        kind: 'object',
+        required: true,
+        properties: { city: { kind: 'string', required: true } },
+      },
+    };
+    expect(isCompatible({ address: { kind: 'object', required: true } }, required)).toBe(false);
+  });
+
+  test('an opaque requirement is satisfied by any object of that kind', () => {
+    const required: TypeSchema = { meta: { kind: 'object', required: true } };
+    const candidate: TypeSchema = {
+      meta: { kind: 'object', required: true, properties: { a: { kind: 'string' } } },
+    };
+    expect(isCompatible(candidate, required)).toBe(true);
+  });
+
+  // Neither direction is additive: closing an opaque container refuses
+  // content it used to accept, and opening a declared one accepts content
+  // it used to refuse. A field-by-field diff would show neither.
+  test('closing an opaque object is drift', () => {
+    const violations = diffSchemas(
+      { meta: { kind: 'object' } },
+      { meta: { kind: 'object', properties: { a: { kind: 'string' } } } },
+    );
+    expect(violations).toEqual([
+      { path: 'meta', message: 'object changed from opaque to declared' },
+    ]);
+  });
+
+  test('opening a declared object is drift', () => {
+    const violations = diffSchemas(
+      { meta: { kind: 'object', properties: { a: { kind: 'string' } } } },
+      { meta: { kind: 'object' } },
+    );
+    expect(violations).toEqual([
+      { path: 'meta', message: 'object changed from declared to opaque' },
+    ]);
+  });
+
+  test('the same holds for arrays in both directions', () => {
+    expect(
+      diffSchemas(
+        { tags: { kind: 'array' } },
+        { tags: { kind: 'array', items: { kind: 'string' } } },
+      ),
+    ).toEqual([{ path: 'tags', message: 'array changed from opaque to declared' }]);
+    expect(
+      diffSchemas(
+        { tags: { kind: 'array', items: { kind: 'string' } } },
+        { tags: { kind: 'array' } },
+      ),
+    ).toEqual([{ path: 'tags', message: 'array changed from declared to opaque' }]);
+  });
+
+  test('an unchanged opaque container is not drift', () => {
+    const schema: TypeSchema = { meta: { kind: 'object' }, tags: { kind: 'array' } };
+    expect(diffSchemas(schema, schema)).toEqual([]);
+  });
+});
+
 describe('parseTypeId', () => {
   test('parses a versioned type ID correctly', () => {
     expect(parseTypeId('com.example.myapp/note@2')).toEqual({

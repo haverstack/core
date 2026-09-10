@@ -1,0 +1,73 @@
+---
+'@haverstack/core': minor
+---
+
+Hold content to the type's schema, and give a schema-less shape a way to say so
+
+**Behavior change: a content field the record's type does not declare is refused
+with `StackValidationError` (wire: 422)** — on `create()`, in an `update()` patch,
+and on `commitMigration()` against the destination type — naming the field and the
+path it sits at. It holds at every depth: an undeclared key inside a declared
+`object`, or inside the `object` an `array` declares as its items, is refused with
+its full path (`address.postcode`, `emails[1].label`).
+
+The schema is the record's shape. A key outside it is a typo, a stale writer, or a
+caller reaching for something that is not content at all, and accepting it makes all
+three look like a write that worked. The third is the one that motivated this:
+content is its own namespace, so `update(id, { parentId })` writes a content field
+of that name and never the native one, leaving a `content.parentId` sitting beside a
+native `parentId` holding something else, with nothing downstream reading it. That
+now names the field and points the caller back at the verb they wanted.
+
+**The rule is about the schema, not about the names.** A type is free to declare
+`parentId`, `version` or `createdAt` as content — a bookmark's `parentId` naming the
+upstream record it was clipped from is an ordinary field — and once declared it is
+patched like any other. Nothing is reserved by resemblance to a native field, and
+the same check catches `titel` and `craetedAt`, which no list of names would.
+
+**New: opaque containers.** An `object` field declared without `properties`, or an
+`array` field declared without `items`, is opaque — the schema places a container
+there and says nothing about its interior, so its contents are not validated. That
+is the deliberate way to store a shape a schema cannot describe: an imported blob, a
+payload whose keys are data, or a heterogeneous or null-bearing list (a declared
+array has never accepted a `null` element, so this is the only spelling for one). An
+opaque container is still held to its own kind — an opaque `object` refuses an array
+— and it is exempt from the schema only. [Content field names](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#content-field-names)
+are still checked at every depth inside one, since that rule is about what a filter
+path can address rather than about what the type promised. Query reach is unchanged:
+a content path walks into an opaque container, because the query engine reads the
+content rather than the schema.
+
+Opaque and declared are different shapes, not degrees of one. They hash differently,
+so `schemaHash` tells them apart. Changing a type from one to the other is schema
+drift in **both** directions — closing an opaque container refuses content it used
+to accept, and opening a declared one accepts content it used to refuse — so neither
+is an additive-in-place change, and the remedy is a version bump. `isCompatible()`
+reads them the same way: an opaque candidate satisfies a required container only
+where the required side asks nothing of its interior, since a bag promises a
+consumer nothing to read.
+
+**Additive-in-place evolution is unchanged in mechanism and narrower in what it
+licenses.** Validation runs on write and the schema lives in the stack, so a reader
+holding an older idea of a type still reads records carrying fields it was never
+taught about, and `update()`'s merge patch still preserves fields the caller didn't
+name. What changed is that _writing_ a new field means declaring it first — a
+`defineType()` call with the field added, which is already the additive-legal path,
+not a version bump.
+
+`update()` validating against the record's **own stored type** rather than the
+latest is what keeps this safe across a migration: an unswept `@1` record answers to
+`@1`'s schema, so a field that exists only in `@2` is refused until `migrateAll()`
+moves the record. A field can only ever be added to a schema in place, so a stored
+record cannot accumulate content its own type does not declare.
+
+`__proto__`, `constructor` and `prototype` remain refused as top-level content keys
+independently of the schema, including inside an opaque container. Declaring one
+does not make it writable: the hazard is what the key does to a JavaScript object on
+the way through, which a declaration cannot change.
+
+**For server authors:** this is a `Stack` invariant that a server built on core
+inherits through ordinary record validation, and a third content-key rule for a
+server mapping request bodies onto storage directly to apply itself. It answers
+**422** (code `validation`) on `POST /records`, `PATCH /records/:id`, and
+`POST /records/:id/migrate`.

@@ -22,7 +22,9 @@ import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 const canonicalizeFieldDef = (def: FieldDef): unknown => {
   if (def.kind === 'array') {
     return {
-      items: canonicalizeFieldDef(def.items),
+      // Omitted rather than canonicalized, for the reason `properties` is
+      // below: an opaque array accepts content a declared one refuses.
+      ...(def.items !== undefined && { items: canonicalizeFieldDef(def.items) }),
       kind: def.kind,
       ...(def.required !== undefined && { required: def.required }),
     };
@@ -31,7 +33,10 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
   if (def.kind === 'object') {
     return {
       kind: def.kind,
-      properties: canonicalizeSchema(def.properties),
+      // Omitted rather than canonicalized to `{}`: an opaque object and one
+      // declaring no properties accept different content, so they must not
+      // share a hash.
+      ...(def.properties !== undefined && { properties: canonicalizeSchema(def.properties) }),
       ...(def.required !== undefined && { required: def.required }),
     };
   }
@@ -101,14 +106,22 @@ const MAX_COMPATIBILITY_DEPTH = 32;
 const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: number): boolean => {
   if (depth > MAX_COMPATIBILITY_DEPTH) return false;
   if (required.kind === 'array') {
+    if (candidate.kind !== 'array') return false;
+    // A required array that names no item kind asks nothing of the
+    // elements, so any array satisfies it; one that does is unsatisfied by
+    // an opaque candidate, which promises nothing about what it holds.
+    if (required.items === undefined) return true;
     return (
-      candidate.kind === 'array' && isFieldCompatible(candidate.items, required.items, depth + 1)
+      candidate.items !== undefined && isFieldCompatible(candidate.items, required.items, depth + 1)
     );
   }
   if (required.kind === 'object') {
+    // An opaque candidate declares no fields, so it satisfies a required
+    // object only when that one asks for none either — a bag promises
+    // nothing a consumer can read.
     return (
       candidate.kind === 'object' &&
-      isCompatibleAtDepth(candidate.properties, required.properties, depth + 1)
+      isCompatibleAtDepth(candidate.properties ?? {}, required.properties ?? {}, depth + 1)
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
@@ -183,10 +196,34 @@ const diffField = (
     });
   }
   if (stored.kind === 'array' && candidate.kind === 'array') {
-    diffField(`${path}[]`, stored.items, candidate.items, depth + 1, violations);
+    if ((stored.items === undefined) !== (candidate.items === undefined)) {
+      violations.push({
+        path,
+        message:
+          stored.items === undefined
+            ? 'array changed from opaque to declared'
+            : 'array changed from declared to opaque',
+      });
+      return;
+    }
+    if (stored.items !== undefined && candidate.items !== undefined) {
+      diffField(`${path}[]`, stored.items, candidate.items, depth + 1, violations);
+    }
   }
   if (stored.kind === 'object' && candidate.kind === 'object') {
-    diffFields(path, stored.properties, candidate.properties, depth + 1, violations);
+    // Opening a declared object, or closing an opaque one, changes which
+    // content it accepts in a way no field-by-field diff would show.
+    if ((stored.properties === undefined) !== (candidate.properties === undefined)) {
+      violations.push({
+        path,
+        message:
+          stored.properties === undefined
+            ? 'object changed from opaque to declared'
+            : 'object changed from declared to opaque',
+      });
+      return;
+    }
+    diffFields(path, stored.properties ?? {}, candidate.properties ?? {}, depth + 1, violations);
   }
 };
 

@@ -223,13 +223,24 @@ export type ScalarFieldDef = {
 
 export type ArrayFieldDef = {
   kind: 'array';
-  items: FieldDef; // What's inside the array
+  /**
+   * What's inside the array. Omit to declare an opaque array: its elements
+   * are not validated, so a heterogeneous or null-bearing list has a
+   * spelling. See docs/spec/data-model.md § Undeclared content fields.
+   */
+  items?: FieldDef;
   required?: boolean;
 };
 
 export type ObjectFieldDef = {
   kind: 'object';
-  properties: TypeSchema; // Recursive schema for nested objects
+  /**
+   * Recursive schema for the object's interior. Omit to declare an opaque
+   * object: its keys are not validated, which is the one way to store a
+   * shape a schema does not describe. See docs/spec/data-model.md
+   * § Undeclared content fields.
+   */
+  properties?: TypeSchema;
   required?: boolean;
 };
 
