@@ -69,16 +69,18 @@ walks `parentId` must carry a visited set or a depth bound of its own.
 record, a create-time fact no later write moves, so there is nothing for a rollback
 to revert it to.
 
-**Fixed:** nullable native fields are now read back by presence rather than
-truthiness, so an empty-string `parentId`, `entityId`, `appId`, `principalId`,
-`updatedBy` or `updatedVia`, and a `deletedAt` or `unlistedAt` at the epoch, survive
-the round trip as the values they are. SQL NULL is the only spelling of an absent
-field. The query predicates already read `IS NULL`, so the mapper disagreeing let
-one record answer one way to `getRecord()` and another to the filter that should
-have found it — an empty-string `parentId` read back as the root while
-`parentId: null` did not match it, and a record deleted at the epoch dropped from
-every query while `getRecord()` reported it live. `Stack.create()` carried the same
-defect one layer up, dropping an empty-string id from the record it wrote.
+**Fixed:** a record soft-deleted or unlisted at the epoch was read back as neither.
+`deletedAt` and `unlistedAt` are stored as integers, and the SQLite mappers tested
+them for truthiness, so a timestamp of `0` came back absent — `getRecord()` reported
+the record live while every query, reading `deleted_at IS NULL`, correctly excluded
+it. The same row answered two ways. The mappers now read every nullable native field
+by presence, so SQL NULL is the only spelling of an absent field and the mapper
+agrees with the predicates beside it.
+
+**Also:** `create()` now refuses an empty-string `entityId`, `appId` or `principalId`
+(`StackQueryError`, wire: 400) rather than silently dropping it. The empty string
+names nobody, and a field quietly discarded is the same silent normalization the
+mapper fix above is about.
 
 **Fixed:** healing an orphaned version row — the snapshot an interrupted write left
 behind at the record's current version — replaced only some of the row. `parent_id`,

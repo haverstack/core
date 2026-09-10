@@ -1386,6 +1386,17 @@ describe('Stack.setParent', () => {
     expect(made.parentId).toBe(box.id);
   });
 
+  // The empty string names nobody, so it is refused rather than quietly
+  // dropped — the same answer parentId gives, and for the same reason.
+  test.each(['entityId', 'appId', 'principalId'] as const)(
+    'creating with an empty-string %s is refused',
+    async (field) => {
+      await expect(stack.create(NOTE_V1, { text: 'note' }, { [field]: '' })).rejects.toThrow(
+        StackQueryError,
+      );
+    },
+  );
+
   test('parenting to a record that does not exist is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const gone = idWithTimestamp(Date.now());

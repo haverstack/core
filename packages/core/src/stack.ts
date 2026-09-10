@@ -1768,6 +1768,16 @@ export class Stack implements StackClient {
         ? generateIdForTimestamp(createdAt.getTime())
         : generateId(createdAt.getTime()));
 
+    // An id field a caller supplies is a value or it is absent — never the
+    // empty string, which names nobody. Refused rather than dropped: an
+    // ignored field is the silent-normalization this mapper family was just
+    // fixed for, one layer up.
+    for (const field of ['entityId', 'appId', 'principalId'] as const) {
+      if (opts[field] === '') {
+        throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
+      }
+    }
+
     // Every create naming a parent owes the reference check, whether or not
     // it supplied an id: a destination a caller names has to be one that
     // exists. This is the read an ordinary create used to skip.
@@ -1780,11 +1790,10 @@ export class Stack implements StackClient {
       updatedAt,
       content,
       version: 1,
-      // Read for presence, not truthiness: entityId, appId and principalId
-      // are unvalidated ids, so '' is a value to keep rather than a spelling
-      // of absence — the same distinction rowToRecord draws in the SQLite
-      // mappers. parentId is checked above and cannot be '' by the time it
-      // gets here, but it reads the same way as its siblings.
+      // Read for presence, not truthiness — every one of these is checked
+      // above, so '' never reaches here and absence is the only thing a
+      // falsy value could mean. Presence says that outright instead of
+      // relying on it.
       ...(opts.parentId !== undefined && { parentId: opts.parentId }),
       ...(opts.entityId !== undefined && { entityId: opts.entityId }),
       ...(opts.appId !== undefined && { appId: opts.appId }),
