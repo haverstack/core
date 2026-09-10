@@ -1,5 +1,16 @@
 # @haverstack/commons
 
+## 0.21.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`e40e814`](https://github.com/haverstack/core/commit/e40e8143cda1b4a97ce930cd4e7f6d7b6b3f077f)]:
+  - @haverstack/core@0.27.0
+
 ## 0.20.0
 
 ### Minor Changes

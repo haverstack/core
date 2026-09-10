@@ -1,5 +1,39 @@
 # @haverstack/adapter-api
 
+## 0.26.0
+
+### Minor Changes
+
+- [#258](https://github.com/haverstack/core/pull/258) [`e40e814`](https://github.com/haverstack/core/commit/e40e8143cda1b4a97ce930cd4e7f6d7b6b3f077f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Remove `total` from `QueryResult`. A query answers with `records` and
+  `cursor`.
+
+  The count was only ever a number on one of the three paths a query can
+  take. A permission-scoped query could not report one — the count of
+  matching Records reveals the cardinality the permission check just hid —
+  and neither could any response on the wire, for the same reason. That left
+  it populated on a direct unscoped `Stack.query()` in process and `null`
+  everywhere else, so an app reading it saw a number locally and `null` the
+  moment the same code ran scoped or against a server.
+
+  Meanwhile every path paid for it. `ScopedStack.query()` filters and refills
+  by calling the adapter per page, so one scoped query at `limit: 50` ran
+  eleven `COUNT(*)`s and discarded all eleven. Measured over 20k records, the
+  count was 74% of a scoped query and 77% of an `asEntity(null)` one.
+
+  A caller that needs a count follows `cursor` to exhaustion and counts what
+  arrives — the only number that was ever true for that requester.
+
+  `MemoryAdapter` and the SQL adapters had also disagreed about what the
+  field meant: the documented "ignoring pagination" (which `MemoryAdapter`
+  implemented) against the count of what remained after the cursor (which the
+  SQL adapters returned). Removing the field settles it.
+
+### Patch Changes
+
+- Updated dependencies [[`e40e814`](https://github.com/haverstack/core/commit/e40e8143cda1b4a97ce930cd4e7f6d7b6b3f077f)]:
+  - @haverstack/core@0.27.0
+  - @haverstack/wire-types@0.26.0
+
 ## 0.25.0
 
 ### Minor Changes
