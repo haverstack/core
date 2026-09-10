@@ -218,6 +218,27 @@ export const validateReservedKeys = (content: Record<string, unknown>): Validati
   }));
 
 /**
+ * The same three names, refused where a schema declares them. Top-level
+ * only, exactly matching the content rule's scope above: a nested
+ * declaration names a field a record can actually carry, so refusing one
+ * would deny a writable shape.
+ *
+ * A declaration cannot license what the content rule refuses, so accepting
+ * one would define a field no record could ever hold — and, where the
+ * declaration is `required`, a type no record could satisfy at all: supply
+ * the field and the write is refused as a reserved key, omit it and the
+ * write is refused as a missing required field. Refused at definition time
+ * for the reason a field name no filter could address is
+ * (validateSchemaFieldNames): a schema is a promise that a field is
+ * meaningful. See docs/spec/data-model.md § Reserved content keys.
+ */
+export const validateSchemaReservedNames = (schema: TypeSchema): ValidationError[] =>
+  RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(schema, key)).map((key) => ({
+    path: key,
+    message: `"${key}" is a reserved content key and cannot be declared as a field name`,
+  }));
+
+/**
  * `undefined` is not a value a merge patch can carry: `null` is the
  * deletion sentinel, JSON drops the key on the way to storage, and the
  * presence checks a patch runs through read the key as a claim on the

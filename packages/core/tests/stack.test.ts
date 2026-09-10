@@ -21,6 +21,8 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
+import type { TypeSchema } from '../src/types.js';
+import { RESERVED_CONTENT_KEYS } from '../src/validate.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
@@ -3883,6 +3885,52 @@ describe('reserved content keys', () => {
       );
     },
   );
+
+  // Built by parsing, as one off the wire is: `__proto__` in an object
+  // literal reaches the prototype setter rather than declaring a field, and
+  // `constructor` there collides with `Object.prototype.constructor`.
+  const schemaWith = (key: string, def: unknown): TypeSchema =>
+    JSON.parse(`{${JSON.stringify(key)}: ${JSON.stringify(def)}}`) as TypeSchema;
+
+  test.each(RESERVED_CONTENT_KEYS)(
+    'defineType() refuses a schema declaring %s as a top-level field',
+    async (key) => {
+      await expect(
+        stack.defineType(
+          'com.example.test/reserved@1',
+          'Reserved',
+          schemaWith(key, { kind: 'string' }),
+        ),
+      ).rejects.toThrow(/cannot be declared as a field name/);
+    },
+  );
+
+  // The declaration cannot license what the write rule refuses, so
+  // accepting one would define a type no record could ever satisfy:
+  // supplying the field is a reserved key, omitting it is a missing
+  // required field.
+  test('a required declaration would be a type no record could satisfy', async () => {
+    await expect(
+      stack.defineType(
+        'com.example.test/reserved@1',
+        'Reserved',
+        schemaWith('constructor', { kind: 'string', required: true }),
+      ),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // Scoped to the write rule's own scope: a nested one names a field a
+  // record can actually carry.
+  test('a nested declaration is left alone, and the field it names is writable', async () => {
+    const NESTED = 'com.example.test/nested-reserved@1';
+    await stack.defineType(NESTED, 'Nested', {
+      meta: { kind: 'object', properties: schemaWith('constructor', { kind: 'string' }) },
+    });
+
+    const record = await stack.create(NESTED, JSON.parse('{"meta": {"constructor": "ok"}}'));
+
+    expect(record.content.meta).toEqual(JSON.parse('{"constructor": "ok"}'));
+  });
 
   test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
     await stack.defineType(NOTE_V1, 'Note', {

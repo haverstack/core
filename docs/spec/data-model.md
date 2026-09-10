@@ -303,7 +303,7 @@ They name JavaScript's object machinery rather than a field, and the two write p
 
 This is a `Stack` invariant, not an adapter or server concern — it holds for every backend and for `ScopedStack`, which delegates (the layering of [System types](#system-types) and `_config`'s protections). Nested occurrences are not rejected: they survive the JSON round trip as inert own properties, since `JSON.parse` creates `__proto__` as a data property rather than invoking the setter — including inside an [opaque container](#undeclared-content-fields), which is exempt from the schema and not from this.
 
-Declaring one of the three in a schema does not make it writable. That is the one place this rule and the schema disagree, and it is deliberate: the hazard is in what the key does to a JavaScript object on the way through, which a declaration cannot change.
+**A schema may not declare one of the three as a top-level field name either** — `defineType()` refuses it with `StackValidationError` (422), the same answer `POST /types` gives. A declaration cannot license what the write rule refuses, so accepting one would define a field no Record could ever carry; where the declaration is `required`, it would define a Type no Record could satisfy at all, since supplying the field is refused as a reserved key and omitting it is refused as a missing required field. This is the argument [content field names](#content-field-names) makes for declared names too — a schema is a promise that a field is meaningful — and it applies at exactly the scope the write rule does: a **nested** declaration names a field a Record can actually carry, so it is left alone.
 
 ### Undefined values in a patch
 

@@ -38,6 +38,7 @@ import {
   validatePatchValues,
   validateReservedKeys,
   validateSchemaFieldNames,
+  validateSchemaReservedNames,
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import {
@@ -1480,7 +1481,10 @@ export class Stack implements StackClient {
     const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
     if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
 
-    const nameErrors = validateSchemaFieldNames(schema);
+    const nameErrors = [
+      ...validateSchemaReservedNames(schema),
+      ...validateSchemaFieldNames(schema),
+    ];
     if (nameErrors.length > 0) {
       throw new StackValidationError(nameErrors);
     }

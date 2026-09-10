@@ -62,9 +62,16 @@ moves the record. A field can only ever be added to a schema in place, so a stor
 record cannot accumulate content its own type does not declare.
 
 `__proto__`, `constructor` and `prototype` remain refused as top-level content keys
-independently of the schema, including inside an opaque container. Declaring one
-does not make it writable: the hazard is what the key does to a JavaScript object on
-the way through, which a declaration cannot change.
+independently of the schema, including inside an opaque container. **`defineType()`
+now refuses a schema that declares one as a top-level field name** (wire: 422 on
+`POST /types`), at exactly the scope the write rule holds — a nested declaration
+names a field a record can carry, so it is left alone. A declaration cannot license
+what the write rule refuses, so accepting one defined a field no record could carry;
+where the declaration was `required`, it defined a type no record could satisfy at
+all, since supplying the field is refused as a reserved key and omitting it is
+refused as a missing required field. This is the argument `defineType()` already
+makes for a field name no filter could address: a schema is a promise that a field is
+meaningful.
 
 **For server authors:** this is a `Stack` invariant that a server built on core
 inherits through ordinary record validation, and a third content-key rule for a
