@@ -221,28 +221,26 @@ export type ScalarFieldDef = {
   required?: boolean;
 };
 
-export type ArrayFieldDef = {
-  kind: 'array';
-  /**
-   * What's inside the array. Omit to declare an opaque array: its elements
-   * are not validated, so a heterogeneous or null-bearing list has a
-   * spelling. See docs/spec/data-model.md § Undeclared content fields.
-   */
-  items?: FieldDef;
-  required?: boolean;
-};
+/**
+ * A list. `open: true` leaves its elements unvalidated,
+ * which is how a heterogeneous or null-bearing list is spelled. Opacity is
+ * declared rather than inferred from a missing `items`, so a schema that
+ * forgets to describe its elements is a type error rather than a silently
+ * unchecked field. See docs/spec/data-model.md § Undeclared content fields.
+ */
+export type ArrayFieldDef =
+  | { kind: 'array'; items: FieldDef; open?: false; required?: boolean }
+  | { kind: 'array'; open: true; items?: undefined; required?: boolean };
 
-export type ObjectFieldDef = {
-  kind: 'object';
-  /**
-   * Recursive schema for the object's interior. Omit to declare an opaque
-   * object: its keys are not validated, which is the one way to store a
-   * shape a schema does not describe. See docs/spec/data-model.md
-   * § Undeclared content fields.
-   */
-  properties?: TypeSchema;
-  required?: boolean;
-};
+/**
+ * An object. `open: true` leaves its keys unvalidated,
+ * which is the one way to store a shape a schema does not describe. Same
+ * reason as ArrayFieldDef for making it a declaration rather than an
+ * omission. See docs/spec/data-model.md § Undeclared content fields.
+ */
+export type ObjectFieldDef =
+  | { kind: 'object'; properties: TypeSchema; open?: false; required?: boolean }
+  | { kind: 'object'; open: true; properties?: undefined; required?: boolean };
 
 /**
  * A field definition in a Type schema. Supports scalars, arrays, and nested

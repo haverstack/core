@@ -5,7 +5,7 @@ import {
   validateReservedKeys,
   isValid,
 } from '../src/validate.js';
-import type { TypeSchema } from '../src/types.js';
+import type { TypeSchema, FieldDef } from '../src/types.js';
 
 // -------------------------------------------------------
 // Helpers
@@ -195,30 +195,47 @@ describe('undeclared content fields', () => {
   });
 });
 
-describe('opaque containers', () => {
-  test('an object field with no properties accepts any interior', () => {
-    const schema: TypeSchema = { meta: { kind: 'object' } };
+describe('open containers', () => {
+  // Opacity is declared, never inferred from a missing `items`/`properties`:
+  // a schema that forgets to describe its interior does not compile, so it
+  // cannot become an unchecked field by accident. @ts-expect-error fails the
+  // build if these ever start type-checking.
+  test('a container that declares neither its interior nor `open` is a type error', () => {
+    // @ts-expect-error - an object must declare `properties` or `open`
+    const objectDef: FieldDef = { kind: 'object' };
+    // @ts-expect-error - an array must declare `items` or `open`
+    const arrayDef: FieldDef = { kind: 'array' };
+
+    // The assertion that matters is above, and `pnpm run typecheck` is what
+    // makes it: @ts-expect-error fails the build if either line ever starts
+    // type-checking. These two keep the values used.
+    expect(objectDef.kind).toBe('object');
+    expect(arrayDef.kind).toBe('array');
+  });
+
+  test('an open object accepts any interior', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
     expect(errorsFor({ meta: { anything: 'goes', nested: { deep: [1, 2] } } }, schema)).toEqual([]);
   });
 
-  test('an opaque object still has to be an object', () => {
-    const schema: TypeSchema = { meta: { kind: 'object' } };
+  test('an open object still has to be an object', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
     expect(paths({ meta: 'not-an-object' }, schema)).toEqual(['meta']);
     expect(paths({ meta: [1, 2] }, schema)).toEqual(['meta']);
   });
 
-  test('an array field with no items accepts heterogeneous and null elements', () => {
-    const schema: TypeSchema = { tags: { kind: 'array' } };
+  test('an open array accepts heterogeneous and null elements', () => {
+    const schema: TypeSchema = { tags: { kind: 'array', open: true } };
     expect(errorsFor({ tags: [null, 'x', 3, { a: 1 }] }, schema)).toEqual([]);
   });
 
-  test('an opaque array still has to be an array', () => {
-    const schema: TypeSchema = { tags: { kind: 'array' } };
+  test('an open array still has to be an array', () => {
+    const schema: TypeSchema = { tags: { kind: 'array', open: true } };
     expect(paths({ tags: { 0: 'x' } }, schema)).toEqual(['tags']);
   });
 
-  test('a required opaque container is still required', () => {
-    const schema: TypeSchema = { meta: { kind: 'object', required: true } };
+  test('a required open container is still required', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true, required: true } };
     expect(paths({}, schema)).toEqual(['meta']);
   });
 });

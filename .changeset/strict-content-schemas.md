@@ -25,27 +25,37 @@ upstream record it was clipped from is an ordinary field — and once declared i
 patched like any other. Nothing is reserved by resemblance to a native field, and
 the same check catches `titel` and `craetedAt`, which no list of names would.
 
-**New: opaque containers.** An `object` field declared without `properties`, or an
-`array` field declared without `items`, is opaque — the schema places a container
-there and says nothing about its interior, so its contents are not validated. That
-is the deliberate way to store a shape a schema cannot describe: an imported blob, a
-payload whose keys are data, or a heterogeneous or null-bearing list (a declared
-array has never accepted a `null` element, so this is the only spelling for one). An
-opaque container is still held to its own kind — an opaque `object` refuses an array
-— and it is exempt from the schema only. [Content field names](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#content-field-names)
+**New: open containers.** An `object` or `array` field declared `open: true` is not
+validated inside — the schema places a container there and says nothing about its
+interior. That is the deliberate way to store a shape a schema cannot describe: an
+imported blob, a payload whose keys are data, or a heterogeneous or null-bearing
+list (a declared array has never accepted a `null` element, so this is the only
+spelling for one).
+
+A container now declares either its interior or `open`, never neither: `ArrayFieldDef`
+and `ObjectFieldDef` are unions, so `{ kind: 'object' }` on its own no longer
+type-checks. Opacity is a claim the schema makes rather than something inferred from
+a missing `items`/`properties`, so forgetting to describe a container's elements is a
+compile error instead of a silently unchecked field.
+
+An open container is still held to its own kind — an open `object` refuses an array,
+an open `array` refuses an object — which is why this is a flag on the container
+kinds rather than an "any JSON here" kind of its own: a type that means "a list,
+contents unspecified" can still say so. It is exempt from the schema only.
+[Content field names](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#content-field-names)
 are still checked at every depth inside one, since that rule is about what a filter
 path can address rather than about what the type promised. Query reach is unchanged:
-a content path walks into an opaque container, because the query engine reads the
+a content path walks into an open container, because the query engine reads the
 content rather than the schema.
 
-Opaque and declared are different shapes, not degrees of one. They hash differently,
+Open and declared are different shapes, not degrees of one. They hash differently,
 so `schemaHash` tells them apart. Changing a type from one to the other is schema
-drift in **both** directions — closing an opaque container refuses content it used
-to accept, and opening a declared one accepts content it used to refuse — so neither
-is an additive-in-place change, and the remedy is a version bump. `isCompatible()`
-reads them the same way: an opaque candidate satisfies a required container only
-where the required side asks nothing of its interior, since a bag promises a
-consumer nothing to read.
+drift in **both** directions — closing an open container refuses content it used to
+accept, and opening a declared one accepts content it used to refuse — so neither is
+an additive-in-place change, and the remedy is a version bump. `isCompatible()` reads
+them the same way: an open candidate satisfies a required container only where the
+required side asks nothing of its interior, since a bag promises a consumer nothing
+to read.
 
 **Additive-in-place evolution is unchanged in mechanism and narrower in what it
 licenses.** Validation runs on write and the schema lives in the stack, so a reader
@@ -62,7 +72,7 @@ moves the record. A field can only ever be added to a schema in place, so a stor
 record cannot accumulate content its own type does not declare.
 
 `__proto__`, `constructor` and `prototype` remain refused as top-level content keys
-independently of the schema, including inside an opaque container. **`defineType()`
+independently of the schema, including inside an open container. **`defineType()`
 now refuses a schema that declares one as a top-level field name** (wire: 422 on
 `POST /types`), at exactly the scope the write rule holds — a nested declaration
 names a field a record can carry, so it is left alone. A declaration cannot license

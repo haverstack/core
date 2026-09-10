@@ -856,8 +856,8 @@ describe('query — content filter null semantics', () => {
     await stack.defineType(NOTE_V1, 'Note', {
       text: { kind: 'text', required: true },
       priority: { kind: 'number' },
-      a: { kind: 'object' },
-      n: { kind: 'object' },
+      a: { kind: 'object', open: true },
+      n: { kind: 'object', open: true },
     });
   });
 
@@ -922,10 +922,10 @@ describe('query — contentPresent', () => {
       publishedAt: { kind: 'date' },
       a: { kind: 'number' },
       b: { kind: 'number' },
-      // Opaque: these hold nulls and bare objects, which is the content
+      // Open: these hold nulls and bare objects, which is the content
       // whose presence semantics these tests are about.
-      emails: { kind: 'array' },
-      tags: { kind: 'array' },
+      emails: { kind: 'array', open: true },
+      tags: { kind: 'array', open: true },
     });
   });
 
@@ -3822,11 +3822,11 @@ describe('undeclared content fields', () => {
     ).rejects.toThrow(/"subtitle" is not declared by this type/);
   });
 
-  test('an opaque object is the way to store a shape the schema cannot describe', async () => {
+  test('an open object is the way to store a shape the schema cannot describe', async () => {
     const BLOB = 'com.example.test/blob@1';
     await stack.defineType(BLOB, 'Blob', {
       name: { kind: 'string', required: true },
-      meta: { kind: 'object' },
+      meta: { kind: 'object', open: true },
     });
 
     const record = await stack.create(BLOB, {
@@ -3839,11 +3839,11 @@ describe('undeclared content fields', () => {
 
   // The two rules are independent: an opaque object is exempt from the
   // schema, not from what a content field may be named.
-  test('the field-name rule still reaches inside an opaque object', async () => {
+  test('the field-name rule still reaches inside an open object', async () => {
     const BLOB = 'com.example.test/blob@1';
     await stack.defineType(BLOB, 'Blob', {
       name: { kind: 'string', required: true },
-      meta: { kind: 'object' },
+      meta: { kind: 'object', open: true },
     });
 
     const content = JSON.parse('{"name": "x", "meta": {"a.b": 1}}') as Record<string, unknown>;
@@ -3935,7 +3935,7 @@ describe('reserved content keys', () => {
   test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
     await stack.defineType(NOTE_V1, 'Note', {
       text: { kind: 'text', required: true },
-      meta: { kind: 'object' },
+      meta: { kind: 'object', open: true },
     });
     const content = JSON.parse('{"text": "hi", "meta": {"__proto__": {"x": 1}}}') as Record<
       string,
@@ -3958,7 +3958,7 @@ describe('undefined patch values', () => {
     await stack.defineType(NOTE_V1, 'Note', {
       text: { kind: 'text', required: true },
       extra: { kind: 'string' },
-      meta: { kind: 'object' },
+      meta: { kind: 'object', open: true },
     });
   });
 

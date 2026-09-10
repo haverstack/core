@@ -21,22 +21,38 @@ import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
  */
 const canonicalizeFieldDef = (def: FieldDef): unknown => {
   if (def.kind === 'array') {
+    // `open` carries into the hash and `items` drops out of it, for the
+    // reason an object's `properties` does below: an open array accepts
+    // content a declared one refuses. A closed array omits the flag rather
+    // than storing `false`, so declaring it explicitly hashes the same as
+    // leaving it off.
+    if (def.open) {
+      return {
+        kind: def.kind,
+        open: true,
+        ...(def.required !== undefined && { required: def.required }),
+      };
+    }
     return {
-      // Omitted rather than canonicalized, for the reason `properties` is
-      // below: an opaque array accepts content a declared one refuses.
-      ...(def.items !== undefined && { items: canonicalizeFieldDef(def.items) }),
+      items: canonicalizeFieldDef(def.items),
       kind: def.kind,
       ...(def.required !== undefined && { required: def.required }),
     };
   }
 
   if (def.kind === 'object') {
+    // An open object and one declaring no properties accept different
+    // content, so they must not share a hash.
+    if (def.open) {
+      return {
+        kind: def.kind,
+        open: true,
+        ...(def.required !== undefined && { required: def.required }),
+      };
+    }
     return {
       kind: def.kind,
-      // Omitted rather than canonicalized to `{}`: an opaque object and one
-      // declaring no properties accept different content, so they must not
-      // share a hash.
-      ...(def.properties !== undefined && { properties: canonicalizeSchema(def.properties) }),
+      properties: canonicalizeSchema(def.properties),
       ...(def.required !== undefined && { required: def.required }),
     };
   }
@@ -97,6 +113,10 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
 // items / object properties is depth-bounded — matches MAX_VALIDATION_DEPTH
 // in validate.ts. Past the limit we can't verify compatibility, so we
 // fail closed (treat as incompatible) rather than risk a stack overflow.
+/** Only a container can be open, so this is false for every scalar. */
+const isOpen = (def: FieldDef): boolean =>
+  (def.kind === 'array' || def.kind === 'object') && def.open === true;
+
 const MAX_COMPATIBILITY_DEPTH = 32;
 
 /**
@@ -107,21 +127,22 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
   if (depth > MAX_COMPATIBILITY_DEPTH) return false;
   if (required.kind === 'array') {
     if (candidate.kind !== 'array') return false;
-    // A required array that names no item kind asks nothing of the
-    // elements, so any array satisfies it; one that does is unsatisfied by
-    // an opaque candidate, which promises nothing about what it holds.
-    if (required.items === undefined) return true;
-    return (
-      candidate.items !== undefined && isFieldCompatible(candidate.items, required.items, depth + 1)
-    );
+    // An open requirement asks nothing of the elements, so any array
+    // satisfies it; a declared one is unsatisfied by an open candidate,
+    // which promises nothing about what it holds.
+    if (required.open) return true;
+    return !candidate.open && isFieldCompatible(candidate.items, required.items, depth + 1);
   }
   if (required.kind === 'object') {
-    // An opaque candidate declares no fields, so it satisfies a required
-    // object only when that one asks for none either — a bag promises
-    // nothing a consumer can read.
-    return (
-      candidate.kind === 'object' &&
-      isCompatibleAtDepth(candidate.properties ?? {}, required.properties ?? {}, depth + 1)
+    if (candidate.kind !== 'object') return false;
+    // Same on both sides: an open candidate declares no fields, so it
+    // satisfies a required object only where that one asks for none — a bag
+    // promises a consumer nothing to read.
+    if (required.open) return true;
+    return isCompatibleAtDepth(
+      candidate.open ? {} : candidate.properties,
+      required.properties,
+      depth + 1,
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
@@ -195,35 +216,26 @@ const diffField = (
       message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
     });
   }
+  // Opening a declared container, or closing an open one, changes which
+  // content it accepts in a way no field-by-field diff would show.
+  if (isOpen(stored) !== isOpen(candidate)) {
+    violations.push({
+      path,
+      message: isOpen(stored)
+        ? `${stored.kind} changed from open to declared`
+        : `${stored.kind} changed from declared to open`,
+    });
+    return;
+  }
   if (stored.kind === 'array' && candidate.kind === 'array') {
-    if ((stored.items === undefined) !== (candidate.items === undefined)) {
-      violations.push({
-        path,
-        message:
-          stored.items === undefined
-            ? 'array changed from opaque to declared'
-            : 'array changed from declared to opaque',
-      });
-      return;
-    }
-    if (stored.items !== undefined && candidate.items !== undefined) {
+    if (!stored.open && !candidate.open) {
       diffField(`${path}[]`, stored.items, candidate.items, depth + 1, violations);
     }
   }
   if (stored.kind === 'object' && candidate.kind === 'object') {
-    // Opening a declared object, or closing an opaque one, changes which
-    // content it accepts in a way no field-by-field diff would show.
-    if ((stored.properties === undefined) !== (candidate.properties === undefined)) {
-      violations.push({
-        path,
-        message:
-          stored.properties === undefined
-            ? 'object changed from opaque to declared'
-            : 'object changed from declared to opaque',
-      });
-      return;
+    if (!stored.open && !candidate.open) {
+      diffFields(path, stored.properties, candidate.properties, depth + 1, violations);
     }
-    diffFields(path, stored.properties ?? {}, candidate.properties ?? {}, depth + 1, violations);
   }
 };
 

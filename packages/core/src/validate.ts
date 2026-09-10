@@ -72,10 +72,9 @@ const validateField = (
       errors.push({ path, message: `Expected array, got ${typeof value}` });
       return;
     }
-    // No `items` is an opaque array, the array-shaped counterpart of an
-    // object field with no `properties`: the schema places a list here and
-    // says nothing about what it holds.
-    if (def.items === undefined) return;
+    // An open array is the list-shaped counterpart of an open object: the
+    // schema places a list here and says nothing about what it holds.
+    if (def.open) return;
     const items = def.items;
     value.forEach((item, i) => validateField(item, items, `${path}[${i}]`, errors, depth + 1));
     return;
@@ -86,10 +85,9 @@ const validateField = (
       errors.push({ path, message: `Expected object, got ${typeof value}` });
       return;
     }
-    // An object field with no `properties` is opaque by declaration — the
-    // schema says "an object lives here" and nothing about its interior,
-    // so there is no set of declared keys to hold it to.
-    if (def.properties === undefined) return;
+    // An open object says "an object lives here" and nothing about its
+    // interior, so there is no set of declared keys to hold it to.
+    if (def.open) return;
     validateContent(value as Record<string, unknown>, def.properties, path, errors, depth + 1);
     return;
   }
@@ -158,8 +156,8 @@ export const validateContent = (
   // The schema is the record's shape; a key outside it is a typo, a stale
   // writer, or a caller reaching for something that isn't content at all,
   // and storing it makes all three look like a write that worked. Declare
-  // an `object` field without `properties` for a shape a schema cannot
-  // describe. See docs/spec/data-model.md § Undeclared content fields.
+  // an `object` field `open` for a shape a schema cannot describe.
+  // See docs/spec/data-model.md § Undeclared content fields.
   for (const key of Object.keys(content)) {
     if (Object.hasOwn(schema, key)) continue;
     errors.push({
@@ -354,8 +352,8 @@ export const validateSchemaFieldNames = (
       });
     }
     let inner: FieldDef = def;
-    while (inner.kind === 'array' && inner.items !== undefined) inner = inner.items;
-    if (inner.kind === 'object' && inner.properties !== undefined)
+    while (inner.kind === 'array' && !inner.open) inner = inner.items;
+    if (inner.kind === 'object' && !inner.open)
       validateSchemaFieldNames(inner.properties, path, errors, depth + 1);
   }
   return errors;
