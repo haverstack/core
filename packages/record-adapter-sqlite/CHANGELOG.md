@@ -1,5 +1,133 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.20.0
+
+### Minor Changes
+
+- [#263](https://github.com/haverstack/core/pull/263) [`12e1a4b`](https://github.com/haverstack/core/commit/12e1a4bf9db1086a6b546859171f3a7bf72db322) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `setParent()` — records can be moved between containers after creation
+
+  `parentId` was settable at create and nowhere else: `update()` is a content-only
+  merge patch, `patchContent()` is content-only by contract, and `PATCH /records/:id`
+  carries the content patch as its whole body. A record's place in the hierarchy was
+  therefore fixed for life, and a `parentId` key in an `update()` patch was stored as
+  a content field of that name instead.
+
+  `setParent(id, parentId | null)` joins `setUnlisted()` and `setPermissions()` as a
+  native-field verb — `null` moves a record to the root. It bumps `version`, snapshots
+  the prior state, takes `ifVersion`, and travels as `PUT /records/:id/parent`.
+  `StackAdapter` gains a matching `setParent()`; every bundled adapter implements it.
+
+  Moving a record confers nothing: containment is not an access-control edge, so
+  nothing is inherited from a container and nothing cascades out of one. `ScopedStack`
+  gates a move as an ordinary write on the record plus read access to the destination —
+  the same reference gate `create()` applies to a `parentId`. The origin is ungated,
+  since naming it requires reading the record.
+
+  An edge that would make a record its own ancestor is refused with `StackConflictError`
+  (wire: 409), at both sites that add one: `setParent()`, and a `create()` supplying both
+  `id` and `parentId` — a generated id names nothing, but a caller-supplied one may already
+  have records pointing at it. Dangling parents stay legal. The check is read-then-write, so
+  it is advisory under concurrency, the same posture as DID binding uniqueness; consumers
+  that walk `parentId` should carry a visited set.
+
+  The change feed gains a `reparent` op (kind `changed`), matched against both
+  containers a move concerns so a subscription filtered on the origin learns the record
+  left it. Frames carry the destination in `parentId`, as every frame carries the
+  record's state at the moment of the change; a subscriber compares it to its own
+  filter to tell a departure from an arrival.
+
+- [#266](https://github.com/haverstack/core/pull/266) [`e134c5a`](https://github.com/haverstack/core/commit/e134c5a8935893131361bc2da4ecff0de6ab0a5b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Make reparenting restorable, and settle what `parentId` spells and promises
+
+  A version snapshot now captures `parentId`, so a move rolls back like every other
+  mutation and the write bit's recoverability claim — anything a write-holder does,
+  the owner can undo — holds for `setParent()` too. `RecordVersion` and `WireVersion`
+  gain the field; `restoreVersion()` applies it.
+
+  A snapshot spells `parentId` exactly as the record does: **absent is the root.**
+  That follows the rule the field has always followed, now stated. Inputs spell the
+  root `null`, because they must tell the root from "not specified" — `setParent()`'s
+  argument, the `PUT /records/:id/parent` body, `RecordFilter`, `?parentId=null`.
+  State spells it by omission, because a record is always somewhere — `StackRecord`,
+  `RecordChange`, and now `RecordVersion`. `null` never appears on a snapshot; a
+  foreign server that sends the input spelling is read as the root rather than
+  misread. Because absence is the root rather than a missing claim, a restore always
+  settles containment: a snapshot carrying no `parentId` returns the record to the
+  root instead of leaving it where it sits.
+
+  A restore that puts a different container back is a move, and is treated as one
+  throughout. It is refused with `StackConflictError` (wire: 409) where it would make
+  the record its own ancestor, joining `setParent()` and a `create()` naming both its
+  own `id` and a `parentId` as the sites that walk the proposed chain. `ScopedStack`
+  applies the same reference gate to it that `setParent()` applies to a destination
+  named directly, so a restore cannot reach a container the requester could not name
+  today; a `parentId` the restore would not change is not re-gated, since the record
+  is already there, and a snapshot taken at the root names no container to gate. And
+  its change event is matched against both containers it concerns, exactly as a
+  `reparent` is — a subscription filtered on the origin learns the record left.
+
+  **Behavior change: a `parentId` a caller names must be well-formed and must name a
+  record that exists.** `setParent()` and `create()` now check format first
+  (`StackQueryError`, wire: 400) and then existence (`StackConflictError`, wire: 409).
+  Format is the rule a caller-supplied `id` already passes, so the empty string is not
+  a `parentId` any more than it is a record id. Code that relied on pointing at a
+  container before creating it, or on planting a reference to nothing, has to create
+  the container first. This is a front-door check rather than an invariant: deleting a
+  container never touches its children, so a `parentId` resolving to nothing remains
+  an ordinary state at rest and consumers must still handle one. What it buys is that
+  a caller cannot mint one — a dangling parent now means a container was removed.
+
+  **`restoreVersion()` is exempt from that check.** It is not a caller naming a
+  destination, it is history being put back, and the container may have been
+  hard-deleted since the snapshot was taken; refusing would let an unrelated deletion
+  cost a record its content rollback. It is the same stance restore takes on content,
+  validating against the snapshot's own `typeId` rather than the record's current one.
+  A restore is therefore the only write that can still produce a dangling parent.
+
+  **Behavior change: a chain deeper than the acyclicity walk's 64-level cap is no
+  longer refused.** The walk stops at the cap and the write proceeds. Depth is not
+  something the library bounds — an ordinary `create()` under a parent never walks,
+  and moving a subtree checks only the chain above it — so refusing there advertised a
+  guarantee that does not hold, and permanently froze a deep region against moves,
+  since nothing shortens a chain. The cap still bounds each move's cost and still
+  guarantees the walk terminates on a chain that is already cyclic. Acyclicity is a
+  guardrail against the common accident of moving a container into its own descendant:
+  exact for a single writer within the cap, and nothing beyond it. A consumer that
+  walks `parentId` must carry a visited set or a depth bound of its own.
+
+  `appId` remains uncaptured by snapshots. It names the software that authored the
+  record, a create-time fact no later write moves, so there is nothing for a rollback
+  to revert it to.
+
+  **Fixed:** a record soft-deleted or unlisted at the epoch was read back as neither.
+  `deletedAt` and `unlistedAt` are stored as integers, and the SQLite mappers tested
+  them for truthiness, so a timestamp of `0` came back absent — `getRecord()` reported
+  the record live while every query, reading `deleted_at IS NULL`, correctly excluded
+  it. The same row answered two ways. The mappers now read every nullable native field
+  by presence, so SQL NULL is the only spelling of an absent field and the mapper
+  agrees with the predicates beside it.
+
+  **Also:** `create()` now refuses an empty-string `entityId`, `appId` or `principalId`
+  (`StackQueryError`, wire: 400) rather than silently dropping it. The empty string
+  names nobody, and a field quietly discarded is the same silent normalization the
+  mapper fix above is about.
+
+  **Fixed:** healing an orphaned version row — the snapshot an interrupted write left
+  behind at the record's current version — replaced only some of the row. `parent_id`,
+  `updated_by` and `updated_via` kept the orphan's values, so a later restore could
+  move a record into a container the healing snapshot never named, and the two
+  reference adapters disagreed about it.
+
+  **For adapter authors:** `StackAdapter.restoreVersion()`'s contract now states that
+  it restores the snapshot's `parentId` alongside content and associations, and that
+  an absent `parentId` means the root. An adapter written to the previous wording
+  would ignore containment on restore while `Stack` refused cycles and `ScopedStack`
+  refused moves against it.
+
+### Patch Changes
+
+- Updated dependencies [[`12e1a4b`](https://github.com/haverstack/core/commit/12e1a4bf9db1086a6b546859171f3a7bf72db322), [`e134c5a`](https://github.com/haverstack/core/commit/e134c5a8935893131361bc2da4ecff0de6ab0a5b)]:
+  - @haverstack/core@0.28.0
+
 ## 0.19.0
 
 ### Minor Changes
