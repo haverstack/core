@@ -506,8 +506,9 @@ export class MemoryAdapter implements StackAdapter {
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const merged = { ...record, typeId: target.typeId, content: target.content };
-    const withParent =
-      target.parentId === undefined ? merged : withParentId(merged, target.parentId);
+    // A snapshot always settles containment: absent is the root, so a
+    // restore moves the record there rather than leaving it where it sits.
+    const withParent = withParentId(merged, target.parentId ?? null);
     const withAssoc =
       target.associations !== undefined
         ? withAssociations(withParent, target.associations)

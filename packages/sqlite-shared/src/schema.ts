@@ -45,10 +45,9 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
   ) STRICT;
 
-  -- parent_id is JSON, not a bare id, so one column spells all three
-  -- states a snapshot's parentId has: SQL NULL is a snapshot claiming
-  -- nothing about containment, 'null' is the root, and '"<id>"' is a
-  -- container. Same trick the associations column turns on NULL vs '[]'.
+  -- parent_id holds the container the record sat in, NULL for the root --
+  -- the same encoding records.parent_id uses, since a snapshot states
+  -- where the record was rather than an instruction to apply.
   CREATE TABLE IF NOT EXISTS versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
     version     INTEGER NOT NULL,
@@ -58,7 +57,7 @@ export const RECORD_SCHEMA_SQL = `
     entity_id   TEXT,
     updated_by  TEXT,
     updated_via TEXT,
-    parent_id   TEXT CHECK (parent_id IS NULL OR json_valid(parent_id)),
+    parent_id   TEXT,
     associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
     permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)

@@ -1151,16 +1151,15 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
       typeId: 'com.example/note@1',
       content: { title: 'original title' },
       updatedAt: '2024-01-01T00:00:00.000Z',
-      parentId: null,
     },
   },
   {
     name: 'get-version-carries-the-container-the-snapshot-was-taken-in',
     description:
-      'A snapshot records where the record sat, so a restore can put it back. The field is ' +
-      'nullable rather than merely optional: null is the root, and an absent key is a ' +
-      'snapshot claiming nothing about containment, which restores to no move. Assumes the ' +
-      'record was in container 1hk153x0000f at version 2.',
+      'A snapshot records where the record sat, so a restore can put it back. It spells ' +
+      'parentId exactly as a record does — absent is the root, and null never appears on a ' +
+      'response — so version 1 above, taken at the root, carries no parentId key while this ' +
+      'one names the container. Assumes the record was in 1hk153x0000f at version 2.',
     method: 'GET',
     path: '/records/1hk153x00001/versions/2',
     responseStatus: 200,
@@ -1191,7 +1190,9 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
       'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
       'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
       "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
-      'alongside the pre-existing version 1 snapshot being restored from.',
+      'alongside the pre-existing version 1 snapshot being restored from. The record sat in ' +
+      '1hk153x0000f at that point, so its auto-snapshot carries that parentId; version 1 was ' +
+      'taken at the root and carries none.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
@@ -1201,6 +1202,7 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
         typeId: 'com.example/note@1',
         content: { title: 'title before restore' },
         updatedAt: '2024-01-04T00:00:00.000Z',
+        parentId: '1hk153x0000f',
       },
       {
         version: 1,

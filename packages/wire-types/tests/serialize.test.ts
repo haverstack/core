@@ -80,19 +80,21 @@ describe('serializeVersion', () => {
     expect(serializeVersion(version()).updatedAt).toBe('2024-01-01T00:00:00.000Z');
   });
 
-  // The three states a restore reads: a container, the root, and a
-  // snapshot claiming nothing. See docs/spec/versioning.md § Version history.
-  it('sends a root parentId as null rather than dropping the key', () => {
-    const w = serializeVersion(version({ parentId: null }));
-    expect('parentId' in w).toBe(true);
-    expect(w.parentId).toBeNull();
-  });
-
+  // A snapshot spells parentId the way a record does: absent is the root.
+  // See docs/spec/versioning.md § Version history.
   it('carries a container parentId', () => {
     expect(serializeVersion(version({ parentId: '1hk153x0000f' })).parentId).toBe('1hk153x0000f');
   });
 
-  it('omits parentId entirely when the snapshot carries none', () => {
+  it('omits parentId for a snapshot taken at the root', () => {
     expect('parentId' in serializeVersion(version())).toBe(false);
+  });
+
+  // parentId is unvalidated by design, so '' is a container id rather than
+  // a spelling of absence — it has to survive the trip.
+  it('keeps an empty-string parentId', () => {
+    const w = serializeVersion(version({ parentId: '' }));
+    expect('parentId' in w).toBe(true);
+    expect(w.parentId).toBe('');
   });
 });

@@ -799,7 +799,6 @@ describe('ScopedStack — versions', () => {
         typeId: NOTE,
         content: {},
         updatedAt: new Date(),
-        parentId: null,
       });
       const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
       expect(restored.parentId).toBeUndefined();

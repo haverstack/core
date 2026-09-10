@@ -1280,15 +1280,14 @@ describe('getVersions', () => {
     expect(versions[0].entityId).toBe('entity-owner-123');
   });
 
-  // Read for presence, not for a value: null is the root, and an absent
-  // key is a snapshot claiming nothing about containment — a foreign
-  // server's answer, which a restore must not read as "move to the root".
-  test('a null parentId parses as the root, not as an absent field', async () => {
+  // A snapshot spells the root the way a record does — by omission. A
+  // foreign server that sends the input spelling instead means the same
+  // thing, so it lands as absent rather than as a literal null.
+  test('a null parentId from a foreign server parses as the root', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: null }]));
     const [parsed] = await adapter.getVersions('rec-abc123');
-    expect('parentId' in parsed).toBe(true);
-    expect(parsed.parentId).toBeNull();
+    expect('parentId' in parsed).toBe(false);
   });
 
   test('an omitted parentId stays omitted', async () => {
@@ -1296,6 +1295,15 @@ describe('getVersions', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
     const [parsed] = await adapter.getVersions('rec-abc123');
     expect('parentId' in parsed).toBe(false);
+  });
+
+  // parentId is unvalidated by design, so '' is a container id a snapshot
+  // can legitimately carry — never a spelling of absence.
+  test('an empty-string parentId survives the parse', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: '' }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect(parsed.parentId).toBe('');
   });
 
   test('a container parentId parses through', async () => {

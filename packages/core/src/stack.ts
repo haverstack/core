@@ -1755,10 +1755,13 @@ export class Stack implements StackClient {
       updatedAt,
       content,
       version: 1,
-      ...(opts.parentId && { parentId: opts.parentId }),
-      ...(opts.entityId && { entityId: opts.entityId }),
-      ...(opts.appId && { appId: opts.appId }),
-      ...(opts.principalId && { principalId: opts.principalId }),
+      // Read for presence, not truthiness: these are unvalidated ids, so
+      // '' is a value to keep rather than a spelling of absence — the same
+      // distinction rowToRecord draws in the SQLite mappers.
+      ...(opts.parentId !== undefined && { parentId: opts.parentId }),
+      ...(opts.entityId !== undefined && { entityId: opts.entityId }),
+      ...(opts.appId !== undefined && { appId: opts.appId }),
+      ...(opts.principalId !== undefined && { principalId: opts.principalId }),
       // A create's actor is its author, so these are derived rather than
       // taken: stamping them here keeps "absent means an unscoped write"
       // true of version 1 as it is of every later version.
@@ -2260,7 +2263,8 @@ export class Stack implements StackClient {
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
    * stored typeId (not the record's current type), restores associations
-   * and `parentId`, and never restores permissions. See
+   * and `parentId` (absent on the snapshot is the root, so a restore
+   * always settles containment), and never restores permissions. See
    * docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
@@ -2315,9 +2319,10 @@ export class Stack implements StackClient {
     // setParent(), and the chain above that container may have moved since
     // the snapshot was taken.
     const previousParentId = existing.parentId ?? null;
-    const moves = target.parentId !== undefined && target.parentId !== previousParentId;
-    if (moves && target.parentId != null) {
-      await this.assertNoParentCycle(id, target.parentId);
+    const targetParentId = target.parentId ?? null;
+    const moves = targetParentId !== previousParentId;
+    if (moves && targetParentId !== null) {
+      await this.assertNoParentCycle(id, targetParentId);
     }
 
     const restored = await this.adapter.restoreVersion(id, version, {
@@ -3296,7 +3301,7 @@ export class Stack implements StackClient {
       ...(record.entityId && { entityId: record.entityId }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
-      parentId: record.parentId ?? null,
+      ...(record.parentId !== undefined && { parentId: record.parentId }),
       associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
@@ -4537,8 +4542,13 @@ export class ScopedStack implements StackClient {
             (target.content as Record<string, unknown>)[field] !==
             (record.content as Record<string, unknown>)[field],
         );
+        // Only a restore that moves the record *into* a container creates a
+        // reference. A snapshot at the root names nothing, and a parentId
+        // the restore would not change is not re-gated: the record is
+        // already there, so a content rollback is not refused over a move
+        // it isn't making.
         if (
-          target.parentId != null &&
+          target.parentId !== undefined &&
           target.parentId !== record.parentId &&
           !(await this.canReadReferent(target.parentId))
         ) {

@@ -73,10 +73,11 @@ export type WireType = {
 };
 
 /**
- * `parentId` is the one field here that is nullable rather than merely
- * optional: `null` is the root, and an absent key is a snapshot claiming
- * nothing about containment. A `WireRecord` needs no such spelling — it
- * describes a record that is somewhere, so absent alone means the root.
+ * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
+ * root. A snapshot is state, not an instruction, so it takes the same
+ * shape the record it describes takes — `null` is an input spelling
+ * (`PUT /records/:id/parent`, a `parentId=null` filter) and never appears
+ * on a response. See docs/spec/wire-format.md § Versions.
  */
 export type WireVersion = {
   version: number;
@@ -86,7 +87,7 @@ export type WireVersion = {
   entityId?: string;
   updatedBy?: string;
   updatedVia?: string;
-  parentId?: string | null;
+  parentId?: string;
   associations?: Association[];
   permissions?: Permission[];
 };

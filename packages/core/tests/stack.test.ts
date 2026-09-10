@@ -1408,12 +1408,22 @@ describe('Stack.restoreVersion — parentId', () => {
     expect(snapshot.parentId).toBe(box.id);
   });
 
-  test('a snapshot of a root record spells the root as null, not absence', async () => {
+  // A snapshot spells containment the way a record does — absent is the
+  // root — so `null` never appears on one.
+  test('a snapshot of a root record omits parentId', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.update(note.id, { text: 'edited' });
     const [snapshot] = await stack.getVersions(note.id);
-    expect(snapshot.parentId).toBeNull();
-    expect('parentId' in snapshot).toBe(true);
+    expect('parentId' in snapshot).toBe(false);
+  });
+
+  // parentId is unvalidated by design, so '' is a container id a snapshot
+  // has to carry rather than read as absence.
+  test('a snapshot keeps an empty-string parentId', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: '' });
+    await stack.update(note.id, { text: 'edited' });
+    const [snapshot] = await stack.getVersions(note.id);
+    expect(snapshot.parentId).toBe('');
   });
 
   test('restoring puts the record back in the container it left', async () => {
@@ -1454,9 +1464,10 @@ describe('Stack.restoreVersion — parentId', () => {
     expect(restored.parentId).toBe(box.id);
   });
 
-  // A snapshot that claims nothing about containment is what a foreign
-  // server or a hand-built saveVersion() produces; core never writes one.
-  test('a snapshot with no parentId key leaves the record where it sits', async () => {
+  // A snapshot always settles containment, so one with no parentId — a
+  // foreign server's, or a hand-built saveVersion() — restores the record
+  // to the root rather than leaving it where it sits.
+  test('a snapshot with no parentId key restores the record to the root', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await adapter.saveVersion(note.id, {
@@ -1467,7 +1478,26 @@ describe('Stack.restoreVersion — parentId', () => {
     });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'older' });
-    expect(restored.parentId).toBe(box.id);
+    expect(restored.parentId).toBeUndefined();
+  });
+
+  // ...and that counts as a move, so a subscription filtered on the origin
+  // container is told the record left it.
+  test('a restore to the root reaches a subscription filtered on the origin', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await adapter.saveVersion(note.id, {
+      version: 1,
+      typeId: NOTE_V1,
+      content: { text: 'older' },
+      updatedAt: new Date(),
+    });
+    const seen: { recordId: string; op: string }[] = [];
+    await stack.subscribe((c) => seen.push({ recordId: c.recordId, op: c.op }), {
+      filter: { parentId: box.id },
+    });
+    await stack.restoreVersion(note.id, 1);
+    expect(seen).toEqual([{ recordId: note.id, op: 'restore' }]);
   });
 
   // Putting a container back is an edge-adding site like setParent(): the

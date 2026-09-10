@@ -192,12 +192,13 @@ export type RecordVersion = {
   /** The principal behind that mutation, when it isn't `updatedBy`. */
   updatedVia?: EntityId;
   /**
-   * The container the record sat in, `null` for the root. Absent means the
-   * snapshot claims nothing about containment, and a restore leaves the
-   * record where it is — the same three states `associations` carries.
+   * The container the record sat in, absent for the root — the same
+   * spelling `StackRecord` uses, because a snapshot states where the
+   * record *was*, not an instruction to apply. `null` is an input
+   * spelling (`setParent()`, `RecordFilter`) and never appears here.
    * See docs/spec/versioning.md § Version history.
    */
-  parentId?: RecordId | null;
+  parentId?: RecordId;
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -958,9 +959,14 @@ export interface StackRecordAdapter {
    */
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
   /**
-   * Restore a record to a previous version's content (and associations,
-   * when the snapshot has them). Never restores permissions. Bumps version
-   * internally. Throws StackNotFoundError if the version doesn't exist.
+   * Restore a record to a previous version's content, `parentId` (absent
+   * on the snapshot means the root, so a restore always settles
+   * containment), and associations, when the snapshot has them. Never
+   * restores permissions. Bumps version internally. Throws
+   * StackNotFoundError if the version doesn't exist.
+   *
+   * The acyclicity check on a restore that moves the record belongs to the
+   * caller (Stack.restoreVersion()), exactly as it does for setParent().
    */
   restoreVersion(
     id: RecordId,
