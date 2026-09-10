@@ -540,6 +540,50 @@ describe('filtering is exact', () => {
     expect(seen.at(-1)).toMatchObject({ kind: 'changed', op: 'reparent' });
   });
 
+  // Undoing a move is a move: a restore that puts a different container
+  // back is matched against both sides exactly as a reparent is.
+  test('a restore that moves the record reaches the container it left', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    await stack.setParent(note.id, to.id);
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: to.id } });
+
+    await stack.restoreVersion(note.id, 1);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.op).toBe('restore');
+    expect(seen[0]!.parentId).toBe(from.id);
+  });
+
+  test('a restore that moves the record reaches the container it arrived in', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    await stack.setParent(note.id, to.id);
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: from.id } });
+
+    await stack.restoreVersion(note.id, 1);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.parentId).toBe(from.id);
+  });
+
+  test('a restore that leaves the record where it is reaches only its container', async () => {
+    const from = await stack.create(NOTE, { text: 'from' });
+    const to = await stack.create(NOTE, { text: 'to' });
+    const note = await stack.create(NOTE, { text: 'note' }, { parentId: to.id });
+    await stack.update(note.id, { text: 'edited' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { parentId: from.id } });
+
+    await stack.restoreVersion(note.id, 1);
+
+    expect(seen).toHaveLength(0);
+  });
+
   test('entityId filters on the record author, not the actor', async () => {
     await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
     const authored = await stack.asEntity(AUTHOR).create(NOTE, { text: 'a' });

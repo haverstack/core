@@ -560,6 +560,7 @@ describe('getVersion fixtures', () => {
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
       expect(result?.permissions).toBeUndefined();
+      expect(result?.parentId).toBe(fixture.responseBody!.parentId);
     });
   }
 });
@@ -598,6 +599,7 @@ describe('restoreVersion fixtures', () => {
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
       expect(result.content).toEqual(fixture.responseBody!.content);
+      expect(result.parentId).toBe(fixture.responseBody!.parentId);
     });
   }
 });

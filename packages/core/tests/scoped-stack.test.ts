@@ -716,6 +716,108 @@ describe('ScopedStack — versions', () => {
         stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
       ).rejects.toThrow(StackPermissionError);
     });
+
+    test('rejects restoring a parentId naming a container the requester cannot read', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
+    });
+
+    test('allows restoring a parentId naming a container the requester can read', async () => {
+      const box = await adapter.createRecord(
+        makeRecord({
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        }),
+      );
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.parentId).toBe(box.id);
+    });
+
+    // No reference is created by a restore that doesn't move the record,
+    // so rolling content back is not refused on the strength of a
+    // container the record is already sitting in.
+    test('a parentId the restore would not change is not re-gated', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          parentId: box.id,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: { text: 'older' },
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.content).toEqual({ text: 'older' });
+    });
+
+    // A restore to the root reaches no container, so there is nothing to
+    // gate — the same way setParent(id, null) is ungated.
+    test('restoring to the root needs no read on anything', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          parentId: box.id,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: null,
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.parentId).toBeUndefined();
+    });
+
+    test('the owner is exempt from the parentId gate too', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(makeRecord({ version: 2 }));
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
+      expect(restored.parentId).toBe(box.id);
+    });
   });
 });
 

@@ -392,7 +392,9 @@ POST /records/:id/restore/:version    — restore a version (creates new version
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Snapshot `permissions` are additionally omitted from the response body for any non-owner requester, including a write-holder who passes the gate. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records).
+A snapshot body carries `parentId` as a **nullable** field, unlike the Record body above: `null` is the root, and an absent key is a snapshot claiming nothing about containment, which restores to no move. A server that omits it from its snapshots makes every restore leave the record where it sits.
+
+`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals `PUT .../parent` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **That same exhaustive list is what the [change feed](./change-feed.md) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
 

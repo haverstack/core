@@ -1555,6 +1555,73 @@ describe('versions', () => {
     expect(retrieved?.entityId).toBe('entity-123');
   });
 
+  // NULL in the parent_id column is two different facts, so the row
+  // carries a flag beside it. See sqlite-shared/src/schema.ts.
+  test('a snapshot distinguishes a root parentId from an absent one', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const base = { typeId: record.typeId, content: {}, updatedAt: new Date('2024-01-01') };
+    await adapter.saveVersion(record.id, { ...base, version: 1, parentId: null });
+    await adapter.saveVersion(record.id, { ...base, version: 2 });
+    await adapter.saveVersion(record.id, { ...base, version: 3, parentId: 'box-1' });
+
+    expect((await adapter.getVersion(record.id, 1))?.parentId).toBeNull();
+    expect((await adapter.getVersion(record.id, 2))?.parentId).toBeUndefined();
+    expect((await adapter.getVersion(record.id, 3))?.parentId).toBe('box-1');
+  });
+
+  test('restoreVersion writes the snapshot parentId back', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ version: 2 });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date('2024-01-01'),
+      parentId: box.id,
+    });
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.parentId).toBe(box.id);
+    expect((await adapter.queryRecords({ filter: { parentId: box.id } })).records).toHaveLength(1);
+  });
+
+  test('restoreVersion clears parentId for a snapshot taken at the root', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ version: 2, parentId: box.id });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date('2024-01-01'),
+      parentId: null,
+    });
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.parentId).toBeUndefined();
+  });
+
+  test('restoreVersion leaves parentId alone for a snapshot that carries none', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ version: 2, parentId: box.id });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: new Date('2024-01-01'),
+    });
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.parentId).toBe(box.id);
+  });
+
   test('saveVersion throws on a (record, version) collision instead of silently dropping the snapshot', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();

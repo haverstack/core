@@ -79,4 +79,20 @@ describe('serializeVersion', () => {
   it('encodes updatedAt as an ISO string', () => {
     expect(serializeVersion(version()).updatedAt).toBe('2024-01-01T00:00:00.000Z');
   });
+
+  // The three states a restore reads: a container, the root, and a
+  // snapshot claiming nothing. See docs/spec/versioning.md § Version history.
+  it('sends a root parentId as null rather than dropping the key', () => {
+    const w = serializeVersion(version({ parentId: null }));
+    expect('parentId' in w).toBe(true);
+    expect(w.parentId).toBeNull();
+  });
+
+  it('carries a container parentId', () => {
+    expect(serializeVersion(version({ parentId: '1hk153x0000f' })).parentId).toBe('1hk153x0000f');
+  });
+
+  it('omits parentId entirely when the snapshot carries none', () => {
+    expect('parentId' in serializeVersion(version())).toBe(false);
+  });
 });

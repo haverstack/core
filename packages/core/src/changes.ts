@@ -39,12 +39,13 @@ export type EmittedChange = {
    */
   record: StackRecord;
   /**
-   * The container a `reparent` moved the record out of, `null` for the
-   * root. Emitter-side only, like `record`: it exists so a `parentId`
-   * filter can answer for the origin as well as the destination, and no
-   * frame carries it — a subscriber compares the frame's `parentId` to
-   * its own filter to tell an arrival from a departure. Absent on every
-   * other op. See docs/spec/events.md § The reparent transition.
+   * The container a move took the record out of, `null` for the root.
+   * Emitter-side only, like `record`: it exists so a `parentId` filter can
+   * answer for the origin as well as the destination, and no frame carries
+   * it — a subscriber compares the frame's `parentId` to its own filter to
+   * tell an arrival from a departure. Present on `reparent`, and on a
+   * `restore` that put a different container back; absent wherever the
+   * record did not move. See docs/spec/events.md § The reparent transition.
    */
   previousParentId?: string | null;
 };
@@ -73,9 +74,10 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
     const parentId = record.parentId ?? null;
     // A move is announced to both containers it concerns: the record's
     // post-change state answers for the destination, and the origin has
-    // only `previousParentId` to be found by. See docs/spec/events.md
-    // § The reparent transition.
-    const origin = change.op === 'reparent' ? (emitted.previousParentId ?? null) : parentId;
+    // only `previousParentId` to be found by. Which ops move a record is
+    // the emitter's to say — a null origin is a move off the root, not an
+    // absent one. See docs/spec/events.md § The reparent transition.
+    const origin = emitted.previousParentId === undefined ? parentId : emitted.previousParentId;
     if (parentId !== filter.parentId && origin !== filter.parentId) return false;
   }
 

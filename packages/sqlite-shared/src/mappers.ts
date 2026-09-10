@@ -108,6 +108,9 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   if (row.entity_id) v.entityId = row.entity_id as string;
   if (row.updated_by) v.updatedBy = row.updated_by as string;
   if (row.updated_via) v.updatedVia = row.updated_via as string;
+  // A stored NULL parent_id is the root only when the snapshot claimed the
+  // field at all; see the versions table in schema.ts.
+  if (row.has_parent_id) v.parentId = (row.parent_id as string | null) ?? null;
   if (row.associations) v.associations = JSON.parse(row.associations as string);
   if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
   return v;

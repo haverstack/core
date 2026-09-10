@@ -72,6 +72,12 @@ export type WireType = {
   createdAt: string;
 };
 
+/**
+ * `parentId` is the one field here that is nullable rather than merely
+ * optional: `null` is the root, and an absent key is a snapshot claiming
+ * nothing about containment. A `WireRecord` needs no such spelling — it
+ * describes a record that is somewhere, so absent alone means the root.
+ */
 export type WireVersion = {
   version: number;
   typeId: string;
@@ -80,6 +86,7 @@ export type WireVersion = {
   entityId?: string;
   updatedBy?: string;
   updatedVia?: string;
+  parentId?: string | null;
   associations?: Association[];
   permissions?: Permission[];
 };
@@ -130,6 +137,7 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.entityId !== undefined) w.entityId = v.entityId;
   if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
+  if (v.parentId !== undefined) w.parentId = v.parentId;
   if (v.associations !== undefined) w.associations = v.associations;
   if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;

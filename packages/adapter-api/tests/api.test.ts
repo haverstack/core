@@ -1279,6 +1279,31 @@ describe('getVersions', () => {
     expect(versions[0].updatedAt).toBeInstanceOf(Date);
     expect(versions[0].entityId).toBe('entity-owner-123');
   });
+
+  // Read for presence, not for a value: null is the root, and an absent
+  // key is a snapshot claiming nothing about containment — a foreign
+  // server's answer, which a restore must not read as "move to the root".
+  test('a null parentId parses as the root, not as an absent field', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: null }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect('parentId' in parsed).toBe(true);
+    expect(parsed.parentId).toBeNull();
+  });
+
+  test('an omitted parentId stays omitted', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect('parentId' in parsed).toBe(false);
+  });
+
+  test('a container parentId parses through', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: 'rec-box' }]));
+    const [parsed] = await adapter.getVersions('rec-abc123');
+    expect(parsed.parentId).toBe('rec-box');
+  });
 });
 
 describe('getVersion', () => {

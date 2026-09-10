@@ -2078,10 +2078,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Refuse an edge that would make a record its own ancestor — the two
-   * sites that add one, setParent() and a create naming both its own id
-   * and a parent. Nothing downstream (a generator deriving a page path, a
-   * folder view) is written to survive a cycle.
+   * Refuse an edge that would make a record its own ancestor — asked at
+   * every site that adds one: setParent(), a restore putting a container
+   * back, and a create naming both its own id and a parent. Nothing
+   * downstream (a generator deriving a page path, a folder view) is
+   * written to survive a cycle.
    *
    * Walks with the unscoped adapter deliberately: a walk that skipped the
    * links a requester cannot read would let a cycle be assembled through
@@ -2258,9 +2259,9 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
-   * stored typeId (not the record's current type), restores associations,
-   * and never restores permissions. See docs/spec/versioning.md § Restore
-   * semantics.
+   * stored typeId (not the record's current type), restores associations
+   * and `parentId`, and never restores permissions. See
+   * docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -2310,13 +2311,22 @@ export class Stack implements StackClient {
       );
     }
 
+    // A restore that puts a container back is an edge-adding site like
+    // setParent(), and the chain above that container may have moved since
+    // the snapshot was taken.
+    const previousParentId = existing.parentId ?? null;
+    const moves = target.parentId !== undefined && target.parentId !== previousParentId;
+    if (moves && target.parentId != null) {
+      await this.assertNoParentCycle(id, target.parentId);
+    }
+
     const restored = await this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
-    this.emitChange('restore', restored);
+    this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
   }
 
@@ -3272,8 +3282,9 @@ export class Stack implements StackClient {
   /**
    * Snapshot of a record's prior state, passed with the mutating adapter
    * call so snapshot and mutation land in one atomic write. `associations`
-   * is always present ([] when empty) so restore can distinguish "cleared"
-   * from a snapshot that omits the key entirely ("leave as-is"). See
+   * and `parentId` are always present (`[]` and `null` where the record has
+   * neither) so restore can distinguish "cleared" and "at the root" from a
+   * snapshot that omits the key entirely ("leave as-is"). See
    * docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
@@ -3285,6 +3296,7 @@ export class Stack implements StackClient {
       ...(record.entityId && { entityId: record.entityId }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
+      parentId: record.parentId ?? null,
       associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
@@ -4502,9 +4514,11 @@ export class ScopedStack implements StackClient {
   /**
    * Re-runs the reference-creation checks against the snapshot, so a
    * restore can't re-convey access to a file or record the subject can no
-   * longer reach today. Only the owner acting alone is exempt: under
-   * delegation the checks resolve against the subject, which is whose reach
-   * the restore would widen. See docs/spec/versioning.md § Restore semantics.
+   * longer reach today — the snapshot's `parentId` among them, gated
+   * exactly as setParent() gates a destination named directly. Only the
+   * owner acting alone is exempt: under delegation the checks resolve
+   * against the subject, which is whose reach the restore would widen.
+   * See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -4523,6 +4537,13 @@ export class ScopedStack implements StackClient {
             (target.content as Record<string, unknown>)[field] !==
             (record.content as Record<string, unknown>)[field],
         );
+        if (
+          target.parentId != null &&
+          target.parentId !== record.parentId &&
+          !(await this.canReadReferent(target.parentId))
+        ) {
+          throw new StackPermissionError();
+        }
         await this.requireFileRefAccess(target.typeId, target.content);
         for (const association of target.associations ?? []) {
           await this.requireAssociationAccess(target.typeId, association);

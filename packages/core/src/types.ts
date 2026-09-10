@@ -191,6 +191,13 @@ export type RecordVersion = {
   updatedBy?: EntityId;
   /** The principal behind that mutation, when it isn't `updatedBy`. */
   updatedVia?: EntityId;
+  /**
+   * The container the record sat in, `null` for the root. Absent means the
+   * snapshot claims nothing about containment, and a restore leaves the
+   * record where it is — the same three states `associations` carries.
+   * See docs/spec/versioning.md § Version history.
+   */
+  parentId?: RecordId | null;
   associations?: Association[];
   permissions?: Permission[];
 };

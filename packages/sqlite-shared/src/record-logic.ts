@@ -434,17 +434,23 @@ export class SharedSqlRecordLogic {
     const target = await this.getVersion(id, version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
 
+    // A snapshot that claims no parentId leaves the record where it sits,
+    // so the column is written only when the snapshot carries the field.
+    const parentClause = target.parentId === undefined ? '' : ', parent_id = ?';
+    const parentParams = target.parentId === undefined ? [] : [target.parentId];
+
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       fts5Strategy.remove(this.exec, id);
       this.exec.run(
-        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
+        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ?${parentClause} WHERE id = ?`,
         [
           target.typeId,
           JSON.stringify(target.content),
           toMs(new Date()),
           opts.updatedBy ?? null,
           opts.updatedVia ?? null,
+          ...parentParams,
           id,
         ],
       );
@@ -612,8 +618,8 @@ export class SharedSqlRecordLogic {
       this.exec.run(
         `INSERT INTO versions
           (record_id, version, type_id, content, updated_at, entity_id,
-           updated_by, updated_via, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           updated_by, updated_via, parent_id, has_parent_id, associations, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           version.version,
@@ -623,6 +629,8 @@ export class SharedSqlRecordLogic {
           version.entityId ?? null,
           version.updatedBy ?? null,
           version.updatedVia ?? null,
+          version.parentId ?? null,
+          version.parentId === undefined ? 0 : 1,
           version.associations ? JSON.stringify(version.associations) : null,
           version.permissions ? JSON.stringify(version.permissions) : null,
         ],

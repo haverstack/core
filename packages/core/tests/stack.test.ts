@@ -1395,6 +1395,102 @@ describe('Stack.setParent', () => {
 });
 
 // -------------------------------------------------------
+// A move rolls back like every other mutation.
+// See docs/spec/versioning.md § Restore semantics.
+// -------------------------------------------------------
+
+describe('Stack.restoreVersion — parentId', () => {
+  test('a snapshot records the container the record sat in', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.setParent(note.id, null);
+    const [snapshot] = await stack.getVersions(note.id);
+    expect(snapshot.parentId).toBe(box.id);
+  });
+
+  test('a snapshot of a root record spells the root as null, not absence', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.update(note.id, { text: 'edited' });
+    const [snapshot] = await stack.getVersions(note.id);
+    expect(snapshot.parentId).toBeNull();
+    expect('parentId' in snapshot).toBe(true);
+  });
+
+  test('restoring puts the record back in the container it left', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const other = await stack.create(NOTE_V1, { text: 'other' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.setParent(note.id, other.id);
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.parentId).toBe(box.id);
+  });
+
+  test('restoring a snapshot taken at the root moves the record back to the root', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.setParent(note.id, box.id);
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.parentId).toBeUndefined();
+  });
+
+  test('a restore that moves the record is itself restorable', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.setParent(note.id, null);
+    await stack.restoreVersion(note.id, 1);
+    const back = await stack.restoreVersion(note.id, 2);
+    expect(back.parentId).toBeUndefined();
+  });
+
+  test('restoring leaves content and associations rolled back alongside the move', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.associate(note.id, { kind: 'tag', label: 'pinned' });
+    await stack.update(note.id, { text: 'edited' });
+    await stack.setParent(note.id, null);
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.content).toEqual({ text: 'note' });
+    expect(restored.associations).toBeUndefined();
+    expect(restored.parentId).toBe(box.id);
+  });
+
+  // A snapshot that claims nothing about containment is what a foreign
+  // server or a hand-built saveVersion() produces; core never writes one.
+  test('a snapshot with no parentId key leaves the record where it sits', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await adapter.saveVersion(note.id, {
+      version: 1,
+      typeId: NOTE_V1,
+      content: { text: 'older' },
+      updatedAt: new Date(),
+    });
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.content).toEqual({ text: 'older' });
+    expect(restored.parentId).toBe(box.id);
+  });
+
+  // Putting a container back is an edge-adding site like setParent(): the
+  // chain above it may have moved since the snapshot was taken.
+  test('a restore that would make the record its own ancestor is refused', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.setParent(note.id, null);
+    await stack.setParent(box.id, note.id);
+    await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a snapshot naming a since-deleted container restores anyway', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.setParent(note.id, null);
+    await stack.delete(box.id, { hard: true });
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.parentId).toBe(box.id);
+  });
+});
+
+// -------------------------------------------------------
 // Records at rest: get()/query() are stored-version by default,
 // migrateAll() is the only thing that ever changes disk state.
 // -------------------------------------------------------

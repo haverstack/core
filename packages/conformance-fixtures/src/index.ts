@@ -1151,6 +1151,25 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
       typeId: 'com.example/note@1',
       content: { title: 'original title' },
       updatedAt: '2024-01-01T00:00:00.000Z',
+      parentId: null,
+    },
+  },
+  {
+    name: 'get-version-carries-the-container-the-snapshot-was-taken-in',
+    description:
+      'A snapshot records where the record sat, so a restore can put it back. The field is ' +
+      'nullable rather than merely optional: null is the root, and an absent key is a ' +
+      'snapshot claiming nothing about containment, which restores to no move. Assumes the ' +
+      'record was in container 1hk153x0000f at version 2.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions/2',
+    responseStatus: 200,
+    responseBody: {
+      version: 2,
+      typeId: 'com.example/note@1',
+      content: { title: 'title before restore' },
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      parentId: '1hk153x0000f',
     },
   },
 ];
@@ -1233,8 +1252,9 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     name: 'restore-version',
     description:
       "POST /records/:id/restore/:version creates a new version from an old snapshot's " +
-      'content (and associations, if present) — never permissions. No request body: the ' +
-      'server holds the snapshot already.',
+      'content, associations and parentId — never permissions. No request body: the ' +
+      'server holds the snapshot already. Version 1 was taken at the root, so the restored ' +
+      'record comes back with parentId absent.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/1',
     responseStatus: 200,
@@ -1245,6 +1265,27 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
       updatedAt: '2024-01-04T00:00:00.000Z',
       content: { title: 'original title' },
       version: 4,
+    },
+  },
+  {
+    name: 'restore-version-puts-the-record-back-in-its-old-container',
+    description:
+      'A restore undoes a move like any other mutation: the snapshot at version 2 was taken ' +
+      'in 1hk153x0000f, so restoring it returns the record carrying that parentId, whatever ' +
+      'container it sits in now. A restore that reaches a container the requester cannot ' +
+      'read answers 403, the same gate PUT /records/:id/parent applies to a destination ' +
+      'named directly. See docs/spec/versioning.md § Restore semantics.',
+    method: 'POST',
+    path: '/records/1hk153x00001/restore/2',
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-04T00:00:00.000Z',
+      content: { title: 'title before restore' },
+      version: 4,
+      parentId: '1hk153x0000f',
     },
   },
 ];
