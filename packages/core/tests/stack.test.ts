@@ -22,7 +22,7 @@ import {
   IdGenerationError,
 } from '../src/id.js';
 import type { TypeSchema } from '../src/types.js';
-import { RESERVED_CONTENT_KEYS } from '../src/validate.js';
+import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
 import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
@@ -4059,28 +4059,52 @@ describe('content field names', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('defineType() refuses a schema declaring a field no filter could name', async () => {
+  // Every reserved character, at every shape the declared-name walk has to
+  // reach. Driven off the constant rather than a copy of it, so reserving
+  // another character extends this rather than quietly leaving it behind —
+  // and so the walk's recursion through `items` and `properties` is pinned
+  // at more than the single array-of-objects case.
+  const nameShapes: Record<string, (key: string) => TypeSchema> = {
+    'top level': (key) => ({ [key]: { kind: 'string' } }),
+    'nested object': (key) => ({
+      outer: { kind: 'object', properties: { [key]: { kind: 'string' } } },
+    }),
+    'array of objects': (key) => ({
+      list: { kind: 'array', items: { kind: 'object', properties: { [key]: { kind: 'string' } } } },
+    }),
+    'array of arrays': (key) => ({
+      grid: {
+        kind: 'array',
+        items: {
+          kind: 'array',
+          items: { kind: 'object', properties: { [key]: { kind: 'string' } } },
+        },
+      },
+    }),
+    'object within an object': (key) => ({
+      outer: {
+        kind: 'object',
+        properties: { inner: { kind: 'object', properties: { [key]: { kind: 'string' } } } },
+      },
+    }),
+  };
+
+  test.each(
+    Object.entries(nameShapes).flatMap(([shape, build]) =>
+      CONTENT_KEY_PATH_METACHARACTERS.map((char) => [char, shape, build] as const),
+    ),
+  )('defineType() refuses a declared name containing %s at the %s', async (char, _shape, build) => {
     await expect(
-      stack.defineType('com.example.test/dotted@1', 'Dotted', {
-        'a.b': { kind: 'string' },
-      }),
+      stack.defineType('com.example.test/named@1', 'Named', build(`a${char}b`)),
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('defineType() checks nested object properties as well', async () => {
-    await expect(
-      stack.defineType('com.example.test/nested@1', 'Nested', {
-        outer: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
-      }),
-    ).rejects.toThrow(StackValidationError);
-    await expect(
-      stack.defineType('com.example.test/arr@1', 'Arr', {
-        items: {
-          kind: 'array',
-          items: { kind: 'object', properties: { 'a.b': { kind: 'string' } } },
-        },
-      }),
-    ).rejects.toThrow(StackValidationError);
+  test('a declared name at each of those shapes is otherwise fine', async () => {
+    for (const [shape, build] of Object.entries(nameShapes)) {
+      await expect(
+        stack.defineType(`com.example.test/ok-${shape.replace(/ /g, '-')}@1`, 'Ok', build('plain')),
+      ).resolves.toBeDefined();
+    }
   });
 
   test('ordinary names, including unicode and reverse-DNS-ish ones, still pass', async () => {
