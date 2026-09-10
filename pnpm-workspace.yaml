@@ -11,3 +11,15 @@ allowBuilds:
 # directly for anything version-sensitive.
 overrides:
   '@cloudflare/workers-types': 5.20260817.1
+  # Security overrides for vulnerable transitive dependencies whose direct
+  # parents pin them below the patched version. Both parents are already at
+  # their latest release, so there is nothing to upgrade to upstream yet.
+  # Drop each entry once the parent ships a release that resolves the fix
+  # on its own.
+  #
+  # tsup 8.5.1 depends on esbuild ^0.27.0; GHSA-g7r4-m6w7-qqqr is fixed in
+  # 0.28.1. Build-time only.
+  esbuild: 0.28.2
+  # miniflare pins sharp to exactly 0.35.2; GHSA-rgj7-g3m4-5g8c (libheif
+  # RCE) is fixed in 0.35.4. Test-time only, via @cloudflare/vitest-pool-workers.
+  sharp: 0.35.4
