@@ -90,8 +90,9 @@ describe('serializeVersion', () => {
     expect('parentId' in serializeVersion(version())).toBe(false);
   });
 
-  // parentId is unvalidated by design, so '' is a container id rather than
-  // a spelling of absence — it has to survive the trip.
+  // Serialization carries what it is given — Stack is where a caller-named
+  // parentId is validated — so '' has to survive the trip rather than be
+  // read as a spelling of absence.
   it('keeps an empty-string parentId', () => {
     const w = serializeVersion(version({ parentId: '' }));
     expect('parentId' in w).toBe(true);

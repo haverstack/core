@@ -1297,8 +1297,9 @@ describe('getVersions', () => {
     expect('parentId' in parsed).toBe(false);
   });
 
-  // parentId is unvalidated by design, so '' is a container id a snapshot
-  // can legitimately carry — never a spelling of absence.
+  // Validation lives in Stack, not on the wire: a foreign server can send
+  // anything, and the parse must carry it through rather than read '' as a
+  // spelling of absence.
   test('an empty-string parentId survives the parse', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: '' }]));

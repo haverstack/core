@@ -684,6 +684,10 @@ describe('error response fixtures', () => {
         if (fixture.method === 'GET' && fixture.path.endsWith('/versions')) {
           return adapter.getVersions(idFromPath(fixture.path));
         }
+        if (fixture.method === 'PUT' && fixture.path.endsWith('/parent')) {
+          const body = fixture.requestBody as { parentId: string | null };
+          return adapter.setParent(idFromPath(fixture.path), body.parentId);
+        }
         if (fixture.method === 'PUT' && fixture.path.endsWith('/permissions')) {
           const body = fixture.requestBody as { permissions: unknown[] };
           return adapter.setPermissions(idFromPath(fixture.path), body.permissions as never);

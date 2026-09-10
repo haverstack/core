@@ -1496,6 +1496,44 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: { error: { code: 'conflict', message: 'Record "1hk153x00001" already exists.' } },
   },
   {
+    name: 'error-conflict-parent-does-not-exist',
+    description:
+      'PUT /records/:id/parent naming a container that does not exist returns 409 with code ' +
+      '"conflict". A parentId a caller names has to resolve; POST /records with a parentId is ' +
+      'refused the same way. Restore is the exception — see ' +
+      'restore-version-puts-the-record-back-in-its-old-container.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
+    requestBody: { parentId: '1hk153xffffz' },
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message:
+          'Cannot parent record "1hk153x00001" to "1hk153xffffz": no such record. A container ' +
+          'has to exist when it is named.',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-malformed-parent-id',
+    description:
+      'A parentId that is not a well-formed record id returns 400 with code "bad_request", ' +
+      'checked before existence so the answer names what is wrong rather than reporting a ' +
+      'lookup that could never match. The empty string is one of these, not a spelling of the ' +
+      'root — the root is `null` on this endpoint.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
+    requestBody: { parentId: '' },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid parentId "": expected 12 lowercase Crockford base-32 characters.',
+      },
+    },
+  },
+  {
     name: 'error-validation-failed',
     description:
       'PATCH content that fails the target type schema returns 422 with code "validation" and ' +

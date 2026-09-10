@@ -1338,23 +1338,29 @@ describe('Stack.setParent', () => {
   });
 
   // A create supplying both id and parentId is the second edge-adding
-  // site: existing records may already point at the id it names.
+  // site: existing records may already point at the id it names. Since
+  // Stack refuses a parentId that names nothing, the chain it has to walk
+  // can only have been built outside that gate — by an adapter write, or by
+  // a restore, which is exempt.
   test('a create naming its own id under a descendant is refused', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const minted = idWithTimestamp(Date.now());
-    await stack.setParent(a.id, minted);
+    // Straight to the adapter: it holds no opinion on references, so this
+    // plants the dangling parent Stack.setParent() would now refuse.
+    await adapter.setParent(a.id, minted);
     await expect(
       stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
     ).rejects.toThrow(StackConflictError);
   });
 
-  test('two creates with mutually-referencing minted ids are refused', async () => {
+  // The forward-reference route is closed: a parent has to exist when it is
+  // named, so two creates can no longer point at each other's minted ids.
+  test('a create naming a not-yet-created parent is refused', async () => {
     const first = idWithTimestamp(Date.now());
     const second = idWithTimestamp(Date.now() + 60_000);
-    await stack.create(NOTE_V1, { text: 'x' }, { id: first, parentId: second });
     await expect(
-      stack.create(NOTE_V1, { text: 'y' }, { id: second, parentId: first }),
+      stack.create(NOTE_V1, { text: 'x' }, { id: first, parentId: second }),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -1365,8 +1371,9 @@ describe('Stack.setParent', () => {
     ).rejects.toThrow(StackConflictError);
   });
 
-  // A generated id names nothing, so this pays no reads and never refuses.
-  test('a create with a generated id under any parent is allowed', async () => {
+  // A generated id names nothing, so this skips the cycle walk — though it
+  // still pays the one read the reference check owes.
+  test('a create with a generated id under an existing parent is allowed', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     expect(b.parentId).toBe(a.id);
@@ -1379,10 +1386,43 @@ describe('Stack.setParent', () => {
     expect(made.parentId).toBe(box.id);
   });
 
-  test('parenting to a missing record is allowed, as at create', async () => {
+  test('parenting to a record that does not exist is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.setParent(note.id, 'nonexistent');
-    expect(moved.parentId).toBe('nonexistent');
+    const gone = idWithTimestamp(Date.now());
+    await expect(stack.setParent(note.id, gone)).rejects.toThrow(StackConflictError);
+  });
+
+  test('creating under a record that does not exist is refused', async () => {
+    const gone = idWithTimestamp(Date.now());
+    await expect(stack.create(NOTE_V1, { text: 'note' }, { parentId: gone })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  // Format first, so a malformed destination reports what is wrong with it
+  // rather than failing as a read that could never match.
+  test.each([
+    ['an empty string', ''],
+    ['a non-Crockford id', 'NOT-AN-ID'],
+    ['a reserved id', '_config'],
+  ])('parenting to %s is refused as malformed', async (_name, bad) => {
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await expect(stack.setParent(note.id, bad)).rejects.toThrow(StackQueryError);
+    await expect(stack.create(NOTE_V1, { text: 'other' }, { parentId: bad })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  // The walk bounds work rather than refusing what it cannot finish, so a
+  // chain past the cap still accepts moves.
+  test('a chain deeper than the walk cap can still be built and moved into', async () => {
+    let previous = await stack.create(NOTE_V1, { text: 'root' });
+    for (let i = 0; i < 70; i++) {
+      previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
+    }
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.setParent(note.id, previous.id);
+    expect(moved.parentId).toBe(previous.id);
   });
 
   test('a parentId filter finds the record at its new home', async () => {
@@ -1417,13 +1457,12 @@ describe('Stack.restoreVersion — parentId', () => {
     expect('parentId' in snapshot).toBe(false);
   });
 
-  // parentId is unvalidated by design, so '' is a container id a snapshot
-  // has to carry rather than read as absence.
-  test('a snapshot keeps an empty-string parentId', async () => {
-    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: '' });
+  test('a snapshot carries the container the record sat in', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.update(note.id, { text: 'edited' });
     const [snapshot] = await stack.getVersions(note.id);
-    expect(snapshot.parentId).toBe('');
+    expect(snapshot.parentId).toBe(box.id);
   });
 
   test('restoring puts the record back in the container it left', async () => {
@@ -1510,6 +1549,9 @@ describe('Stack.restoreVersion — parentId', () => {
     await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(StackConflictError);
   });
 
+  // Restore is exempt from the reference check setParent() pays: it is
+  // history being put back, not a caller naming a destination, and refusing
+  // would let an unrelated deletion cost the record its content rollback.
   test('a snapshot naming a since-deleted container restores anyway', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
@@ -1517,6 +1559,17 @@ describe('Stack.restoreVersion — parentId', () => {
     await stack.delete(box.id, { hard: true });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBe(box.id);
+    // ...and the content came back with it, which is the point.
+    expect(restored.content).toEqual({ text: 'note' });
+  });
+
+  // The contrast that makes the exemption legible: naming the same gone
+  // container directly is refused.
+  test('setParent to that same deleted container is refused', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.delete(box.id, { hard: true });
+    await expect(stack.setParent(note.id, box.id)).rejects.toThrow(StackConflictError);
   });
 });
 

@@ -994,6 +994,25 @@ const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
  * pagination cursor a StackQueryError rather than a content-validation
  * failure. See StackQueryError's doc comment.
  */
+/**
+ * The same format rule applied to a `parentId` a caller names. Separate
+ * from validateRecordId() only for its message: the id under discussion is
+ * the destination, not the record being written, and a shared message would
+ * report the wrong one. See docs/spec/data-model.md § Reparenting.
+ */
+function validateParentId(parentId: string): void {
+  if (parentId.startsWith(RESERVED_ID_PREFIX)) {
+    throw new StackQueryError(
+      `Invalid parentId "${parentId}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
+    );
+  }
+  if (!isValidIdFormat(parentId)) {
+    throw new StackQueryError(
+      `Invalid parentId "${parentId}": expected 12 lowercase Crockford base-32 characters.`,
+    );
+  }
+}
+
 function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
     throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
@@ -1724,8 +1743,8 @@ export class Stack implements StackClient {
       // A generated id names nothing, so a create under a parent cannot
       // close a loop. A caller-supplied one can: existing records may
       // already point at it, and the chain above the parent can lead back
-      // to it. Asked only for that combination, so an ordinary create pays
-      // no reads. See docs/spec/data-model.md § Reparenting.
+      // to it — so the walk is asked only for that combination.
+      // See docs/spec/data-model.md § Reparenting.
       if (opts.parentId !== undefined) await this.assertNoParentCycle(opts.id, opts.parentId);
     }
 
@@ -1748,6 +1767,12 @@ export class Stack implements StackClient {
       (opts.createdAt !== undefined
         ? generateIdForTimestamp(createdAt.getTime())
         : generateId(createdAt.getTime()));
+
+    // Every create naming a parent owes the reference check, whether or not
+    // it supplied an id: a destination a caller names has to be one that
+    // exists. This is the read an ordinary create used to skip.
+    if (opts.parentId !== undefined) await this.assertParentExists(id, opts.parentId);
+
     const record: StackRecord = {
       id,
       typeId,
@@ -1755,9 +1780,11 @@ export class Stack implements StackClient {
       updatedAt,
       content,
       version: 1,
-      // Read for presence, not truthiness: these are unvalidated ids, so
-      // '' is a value to keep rather than a spelling of absence — the same
-      // distinction rowToRecord draws in the SQLite mappers.
+      // Read for presence, not truthiness: entityId, appId and principalId
+      // are unvalidated ids, so '' is a value to keep rather than a spelling
+      // of absence — the same distinction rowToRecord draws in the SQLite
+      // mappers. parentId is checked above and cannot be '' by the time it
+      // gets here, but it reads the same way as its siblings.
       ...(opts.parentId !== undefined && { parentId: opts.parentId }),
       ...(opts.entityId !== undefined && { entityId: opts.entityId }),
       ...(opts.appId !== undefined && { appId: opts.appId }),
@@ -2068,7 +2095,10 @@ export class Stack implements StackClient {
     const previousParentId = existing.parentId ?? null;
     if (previousParentId === parentId) return existing;
 
-    if (parentId !== null) await this.assertNoParentCycle(id, parentId);
+    if (parentId !== null) {
+      await this.assertParentExists(id, parentId);
+      await this.assertNoParentCycle(id, parentId);
+    }
 
     const updated = await this.adapter.setParent(id, parentId, {
       expectedVersion: opts.ifVersion,
@@ -2101,6 +2131,27 @@ export class Stack implements StackClient {
    * the same posture applied here.
    * See docs/spec/data-model.md § Reparenting.
    */
+  /**
+   * The checks a *caller-named* destination owes, before the cycle walk:
+   * `parentId` is a real, well-formed record id. Format first, so a
+   * malformed one is a 400 naming the problem rather than a read that
+   * cannot match. Existence closes the gap between the owner path and a
+   * non-owner's, where canReadReferent() already refuses a parent that
+   * isn't there.
+   *
+   * restoreVersion() deliberately does not call this — see its own comment.
+   * See docs/spec/data-model.md § Reparenting.
+   */
+  private async assertParentExists(id: string, parentId: string): Promise<void> {
+    validateParentId(parentId);
+    if (!(await this.adapter.getRecord(parentId))) {
+      throw new StackConflictError(
+        `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
+          'exist when it is named.',
+      );
+    }
+  }
+
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
     let cursor: string | undefined = parentId;
     for (let depth = 0; cursor !== undefined; depth++) {
@@ -2110,12 +2161,11 @@ export class Stack implements StackClient {
             'and the move would make the record its own ancestor.',
         );
       }
-      if (depth >= MAX_PARENT_DEPTH) {
-        throw new StackConflictError(
-          `Cannot parent record "${id}" to "${parentId}": the ancestor chain exceeds ` +
-            `${MAX_PARENT_DEPTH} levels, so it cannot be shown to be acyclic.`,
-        );
-      }
+      // The cap bounds work, and guarantees this terminates on a chain that
+      // is already cyclic. It does not refuse the move: a chain this long is
+      // past what the check can speak to, not evidence of a loop, and
+      // refusing it would claim an invariant core does not maintain.
+      if (depth >= MAX_PARENT_DEPTH) return;
       cursor = (await this.adapter.getRecord(cursor))?.parentId;
     }
   }
@@ -2317,7 +2367,14 @@ export class Stack implements StackClient {
 
     // A restore that puts a container back is an edge-adding site like
     // setParent(), and the chain above that container may have moved since
-    // the snapshot was taken.
+    // the snapshot was taken. The cycle walk therefore applies — but
+    // assertParentExists() deliberately does not: a restore is not a caller
+    // naming a destination, it is history being put back, and the container
+    // may have been hard-deleted since. Refusing here would make an
+    // unrelated deletion cost the record its content rollback, which is the
+    // recoverability this whole verb exists for. A dangling parentId is
+    // legal at rest anyway — deleting a container never touches its
+    // children. See docs/spec/versioning.md § Restore semantics.
     const previousParentId = existing.parentId ?? null;
     const targetParentId = target.parentId ?? null;
     const moves = targetParentId !== previousParentId;
