@@ -1127,6 +1127,13 @@ export interface StackClient {
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   setUnlisted(id: string, unlisted: boolean, opts?: IfVersionOptions): Promise<StackRecord>;
+  /**
+   * Move a record into another container, or to the root with `null`.
+   * The only native field a write-holder may change after creation; it
+   * decides enumeration, never access. See docs/spec/data-model.md
+   * § Reparenting.
+   */
+  setParent(id: string, parentId: string | null, opts?: IfVersionOptions): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -1296,7 +1303,7 @@ export class Stack implements StackClient {
   private emitChange(
     op: ChangeOp,
     record: StackRecord,
-    opts: { actor?: ChangeActor; at?: Date } = {},
+    opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
   ): void {
     this.changes.emit(buildEmission(op, record, opts));
   }
@@ -2024,6 +2031,76 @@ export class Stack implements StackClient {
     });
     this.emitChange(unlisted ? 'unlist' : 'list', updated);
     return updated;
+  }
+
+  /**
+   * Move a record into another container, or to the root with `null`.
+   * Snapshots and bumps version, same as setUnlisted(). No-op if the
+   * record is already there. Returns the record as it now stands —
+   * unchanged on a no-op.
+   *
+   * `parentId` is the one native field a write-holder may move after
+   * creation, and it confers nothing: containment is not an
+   * access-control edge, so a move changes which queries and feeds
+   * enumerate a record and nothing about who may read it. See
+   * docs/spec/data-model.md § Reparenting.
+   */
+  async setParent(
+    id: string,
+    parentId: string | null,
+    opts: IfVersionOptions & ActorOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    const existing = await this.adapter.getRecord(id);
+    if (!existing) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
+    this.checkIfVersion(existing, opts.ifVersion);
+    const previousParentId = existing.parentId ?? null;
+    if (previousParentId === parentId) return existing;
+
+    if (parentId !== null) await this.assertNoParentCycle(id, parentId);
+
+    const updated = await this.adapter.setParent(id, parentId, {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
+    });
+    this.emitChange('reparent', updated, { previousParentId });
+    return updated;
+  }
+
+  /**
+   * Refuse a move that would make a record its own ancestor. Create can
+   * never produce one — a new record's id names nothing yet — so this is
+   * the single site where the hierarchy could stop being a tree, and
+   * nothing downstream (a generator deriving a page path, a folder view)
+   * is written to survive one.
+   *
+   * Walks with the unscoped adapter deliberately: a walk that skipped the
+   * links a requester cannot read would let a cycle be assembled through
+   * them and break the invariant for every reader. The walk is bounded
+   * because a chain long enough to exhaust it is already pathological.
+   * See docs/spec/data-model.md § Reparenting.
+   */
+  private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
+    let cursor: string | undefined = parentId;
+    for (let depth = 0; cursor !== undefined; depth++) {
+      if (cursor === id) {
+        throw new StackConflictError(
+          `Cannot parent record "${id}" to "${parentId}": it is a descendant of "${id}", ` +
+            'and the move would make the record its own ancestor.',
+        );
+      }
+      if (depth >= MAX_PARENT_DEPTH) {
+        throw new StackConflictError(
+          `Cannot parent record "${id}" to "${parentId}": the ancestor chain exceeds ` +
+            `${MAX_PARENT_DEPTH} levels, so it cannot be shown to be acyclic.`,
+        );
+      }
+      cursor = (await this.adapter.getRecord(cursor))?.parentId;
+    }
   }
 
   /**
@@ -3254,6 +3331,14 @@ const DEFAULT_QUERY_LIMIT = 50;
 const MAX_QUERY_LIMIT = 1000;
 
 /**
+ * How far setParent() will walk a proposed ancestor chain before refusing
+ * the move. Bounds the reads one call can cost; a hierarchy deeper than
+ * this is beyond what `parentId` is for. See docs/spec/data-model.md
+ * § Reparenting.
+ */
+const MAX_PARENT_DEPTH = 64;
+
+/**
  * Ensures `creator` carries an `admin` relationship association, adding one
  * if it's not already present. Used to bootstrap a `_group` record's first
  * admin at create time.
@@ -4326,6 +4411,30 @@ export class ScopedStack implements StackClient {
     this.refuseIfDeleted(record, true);
 
     return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
+  }
+
+  /**
+   * Move a record into another container, or to the root with `null`.
+   * Gated as an ordinary write on the record, plus read access to the
+   * destination — the same reference gate `create()` applies to a
+   * `parentId`, asked again here so a move cannot reach a container an
+   * authoring call could not have named. Not reshare-gated like
+   * setUnlisted(): containment decides which listings enumerate a record,
+   * never who may read it, so a move discloses it to nobody who could not
+   * already read it. The origin is ungated — knowing it requires reading
+   * the record, which this caller has already had to do. See
+   * docs/spec/access-control.md § Reference-creation gating.
+   */
+  async setParent(
+    id: string,
+    parentId: string | null,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    await this.requireUpdatable(id);
+    if (parentId !== null && !(await this.canReadReferent(parentId))) {
+      throw new StackPermissionError();
+    }
+    return this.stack.setParent(id, parentId, { ...opts, ...this.actor });
   }
 
   /**

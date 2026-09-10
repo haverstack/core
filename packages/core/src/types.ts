@@ -703,7 +703,15 @@ export type ChangeOp =
    */
   | 'unlist'
   /** The publish moment — mechanically an upsert, like `undelete`. */
-  | 'list';
+  | 'list'
+  /**
+   * A move between containers. Matched by a `parentId` filter naming
+   * *either* side of the move, so a subscriber watching the old container
+   * learns the record left it — the record's post-change state alone
+   * would answer only for the destination. See docs/spec/events.md
+   * § The reparent transition.
+   */
+  | 'reparent';
 
 /**
  * Who performed a change — never who authored the record. Absent from a
@@ -918,6 +926,18 @@ export interface StackRecordAdapter {
   setUnlisted(
     id: RecordId,
     unlisted: boolean,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+  ): Promise<StackRecord>;
+
+  /**
+   * Set or clear `parentId`. Bumps version internally, like
+   * setUnlisted(). Storage only: the caller (Stack.setParent()) owns the
+   * acyclicity check, which is a `Stack` invariant every adapter
+   * inherits rather than one each reimplements.
+   */
+  setParent(
+    id: RecordId,
+    parentId: RecordId | null,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 

@@ -1145,6 +1145,22 @@ export class APIAdapter implements StackAdapter {
     return requireRecordBody(raw, `PUT /records/${id}/unlisted`);
   }
 
+  async setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts: { expectedVersion?: number } = {},
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord | undefined>(
+      'PUT',
+      `/records/${id}/parent`,
+      { parentId },
+      {
+        ifMatch: opts.expectedVersion,
+      },
+    );
+    return requireRecordBody(raw, `PUT /records/${id}/parent`);
+  }
+
   // -------------------------------------------------------
   // Versions
   // -------------------------------------------------------

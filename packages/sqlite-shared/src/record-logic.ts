@@ -395,6 +395,33 @@ export class SharedSqlRecordLogic {
     return updated;
   }
 
+  async setParent(
+    id: string,
+    parentId: string | null,
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+  ): Promise<StackRecord> {
+    this.exec.transaction(() => {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const changed = this.exec.run(
+        `UPDATE records SET parent_id = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
+        [
+          parentId,
+          toMs(new Date()),
+          opts.updatedBy ?? null,
+          opts.updatedVia ?? null,
+          id,
+          ...verParams,
+        ],
+      );
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+    });
+
+    const updated = await this.getRecord(id);
+    if (!updated) throw new Error(`Record not found after setParent: "${id}"`);
+    return updated;
+  }
+
   async restoreVersion(
     id: string,
     version: number,

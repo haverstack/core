@@ -169,6 +169,14 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
     return this.record.setUnlisted(id, unlisted, opts);
   }
 
+  setParent(
+    id: string,
+    parentId: string | null,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+  ): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
   restoreVersion(
     id: string,
     version: number,

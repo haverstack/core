@@ -1469,6 +1469,70 @@ describe('setUnlisted', () => {
   });
 });
 
+describe('setParent', () => {
+  test('sets parent_id and bumps version', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    const record = makeRecord();
+    await adapter.createRecord(box);
+    await adapter.createRecord(record);
+    await adapter.setParent(record.id, box.id);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.parentId).toBe(box.id);
+    expect(retrieved?.version).toBe(2);
+  });
+
+  test('null clears parent_id', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({ parentId: box.id });
+    await adapter.createRecord(record);
+    await adapter.setParent(record.id, null);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.parentId).toBeUndefined();
+    expect(retrieved?.version).toBe(2);
+  });
+
+  test('leaves content and associations untouched', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    await adapter.createRecord(box);
+    const record = makeRecord({
+      content: { text: 'hello' },
+      associations: [{ kind: 'tag', label: 'starred' }],
+    });
+    await adapter.createRecord(record);
+    await adapter.setParent(record.id, box.id);
+    const retrieved = await adapter.getRecord(record.id);
+    expect(retrieved?.content).toEqual({ text: 'hello' });
+    expect(retrieved?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
+  });
+
+  test('the moved record is found by a parentId query', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    const record = makeRecord();
+    await adapter.createRecord(box);
+    await adapter.createRecord(record);
+    await adapter.setParent(record.id, box.id);
+    const result = await adapter.queryRecords({ filter: { parentId: box.id } });
+    expect(result.records.map((r) => r.id)).toEqual([record.id]);
+  });
+
+  test('enforces expectedVersion', async () => {
+    const adapter = await initAdapter();
+    const box = makeRecord();
+    const record = makeRecord();
+    await adapter.createRecord(box);
+    await adapter.createRecord(record);
+    await expect(
+      adapter.setParent(record.id, box.id, { expectedVersion: 99 }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    await adapter.setParent(record.id, box.id, { expectedVersion: 1 });
+  });
+});
+
 // -------------------------------------------------------
 // Versions
 // -------------------------------------------------------

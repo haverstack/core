@@ -18,6 +18,7 @@ import {
   dissociateFixtures,
   setPermissionsFixtures,
   setUnlistedFixtures,
+  setParentFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -505,6 +506,26 @@ describe('setUnlisted fixtures', () => {
       expect(result.unlistedAt).toEqual(
         fixture.responseBody!.unlistedAt ? new Date(fixture.responseBody!.unlistedAt) : undefined,
       );
+    });
+  }
+});
+
+describe('setParent fixtures', () => {
+  for (const fixture of setParentFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.setParent(
+        idFromPath(fixture.path),
+        fixture.requestBody!.parentId,
+      );
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.parentId).toBe(fixture.responseBody!.parentId);
     });
   }
 });

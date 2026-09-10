@@ -275,6 +275,14 @@ export class LocalAdapter implements StackAdapter {
     return this.record.setUnlisted(id, unlisted, opts);
   }
 
+  async setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+  ): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
     return this.record.getVersions(id);
   }

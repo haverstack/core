@@ -29,7 +29,7 @@ type RecordVersion = {
 **API surface:**
 
 - `stack.getVersions(recordId)` — retrieve version history
-- `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Access control](./access-control.md#the-write-bit-a-recoverability-trust-model)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore. The snapshot also deliberately does not capture `parentId` or `appId`, so restore never reverts a re-parent or an app reattribution — those fields keep their current values.
+- `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId`, and `associations` when the target snapshot has them, but **never restores `permissions`** — those are owner/creator territory (see [Access control](./access-control.md#the-write-bit-a-recoverability-trust-model)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants. Permissions in a snapshot are for audit and deliberate owner action, not automatic restore. The snapshot also deliberately does not capture `parentId` or `appId`, so restore never reverts a [reparent](./data-model.md#reparenting) or an app reattribution — those fields keep their current values.
 
 ## Snapshot atomicity
 

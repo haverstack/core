@@ -215,19 +215,20 @@ POST   /records/query        — query including content field filters (JSON bod
 POST   /records              — create
 GET    /records/:id          — get one
 PATCH  /records/:id          — update content only (partial merge, null = delete field)
+PUT    /records/:id/parent   — move into a container, or to the root (see Parent)
 DELETE /records/:id          — soft delete
 DELETE /records/:id?hard=true — hard delete
 POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
-**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `PUT .../parent`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
 **A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
 
-**Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints, `PUT .../permissions` and `PUT .../unlisted`, and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
+**Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted` and `PUT .../parent`, and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
 
 **`GET /records` query params:**
 
@@ -365,11 +366,23 @@ Request body: `{ "unlisted": boolean }`. Answers `200` with the updated **Record
 
 **`GET /records` and `POST /records/query` accept `includeUnlisted`** (a query parameter on the former, a `filter` key on the latter), excluded by default like `includeDeleted`. **A server built on `ScopedStack` MUST refuse it with `403` for any requester but the owner acting alone** — enumeration standing rests on nothing but ownership, so no grant or delegation carries it (see [Unlisted records § `includeUnlisted` is owner-only](./unlisted.md#includeunlisted-is-owner-only)). `GET /changes` accepts the same parameter, refused on the same terms, for the change feed's own default exclusion — see [Change feed](./change-feed.md).
 
+## Parent
+
+```
+PUT  /records/:id/parent             — move a record into a container, or to the root
+```
+
+Request body: `{ "parentId": string | null }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `parentId` when a container was named, absent when `null`. `null` is the root sentinel, the JSON spelling of the `parentId=null` that `GET /records` takes as a query string. Accepts the same optional `If-Match` precondition as every other mutating endpoint.
+
+This is the only endpoint that changes `parentId`; `PATCH /records/:id` is content-only, so a `parentId` key in a patch body is a content field of that name, never this. Orthogonal to `PUT .../permissions` in exactly the way `PUT .../unlisted` is: it decides which listings enumerate the record, never who may read it. A server built on `ScopedStack` serves it to any requester holding write on the record **and** read on the destination, and answers `403` otherwise.
+
+A move that would make the record its own ancestor answers **409** (code `conflict`), as does one whose ancestor chain is too deep to verify. See [Data model § Reparenting](./data-model.md#reparenting).
+
 **The one unsafe path is a server mapping a request body straight onto an unscoped `Stack`.** Unscoped `Stack` honors `includeUnlisted` unconditionally, the same as `includeDeleted` — it is fully trusted by definition — so a server that forwards a request's filter verbatim onto one must strip `includeUnlisted` itself before dispatching, exactly as it already must for `entityId`/`principalId` on a create body (see [Records](#records)). Routing the request through `ScopedStack` instead makes this the library's problem rather than the server's, which is the shape every example in this document assumes.
 
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `PUT .../parent`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)

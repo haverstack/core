@@ -2993,6 +2993,98 @@ describe('ScopedStack.create — relationship association and parentId gating', 
   });
 });
 
+// -------------------------------------------------------
+// ScopedStack.setParent — an ordinary write on the record, plus the
+// destination gate create() applies to a parentId.
+// -------------------------------------------------------
+
+describe('ScopedStack.setParent', () => {
+  let readableBox: StackRecord;
+  let unreadableBox: StackRecord;
+  let writable: StackRecord;
+
+  beforeEach(async () => {
+    readableBox = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
+    unreadableBox = await adapter.createRecord(makeRecord());
+    writable = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+  });
+
+  test('a write-holder may move a record into a container it can read', async () => {
+    const moved = await stack.asEntity(MEMBER).setParent(writable.id, readableBox.id);
+    expect(moved.parentId).toBe(readableBox.id);
+  });
+
+  test('read on the destination is required', async () => {
+    await expect(stack.asEntity(MEMBER).setParent(writable.id, unreadableBox.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // A destination that does not exist and one the requester cannot read
+  // are the same refusal, so this cannot probe for a record's existence.
+  test('a missing destination is refused identically to an unreadable one', async () => {
+    await expect(stack.asEntity(MEMBER).setParent(writable.id, 'nonexistent')).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  test('write on the record is required', async () => {
+    const readOnly = await adapter.createRecord(
+      makeRecord({
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      }),
+    );
+    await expect(stack.asEntity(MEMBER).setParent(readOnly.id, readableBox.id)).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Moving out needs nothing on the origin: naming it requires reading the
+  // record, which a write-holder has already had to do.
+  test('the origin container is ungated', async () => {
+    const inside = await adapter.createRecord(
+      makeRecord({
+        parentId: unreadableBox.id,
+        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      }),
+    );
+    const moved = await stack.asEntity(MEMBER).setParent(inside.id, null);
+    expect(moved.parentId).toBeUndefined();
+  });
+
+  test('a soft-deleted record is refused', async () => {
+    await stack.delete(writable.id);
+    await expect(stack.asEntity(MEMBER).setParent(writable.id, readableBox.id)).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('an unreadable record is not found, never forbidden', async () => {
+    const hidden = await adapter.createRecord(makeRecord());
+    await expect(stack.asEntity(MEMBER).setParent(hidden.id, readableBox.id)).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('the owner is exempt from the destination gate', async () => {
+    const moved = await stack.asEntity(OWNER).setParent(writable.id, unreadableBox.id);
+    expect(moved.parentId).toBe(unreadableBox.id);
+  });
+
+  test('the actor is stamped on the move', async () => {
+    const moved = await stack.asEntity(MEMBER).setParent(writable.id, readableBox.id);
+    expect(moved.updatedBy).toBe(MEMBER);
+  });
+});
+
 describe('ScopedStack.associate — reference-creation gating', () => {
   let ownedRecord: StackRecord;
 
