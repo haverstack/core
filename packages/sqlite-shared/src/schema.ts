@@ -45,10 +45,10 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
   ) STRICT;
 
-  -- has_parent_id distinguishes the two things a NULL parent_id would
-  -- otherwise mean: a snapshot taken at the root (1), and one that claims
-  -- nothing about containment and restores to no move (0). The
-  -- associations column gets that distinction free from JSON, NULL vs '[]'.
+  -- parent_id is JSON, not a bare id, so one column spells all three
+  -- states a snapshot's parentId has: SQL NULL is a snapshot claiming
+  -- nothing about containment, 'null' is the root, and '"<id>"' is a
+  -- container. Same trick the associations column turns on NULL vs '[]'.
   CREATE TABLE IF NOT EXISTS versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
     version     INTEGER NOT NULL,
@@ -58,8 +58,7 @@ export const RECORD_SCHEMA_SQL = `
     entity_id   TEXT,
     updated_by  TEXT,
     updated_via TEXT,
-    parent_id     TEXT,
-    has_parent_id INTEGER NOT NULL DEFAULT 0 CHECK (has_parent_id IN (0, 1)),
+    parent_id   TEXT CHECK (parent_id IS NULL OR json_valid(parent_id)),
     associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
     permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)

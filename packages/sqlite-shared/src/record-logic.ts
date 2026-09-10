@@ -618,8 +618,8 @@ export class SharedSqlRecordLogic {
       this.exec.run(
         `INSERT INTO versions
           (record_id, version, type_id, content, updated_at, entity_id,
-           updated_by, updated_via, parent_id, has_parent_id, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           updated_by, updated_via, parent_id, associations, permissions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           version.version,
@@ -629,8 +629,7 @@ export class SharedSqlRecordLogic {
           version.entityId ?? null,
           version.updatedBy ?? null,
           version.updatedVia ?? null,
-          version.parentId ?? null,
-          version.parentId === undefined ? 0 : 1,
+          version.parentId === undefined ? null : JSON.stringify(version.parentId),
           version.associations ? JSON.stringify(version.associations) : null,
           version.permissions ? JSON.stringify(version.permissions) : null,
         ],

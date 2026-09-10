@@ -27,15 +27,20 @@ export const rowToRecord = (
     content: JSON.parse(row.content as string),
     version: row.version as number,
   };
-  if (row.parent_id) record.parentId = row.parent_id as string;
-  if (row.entity_id) record.entityId = row.entity_id as string;
-  if (row.app_id) record.appId = row.app_id as string;
-  if (row.principal_id) record.principalId = row.principal_id as string;
-  if (row.updated_by) record.updatedBy = row.updated_by as string;
-  if (row.updated_via) record.updatedVia = row.updated_via as string;
-  if (row.deleted_at) record.deletedAt = fromMs(row.deleted_at as number);
-  if (row.unlisted_at) record.unlistedAt = fromMs(row.unlisted_at as number);
-  if (row.permissions) record.permissions = JSON.parse(row.permissions as string);
+  // Presence, never truthiness: SQL NULL is the only spelling of an absent
+  // field, so the empty string and the epoch are values like any other.
+  // The query predicates beside this read `IS NULL`, and a mapper that
+  // disagreed would let a record answer one way to get() and another to
+  // the filter that should have found it.
+  if (row.parent_id != null) record.parentId = row.parent_id as string;
+  if (row.entity_id != null) record.entityId = row.entity_id as string;
+  if (row.app_id != null) record.appId = row.app_id as string;
+  if (row.principal_id != null) record.principalId = row.principal_id as string;
+  if (row.updated_by != null) record.updatedBy = row.updated_by as string;
+  if (row.updated_via != null) record.updatedVia = row.updated_via as string;
+  if (row.deleted_at != null) record.deletedAt = fromMs(row.deleted_at as number);
+  if (row.unlisted_at != null) record.unlistedAt = fromMs(row.unlisted_at as number);
+  if (row.permissions != null) record.permissions = JSON.parse(row.permissions as string);
   if (associations.length) record.associations = associations;
   return record;
 };
@@ -105,13 +110,13 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
     content: JSON.parse(row.content as string),
     updatedAt: fromMs(row.updated_at as number),
   };
-  if (row.entity_id) v.entityId = row.entity_id as string;
-  if (row.updated_by) v.updatedBy = row.updated_by as string;
-  if (row.updated_via) v.updatedVia = row.updated_via as string;
-  // A stored NULL parent_id is the root only when the snapshot claimed the
-  // field at all; see the versions table in schema.ts.
-  if (row.has_parent_id) v.parentId = (row.parent_id as string | null) ?? null;
-  if (row.associations) v.associations = JSON.parse(row.associations as string);
-  if (row.permissions) v.permissions = JSON.parse(row.permissions as string);
+  if (row.entity_id != null) v.entityId = row.entity_id as string;
+  if (row.updated_by != null) v.updatedBy = row.updated_by as string;
+  if (row.updated_via != null) v.updatedVia = row.updated_via as string;
+  // Read for presence, not truthiness: the stored 'null' is the root, and
+  // only a SQL NULL is a snapshot that claimed no container at all.
+  if (row.parent_id != null) v.parentId = JSON.parse(row.parent_id as string);
+  if (row.associations != null) v.associations = JSON.parse(row.associations as string);
+  if (row.permissions != null) v.permissions = JSON.parse(row.permissions as string);
   return v;
 };

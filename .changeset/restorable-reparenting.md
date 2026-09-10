@@ -3,6 +3,8 @@
 '@haverstack/wire-types': minor
 '@haverstack/adapter-api': minor
 '@haverstack/conformance-fixtures': minor
+'@haverstack/record-adapter-sqlite': minor
+'@haverstack/record-adapter-do-sqlite': minor
 '@haverstack/sqlite-shared': minor
 ---
 
@@ -38,3 +40,13 @@ has to be able to see the one that happened.
 `appId` remains uncaptured. It names the software that authored the record, a
 create-time fact no later write moves, so there is nothing for a rollback to revert
 it to.
+
+**Fixed, in the SQLite adapters:** a record's nullable native fields are now read
+back by presence rather than truthiness, so an empty-string `parentId`, `entityId`,
+`appId`, `principalId`, `updatedBy` or `updatedVia`, and a `deletedAt` or
+`unlistedAt` at the epoch, survive the round trip as the values they are. SQL NULL
+is the only spelling of an absent field. The query predicates already read
+`IS NULL`, so the mapper disagreeing let one record answer one way to `getRecord()`
+and another to the filter that should have found it — an empty-string `parentId`
+read back as the root while `parentId: null` did not match it, and a record deleted
+at the epoch dropped from every query while `getRecord()` reported it live.
