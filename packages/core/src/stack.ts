@@ -987,18 +987,6 @@ const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Format and reserved-prefix checks — full-trust context (Stack.create()).
- * Checked before the format check: the Crockford charset already excludes
- * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
- * as a generic format error instead of a specific, actionable one.
- *
- * Throws StackQueryError, not StackValidationError: a malformed id is
- * structurally bad input the request never gets past — it doesn't reach
- * type-schema validation — the same reasoning that makes an undecodable
- * pagination cursor a StackQueryError rather than a content-validation
- * failure. See StackQueryError's doc comment.
- */
-/**
  * The same format rule applied to a `parentId` a caller names. Separate
  * from validateRecordId() only for its message: the id under discussion is
  * the destination, not the record being written, and a shared message would
@@ -1017,6 +1005,18 @@ function validateParentId(parentId: string): void {
   }
 }
 
+/**
+ * Format and reserved-prefix checks — full-trust context (Stack.create()).
+ * Checked before the format check: the Crockford charset already excludes
+ * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
+ * as a generic format error instead of a specific, actionable one.
+ *
+ * Throws StackQueryError, not StackValidationError: a malformed id is
+ * structurally bad input the request never gets past — it doesn't reach
+ * type-schema validation — the same reasoning that makes an undecodable
+ * pagination cursor a StackQueryError rather than a content-validation
+ * failure. See StackQueryError's doc comment.
+ */
 function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
     throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
@@ -2116,27 +2116,6 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Refuse an edge that would make a record its own ancestor — asked at
-   * every site that adds one: a change set naming `parentId`, a restore
-   * putting a container back, and a create naming both its own id and a parent. Nothing
-   * downstream (a generator deriving a page path, a folder view) is
-   * written to survive a cycle.
-   *
-   * Walks with the unscoped adapter deliberately: a walk that skipped the
-   * links a requester cannot read would let a cycle be assembled through
-   * them and break the invariant for every reader. The walk is bounded
-   * because a chain long enough to exhaust it is already pathological.
-   *
-   * Read-then-write, so two moves racing on opposite ends of one chain can
-   * both pass — closing that means the invariant lives in the adapter,
-   * where the write is atomic, which puts a graph constraint in the
-   * storage contract every adapter then implements. Same deferral as
-   * checkBindingUnique() above. Consumers that walk `parentId` should
-   * carry a visited set rather than trust this alone; MAX_PARENT_DEPTH is
-   * the same posture applied here.
-   * See docs/spec/data-model.md § Reparenting.
-   */
-  /**
    * The checks a *caller-named* destination owes, before the cycle walk:
    * `parentId` is a real, well-formed record id. Format first, so a
    * malformed one is a 400 naming the problem rather than a read that
@@ -2157,6 +2136,27 @@ export class Stack implements StackClient {
     }
   }
 
+  /**
+   * Refuse an edge that would make a record its own ancestor — asked at
+   * every site that adds one: a change set naming `parentId`, a restore
+   * putting a container back, and a create naming both its own id and a parent. Nothing
+   * downstream (a generator deriving a page path, a folder view) is
+   * written to survive a cycle.
+   *
+   * Walks with the unscoped adapter deliberately: a walk that skipped the
+   * links a requester cannot read would let a cycle be assembled through
+   * them and break the invariant for every reader. The walk is bounded
+   * because a chain long enough to exhaust it is already pathological.
+   *
+   * Read-then-write, so two moves racing on opposite ends of one chain can
+   * both pass — closing that means the invariant lives in the adapter,
+   * where the write is atomic, which puts a graph constraint in the
+   * storage contract every adapter then implements. Same deferral as
+   * checkBindingUnique() above. Consumers that walk `parentId` should
+   * carry a visited set rather than trust this alone; MAX_PARENT_DEPTH is
+   * the same posture applied here.
+   * See docs/spec/data-model.md § Reparenting.
+   */
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
     let cursor: string | undefined = parentId;
     for (let depth = 0; cursor !== undefined; depth++) {
@@ -3016,12 +3016,6 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Flush pending writes to the underlying storage. A no-op for adapters
-   * that commit on every call (SQLite, the API adapter); meaningful for
-   * ones that buffer, and for checkpointing a stack that stays open —
-   * close() covers the teardown case on its own.
-   */
-  /**
    * Observe every change made through this Stack. Unscoped, so no
    * permission filter applies — a caller holding a `Stack` already reaches
    * every record by other means; `ScopedStack.subscribe()` is the filtered
@@ -3095,6 +3089,12 @@ export class Stack implements StackClient {
     return typeof this.adapter.subscribeChanges === 'function';
   }
 
+  /**
+   * Flush pending writes to the underlying storage. A no-op for adapters
+   * that commit on every call (SQLite, the API adapter); meaningful for
+   * ones that buffer, and for checkpointing a stack that stays open —
+   * close() covers the teardown case on its own.
+   */
   async flush(): Promise<void> {
     this.assertOpen();
     await this.adapter.flush?.();
@@ -3592,28 +3592,6 @@ const presentDeleted = (record: StackRecord): StackRecord =>
   record.deletedAt ? tombstoneOf(record) : record;
 
 /**
- * A permission-enforcing view of a Stack for a single (principal, subject)
- * pair, obtained via `stack.asEntity(entityId)`. A record the request
- * cannot read answers exactly as a missing one does — null on reads,
- * StackNotFoundError on the verbs that name one — so only a requester who
- * could have read it is told a refusal was about access.
- * See docs/spec/access-control.md § Errors and information exposure.
- *
- * Two identities, one rule: **the principal governs authority, the subject
- * governs attribution.** Grant lookup and the privilege-bearing gates that
- * no grant reaches (resharing, group management, hard delete, widening
- * access at create time) key on `principalEntityId`; authorship, `-own`
- * matching, record-level permission resolution, and "files I uploaded"
- * lookups key on `subjectEntityId`.
- *
- * Unconditional owner access follows that same split rather than one
- * identity: it answers *what data is reachable* for the subject (an owner
- * subject resolves past every permission check) and *who may exercise a
- * privileged verb* for the principal (an owner app is not bounded by
- * grants). Under delegation both halves apply, and a mistake on the
- * authority side is an escalation rather than a preference.
- */
-/**
  * The authority lookups canRead needs, held for the life of one
  * subscription. A subscription is long-lived where a query is not, so the
  * cache is only safe because every write that can change canRead's answer
@@ -3725,6 +3703,28 @@ class ScopedSubscription extends Subscription {
   }
 }
 
+/**
+ * A permission-enforcing view of a Stack for a single (principal, subject)
+ * pair, obtained via `stack.asEntity(entityId)`. A record the request
+ * cannot read answers exactly as a missing one does — null on reads,
+ * StackNotFoundError on the verbs that name one — so only a requester who
+ * could have read it is told a refusal was about access.
+ * See docs/spec/access-control.md § Errors and information exposure.
+ *
+ * Two identities, one rule: **the principal governs authority, the subject
+ * governs attribution.** Grant lookup and the privilege-bearing gates that
+ * no grant reaches (resharing, group management, hard delete, widening
+ * access at create time) key on `principalEntityId`; authorship, `-own`
+ * matching, record-level permission resolution, and "files I uploaded"
+ * lookups key on `subjectEntityId`.
+ *
+ * Unconditional owner access follows that same split rather than one
+ * identity: it answers *what data is reachable* for the subject (an owner
+ * subject resolves past every permission check) and *who may exercise a
+ * privileged verb* for the principal (an owner app is not bounded by
+ * grants). Under delegation both halves apply, and a mistake on the
+ * authority side is an escalation rather than a preference.
+ */
 export class ScopedStack implements StackClient {
   constructor(
     private readonly stack: Stack,
