@@ -55,7 +55,7 @@ describe('attribution — updatedBy tracks the actor', () => {
 
   test('a non-author update moves updatedBy but never entityId', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
     expect(record?.entityId).toBe(AUTHOR);
@@ -66,7 +66,7 @@ describe('attribution — updatedBy tracks the actor', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     const view = stack.asEntity(EDITOR);
 
-    await view.update(created.id, { text: 'v2' });
+    await view.patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
 
     await view.associate(created.id, { kind: 'tag', label: 'x' });
@@ -87,17 +87,17 @@ describe('attribution — updatedBy tracks the actor', () => {
   // is what makes "who widened access to this" answerable at all.
   test('setPermissions records who reshared', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
 
-    await stack.asEntity(AUTHOR).setPermissions(created.id, [{ access: 'public' }]);
+    await stack.asEntity(AUTHOR).mutate(created.id, { permissions: [{ access: 'public' }] });
 
     expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
   });
 
   test('a delegated write records both halves', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(APP, { onBehalfOf: EDITOR }).update(created.id, { text: 'v2' });
+    await stack.asEntity(APP, { onBehalfOf: EDITOR }).patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
     expect(record?.updatedBy).toBe(EDITOR);
@@ -106,7 +106,7 @@ describe('attribution — updatedBy tracks the actor', () => {
 
   test('an undelegated write names no principal', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedVia).toBeUndefined();
   });
 
@@ -116,7 +116,7 @@ describe('attribution — updatedBy tracks the actor', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
 
-    await stack.update(created.id, { text: 'v2' });
+    await stack.patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
     expect(record?.updatedBy).toBeUndefined();
@@ -144,7 +144,7 @@ describe('attribution — not caller-assertable', () => {
 
     await stack
       .asEntity(EDITOR)
-      .update(created.id, { text: 'v2' }, { updatedBy: AUTHOR, updatedVia: APP } as never);
+      .patchContent(created.id, { text: 'v2' }, { updatedBy: AUTHOR, updatedVia: APP } as never);
 
     const record = await stack.get(created.id);
     expect(record?.updatedBy).toBe(EDITOR);
@@ -159,8 +159,8 @@ describe('attribution — not caller-assertable', () => {
 describe('attribution — version history', () => {
   test('each version carries the actor that produced it', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
-    await stack.asEntity(APP, { onBehalfOf: AUTHOR }).update(created.id, { text: 'v3' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
+    await stack.asEntity(APP, { onBehalfOf: AUTHOR }).patchContent(created.id, { text: 'v3' });
 
     const versions = await stack.getVersions(created.id);
     const byVersion = new Map(versions.map((v) => [v.version, v]));
@@ -176,8 +176,8 @@ describe('attribution — version history', () => {
 
   test('a version snapshot keeps author and actor as separate facts', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v3' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v3' });
 
     const v2 = (await stack.getVersions(created.id)).find((v) => v.version === 2);
     expect(v2?.entityId).toBe(AUTHOR);
@@ -194,7 +194,7 @@ describe('attribution — restoreVersion', () => {
   // with the content would credit the restored version's actor for it.
   test('stamps the restorer, not the restored version’s actor', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
     await stack.asEntity(APP, { onBehalfOf: EDITOR }).restoreVersion(created.id, 1);
 
@@ -206,7 +206,7 @@ describe('attribution — restoreVersion', () => {
 
   test('restoring never moves the author', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     await stack.asEntity(EDITOR).restoreVersion(created.id, 1);
 
     expect((await stack.get(created.id))?.entityId).toBe(AUTHOR);
@@ -222,7 +222,7 @@ describe('attribution — separate from authorship checks', () => {
   // updatedBy must not hand them a record they only touched.
   test('updatedBy does not satisfy an -own grant', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(EDITOR).update(created.id, { text: 'v2' });
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
     const ownOnly = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const s2 = await Stack.create(ownOnly);

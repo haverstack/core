@@ -54,6 +54,7 @@ export type {
   EntityId,
   AttachmentContent,
   StackRecord,
+  RecordChanges,
   RecordVersion,
   ActorOptions,
   ChangeKind,

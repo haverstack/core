@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * Shallow merge-patch semantics for record content: a field set to `null`
  * removes it, any other value replaces it, and omitted fields are retained.
- * Shared by Stack.update() (for client-side validation) and every
+ * Shared by Stack.mutate() (for client-side validation) and every
  * StackRecordAdapter's patchContent() implementation, so a patch produces
  * the same merged content everywhere it's applied.
  */
@@ -25,7 +25,7 @@ export function applyMergePatch(
       // the same key is read back, so both write paths agree. The spread
       // above is already safe (it copies data properties directly).
       //
-      // Stack.create()/update() reject the reserved keys outright (see
+      // Stack.create()/Stack.mutate() reject the reserved keys outright (see
       // validateReservedKeys); this is the backstop for adapters that call
       // this directly, and for the day someone deepens the merge.
       Object.defineProperty(merged, key, {

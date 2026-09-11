@@ -748,35 +748,75 @@ describe('getRecord', () => {
 });
 
 // -------------------------------------------------------
-// patchContent
+// mutateRecord
 // -------------------------------------------------------
 
-describe('patchContent', () => {
+describe('mutateRecord', () => {
   test('sends PATCH /records/:id', async () => {
     const adapter = await openAdapter();
     const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
     mockFetch.mockResolvedValueOnce(jsonResponse(updated));
-    await adapter.patchContent('rec-abc123', { text: 'Updated' });
+    await adapter.mutateRecord('rec-abc123', { contentPatch: { text: 'Updated' } });
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123`,
       expect.objectContaining({ method: 'PATCH' }),
     );
   });
 
-  test('sends only the raw patch — no record fields — as the body', async () => {
+  test('sends the change set as the body — no record fields ride along', async () => {
     const adapter = await openAdapter();
     const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
     mockFetch.mockResolvedValueOnce(jsonResponse(updated));
-    await adapter.patchContent('rec-abc123', { text: 'Updated', removedField: null });
+    await adapter.mutateRecord('rec-abc123', {
+      contentPatch: { text: 'Updated', removedField: null },
+    });
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ text: 'Updated', removedField: null });
+    expect(JSON.parse(init.body as string)).toEqual({
+      contentPatch: { text: 'Updated', removedField: null },
+    });
+  });
+
+  // Every aspect travels in one request, so one If-Match fences the whole
+  // edit rather than the caller threading a version through three calls.
+  test('carries every key of a multi-aspect change set in one PATCH', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...RECORD_RAW, version: 2 }));
+    await adapter.mutateRecord(
+      'rec-abc123',
+      {
+        contentPatch: { text: 'Updated' },
+        parentId: 'box-1',
+        permissions: [{ access: 'public' }],
+        unlisted: false,
+      },
+      { expectedVersion: 1 },
+    );
+    const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}/records/rec-abc123`);
+    expect(init.method).toBe('PATCH');
+    expect((init.headers as Record<string, string>)['If-Match']).toBe('"1"');
+    expect(JSON.parse(init.body as string)).toEqual({
+      contentPatch: { text: 'Updated' },
+      parentId: 'box-1',
+      permissions: [{ access: 'public' }],
+      unlisted: false,
+    });
+  });
+
+  // null is the root sentinel here, not a removal spelling.
+  test('sends parentId: null as the root rather than omitting it', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.mutateRecord('rec-abc123', { parentId: null });
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ parentId: null });
   });
 
   test('returns updated record with parsed dates', async () => {
     const adapter = await openAdapter();
     const updated = { ...RECORD_RAW, content: { text: 'Updated' }, version: 2 };
     mockFetch.mockResolvedValueOnce(jsonResponse(updated));
-    const result = await adapter.patchContent('rec-abc123', { text: 'Updated' });
+    const result = await adapter.mutateRecord('rec-abc123', { contentPatch: { text: 'Updated' } });
     expect(result.content).toEqual({ text: 'Updated' });
     expect(result.updatedAt).toBeInstanceOf(Date);
   });
@@ -784,7 +824,11 @@ describe('patchContent', () => {
   test('sends If-Match when expectedVersion is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    await adapter.patchContent('rec-abc123', { text: 'x' }, { expectedVersion: 5 });
+    await adapter.mutateRecord(
+      'rec-abc123',
+      { contentPatch: { text: 'x' } },
+      { expectedVersion: 5 },
+    );
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['If-Match']).toBe('"5"');
   });
@@ -792,7 +836,7 @@ describe('patchContent', () => {
   test('omits If-Match when expectedVersion is not given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    await adapter.patchContent('rec-abc123', { text: 'x' });
+    await adapter.mutateRecord('rec-abc123', { contentPatch: { text: 'x' } });
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
   });
@@ -848,15 +892,17 @@ describe('commitMigration', () => {
 // setPermissions
 // -------------------------------------------------------
 
-describe('setPermissions', () => {
-  test('sends PUT /records/:id/permissions with a permissions envelope', async () => {
+describe('permissions through a change set', () => {
+  test('sends PATCH /records/:id carrying only the permissions key', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const updated = await adapter.setPermissions('rec-abc123', [{ access: 'public' }]);
+    const updated = await adapter.mutateRecord('rec-abc123', {
+      permissions: [{ access: 'public' }],
+    });
     expect(updated.id).toBe('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123/permissions`,
-      expect.objectContaining({ method: 'PUT' }),
+      `${BASE_URL}/records/rec-abc123`,
+      expect.objectContaining({ method: 'PATCH' }),
     );
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ permissions: [{ access: 'public' }] });
@@ -1239,12 +1285,12 @@ describe('a mutation that bumps a version must answer with a Record', () => {
     await expect(adapter.dissociate('rec-abc123', ASSOC)).rejects.toThrow(APIAdapterError);
   });
 
-  test('setPermissions reports an empty body as a protocol error', async () => {
+  test('a change set reports an empty body as a protocol error', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.setPermissions('rec-abc123', [{ access: 'public' }])).rejects.toThrow(
-      APIAdapterError,
-    );
+    await expect(
+      adapter.mutateRecord('rec-abc123', { permissions: [{ access: 'public' }] }),
+    ).rejects.toThrow(APIAdapterError);
   });
 
   test('a soft delete reports an empty body as a protocol error', async () => {
@@ -1614,7 +1660,7 @@ describe('error taxonomy reconstruction', () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'permission', message: 'Permission denied' } }, 403),
     );
-    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+    await expect(adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } })).rejects.toThrow(
       StackPermissionError,
     );
   });
@@ -1624,7 +1670,9 @@ describe('error taxonomy reconstruction', () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'not_found', message: 'Record "rec-1" not found.' } }, 404),
     );
-    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(StackNotFoundError);
+    await expect(adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } })).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 
   test('reconstructs StackConflictError from a 409 wire error body', async () => {
@@ -1659,7 +1707,7 @@ describe('error taxonomy reconstruction', () => {
     );
     let caught: unknown;
     try {
-      await adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 });
+      await adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { expectedVersion: 2 });
     } catch (err) {
       caught = err;
     }
@@ -1677,7 +1725,7 @@ describe('error taxonomy reconstruction', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response('not json', { status: 412 }));
     await expect(
-      adapter.patchContent('rec-1', { title: 'x' }, { expectedVersion: 2 }),
+      adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { expectedVersion: 2 }),
     ).rejects.toThrow(StackVersionConflictError);
   });
 
@@ -1724,7 +1772,7 @@ describe('error taxonomy reconstruction', () => {
     );
     let caught: unknown;
     try {
-      await adapter.patchContent('rec-1', { title: 42 });
+      await adapter.mutateRecord('rec-1', { contentPatch: { title: 42 } });
     } catch (err) {
       caught = err;
     }
@@ -1745,7 +1793,7 @@ describe('error taxonomy reconstruction', () => {
   test('falls back to status-based reconstruction when the body is not a wire error', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
-    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+    await expect(adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } })).rejects.toThrow(
       StackPermissionError,
     );
   });
@@ -1753,7 +1801,9 @@ describe('error taxonomy reconstruction', () => {
   test('falls back to generic APIAdapterError for a status with no unambiguous code', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 418 }));
-    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(APIAdapterError);
+    await expect(adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } })).rejects.toThrow(
+      APIAdapterError,
+    );
   });
 
   test('does not reconstruct StackMigrationError from a bare 500 status', async () => {
@@ -1761,7 +1811,7 @@ describe('error taxonomy reconstruction', () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 500 }));
     let caught: unknown;
     try {
-      await adapter.patchContent('rec-1', { title: 'x' });
+      await adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } });
     } catch (err) {
       caught = err;
     }
@@ -1774,7 +1824,7 @@ describe('error taxonomy reconstruction', () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'migration', message: 'Migration graph corrupted' } }, 500),
     );
-    await expect(adapter.patchContent('rec-1', { title: 'x' })).rejects.toThrow(
+    await expect(adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } })).rejects.toThrow(
       StackMigrationError,
     );
   });

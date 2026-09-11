@@ -258,7 +258,7 @@ describe('the sort index tracks the record', () => {
     const first = await create(ARTICLE, { title: 'first', order: 1 });
     await create(ARTICLE, { title: 'second', order: 2 });
 
-    await adapter.patchContent(first.id, { order: 3 });
+    await adapter.mutateRecord(first.id, { contentPatch: { order: 3 } });
     expect(await titles({ sort: { contentField: 'order', direction: 'asc' } })).toEqual([
       'second',
       'first',
@@ -269,7 +269,7 @@ describe('the sort index tracks the record', () => {
     const dated = await create(ARTICLE, { title: 'dated', publishedAt: '2021-01-01T00:00:00Z' });
     await create(ARTICLE, { title: 'older', publishedAt: '2020-01-01T00:00:00Z' });
 
-    await adapter.patchContent(dated.id, { publishedAt: null });
+    await adapter.mutateRecord(dated.id, { contentPatch: { publishedAt: null } });
     expect(await titles({ sort: { contentField: 'publishedAt', direction: 'asc' } })).toEqual([
       'older',
       'dated',

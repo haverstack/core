@@ -36,7 +36,7 @@ describe('applyMergePatch', () => {
 
 // -------------------------------------------------------
 // Reserved keys: a patch key that names object machinery must set a
-// field, not reach a setter. Stack.update() rejects these before the
+// field, not reach a setter. Stack.mutate() rejects these before the
 // merge (see validateReservedKeys); this is the backstop for adapters
 // that call applyMergePatch directly.
 // -------------------------------------------------------

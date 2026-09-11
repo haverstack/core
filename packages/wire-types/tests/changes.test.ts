@@ -27,7 +27,7 @@ const record = (overrides: Partial<StackRecord> = {}): StackRecord => ({
 
 const change = (overrides: Partial<RecordChange> = {}): RecordChange => ({
   kind: 'changed',
-  op: 'update',
+  ops: ['patch'],
   recordId: '1hk153x00001',
   typeId: 'com.example/note@1',
   version: 2,
@@ -60,7 +60,7 @@ describe('serializeChange', () => {
   it('encodes the envelope with updatedAt as an ISO string', () => {
     expect(serializeChange(change())).toEqual({
       kind: 'changed',
-      op: 'update',
+      ops: ['patch'],
       recordId: '1hk153x00001',
       typeId: 'com.example/note@1',
       version: 2,
@@ -113,7 +113,7 @@ describe('serializeChange on a purge', () => {
   const purge = (overrides: Partial<RecordChange> = {}): RecordChange =>
     change({
       kind: 'purged',
-      op: 'hard-delete',
+      ops: ['hard-delete'],
       version: 4,
       actor: { entityId: OWNER },
       ...overrides,
@@ -136,7 +136,7 @@ describe('serializeChange on a purge', () => {
   it('keeps the outline a purge is auditable by', () => {
     expect(serializeChange(purge({ record: record() }))).toEqual({
       kind: 'purged',
-      op: 'hard-delete',
+      ops: ['hard-delete'],
       recordId: '1hk153x00001',
       typeId: 'com.example/note@1',
       version: 4,

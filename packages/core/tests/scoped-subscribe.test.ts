@@ -77,12 +77,12 @@ describe('a record the subscriber cannot read produces no event', () => {
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
-    await stack.setPermissions(note.id, [
-      { access: 'entity', entityId: READER, read: true, write: false },
-    ]);
+    await stack.mutate(note.id, {
+      permissions: [{ access: 'entity', entityId: READER, read: true, write: false }],
+    });
     await settle();
 
-    expect(reader.seen.map((c) => [c.kind, c.op])).toEqual([['changed', 'permissions']]);
+    expect(reader.seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['permissions']]]);
   });
 
   test('losing access is silent — no event, and no signal that one was withheld', async () => {
@@ -94,8 +94,8 @@ describe('a record the subscriber cannot read produces no event', () => {
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
-    await stack.setPermissions(note.id, []);
-    await stack.update(note.id, { text: 'edited after revocation' });
+    await stack.mutate(note.id, { permissions: [] });
+    await stack.patchContent(note.id, { text: 'edited after revocation' });
     await settle();
 
     expect(reader.seen).toEqual([]);
@@ -207,7 +207,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'while a member' });
+    await stack.patchContent(note.id, { text: 'while a member' });
     await settle();
     expect(reader.seen).toHaveLength(1);
 
@@ -216,7 +216,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       label: 'member',
       target: { scope: 'entity', entityId: READER },
     });
-    await stack.update(note.id, { text: 'after removal' });
+    await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
 
     expect(reader.seen).toHaveLength(1);
@@ -273,7 +273,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'while a member' });
+    await stack.patchContent(note.id, { text: 'while a member' });
     await settle();
     expect(reader.seen).toHaveLength(1);
 
@@ -282,7 +282,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       label: 'member',
       target: { scope: 'entity', entityId: READER },
     });
-    await stack.update(note.id, { text: 'after removal' });
+    await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
 
     expect(reader.seen).toHaveLength(1);
@@ -317,7 +317,7 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     const owner = collector();
     await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'still unlisted' });
+    await stack.patchContent(note.id, { text: 'still unlisted' });
     await settle();
 
     expect(owner.seen).toEqual([]);
@@ -328,10 +328,10 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     const owner = collector();
     await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
 
-    await stack.setUnlisted(note.id, true);
+    await stack.mutate(note.id, { unlisted: true });
     await settle();
 
-    expect(owner.seen.map((c) => [c.kind, c.op])).toEqual([['deleted', 'unlist']]);
+    expect(owner.seen.map((c) => [c.kind, c.ops])).toEqual([['deleted', ['unlist']]]);
   });
 
   test('the list transition reaches a default subscriber, as an ordinary upsert', async () => {
@@ -339,10 +339,10 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     const owner = collector();
     await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
 
-    await stack.setUnlisted(note.id, false);
+    await stack.mutate(note.id, { unlisted: false });
     await settle();
 
-    expect(owner.seen.map((c) => [c.kind, c.op])).toEqual([['changed', 'list']]);
+    expect(owner.seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['list']]]);
   });
 
   test('the owner acting alone with includeUnlisted sees the create and the silent edit', async () => {
@@ -352,10 +352,10 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
       .subscribe(owner.handler, { filter: { typeId: NOTE }, includeUnlisted: true });
 
     const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
-    await stack.update(note.id, { text: 'still unlisted' });
+    await stack.patchContent(note.id, { text: 'still unlisted' });
     await settle();
 
-    expect(owner.seen.map((c) => c.op)).toEqual(['create', 'update']);
+    expect(owner.seen.map((c) => c.ops)).toEqual([['create'], ['patch']]);
   });
 });
 
@@ -369,7 +369,7 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
     const anon = collector();
     await stack.asEntity(null).subscribe(anon.handler, { filter: { typeId: NOTE } });
 
-    for (let i = 2; i <= 12; i++) await stack.update(note.id, { text: `v${i}` });
+    for (let i = 2; i <= 12; i++) await stack.patchContent(note.id, { text: `v${i}` });
     await settle();
 
     expect(anon.seen.map((c) => c.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
@@ -419,7 +419,7 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
       .asEntity(null)
       .subscribe(anon.handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'v2' });
+    await stack.patchContent(note.id, { text: 'v2' });
     unsubscribe();
     await settle();
 
@@ -454,7 +454,7 @@ describe('the feed carries no more of a soft-deleted record than get() does', ()
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { includeRecords: true });
 
-    await stack.update(note.id, { text: 'after' });
+    await stack.patchContent(note.id, { text: 'after' });
     await settle();
 
     expect(reader.seen.at(-1)!.record!.content).toEqual({ text: 'after' });
@@ -467,10 +467,10 @@ describe('the feed carries no more of a soft-deleted record than get() does', ()
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { includeRecords: true });
 
-    await stack.setUnlisted(note.id, true);
+    await stack.mutate(note.id, { unlisted: true });
     await settle();
 
-    const frame = reader.seen.find((c) => c.op === 'unlist');
+    const frame = reader.seen.find((c) => c.ops.includes('unlist'));
     expect(frame?.record?.content).toEqual({ text: 'still here' });
   });
 

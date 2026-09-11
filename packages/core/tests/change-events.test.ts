@@ -41,7 +41,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({
       kind: 'created',
-      op: 'create',
+      ops: ['create'],
       recordId: note.id,
       typeId: NOTE,
       version: 1,
@@ -53,22 +53,22 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
     await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.setPermissions(note.id, [{ access: 'public' }]);
+    await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
     await stack.restoreVersion(note.id, 1);
 
-    expect(seen.map((c) => [c.op, c.kind])).toEqual([
-      ['update', 'changed'],
-      ['associate', 'changed'],
-      ['dissociate', 'changed'],
-      ['permissions', 'changed'],
-      ['delete', 'deleted'],
-      ['undelete', 'changed'],
-      ['restore', 'changed'],
+    expect(seen.map((c) => [c.ops, c.kind])).toEqual([
+      [['patch'], 'changed'],
+      [['associate'], 'changed'],
+      [['dissociate'], 'changed'],
+      [['permissions'], 'changed'],
+      [['delete'], 'deleted'],
+      [['undelete'], 'changed'],
+      [['restore'], 'changed'],
     ]);
   });
 
@@ -84,12 +84,17 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.commitMigration(note.id, NOTE_V2, { text: 'hello', title: 'T' });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ op: 'migrate', kind: 'changed', typeId: NOTE_V2, version: 2 });
+    expect(seen[0]).toMatchObject({
+      ops: ['migrate'],
+      kind: 'changed',
+      typeId: NOTE_V2,
+      version: 2,
+    });
   });
 
   test('a hard delete emits `purged` and nothing further', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
@@ -98,7 +103,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({
       kind: 'purged',
-      op: 'hard-delete',
+      ops: ['hard-delete'],
       recordId: note.id,
       typeId: NOTE,
       version: 2,
@@ -110,9 +115,9 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.update(note.id, { text: 'v2' });
+    await stack.patchContent(note.id, { text: 'v2' });
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.setPermissions(note.id, [{ access: 'public' }]);
+    await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
 
     expect(seen.map((c) => c.version)).toEqual([2, 3, 4]);
     // Read back rather than inferred: the last event agrees with storage.
@@ -136,8 +141,8 @@ describe('a mutation that changes nothing emits nothing', () => {
     ],
     [
       'setting a deep-equal permission set',
-      async (id: string) => stack.setPermissions(id, [{ access: 'public' }]),
-      async (id: string) => stack.setPermissions(id, [{ access: 'public' }]),
+      async (id: string) => stack.mutate(id, { permissions: [{ access: 'public' }] }),
+      async (id: string) => stack.mutate(id, { permissions: [{ access: 'public' }] }),
     ],
     [
       'deleting an already-deleted record',
@@ -174,8 +179,8 @@ describe('a mutation that changes nothing emits nothing', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await expect(stack.update(note.id, { text: null })).rejects.toThrow();
-    await expect(stack.update(note.id, { text: 'x' }, { ifVersion: 99 })).rejects.toThrow();
+    await expect(stack.patchContent(note.id, { text: null })).rejects.toThrow();
+    await expect(stack.patchContent(note.id, { text: 'x' }, { ifVersion: 99 })).rejects.toThrow();
 
     expect(seen).toEqual([]);
   });
@@ -197,9 +202,9 @@ describe('every record emits, including the ones a query hides', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.update('_config', { timezone: 'Europe/London' });
+    await stack.patchContent('_config', { timezone: 'Europe/London' });
 
-    expect(seen.map((c) => [c.recordId, c.op])).toEqual([['_config', 'update']]);
+    expect(seen.map((c) => [c.recordId, c.ops])).toEqual([['_config', ['patch']]]);
     // Addressable only by ID, so a query still cannot see it.
     const queried = await stack.query({});
     expect(queried.records.map((r) => r.id)).not.toContain('_config');
@@ -211,7 +216,7 @@ describe('every record emits, including the ones a query hides', () => {
 
     await stack.grant(AUTHOR, [{ actions: ['read-any'], typeId: NOTE }]);
 
-    expect(seen.map((c) => [c.kind, c.op])).toEqual([['created', 'create']]);
+    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['created', ['create']]]);
   });
 
   test('migrateAll fans out — one event per migrated record, no batch frame', async () => {
@@ -224,7 +229,7 @@ describe('every record emits, including the ones a query hides', () => {
 
     await stack.migrateAll('com.example.test/note');
 
-    expect(seen.map((c) => c.op)).toEqual(['migrate', 'migrate', 'migrate']);
+    expect(seen.map((c) => c.ops)).toEqual([['migrate'], ['migrate'], ['migrate']]);
     expect(seen.map((c) => c.recordId).sort()).toEqual([...ids].sort());
   });
 });
@@ -251,7 +256,7 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
 
     await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
 
-    expect(seen.map((c) => c.op)).toEqual(['create']);
+    expect(seen.map((c) => c.ops)).toEqual([['create']]);
   });
 
   test('the unlist transition emits kind "deleted" despite the post-change state', async () => {
@@ -259,9 +264,9 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.setUnlisted(note.id, true);
+    await stack.mutate(note.id, { unlisted: true });
 
-    expect(seen.map((c) => [c.kind, c.op])).toEqual([['deleted', 'unlist']]);
+    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['deleted', ['unlist']]]);
   });
 
   test('the list transition emits kind "changed", an upsert like undelete', async () => {
@@ -269,9 +274,9 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.setUnlisted(note.id, false);
+    await stack.mutate(note.id, { unlisted: false });
 
-    expect(seen.map((c) => [c.kind, c.op])).toEqual([['changed', 'list']]);
+    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['list']]]);
   });
 
   test('a hard delete of a still-unlisted record is not announced either', async () => {
@@ -295,9 +300,9 @@ describe('actor names who performed the change', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     const { id } = await stack.create(NOTE, { text: 'hello' });
-    await stack.update(id, { text: 'edited' });
+    await stack.patchContent(id, { text: 'edited' });
 
-    expect(seen.map((c) => c.op)).toEqual(['create', 'update']);
+    expect(seen.map((c) => c.ops)).toEqual([['create'], ['patch']]);
     expect(seen.every((c) => c.actor === undefined)).toBe(true);
   });
 
@@ -307,7 +312,7 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.asEntity(EDITOR).update(note.id, { text: 'edited' });
+    await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
 
     expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
     // The author rides the record, never the envelope.
@@ -321,7 +326,7 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.asEntity(APP, { onBehalfOf: EDITOR }).update(note.id, { text: 'edited' });
+    await stack.asEntity(APP, { onBehalfOf: EDITOR }).patchContent(note.id, { text: 'edited' });
 
     expect(seen[0]!.actor).toEqual({ entityId: EDITOR, principalId: APP });
   });
@@ -346,7 +351,7 @@ describe('actor names who performed the change', () => {
       { text: 'hello' },
       { entityId: AUTHOR, appId: 'com.example.app' },
     );
-    await stack.asEntity(EDITOR).update(note.id, { text: 'edited' });
+    await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
 
     expect(seen[0]!.actor).toEqual({ entityId: AUTHOR, appId: 'com.example.app' });
     // The creating app describes the record, not this change.
@@ -430,7 +435,7 @@ describe('filtering is exact', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE, kinds: ['deleted', 'purged'] } });
 
     const note = await stack.create(NOTE, { text: 'a' });
-    await stack.update(note.id, { text: 'b' });
+    await stack.patchContent(note.id, { text: 'b' });
     await stack.delete(note.id);
 
     expect(seen.map((c) => c.kind)).toEqual(['deleted']);
@@ -468,10 +473,10 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: from.id } });
 
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.op).toBe('reparent');
+    expect(seen[0]!.ops).toEqual(['reparent']);
     // The destination, so a subscriber comparing it to its own filter
     // reads this as a departure.
     expect(seen[0]!.parentId).toBe(to.id);
@@ -484,7 +489,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: to.id } });
 
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.parentId).toBe(to.id);
@@ -498,7 +503,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: watched.id } });
 
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
 
     expect(seen).toHaveLength(0);
   });
@@ -509,7 +514,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
 
-    await stack.setParent(note.id, null);
+    await stack.mutate(note.id, { parentId: null });
 
     expect(seen.map((c) => c.recordId)).toEqual([note.id]);
   });
@@ -520,7 +525,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
 
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.recordId).toBe(note.id);
@@ -535,9 +540,9 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
 
-    expect(seen.at(-1)).toMatchObject({ kind: 'changed', op: 'reparent' });
+    expect(seen.at(-1)).toMatchObject({ kind: 'changed', ops: ['reparent'] });
   });
 
   // Undoing a move is a move: a restore that puts a different container
@@ -546,14 +551,14 @@ describe('filtering is exact', () => {
     const from = await stack.create(NOTE, { text: 'from' });
     const to = await stack.create(NOTE, { text: 'to' });
     const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: to.id } });
 
     await stack.restoreVersion(note.id, 1);
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.op).toBe('restore');
+    expect(seen[0]!.ops).toEqual(['restore']);
     expect(seen[0]!.parentId).toBe(from.id);
   });
 
@@ -561,7 +566,7 @@ describe('filtering is exact', () => {
     const from = await stack.create(NOTE, { text: 'from' });
     const to = await stack.create(NOTE, { text: 'to' });
     const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
-    await stack.setParent(note.id, to.id);
+    await stack.mutate(note.id, { parentId: to.id });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: from.id } });
 
@@ -575,7 +580,7 @@ describe('filtering is exact', () => {
     const from = await stack.create(NOTE, { text: 'from' });
     const to = await stack.create(NOTE, { text: 'to' });
     const note = await stack.create(NOTE, { text: 'note' }, { parentId: to.id });
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: from.id } });
 
@@ -592,7 +597,7 @@ describe('filtering is exact', () => {
     await stack.subscribe(handler, { filter: { entityId: AUTHOR } });
 
     // Edited by someone else: the author is what the filter reads.
-    await stack.asEntity(EDITOR).update(authored.id, { text: 'edited' });
+    await stack.asEntity(EDITOR).patchContent(authored.id, { text: 'edited' });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
@@ -618,7 +623,7 @@ describe('the record body is an optional payload', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
 
     expect(seen[1]!.record).toMatchObject({ id: note.id, version: 2 });
     expect((seen[1]!.record as StackRecord).content).toEqual({ text: 'edited' });

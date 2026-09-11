@@ -4,12 +4,12 @@ import type {
   StackType,
   TypeId,
   RecordVersion,
+  RecordChanges,
   ActorOptions,
   StackQuery,
   QueryResult,
   RecordFilter,
   Association,
-  Permission,
   AdapterCapabilities,
   BlobFileInfo,
   QuerySort,
@@ -151,19 +151,38 @@ export class MemoryAdapter implements StackAdapter {
     );
   }
 
-  async patchContent(
+  async mutateRecord(
     id: string,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump(
-      { ...existing, content: applyMergePatch(existing.content, patch) },
-      opts,
-    );
+
+    // Destructured out so each optional native field is re-added only when
+    // the change set leaves it set — assigning `undefined` would leave the
+    // key present, which is how a record grows a `parentId: undefined` that
+    // every `in` check then reads as a container.
+    const { parentId: _p, unlistedAt: _u, ...rest } = existing;
+    let next: StackRecord = rest as StackRecord;
+
+    if (changes.contentPatch) {
+      next = { ...next, content: applyMergePatch(next.content, changes.contentPatch) };
+    }
+    if (changes.permissions) next = { ...next, permissions: changes.permissions };
+    if (changes.associations) next = withAssociations(next, changes.associations);
+
+    const parentId =
+      changes.parentId !== undefined ? changes.parentId : (existing.parentId ?? null);
+    if (parentId !== null) next = { ...next, parentId };
+
+    const unlisted =
+      changes.unlisted !== undefined ? changes.unlisted : Boolean(existing.unlistedAt);
+    if (unlisted) next = { ...next, unlistedAt: existing.unlistedAt ?? new Date() };
+
+    const updated = this.bump(next, opts);
     this.records.set(id, updated);
     return updated;
   }
@@ -383,56 +402,6 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
-  async setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ) {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump({ ...record, permissions }, opts);
-    this.records.set(id, updated);
-    return updated;
-  }
-
-  async setUnlisted(
-    id: string,
-    unlisted: boolean,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ) {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const { unlistedAt: _unlistedAt, ...rest } = record;
-    const updated = this.bump(
-      unlisted ? { ...rest, unlistedAt: new Date() } : (rest as StackRecord),
-      opts,
-    );
-    this.records.set(id, updated);
-    return updated;
-  }
-
-  async setParent(
-    id: string,
-    parentId: string | null,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ) {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const { parentId: _parentId, ...rest } = record;
-    const updated = this.bump(
-      parentId === null ? (rest as StackRecord) : { ...rest, parentId },
-      opts,
-    );
-    this.records.set(id, updated);
-    return updated;
-  }
-
   async getVersions(id: string) {
     return this.versions.get(id) ?? [];
   }
@@ -614,7 +583,7 @@ function withAssociations(record: StackRecord, associations: Association[]): Sta
 
 /**
  * Sets a record's container, omitting the key at the root — the same shape
- * setParent() leaves behind, and the one rowToRecord produces.
+ * a change set's `parentId` leaves behind, and the one rowToRecord produces.
  */
 function withParentId(record: StackRecord, parentId: string | null): StackRecord {
   const { parentId: _drop, ...rest } = record;

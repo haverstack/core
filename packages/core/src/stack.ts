@@ -59,7 +59,7 @@ import {
   passesUnlistedBoundary,
 } from './changes.js';
 import type { EmittedChange } from './changes.js';
-import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
+import { SYSTEM_TYPES, GRANT_ACTIONS, RECORD_CHANGE_KEYS } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -94,6 +94,7 @@ import type {
   ChangeActor,
   ChangeOp,
   RecordChange,
+  RecordChanges,
   SubscribeOptions,
   Unsubscribe,
 } from './types.js';
@@ -324,12 +325,11 @@ export type CreateRecordOptions = {
   /**
    * Create the record already unlisted, so the create event itself is
    * withheld from the feed — there is no window where the record exists
-   * and is listed before setUnlisted() catches up. See
+   * and is listed before a mutation catches up. See
    * docs/spec/unlisted.md.
    */
   unlisted?: boolean;
 };
-
 /**
  * CreateRecordOptions extended with createdAt/updatedAt, for backdating a
  * record's clock fields on import (e.g. migrating an existing archive with
@@ -853,7 +853,7 @@ function assertAttachmentSize(byteLength: number, attachmentBytes: number | null
 
 /**
  * The content half of the same pre-check, on Stack.create() and
- * Stack.update(). Local adapters declare `limits.contentBytes: null` and skip
+ * Stack.mutate(). Local adapters declare `limits.contentBytes: null` and skip
  * the serialization entirely; only a server declares a ceiling, and its
  * own request-size limit stays authoritative — this just spares an app the
  * round trip and gives it a typed failure instead of a 413 it has to
@@ -1135,26 +1135,24 @@ export interface StackClient {
   getEntityByDid(did: EntityId): Promise<StackRecord | null>;
   /** getEntityByDid() for the one DID every stack reserves: its own owner. */
   getOwnerEntity(): Promise<StackRecord | null>;
-  update(
+  /**
+   * Apply a change set: any combination of content patch, `parentId`,
+   * `permissions`, `associations` and `unlisted`, in one atomic write
+   * producing one version. Keys are read for presence, so `unlisted: false`
+   * and `parentId: null` are changes; a change set naming no key at all is
+   * a StackQueryError. Under ScopedStack each key carries its own gate and
+   * one refused key refuses the call.
+   * See docs/spec/data-model.md § Mutations.
+   */
+  mutate(id: string, changes: RecordChanges, opts?: IfVersionOptions): Promise<StackRecord>;
+  /** mutate() with `contentPatch` alone — the common case, named for it. */
+  patchContent(
     id: string,
-    content: Record<string, unknown | null>,
+    patch: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   associate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
   dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
-  setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts?: IfVersionOptions,
-  ): Promise<StackRecord>;
-  setUnlisted(id: string, unlisted: boolean, opts?: IfVersionOptions): Promise<StackRecord>;
-  /**
-   * Move a record into another container, or to the root with `null`.
-   * The only native field a write-holder may change after creation; it
-   * decides enumeration, never access. See docs/spec/data-model.md
-   * § Reparenting.
-   */
-  setParent(id: string, parentId: string | null, opts?: IfVersionOptions): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -1322,7 +1320,7 @@ export class Stack implements StackClient {
    * there is nothing left to fail. See docs/spec/events.md § Handlers.
    */
   private emitChange(
-    op: ChangeOp,
+    op: ChangeOp | ChangeOp[],
     record: StackRecord,
     opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
   ): void {
@@ -1874,91 +1872,143 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Update a record's content via JSON Merge Patch: omitted fields are
-   * kept, null removes a field. Validates the merged result against the
-   * record's *current* stored type and never changes typeId (see
-   * docs/spec/data-model.md § Type migrations); snapshots the prior state
-   * to version history. Associations and permissions have their own methods.
+   * Apply a change set — content patch, `parentId`, `permissions`,
+   * `associations`, `unlisted`, in any combination — as one atomic write
+   * producing one version and one snapshot. Keys are read for presence, so
+   * `unlisted: false` and `parentId: null` are changes.
+   *
+   * Every key present is checked against the record as it stands, and a
+   * change set already satisfied in all of them writes nothing and returns
+   * the record unchanged. The ops the change event carries are derived
+   * from that same comparison, so naming an aspect without moving it is
+   * never reported as moving it.
+   *
+   * Content is validated against the record's *current* stored type and
+   * `typeId` never changes (see docs/spec/data-model.md § Type
+   * migrations). See docs/spec/data-model.md § Mutations.
    */
-  async update(
+  async mutate(
     id: string,
-    content: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
+    assertNonEmptyChangeSet(changes);
+
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
 
-    const type = await this.getTypeCached(existing.typeId);
-    if (!type) {
-      throw new StackQueryError(`Unknown type: "${existing.typeId}"`);
-    }
+    const merged = await this.validateChangeSet(id, existing, changes);
 
-    // Checked on the raw patch, before the merge: a reserved key in a
-    // patch is lost by applyMergePatch rather than stored, and an
-    // `undefined` value is indistinguishable from an absent field once
-    // merged, so a check on the merged result would see neither. See
-    // validateReservedKeys() and validatePatchValues().
-    const patchErrors = [
-      ...validateReservedKeys(content),
-      ...validatePatchValues(content),
-      ...validateContentKeys(content),
-    ];
-    if (patchErrors.length > 0) {
-      throw new StackValidationError(patchErrors);
-    }
+    const ops = changeSetOps(existing, changes, merged);
+    // Nothing moved, so there is nothing to version. Decided here rather
+    // than in the adapter: "did this change anything" is a question about
+    // the record's meaning, and an adapter is never handed a write that
+    // writes nothing.
+    if (ops.length === 0) return existing;
 
-    // The patch is what travels, so the patch is what's measured — a small
-    // patch against a large record is not an oversized request.
-    assertContentSize(content, this.features.limits.contentBytes, 'Patch');
-
-    // Merge (RFC 7396 / JSON Merge Patch): null values delete a field.
-    const merged = applyMergePatch(existing.content, content);
-
-    const errors = validateContent(merged, type.schema);
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
-
-    if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-      this.checkAttachmentImmutableFields(
-        content,
-        existing.content as AttachmentContent,
-        merged as AttachmentContent,
-      );
-    }
-
-    await this.checkBindingsOnUpdate(
-      existing.typeId,
-      id,
-      content,
-      existing.content,
-      merged as Record<string, unknown>,
-    );
-
-    if (id === SYSTEM_TYPES.CONFIG) {
-      this.checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (merged as ConfigContent).entityId,
-      );
-    }
-
-    const updated = await this.adapter.patchContent(id, content, {
+    const previousParentId = existing.parentId ?? null;
+    const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
     });
-    this.emitChange('update', updated);
+    this.emitChange(ops, updated, ops.includes('reparent') ? { previousParentId } : {});
     return updated;
   }
 
   /**
+   * mutate() with `contentPatch` alone. The common case by a wide margin,
+   * and named for what it does rather than for a symmetry with create()
+   * that a patch does not have.
+   */
+  async patchContent(
+    id: string,
+    patch: Record<string, unknown | null>,
+    opts: IfVersionOptions & ActorOptions = {},
+  ): Promise<StackRecord> {
+    return this.mutate(id, { contentPatch: patch }, opts);
+  }
+
+  /**
+   * Every check a change set owes before anything is written, in one pass:
+   * one refused key refuses the call, so none of them may run after a
+   * partial write. Returns the merged content when the set carries a
+   * content patch, since the caller needs it to decide whether content
+   * actually moved.
+   *
+   * Parent existence and acyclicity are asked only when the destination
+   * differs from where the record already sits — a move to where it
+   * already is names no new edge, and would otherwise cost a read apiece.
+   */
+  private async validateChangeSet(
+    id: string,
+    existing: StackRecord,
+    changes: RecordChanges,
+  ): Promise<Record<string, unknown> | undefined> {
+    const { contentPatch, permissions, associations, parentId } = changes;
+
+    const errors = [
+      ...(contentPatch
+        ? [
+            ...validateReservedKeys(contentPatch),
+            ...validatePatchValues(contentPatch),
+            ...validateContentKeys(contentPatch),
+          ]
+        : []),
+      ...(permissions ? validatePermissions(permissions) : []),
+      ...(associations ? validateAssociations(associations) : []),
+    ];
+    if (errors.length > 0) throw new StackValidationError(errors);
+
+    let merged: Record<string, unknown> | undefined;
+    if (contentPatch) {
+      // The patch is what travels, so the patch is what's measured — a
+      // small patch against a large record is not an oversized request.
+      assertContentSize(contentPatch, this.features.limits.contentBytes, 'Patch');
+
+      const type = await this.getTypeCached(existing.typeId);
+      if (!type) {
+        throw new StackQueryError(`Unknown type: "${existing.typeId}"`);
+      }
+      merged = applyMergePatch(existing.content, contentPatch);
+
+      const contentErrors = validateContent(merged, type.schema);
+      if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
+
+      if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
+        this.checkAttachmentImmutableFields(
+          contentPatch,
+          existing.content as AttachmentContent,
+          merged as AttachmentContent,
+        );
+      }
+
+      await this.checkBindingsOnUpdate(existing.typeId, id, contentPatch, existing.content, merged);
+
+      if (id === SYSTEM_TYPES.CONFIG) {
+        this.checkConfigEntityIdUnchanged(
+          (existing.content as ConfigContent).entityId,
+          (merged as ConfigContent).entityId,
+        );
+      }
+    }
+
+    if (parentId !== undefined && parentId !== null && parentId !== (existing.parentId ?? null)) {
+      await this.assertParentExists(id, parentId);
+      await this.assertNoParentCycle(id, parentId);
+    }
+
+    return merged;
+  }
+
+  /**
    * Add an association to a record. Snapshots the record's prior state and
-   * bumps version, same as update() — associations are covered by the same
+   * bumps version, same as patchContent() — associations are covered by the same
    * versioning rule as content.
    * If the association already exists (same kind, label, and payload), this
    * is a no-op. Returns the record as it now stands — unchanged on a no-op.
@@ -2023,119 +2073,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Replace all permissions on a record. Snapshots and bumps version, same
-   * as associate(). Pass an empty array to make the record private (the
-   * default). No-op if the new set is deep-equal to the current one. Returns
-   * the record as it now stands — unchanged on a no-op.
-   */
-  async setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.assertOpen();
-    const errors = validatePermissions(permissions);
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    this.checkIfVersion(existing, opts.ifVersion);
-    if (permissionsEqual(existing.permissions ?? [], permissions)) return existing;
-
-    const updated = await this.adapter.setPermissions(id, permissions, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
-    this.emitChange('permissions', updated);
-    return updated;
-  }
-
-  /**
-   * Withhold a record from enumeration, or restore it. Orthogonal to
-   * setPermissions(): it says nothing about who may read the record, only
-   * whether `query()` and the change feed enumerate it by default. No-op if
-   * already in the requested state. Returns the record as it now stands —
-   * unchanged on a no-op. See docs/spec/access-control.md §
-   * Unlisted records.
-   *
-   * The op passed to emitChange() carries the transition direction —
-   * `unlist` (kind `deleted`, so subscribers already holding the record are
-   * told to drop it) or `list` (kind `changed`, an upsert like `undelete`,
-   * for the record's publish moment).
-   */
-  async setUnlisted(
-    id: string,
-    unlisted: boolean,
-    opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.assertOpen();
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    this.checkIfVersion(existing, opts.ifVersion);
-    if (Boolean(existing.unlistedAt) === unlisted) return existing;
-
-    const updated = await this.adapter.setUnlisted(id, unlisted, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
-    this.emitChange(unlisted ? 'unlist' : 'list', updated);
-    return updated;
-  }
-
-  /**
-   * Move a record into another container, or to the root with `null`.
-   * Snapshots and bumps version, same as setUnlisted(). No-op if the
-   * record is already there. Returns the record as it now stands —
-   * unchanged on a no-op.
-   *
-   * `parentId` is the one native field a write-holder may move after
-   * creation, and it confers nothing: containment is not an
-   * access-control edge, so a move changes which queries and feeds
-   * enumerate a record and nothing about who may read it. See
-   * docs/spec/data-model.md § Reparenting.
-   */
-  async setParent(
-    id: string,
-    parentId: string | null,
-    opts: IfVersionOptions & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.assertOpen();
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    this.checkIfVersion(existing, opts.ifVersion);
-    const previousParentId = existing.parentId ?? null;
-    if (previousParentId === parentId) return existing;
-
-    if (parentId !== null) {
-      await this.assertParentExists(id, parentId);
-      await this.assertNoParentCycle(id, parentId);
-    }
-
-    const updated = await this.adapter.setParent(id, parentId, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
-    this.emitChange('reparent', updated, { previousParentId });
-    return updated;
-  }
-
-  /**
    * Refuse an edge that would make a record its own ancestor — asked at
-   * every site that adds one: setParent(), a restore putting a container
-   * back, and a create naming both its own id and a parent. Nothing
+   * every site that adds one: a change set naming `parentId`, a restore
+   * putting a container back, and a create naming both its own id and a parent. Nothing
    * downstream (a generator deriving a page path, a folder view) is
    * written to survive a cycle.
    *
@@ -2374,7 +2314,7 @@ export class Stack implements StackClient {
     }
 
     // Restoring is a write like any other, so it owes the same immutability
-    // check update() pays — a snapshot taken before a card claimed its DID
+    // check a content patch pays — a snapshot taken before a card claimed its DID
     // would otherwise move the binding by rolling content back. Uniqueness
     // needs no separate check here: a restore can only put back a value this
     // same card already held, which immutability already refuses to change.
@@ -2388,7 +2328,7 @@ export class Stack implements StackClient {
     }
 
     // A restore that puts a container back is an edge-adding site like
-    // setParent(), and the chain above that container may have moved since
+    // a change set's `parentId`, and the chain above that container may have moved since
     // the snapshot was taken. The cycle walk therefore applies — but
     // assertParentExists() deliberately does not: a restore is not a caller
     // naming a destination, it is history being put back, and the container
@@ -2417,12 +2357,12 @@ export class Stack implements StackClient {
   /**
    * Commit a per-record migration: replace `content` and `typeId` together
    * in one step, validated against `toTypeId`'s schema exactly as
-   * create()/update() validate against a type's schema. The single-record
+   * create()/mutate() validate against a type's schema. The single-record
    * counterpart to migrateAll() — content here is supplied by the caller
    * (computed client-side by the type's owning app, per
    * docs/spec/wire-format.md § Migration commit) rather than a registered
    * Migration function. Snapshots the prior state to version history, same
-   * as update()/restoreVersion(), and takes the same optional `ifVersion`
+   * as mutate()/restoreVersion(), and takes the same optional `ifVersion`
    * precondition every version-bumping mutation takes — checked atomically
    * at the adapter, not here (see docs/spec/versioning.md § Optimistic
    * concurrency).
@@ -2432,7 +2372,7 @@ export class Stack implements StackClient {
    * record as it stands, so it owes both sets of integrity checks — the
    * binding rules, the attachment rules, and `_config`'s. Missing either
    * half would make migrate a second, unguarded write path to the same
-   * state create()/update() refuse to reach.
+   * state create()/mutate() refuse to reach.
    */
   async commitMigration(
     id: string,
@@ -2550,7 +2490,7 @@ export class Stack implements StackClient {
   /**
    * Immutability for every binding field a patch touches, then uniqueness
    * for the subset that carries it. Fields absent from the patch carry no
-   * new claim — update() is a merge, so an untouched binding is the one the
+   * new claim — a content patch is a merge, so an untouched binding is the one the
    * card already holds.
    */
   private async checkBindingsOnUpdate(
@@ -2784,7 +2724,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * `_config.entityId` defines stack ownership; neither update() nor
+   * `_config.entityId` defines stack ownership; neither patchContent() nor
    * restoreVersion() may change it. A conflict with stack integrity, not a
    * schema violation — hence StackConflictError. See docs/spec.md § The
    * `_config` record.
@@ -3427,6 +3367,97 @@ function permissionEqual(a: Permission, b: Permission): boolean {
   return false;
 }
 
+/**
+ * A change set has to name at least one aspect. Refused rather than read
+ * as a no-op: it addresses nothing, so there is nothing it could have
+ * failed to satisfy, and every way of producing one is a caller bug —
+ * typically a conditional that built an empty object.
+ * See docs/spec/data-model.md § Mutations.
+ */
+function assertNonEmptyChangeSet(changes: RecordChanges): void {
+  // Presence, not truthiness: `unlisted: false` and `parentId: null` are
+  // aspects this call names, and reading them as absent would drop a
+  // change the caller asked for.
+  if (RECORD_CHANGE_KEYS.some((key) => changes[key] !== undefined)) return;
+  throw new StackQueryError(
+    'A change set names at least one of: ' + RECORD_CHANGE_KEYS.join(', ') + '.',
+  );
+}
+
+/**
+ * Which aspects a change set actually moves, against the record as it
+ * stands — the no-op decision and the change event's `ops` are the same
+ * comparison, so they can never disagree. A key naming the value a record
+ * already holds contributes nothing.
+ *
+ * `merged` is the content the patch produces, computed once by the
+ * caller that had to validate it anyway.
+ * See docs/spec/events.md § The event shape.
+ */
+function changeSetOps(
+  existing: StackRecord,
+  changes: RecordChanges,
+  merged: Record<string, unknown> | undefined,
+): ChangeOp[] {
+  const ops: ChangeOp[] = [];
+
+  if (merged !== undefined && !contentEqual(existing.content, merged)) ops.push('patch');
+
+  if (changes.parentId !== undefined && changes.parentId !== (existing.parentId ?? null)) {
+    ops.push('reparent');
+  }
+
+  if (changes.permissions && !permissionsEqual(existing.permissions ?? [], changes.permissions)) {
+    ops.push('permissions');
+  }
+
+  if (changes.associations) {
+    const before = existing.associations ?? [];
+    const after = changes.associations;
+    if (after.some((a) => !before.some((b) => associationEqual(a, b)))) ops.push('associate');
+    if (before.some((b) => !after.some((a) => associationEqual(a, b)))) ops.push('dissociate');
+  }
+
+  if (changes.unlisted !== undefined && Boolean(existing.unlistedAt) !== changes.unlisted) {
+    ops.push(changes.unlisted ? 'unlist' : 'list');
+  }
+
+  return ops;
+}
+
+/**
+ * The change set narrowed to the aspects that actually moved. An adapter
+ * is handed this rather than what the caller wrote, so restating an aspect
+ * cannot rewrite it: `unlisted: true` on an already-unlisted record would
+ * otherwise drag `unlistedAt` forward, moving the record's publish moment
+ * with no op reporting it. It also keeps the adapter contract honest —
+ * every key an adapter receives is one it must write.
+ */
+function effectiveChanges(changes: RecordChanges, ops: ChangeOp[]): RecordChanges {
+  const effective: RecordChanges = {};
+  if (ops.includes('patch')) effective.contentPatch = changes.contentPatch;
+  if (ops.includes('reparent')) effective.parentId = changes.parentId;
+  if (ops.includes('permissions')) effective.permissions = changes.permissions;
+  if (ops.includes('associate') || ops.includes('dissociate')) {
+    effective.associations = changes.associations;
+  }
+  if (ops.includes('unlist') || ops.includes('list')) effective.unlisted = changes.unlisted;
+  return effective;
+}
+
+/**
+ * Whether a merge patch produced the content the record already held.
+ * Compared by serialization: content is JSON by construction — it round
+ * trips through storage that way — and a patch preserves key order for
+ * every field it does not name, so the encoding of an unchanged record is
+ * stable. A reordering patch that changes nothing else is the one case
+ * this reports as a change, which costs an empty version rather than a
+ * wrong answer.
+ */
+function contentEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function permissionsEqual(a: Permission[], b: Permission[]): boolean {
   return a.length === b.length && a.every((p, i) => permissionEqual(p, b[i]));
 }
@@ -3440,7 +3471,7 @@ const DEFAULT_QUERY_LIMIT = 50;
 const MAX_QUERY_LIMIT = 1000;
 
 /**
- * How far setParent() will walk a proposed ancestor chain before refusing
+ * How far a change set's `parentId` will walk a proposed ancestor chain before refusing
  * the move. Bounds the reads one call can cost; a hierarchy deeper than
  * this is beyond what `parentId` is for. See docs/spec/data-model.md
  * § Reparenting.
@@ -3911,7 +3942,7 @@ export class ScopedStack implements StackClient {
    * `_group` records are managed, not merely written: only the owner or an
    * `admin` roster holder may mutate them — ordinary write permissions and
    * grants don't apply. Asked of both identities under delegation, like
-   * setPermissions(). See docs/spec/identity.md § Group.
+   * a reshare. See docs/spec/identity.md § Group.
    */
   private isGroupManager(record: StackRecord): boolean {
     if (!this.managesGroup(this.principalEntityId, record)) return false;
@@ -4087,7 +4118,7 @@ export class ScopedStack implements StackClient {
    * Gates file-ref content fields on file access, mirroring the
    * attachment-association gate — a file-ref field conveys attachment
    * access exactly like an `attachment` association. Only fields present
-   * in `content` are checked (update() is a merge patch; untouched fields
+   * in `content` are checked (a content patch is a merge patch; untouched fields
    * carry no new reference).
    */
   private async requireFileRefAccess(
@@ -4215,7 +4246,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * Whether this request may decide who else reaches a record — the rule
-   * setPermissions() enforces, asked at create time too so the reach it
+   * a reshare enforces, asked at create time too so the reach it
    * withholds can't be taken one step earlier while authoring. A delegated
    * app is denied it: widening access is the one thing containment most
    * needs to hold. Refused rather than silently ignored, so an app never
@@ -4230,7 +4261,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * Whether one identity, on its own, may decide who else reaches `record`
-   * — the owner-or-creator rule setPermissions() enforces, asked of one
+   * — the owner-or-creator rule a reshare enforces, asked of one
    * side at a time. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    */
@@ -4316,35 +4347,121 @@ export class ScopedStack implements StackClient {
     return { records, cursor: page.cursor };
   }
 
-  async update(
+  /**
+   * Apply a change set on behalf of the subject. Authority is resolved
+   * **per key** and every gate reads the record as it stands, never as the
+   * change set would leave it: a widened `permissions` never satisfies the
+   * read check on a `parentId` named in the same call, and a `_group`
+   * roster never satisfies the admin check that same call has to pass.
+   * One refused key refuses the whole call, so nothing is partially
+   * applied and no key is silently dropped.
+   * See docs/spec/access-control.md § Composing a change set.
+   */
+  async mutate(
     id: string,
-    content: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id);
-    // Ahead of the binding fences below, which compare the patch's value
-    // for a field against the stored one: `undefined` names a field
-    // without claiming a value, so it is refused as a malformed patch
-    // rather than read as a change. See Stack.update() for the same check
-    // on every other path into a patch.
-    const patchErrors = validatePatchValues(content);
-    if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
-    // Value-wise, not presence-wise: a client that reads a card, edits its
-    // `name` and sends the whole content object back is not setting the
-    // binding it round-trips, and `name` is writable by record-level
-    // permission. Same predicate restoreVersion() applies to a snapshot.
-    this.requireOwnerForAppIdentity(
-      record.typeId,
-      (field) =>
-        field in content && content[field] !== (record.content as Record<string, unknown>)[field],
-    );
-    // Likewise value-wise: re-sending the DID a card already holds claims
-    // nothing, and immutability refuses changing it regardless.
-    if ('did' in content && content.did !== (record.content as Record<string, unknown>).did) {
-      this.requireOwnerForOwnerDid(record.typeId, content.did);
+    // Ahead of every gate: a malformed change set is a validation error
+    // for every requester, rather than one for the owner and a permission
+    // refusal for everyone else.
+    assertNonEmptyChangeSet(changes);
+    if (changes.contentPatch) {
+      const patchErrors = validatePatchValues(changes.contentPatch);
+      if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
     }
-    await this.requireFileRefAccess(record.typeId, content);
-    return this.stack.update(id, content, { ...opts, ...this.actor });
+
+    const reshares = changes.permissions !== undefined || changes.unlisted !== undefined;
+    const writes =
+      changes.contentPatch !== undefined ||
+      changes.associations !== undefined ||
+      changes.parentId !== undefined;
+
+    // requireUpdatable() reads the record and applies the write gate; the
+    // reshare keys need the record before their own gate, and a change set
+    // carrying only those must not be held to the write gate it doesn't
+    // need. One read either way.
+    const record = writes ? await this.requireUpdatable(id) : await this.requireReshareable(id);
+    if (writes && reshares) await this.requireReshareOf(record);
+
+    if (changes.contentPatch) {
+      const patch = changes.contentPatch;
+      // Value-wise, not presence-wise: a client that reads a card, edits
+      // its `name` and sends the whole content object back is not setting
+      // the binding it round-trips, and `name` is writable by record-level
+      // permission. Same predicate restoreVersion() applies to a snapshot.
+      this.requireOwnerForAppIdentity(
+        record.typeId,
+        (field) =>
+          field in patch && patch[field] !== (record.content as Record<string, unknown>)[field],
+      );
+      // Likewise value-wise: re-sending the DID a card already holds
+      // claims nothing, and immutability refuses changing it regardless.
+      if ('did' in patch && patch.did !== (record.content as Record<string, unknown>).did) {
+        this.requireOwnerForOwnerDid(record.typeId, patch.did);
+      }
+      await this.requireFileRefAccess(record.typeId, patch);
+    }
+
+    // Every association the change set would add is a reference this
+    // requester has to be allowed to create — asked against the stored
+    // set, so an association already on the record is not re-gated.
+    for (const assoc of changes.associations ?? []) {
+      if ((record.associations ?? []).some((a) => associationEqual(a, assoc))) continue;
+      await this.requireAssociationAccess(record.typeId, assoc);
+    }
+
+    if (changes.parentId != null && !(await this.canReadReferent(changes.parentId))) {
+      throw new StackPermissionError();
+    }
+
+    return this.stack.mutate(id, changes, { ...opts, ...this.actor });
+  }
+
+  async patchContent(
+    id: string,
+    patch: Record<string, unknown | null>,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.mutate(id, { contentPatch: patch }, opts);
+  }
+
+  /**
+   * The record, having established that this request may decide who else
+   * reaches it — the owner-or-creator rule, asked of both sides of a
+   * delegation, or a Group's admin rule for a `_group`. The gate the
+   * `permissions` and `unlisted` keys carry, which the write bit
+   * deliberately does not confer.
+   */
+  private async requireReshareable(id: string): Promise<StackRecord> {
+    const record = await this.stack.get(id);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    await this.requireOwnerForGrantRecord(record);
+    await this.requireReshareOf(record);
+    // Reached through its own gate rather than requireUpdatable(), so the
+    // soft-delete refusal has to be asked here too — after the authority
+    // decision above, for the reason refuseIfDeleted() gives.
+    return this.refuseIfDeleted(record, true);
+  }
+
+  /** The reshare decision alone, for a record already read and write-gated. */
+  private async requireReshareOf(record: StackRecord): Promise<void> {
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+      // Group management, not authorship: a creator later demoted from the
+      // admin roster shouldn't retain a side door to reassign who can read
+      // or write the group record.
+      if (!this.isGroupManager(record)) throw await this.denialFor(record);
+      return;
+    }
+    // Intersected like every other authority here: the principal must hold
+    // the verb, and the subject must be able to reach this record —
+    // without which an owner principal would carry its subject to records
+    // the subject cannot touch. create() withholds the same reach via
+    // mayGrantAccess().
+    if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
+    if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
+      throw await this.denialFor(record);
+    }
   }
 
   /**
@@ -4460,92 +4577,6 @@ export class ScopedStack implements StackClient {
     return this.stack.dissociate(id, association, { ...opts, ...this.actor });
   }
 
-  async setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    await this.requireOwnerForGrantRecord(record);
-
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      // Group management, not authorship: a creator later demoted from the
-      // admin roster shouldn't retain a side door to reassign who can read
-      // or write the group record. Same gate as update/associate/delete.
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-    } else {
-      // Intersected like every other authority here: the principal must
-      // hold the verb, and the subject must be able to reach this record —
-      // without which an owner principal would carry its subject to records
-      // the subject cannot touch. create() withholds the same reach via
-      // mayGrantAccess().
-      if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
-      if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
-        throw await this.denialFor(record);
-      }
-    }
-    // Reached through its own gate rather than requireUpdatable(), so the
-    // soft-delete refusal has to be asked here too — after the authority
-    // decision above, for the reason refuseIfDeleted() gives.
-    this.refuseIfDeleted(record, true);
-
-    return this.stack.setPermissions(id, permissions, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Withhold a record from enumeration, or restore it — gated exactly like
-   * setPermissions(), since both decide who or what can discover the
-   * record rather than merely read it once found. See
-   * docs/spec/unlisted.md.
-   */
-  async setUnlisted(
-    id: string,
-    unlisted: boolean,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    await this.requireOwnerForGrantRecord(record);
-
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-    } else {
-      if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
-      if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
-        throw await this.denialFor(record);
-      }
-    }
-    // See setPermissions() above — same gate, same reason.
-    this.refuseIfDeleted(record, true);
-
-    return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Move a record into another container, or to the root with `null`.
-   * Gated as an ordinary write on the record, plus read access to the
-   * destination — the same reference gate `create()` applies to a
-   * `parentId`, asked again here so a move cannot reach a container an
-   * authoring call could not have named. Not reshare-gated like
-   * setUnlisted(): containment decides which listings enumerate a record,
-   * never who may read it, so a move discloses it to nobody who could not
-   * already read it. The origin is ungated — knowing it requires reading
-   * the record, which this caller has already had to do. See
-   * docs/spec/access-control.md § Reference-creation gating.
-   */
-  async setParent(
-    id: string,
-    parentId: string | null,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    await this.requireUpdatable(id);
-    if (parentId !== null && !(await this.canReadReferent(parentId))) {
-      throw new StackPermissionError();
-    }
-    return this.stack.setParent(id, parentId, { ...opts, ...this.actor });
-  }
-
   /**
    * Hard delete is owner-only: it is irreversible and destroys version
    * history, so neither the write bit nor delete-own/delete-any grants
@@ -4572,7 +4603,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * History is the mutation/recovery surface, not a read surface — gated
-   * like update(), with snapshot `permissions` stripped for everyone but
+   * like patchContent(), with snapshot `permissions` stripped for everyone but
    * the owner acting alone — a snapshot's permissions are the stack's
    * sharing graph, which delegation is not a route to. Reading history
    * changes nothing, so it is the one path the `_grant` write fence leaves
@@ -4599,7 +4630,7 @@ export class ScopedStack implements StackClient {
    * Re-runs the reference-creation checks against the snapshot, so a
    * restore can't re-convey access to a file or record the subject can no
    * longer reach today — the snapshot's `parentId` among them, gated
-   * exactly as setParent() gates a destination named directly. Only the
+   * exactly as a change set's `parentId` gates a destination named directly. Only the
    * owner acting alone is exempt: under delegation the checks resolve
    * against the subject, which is whose reach the restore would widen.
    * See docs/spec/versioning.md § Restore semantics.
@@ -4614,7 +4645,7 @@ export class ScopedStack implements StackClient {
       const target = await this.stack.getVersion(id, version);
       if (target) {
         // A rollback that would move a card's binding is the same trust
-        // decision update() reserves to the owner, reached by another route.
+        // decision a content patch reserves to the owner, reached by another route.
         this.requireOwnerForAppIdentity(
           record.typeId,
           (field) =>
@@ -4654,7 +4685,7 @@ export class ScopedStack implements StackClient {
    * The restriction is what makes the verb safe to expose at all. Migrate
    * replaces `content` and `typeId` wholesale, so a grant-based version
    * would have to re-derive every gate `create()` applies at the
-   * destination *and* every gate `update()` applies over the existing
+   * destination *and* every gate `mutate()` applies over the existing
    * content, and would reopen each one it missed. The sharpest is the
    * non-owner `_attachment@1` refusal create() carries: without it, a
    * requester holding a create grant on `_attachment@1` and write access

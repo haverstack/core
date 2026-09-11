@@ -14,7 +14,15 @@
 import { isOwnerActingAlone } from './access.js';
 import { StackQueryError, StackValidationError } from './stack.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
-import type { Association, EntityId, Permission, TokenSession, TypeId } from './types.js';
+import { RECORD_CHANGE_KEYS } from './types.js';
+import type {
+  Association,
+  EntityId,
+  Permission,
+  RecordChanges,
+  TokenSession,
+  TypeId,
+} from './types.js';
 
 /**
  * A `POST /records` body as the three arguments `ScopedStack.create()`
@@ -120,4 +128,72 @@ export function createOptionsFromWireRecord(
   }
 
   return { typeId, content: content as Record<string, unknown>, options };
+}
+
+/**
+ * Read a `PATCH /records/:id` body as a change set. The envelope's keys
+ * are native aspects, so an unrecognized one is a client reaching for
+ * something this endpoint does not have — refused rather than ignored,
+ * since a dropped `permissions` silently fails to share and a dropped
+ * `unlisted` silently fails to publish.
+ *
+ * `StackQueryError` (400) for a key that addresses nothing and
+ * `StackValidationError` (422) for one whose value is the wrong shape —
+ * the same split every other write endpoint makes. Content keys are
+ * `Stack`'s to judge, so `contentPatch` is checked for being an object and
+ * nothing more.
+ * See docs/spec/wire-format.md § Records.
+ */
+export function changesFromWireBody(body: unknown): RecordChanges {
+  const envelope = requireBody(body);
+
+  const unknown = Object.keys(envelope).filter(
+    (key) => !(RECORD_CHANGE_KEYS as readonly string[]).includes(key),
+  );
+  if (unknown.length > 0) {
+    throw new StackQueryError(
+      `Unknown change-set key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
+        `A change set names one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
+    );
+  }
+
+  const changes: RecordChanges = {};
+
+  if (envelope.contentPatch !== undefined) {
+    const patch = envelope.contentPatch;
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch))
+      fieldError('contentPatch', 'contentPatch must be an object');
+    changes.contentPatch = patch as Record<string, unknown | null>;
+  }
+
+  // The one key `null` is a value for rather than a removal spelling: it
+  // is the root, the same sentinel `?parentId=null` carries.
+  if (envelope.parentId !== undefined) {
+    const parentId = envelope.parentId;
+    if (parentId !== null && typeof parentId !== 'string')
+      fieldError('parentId', 'parentId must be a string or null');
+    changes.parentId = parentId;
+  }
+
+  const permissions = optionalArray<Permission>(envelope, 'permissions');
+  if (permissions !== undefined) changes.permissions = permissions;
+  const associations = optionalArray<Association>(envelope, 'associations');
+  if (associations !== undefined) changes.associations = associations;
+
+  if (envelope.unlisted !== undefined) {
+    if (typeof envelope.unlisted !== 'boolean')
+      fieldError('unlisted', 'unlisted must be a boolean');
+    changes.unlisted = envelope.unlisted;
+  }
+
+  // Every key was absent. Refused here rather than left to mutate(), so a
+  // server answers 400 without a storage round trip; mutate() refuses it
+  // again for callers that never went through the wire.
+  if (Object.keys(changes).length === 0) {
+    throw new StackQueryError(
+      `An empty change set addresses nothing. Name one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
+    );
+  }
+
+  return changes;
 }

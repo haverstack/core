@@ -564,7 +564,8 @@ export function isRetryableAuthError(code: WireAuthErrorCode): boolean {
  */
 export type WireRecordChange = {
   kind: ChangeKind;
-  op: ChangeOp;
+  /** Every aspect this version moved; never empty. See RecordChange.ops. */
+  ops: ChangeOp[];
   recordId: string;
   typeId: string;
   version: number;
@@ -597,7 +598,9 @@ export type WireChangeActor = {
 export function serializeChange(c: RecordChange): WireRecordChange {
   const w: WireRecordChange = {
     kind: c.kind,
-    op: c.op,
+    // Copied, not aliased: a frame is serialized once and delivered to
+    // every subscriber, and the array it came from belongs to the emission.
+    ops: [...c.ops],
     recordId: c.recordId,
     typeId: c.typeId,
     version: c.version,

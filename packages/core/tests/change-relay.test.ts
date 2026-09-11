@@ -43,7 +43,7 @@ class RelayingMemoryAdapter extends MemoryAdapter {
 
 const remoteChange = (overrides: Partial<RecordChange> = {}): RecordChange => ({
   kind: 'changed',
-  op: 'update',
+  ops: ['patch'],
   recordId: '1hk153x00001',
   typeId: NOTE,
   version: 4,
@@ -102,10 +102,10 @@ describe('a stack whose adapter relays', () => {
     await stack.subscribe((c) => void seen.push(c), { filter: { typeId: NOTE } });
 
     adapter.relays[0]!.push(
-      remoteChange({ kind: 'purged', op: 'hard-delete', actor: { entityId: OWNER } }),
+      remoteChange({ kind: 'purged', ops: ['hard-delete'], actor: { entityId: OWNER } }),
     );
 
-    expect(seen[0]).toMatchObject({ kind: 'purged', op: 'hard-delete' });
+    expect(seen[0]).toMatchObject({ kind: 'purged', ops: ['hard-delete'] });
     expect(seen[0]).not.toHaveProperty('record');
   });
 
@@ -140,7 +140,7 @@ describe('a stack whose adapter relays', () => {
     await stack.create(NOTE, { text: 'written here' });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ kind: 'created', op: 'create' });
+    expect(seen[0]).toMatchObject({ kind: 'created', ops: ['create'] });
   });
 
   test('stops the relay and the local stream on unsubscribe', async () => {

@@ -28,7 +28,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
-  Permission,
+  RecordChanges,
 } from '@haverstack/core';
 import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
 import {
@@ -131,12 +131,12 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
     return this.record.getRecord(id);
   }
 
-  patchContent(
+  mutateRecord(
     id: string,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
-    return this.record.patchContent(id, patch, opts);
+    return this.record.mutateRecord(id, changes, opts);
   }
 
   deleteRecord(
@@ -151,30 +151,6 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
-  }
-
-  setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setPermissions(id, permissions, opts);
-  }
-
-  setUnlisted(
-    id: string,
-    unlisted: boolean,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setUnlisted(id, unlisted, opts);
-  }
-
-  setParent(
-    id: string,
-    parentId: string | null,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setParent(id, parentId, opts);
   }
 
   restoreVersion(
