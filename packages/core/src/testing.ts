@@ -20,7 +20,7 @@ import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
 import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
-import { targetEqual } from './stack.js';
+import { targetEqual } from './record-changes.js';
 
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);

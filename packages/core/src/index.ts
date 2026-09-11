@@ -16,7 +16,8 @@
  */
 
 // Core class and client interface
-export { Stack, ScopedStack } from './stack.js';
+export { Stack } from './stack.js';
+export { ScopedStack } from './scoped-stack.js';
 export type {
   StackClient,
   CreateRecordOptions,
