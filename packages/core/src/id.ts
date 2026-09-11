@@ -37,13 +37,6 @@ export class IdGenerationError extends Error {
   }
 }
 
-export class IdGenerationOverflowError extends IdGenerationError {
-  constructor(message = '') {
-    super(message || 'Too many IDs have been generated in the same millisecond.');
-    this.name = 'IdGenerationOverflowError';
-  }
-}
-
 // -------------------------------------------------------
 // Encoding / decoding
 // -------------------------------------------------------
@@ -106,12 +99,10 @@ const generateRandChars = (): string => {
   return pad(crockford32Encode(value % modulus), RAND_SUFFIX_LENGTH);
 };
 
-const incrementRandChars = (randChars: string): string => {
+/** The next suffix after `randChars`, or null once the space is spent. */
+const incrementRandChars = (randChars: string): string | null => {
   const next = crockford32Encode(crockford32Decode(randChars) + 1);
-  if (next.length > RAND_SUFFIX_LENGTH) {
-    throw new IdGenerationOverflowError();
-  }
-  return pad(next, RAND_SUFFIX_LENGTH);
+  return next.length > RAND_SUFFIX_LENGTH ? null : pad(next, RAND_SUFFIX_LENGTH);
 };
 
 // -------------------------------------------------------
@@ -162,15 +153,26 @@ export const MAX_ID_TIMESTAMP = Math.pow(BASE, MIN_TIMESTAMP_LENGTH) - 1;
 /**
  * Generate a new Stack record ID. Time-sortable: lexicographic order
  * matches creation order, with same-millisecond IDs monotonically
- * incremented. Throws IdGenerationOverflowError past 32^3 IDs in one
- * millisecond.
+ * incremented.
+ *
+ * A millisecond whose suffix space is spent carries into the next one
+ * rather than failing, so how many IDs a millisecond holds never depends
+ * on where its random suffix happened to start — which is what keeps the
+ * order total and the call free of a capacity a caller cannot see.
+ * See docs/spec/data-model.md § Record IDs.
  *
  * @param timestamp - Override the timestamp (ms since epoch). Defaults to Date.now().
  */
 export const generateId = (timestamp: number = Date.now()): string => {
-  const effectiveTimestamp = Math.max(timestamp, lastTimestamp);
-  const nowId = pad(crockford32Encode(effectiveTimestamp), MIN_TIMESTAMP_LENGTH);
-  const randChars = nowId !== lastNowId ? generateRandChars() : incrementRandChars(lastRandChars);
+  let effectiveTimestamp = Math.max(timestamp, lastTimestamp);
+  let nowId = pad(crockford32Encode(effectiveTimestamp), MIN_TIMESTAMP_LENGTH);
+  let randChars = nowId === lastNowId ? incrementRandChars(lastRandChars) : generateRandChars();
+
+  if (randChars === null) {
+    effectiveTimestamp += 1;
+    nowId = pad(crockford32Encode(effectiveTimestamp), MIN_TIMESTAMP_LENGTH);
+    randChars = generateRandChars();
+  }
 
   lastTimestamp = effectiveTimestamp;
   lastNowId = nowId;
