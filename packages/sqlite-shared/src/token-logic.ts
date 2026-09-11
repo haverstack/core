@@ -11,6 +11,13 @@ import type { TokenInfo } from '@haverstack/core/wire';
 import type { SqlExecutor } from './executor.js';
 import { toMs, fromMs } from './mappers.js';
 
+/**
+ * How a bearer token is reduced to what the `tokens` table stores. One
+ * function because createToken and lookupToken must agree exactly — a
+ * divergence would silently make every issued token unlookupable.
+ */
+const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
+
 export type SharedTokenLogicDeps = {
   exec: SqlExecutor;
 };
@@ -28,7 +35,7 @@ export class SharedTokenLogic {
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');
     const token = randomBytes(32).toString('hex');
-    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const tokenHash = hashToken(token);
     this.exec.run(
       'INSERT INTO tokens (id, token_hash, principal_id, subject_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [
@@ -47,7 +54,7 @@ export class SharedTokenLogic {
   }
 
   async lookupToken(token: string): Promise<TokenSession | null> {
-    const hash = createHash('sha256').update(token).digest('hex');
+    const hash = hashToken(token);
     const row = this.exec.get<{
       principal_id: string;
       subject_id: string;
