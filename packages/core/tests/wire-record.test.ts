@@ -1,5 +1,9 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { createOptionsFromWireRecord, isOwnerActingAlone } from '../src/wire-entry.js';
+import {
+  createOptionsFromWireRecord,
+  changesFromWireBody,
+  isOwnerActingAlone,
+} from '../src/wire-entry.js';
 import { Stack, StackQueryError, StackValidationError } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackRecord, TokenSession } from '../src/types.js';
@@ -256,5 +260,62 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
     );
     expect(record.entityId).toBe(MEMBER);
     expect(record.principalId).toBeUndefined();
+  });
+});
+
+describe('changesFromWireBody', () => {
+  test('reads every change-set key', () => {
+    expect(
+      changesFromWireBody({
+        contentPatch: { title: 'x', dropped: null },
+        parentId: 'box1',
+        permissions: [{ access: 'public' }],
+        associations: [{ kind: 'tag', label: 'starred' }],
+        unlisted: false,
+      }),
+    ).toEqual({
+      contentPatch: { title: 'x', dropped: null },
+      parentId: 'box1',
+      permissions: [{ access: 'public' }],
+      associations: [{ kind: 'tag', label: 'starred' }],
+      unlisted: false,
+    });
+  });
+
+  // Presence, not truthiness: both of these name an aspect to change.
+  test('keeps parentId: null and unlisted: false', () => {
+    expect(changesFromWireBody({ parentId: null })).toEqual({ parentId: null });
+    expect(changesFromWireBody({ unlisted: false })).toEqual({ unlisted: false });
+  });
+
+  test('an empty envelope addresses nothing and is a bad request', () => {
+    expect(() => changesFromWireBody({})).toThrow(StackQueryError);
+  });
+
+  // Dropped rather than refused, a stray key would let a client believe it
+  // published something it did not.
+  test('an unrecognized top-level key is refused rather than ignored', () => {
+    expect(() => changesFromWireBody({ contentPatch: {}, frobnicate: 1 })).toThrow(StackQueryError);
+    expect(() => changesFromWireBody({ typeId: 'com.example/note@2' })).toThrow(StackQueryError);
+  });
+
+  // A native field spelled at the top level is the envelope's; the same
+  // name inside contentPatch is content, and never reaches this parser.
+  test('a content key is not mistaken for an envelope key', () => {
+    expect(changesFromWireBody({ contentPatch: { parentId: 'clipped-from' } })).toEqual({
+      contentPatch: { parentId: 'clipped-from' },
+    });
+  });
+
+  test('a key whose value is the wrong shape names the field', () => {
+    expect(() => changesFromWireBody({ contentPatch: [] })).toThrow(StackValidationError);
+    expect(() => changesFromWireBody({ parentId: 7 })).toThrow(StackValidationError);
+    expect(() => changesFromWireBody({ unlisted: 'yes' })).toThrow(StackValidationError);
+    expect(() => changesFromWireBody({ permissions: {} })).toThrow(StackValidationError);
+  });
+
+  test('a non-object body is a bad request', () => {
+    expect(() => changesFromWireBody(null)).toThrow(StackQueryError);
+    expect(() => changesFromWireBody([])).toThrow(StackQueryError);
   });
 });

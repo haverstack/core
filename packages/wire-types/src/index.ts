@@ -76,7 +76,7 @@ export type WireType = {
  * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
  * root. A snapshot is state, not an instruction, so it takes the same
  * shape the record it describes takes — `null` is an input spelling
- * (`PUT /records/:id/parent`, a `parentId=null` filter) and never appears
+ * (a change set's `parentId`, a `parentId=null` filter) and never appears
  * on a response. See docs/spec/wire-format.md § Versions.
  */
 export type WireVersion = {
@@ -564,7 +564,8 @@ export function isRetryableAuthError(code: WireAuthErrorCode): boolean {
  */
 export type WireRecordChange = {
   kind: ChangeKind;
-  op: ChangeOp;
+  /** Every aspect this version moved; never empty. See RecordChange.ops. */
+  ops: ChangeOp[];
   recordId: string;
   typeId: string;
   version: number;
@@ -597,7 +598,9 @@ export type WireChangeActor = {
 export function serializeChange(c: RecordChange): WireRecordChange {
   const w: WireRecordChange = {
     kind: c.kind,
-    op: c.op,
+    // Copied, not aliased: a frame is serialized once and delivered to
+    // every subscriber, and the array it came from belongs to the emission.
+    ops: [...c.ops],
     recordId: c.recordId,
     typeId: c.typeId,
     version: c.version,

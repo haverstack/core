@@ -74,7 +74,7 @@ const recordFrame = (id: string, change: Record<string, unknown>): string =>
 
 const CHANGED = {
   kind: 'changed',
-  op: 'update',
+  ops: ['patch'],
   recordId: '1hk153x00001',
   typeId: 'com.example/note@1',
   version: 7,
@@ -265,7 +265,7 @@ describe('frames', () => {
 
     expect(seen[0]).toMatchObject({
       kind: 'changed',
-      op: 'update',
+      ops: ['patch'],
       recordId: '1hk153x00001',
       version: 7,
       actor: { entityId: EDITOR },
@@ -307,7 +307,7 @@ describe('frames', () => {
     stream.write(
       recordFrame('AA3f1S', {
         kind: 'purged',
-        op: 'hard-delete',
+        ops: ['hard-delete'],
         recordId: '1hk153x00002',
         typeId: 'com.example/note@1',
         version: 4,

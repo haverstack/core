@@ -141,11 +141,18 @@ const note = await stack.create('com.example.myapp/note@1', {
   title: 'My first note',
 });
 
-// Update it (partial merge — only changed fields needed)
-await stack.update(note.id, { title: 'Updated title' });
+// Update its content (partial merge — only changed fields needed)
+await stack.patchContent(note.id, { title: 'Updated title' });
 
 // Tag it
 await stack.associate(note.id, { kind: 'tag', label: 'favourite' });
+
+// Or change several things at once — one version, one atomic write
+await stack.mutate(note.id, {
+  contentPatch: { title: 'Final title' },
+  permissions: [{ access: 'public' }],
+  unlisted: false,
+});
 
 // Query
 const notes = await stack.query({

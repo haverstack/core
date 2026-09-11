@@ -101,7 +101,7 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
  */
 export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
   if (includeUnlisted) return true;
-  if (emitted.change.op === 'unlist') return true;
+  if (emitted.change.ops.includes('unlist')) return true;
   return !emitted.record.unlistedAt;
 }
 
@@ -248,18 +248,22 @@ class UnscopedSubscription extends Subscription {
  * whose it was. See docs/spec/events.md § Purged records carry nothing.
  */
 export function buildEmission(
-  op: ChangeOp,
+  ops: ChangeOp | ChangeOp[],
   record: StackRecord,
   opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
 ): EmittedChange {
-  const kind = CHANGE_KINDS[op];
+  const list = Array.isArray(ops) ? ops : [ops];
+  if (list.length === 0) {
+    throw new Error('buildEmission: a change reports at least one op');
+  }
+  const kind = resolveKind(list);
 
   if (kind === 'purged') {
     return {
       record,
       change: {
         kind,
-        op,
+        ops: list,
         recordId: record.id,
         typeId: record.typeId,
         version: record.version,
@@ -275,7 +279,7 @@ export function buildEmission(
     ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
     change: {
       kind,
-      op,
+      ops: list,
       recordId: record.id,
       typeId: record.typeId,
       version: record.version,
@@ -337,9 +341,25 @@ export class ChangeEmitter {
 }
 
 /** The kind each op produces. See docs/spec/events.md § The event shape. */
+/**
+ * The kind a set of ops resolves to: the most conservative entry wins.
+ * `unlist` beats everything a change set can carry beside it, because a
+ * subscriber holding the record still has to drop it — announcing an
+ * edit bundled with an unlist as an upsert would leave a stale copy
+ * behind. Nothing else competes: `created` and `purged` name whole-record
+ * transitions that are always emitted alone, so a multi-op set is always
+ * `changed` unless it unlists.
+ * See docs/spec/events.md § The event shape.
+ */
+function resolveKind(ops: ChangeOp[]): ChangeKind {
+  if (ops.includes('unlist')) return 'deleted';
+  if (ops.length === 1) return CHANGE_KINDS[ops[0]!];
+  return 'changed';
+}
+
 export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   create: 'created',
-  update: 'changed',
+  patch: 'changed',
   associate: 'changed',
   dissociate: 'changed',
   permissions: 'changed',

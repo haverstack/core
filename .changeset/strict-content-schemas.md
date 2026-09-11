@@ -5,7 +5,7 @@
 Hold content to the type's schema, and hold a schema to being one
 
 **Behavior change: a content field the record's type does not declare is refused with
-`StackValidationError` (wire: 422)** — on `create()`, in an `update()` patch, and on
+`StackValidationError` (wire: 422)** — on `create()`, in a content patch, and on
 `commitMigration()` against the destination type — naming the field and the path it
 sits at. It holds at every depth: an undeclared key inside a declared `object`, or
 inside the `object` an `array` declares as its items, is refused with its full path
@@ -14,7 +14,7 @@ inside the `object` an `array` declares as its items, is refused with its full p
 The schema is the record's shape. A key outside it is a typo, a stale writer, or a
 caller reaching for something that is not content at all, and accepting it makes all
 three look like a write that worked. The third is what motivated this: content is its
-own namespace, so `update(id, { parentId })` writes a content field of that name and
+own namespace, so a `parentId` in a content patch writes a content field of that name and
 never the native one, leaving a `content.parentId` beside a native `parentId` holding
 something else, with nothing downstream reading it. That now names the field and
 points the caller back at the verb they wanted.
@@ -92,11 +92,11 @@ independently of the schema, including inside an open container.
 **Additive-in-place evolution is unchanged in mechanism and narrower in what it
 licenses.** Validation runs on write and the schema lives in the stack, so a reader
 holding an older idea of a type still reads records carrying fields it was never taught
-about, and `update()`'s merge patch still preserves fields the caller didn't name. What
+about, and a content patch still preserves fields the caller didn't name. What
 changed is that _writing_ a new field means declaring it first — a `defineType()` call
 with the field added, which is already the additive-legal path, not a version bump.
 
-`update()` validating against the record's **own stored type** rather than the latest is
+A content patch validating against the record's **own stored type** rather than the latest is
 what keeps this safe across a migration: an unswept `@1` record answers to `@1`'s
 schema, so a field that exists only in `@2` is refused until `migrateAll()` moves the
 record. A field can only ever be added to a schema in place, so a stored record cannot
@@ -105,5 +105,5 @@ accumulate content its own type does not declare.
 **For server authors:** the content rule is a `Stack` invariant that a server built on
 core inherits through ordinary record validation, and a third content-key rule for a
 server mapping request bodies onto storage directly to apply itself. It answers **422**
-(code `validation`) on `POST /records`, `PATCH /records/:id` and
+(code `validation`) on `POST /records`, inside a `PATCH /records/:id` content patch, and on
 `POST /records/:id/migrate`. The two schema rules answer **422** on `POST /types`.

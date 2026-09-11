@@ -25,10 +25,10 @@ import type {
   StackQuery,
   QueryResult,
   Association,
-  Permission,
   RecordId,
   FileId,
   TokenSession,
+  RecordChanges,
 } from '@haverstack/core';
 import type { AdapterCapabilities, BlobFileInfo, StackBlobAdapter } from '@haverstack/core/adapter';
 import type { TokenInfo } from '@haverstack/core/wire';
@@ -210,12 +210,12 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getRecord(id);
   }
 
-  async patchContent(
+  async mutateRecord(
     id: RecordId,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
-    return this.record.patchContent(id, patch, opts);
+    return this.record.mutateRecord(id, changes, opts);
   }
 
   async deleteRecord(
@@ -257,30 +257,6 @@ export class LocalAdapter implements StackAdapter {
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.dissociate(id, association, opts);
-  }
-
-  async setPermissions(
-    id: RecordId,
-    permissions: Permission[],
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setPermissions(id, permissions, opts);
-  }
-
-  async setUnlisted(
-    id: RecordId,
-    unlisted: boolean,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setUnlisted(id, unlisted, opts);
-  }
-
-  async setParent(
-    id: RecordId,
-    parentId: RecordId | null,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.setParent(id, parentId, opts);
   }
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {

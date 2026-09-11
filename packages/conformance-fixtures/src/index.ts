@@ -281,8 +281,8 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     description:
       'A create body carrying unlistedAt is honoured verbatim — creating a record already ' +
       'unlisted, so there is no window where it exists and is enumerable before a later ' +
-      'PUT .../unlisted catches up. Excluded from an unfiltered GET/POST /records/query and the ' +
-      'change feed by default, the same as any other unlisted record. See ' +
+      "change set's `unlisted` key catches up. Excluded from an unfiltered GET/POST /records/query " +
+      'and the change feed by default, the same as any other unlisted record. See ' +
       'docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records',
@@ -754,7 +754,7 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'and principalId. See docs/spec/data-model.md § Authorship and attribution.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 'edited by a contributor' },
+    requestBody: { contentPatch: { title: 'edited by a contributor' } },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -774,7 +774,7 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'The server merges it against current content and assigns the new version/updatedAt itself.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 'Updated title', pinned: true },
+    requestBody: { contentPatch: { title: 'Updated title', pinned: true } },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -792,7 +792,7 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'Fields omitted from the patch are left untouched.',
     method: 'PATCH',
     path: '/records/1hk153x01002',
-    requestBody: { title: null },
+    requestBody: { contentPatch: { title: null } },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x01002',
@@ -948,61 +948,63 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
 // Permissions
 // -------------------------------------------------------
 
-export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[] }, WireRecord>[] =
-  [
-    {
-      name: 'set-permissions-public',
-      description:
-        'PUT /records/:id/permissions replaces all permissions. The request body uses the ' +
-        '{ "permissions": [...] } envelope; the response is the updated Record, since this ' +
-        'bumps version like any other mutation. See docs/spec/wire-format.md § Records.',
-      method: 'PUT',
-      path: '/records/1hk153x00001/permissions',
-      requestBody: { permissions: [{ access: 'public' }] },
-      responseStatus: 200,
-      responseBody: {
-        id: '1hk153x00001',
-        typeId: 'com.example/note@1',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-02T00:00:00.000Z',
-        content: { title: 'Hello', body: 'World' },
-        version: 2,
-        permissions: [{ access: 'public' }],
-      },
+export const permissionsChangeFixtures: ConformanceFixture<
+  { permissions: unknown[] },
+  WireRecord
+>[] = [
+  {
+    name: 'set-permissions-public',
+    description:
+      "A change set's `permissions` key replaces all permissions. The response is the " +
+      'updated Record, since this bumps version like any other mutation. See ' +
+      'docs/spec/wire-format.md § Records.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { permissions: [{ access: 'public' }] },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      permissions: [{ access: 'public' }],
     },
-    {
-      name: 'set-permissions-empty-is-private',
-      description:
-        'An empty permissions array makes the record private (owner-only), and the record comes ' +
-        'back with no permissions field at all rather than an empty one.',
-      method: 'PUT',
-      path: '/records/1hk153x00001/permissions',
-      requestBody: { permissions: [] },
-      responseStatus: 200,
-      responseBody: {
-        id: '1hk153x00001',
-        typeId: 'com.example/note@1',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-03T00:00:00.000Z',
-        content: { title: 'Hello', body: 'World' },
-        version: 3,
-      },
+  },
+  {
+    name: 'set-permissions-empty-is-private',
+    description:
+      'An empty permissions array makes the record private (owner-only), and the record comes ' +
+      'back with no permissions field at all rather than an empty one.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { permissions: [] },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
     },
-  ];
+  },
+];
 
 // -------------------------------------------------------
 // Unlisted
 // -------------------------------------------------------
 
-export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, WireRecord>[] = [
+export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, WireRecord>[] = [
   {
     name: 'set-unlisted-true',
     description:
-      'PUT /records/:id/unlisted withholds a record from enumeration without changing who may ' +
+      "A change set's `unlisted` key withholds a record from enumeration without changing who may " +
       'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
-      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/unlisted.md.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/unlisted',
+      "are untouched. Orthogonal to the change set's `permissions` key — see docs/spec/unlisted.md.",
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { unlisted: true },
     responseStatus: 200,
     responseBody: {
@@ -1018,11 +1020,11 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
   {
     name: 'set-unlisted-false-relists',
     description:
-      'PUT /records/:id/unlisted with { "unlisted": false } reverses it — the record comes back ' +
+      'A change set carrying `"unlisted": false` reverses it — the record comes back ' +
       'with unlistedAt absent, and is enumerable again by an unfiltered query() and the change ' +
       'feed. Idempotent, like undelete: assumes prior state from set-unlisted-true.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/unlisted',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { unlisted: false },
     responseStatus: 200,
     responseBody: {
@@ -1040,17 +1042,17 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
 // Parent
 // -------------------------------------------------------
 
-export const setParentFixtures: ConformanceFixture<{ parentId: string | null }, WireRecord>[] = [
+export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null }, WireRecord>[] = [
   {
     name: 'set-parent-moves-a-record-into-a-container',
     description:
-      'PUT /records/:id/parent moves a record between containers. It bumps version like any ' +
+      "A change set's `parentId` key moves a record between containers. It bumps version like any " +
       'other mutation and touches nothing else — content, permissions and associations come ' +
       'back as they were. Containment decides which listings enumerate the record, never who ' +
       'may read it, so the response is not a permission change. See ' +
       'docs/spec/data-model.md § Reparenting.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/parent',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { parentId: '1hk153x0000f' },
     responseStatus: 200,
     responseBody: {
@@ -1069,8 +1071,8 @@ export const setParentFixtures: ConformanceFixture<{ parentId: string | null }, 
       'A null parentId is the root sentinel, matching the "null" spelling GET /records accepts ' +
       'for the same field: the record comes back with parentId absent. Assumes prior state from ' +
       'set-parent-moves-a-record-into-a-container.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/parent',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { parentId: null },
     responseStatus: 200,
     responseBody: {
@@ -1275,7 +1277,7 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
       'A restore undoes a move like any other mutation: the snapshot at version 2 was taken ' +
       'in 1hk153x0000f, so restoring it returns the record carrying that parentId, whatever ' +
       'container it sits in now. A restore that reaches a container the requester cannot ' +
-      'read answers 403, the same gate PUT /records/:id/parent applies to a destination ' +
+      "read answers 403, the same gate a change set's `parentId` applies to a destination " +
       'named directly. See docs/spec/versioning.md § Restore semantics.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/2',
@@ -1341,7 +1343,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'instead (error-not-found-record-the-requester-cannot-read).',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 'New title' },
+    requestBody: { contentPatch: { title: 'New title' } },
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -1453,7 +1455,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.)',
     method: 'PATCH',
     path: '/records/1hk153x0a00b',
-    requestBody: { title: 'New title' },
+    requestBody: { contentPatch: { title: 'New title' } },
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x0a00b" not found.' },
@@ -1471,7 +1473,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'access to it. See docs/spec/access-control.md § Errors and information exposure.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 'New title' },
+    requestBody: { contentPatch: { title: 'New title' } },
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
@@ -1498,12 +1500,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-parent-does-not-exist',
     description:
-      'PUT /records/:id/parent naming a container that does not exist returns 409 with code ' +
+      'A change set naming a `parentId` that does not exist returns 409 with code ' +
       '"conflict". A parentId a caller names has to resolve; POST /records with a parentId is ' +
       'refused the same way. Restore is the exception — see ' +
       'restore-version-puts-the-record-back-in-its-old-container.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/parent',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { parentId: '1hk153xffffz' },
     responseStatus: 409,
     responseBody: {
@@ -1522,8 +1524,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'checked before existence so the answer names what is wrong rather than reporting a ' +
       'lookup that could never match. The empty string is one of these, not a spelling of the ' +
       'root — the root is `null` on this endpoint.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/parent',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: { parentId: '' },
     responseStatus: 400,
     responseBody: {
@@ -1541,7 +1543,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '`.errors`.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 42 },
+    requestBody: { contentPatch: { title: 42 } },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -1573,13 +1575,14 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-permission-write-without-read',
     description:
-      'PUT /records/:id/permissions carrying an entry with write and no read returns 422 with ' +
-      'code "validation". A write-holder reaches the record and its whole history through the ' +
-      'mutate surface, so the combination withholds nothing while appearing to — the server ' +
-      'refuses it wherever a request body carries permissions, POST /records included. See ' +
+      "A change set's `permissions` key carrying an entry with write and no read returns 422 " +
+      'with code "validation". A ' +
+      'write-holder reaches the record and its whole history through the mutate surface, so the ' +
+      'combination withholds nothing while appearing to — the server refuses it wherever a ' +
+      'request body carries permissions, POST /records included. See ' +
       'docs/spec/access-control.md § Write implies read.',
-    method: 'PUT',
-    path: '/records/1hk153x00001/permissions',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
     requestBody: {
       permissions: [{ access: 'entity', entityId: 'did:key:z6MkMember', read: false, write: true }],
     },
@@ -1648,7 +1651,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'rejected the same way if the patch would actually change their stored value.',
     method: 'PATCH',
     path: '/records/1hk153x02003',
-    requestBody: { mimeType: 'image/jpeg' },
+    requestBody: { contentPatch: { mimeType: 'image/jpeg' } },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -1731,7 +1734,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '"payload_too_large" — the same code and class as an oversized attachment upload, since a ' +
       'client acts on both identically. limits.attachmentBytes bounds attachment bytes only: a ' +
       "record body and a PATCH body have no ceiling in core, so this one is the server's to " +
-      'set and to state (as limits.contentBytes in discovery, letting Stack.create()/update() ' +
+      'set and to state (as limits.contentBytes in discovery, letting Stack.create()/Stack.mutate() ' +
       'pre-check rather than burn the round trip). The body below stands in for one that ' +
       'exceeds the limit; the fixture pins the error shape, not a specific size. See ' +
       'docs/spec/wire-format.md § Request size limits.',
@@ -1764,7 +1767,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'docs/spec/data-model.md § Reserved content keys.',
     method: 'PATCH',
     path: '/records/1hk153x02011',
-    requestBody: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
+    requestBody: {
+      contentPatch: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
+    },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -1817,7 +1822,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestHeaders: { 'If-Match': '"5"' },
-    requestBody: { title: 'New title' },
+    requestBody: { contentPatch: { title: 'New title' } },
     responseStatus: 412,
     responseBody: {
       error: {
@@ -1971,7 +1976,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'the same endpoint — only an entityId change is refused.',
     method: 'PATCH',
     path: '/records/_config',
-    requestBody: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
+    requestBody: {
+      contentPatch: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
+    },
     responseStatus: 409,
     responseBody: {
       error: {
@@ -1995,7 +2002,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'one, and reconstructs APIAdapterAuthError from status alone.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { title: 'New title' },
+    requestBody: { contentPatch: { title: 'New title' } },
     responseStatus: 401,
   },
 ];
@@ -2601,7 +2608,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'created',
-              op: 'create',
+              ops: ['create'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 1,
@@ -2632,7 +2639,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'A contributor edits the note.',
           method: 'PATCH',
           path: '/records/1hk153x00001',
-          requestBody: { title: 'edited by a contributor' },
+          requestBody: { contentPatch: { title: 'edited by a contributor' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -2651,7 +2658,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'update',
+              ops: ['patch'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 2,
@@ -2698,7 +2705,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'deleted',
-              op: 'delete',
+              ops: ['delete'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 3,
@@ -2728,8 +2735,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-unlist-frame-mutation',
           description: 'The owner marks the note unlisted.',
-          method: 'PUT',
-          path: '/records/1hk153x00001/unlisted',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
           requestBody: { unlisted: true },
           responseStatus: 200,
           responseBody: {
@@ -2749,7 +2756,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'deleted',
-              op: 'unlist',
+              ops: ['unlist'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 3,
@@ -2780,8 +2787,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-reparent-frame-mutation',
           description: 'The owner moves the note out of the container the subscriber watches.',
-          method: 'PUT',
-          path: '/records/1hk153x00001/parent',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
           requestBody: { parentId: '1hk153x0000g' },
           responseStatus: 200,
           responseBody: {
@@ -2801,7 +2808,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'reparent',
+              ops: ['reparent'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 3,
@@ -2831,8 +2838,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-list-frame-mutation',
           description: 'The owner relists the note.',
-          method: 'PUT',
-          path: '/records/1hk153x00001/unlisted',
+          method: 'PATCH',
+          path: '/records/1hk153x00001',
           requestBody: { unlisted: false },
           responseStatus: 200,
           responseBody: {
@@ -2851,7 +2858,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'list',
+              ops: ['list'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 4,
@@ -2882,7 +2889,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'The owner edits the still-unlisted note.',
           method: 'PATCH',
           path: '/records/1hk153x00001',
-          requestBody: { title: 'Edited while unlisted' },
+          requestBody: { contentPatch: { title: 'Edited while unlisted' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -2931,7 +2938,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'purged',
-              op: 'hard-delete',
+              ops: ['hard-delete'],
               recordId: '1hk153x00002',
               typeId: 'com.example/note@1',
               version: 4,
@@ -2963,7 +2970,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'The owner edits the note.',
           method: 'PATCH',
           path: '/records/1hk153x00001',
-          requestBody: { title: 'Updated title' },
+          requestBody: { contentPatch: { title: 'Updated title' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -2982,7 +2989,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'update',
+              ops: ['patch'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 2,
@@ -3026,7 +3033,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: "The owner edits a private record the connection's session cannot read.",
           method: 'PATCH',
           path: '/records/1hk153x09001',
-          requestBody: { title: 'private' },
+          requestBody: { contentPatch: { title: 'private' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x09001',
@@ -3048,7 +3055,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'The owner edits a note this session may read.',
           method: 'PATCH',
           path: '/records/1hk153x00001',
-          requestBody: { title: 'shared' },
+          requestBody: { contentPatch: { title: 'shared' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -3067,7 +3074,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'update',
+              ops: ['patch'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 2,
@@ -3097,7 +3104,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'A change to a record of an unrelated type.',
           method: 'PATCH',
           path: '/records/1hk153x03001',
-          requestBody: { url: 'https://example.com' },
+          requestBody: { contentPatch: { url: 'https://example.com' } },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x03001',
@@ -3140,7 +3147,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'migrate',
+              ops: ['migrate'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@2',
               version: 5,
@@ -3187,7 +3194,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         event: 'record',
         data: {
           kind: 'changed',
-          op: 'update',
+          ops: ['patch'],
           recordId: '1hk153x00001',
           typeId: 'com.example/note@1',
           version: 2,
@@ -3225,7 +3232,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
               description: 'The owner edits the note while the client is connected.',
               method: 'PATCH',
               path: '/records/1hk153x00001',
-              requestBody: { title: 'first' },
+              requestBody: { contentPatch: { title: 'first' } },
               responseStatus: 200,
               responseBody: {
                 id: '1hk153x00001',
@@ -3244,7 +3251,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
                 event: 'record',
                 data: {
                   kind: 'changed',
-                  op: 'update',
+                  ops: ['patch'],
                   recordId: '1hk153x00001',
                   typeId: 'com.example/note@1',
                   version: 2,
@@ -3268,7 +3275,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
             description: 'A second edit, made while no connection was open.',
             method: 'PATCH',
             path: '/records/1hk153x00001',
-            requestBody: { title: 'second' },
+            requestBody: { contentPatch: { title: 'second' } },
             responseStatus: 200,
             responseBody: {
               id: '1hk153x00001',
@@ -3290,7 +3297,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
             event: 'record',
             data: {
               kind: 'changed',
-              op: 'update',
+              ops: ['patch'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
               version: 3,
@@ -3361,9 +3368,9 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...undeleteRecordFixtures,
   ...associateFixtures,
   ...dissociateFixtures,
-  ...setPermissionsFixtures,
-  ...setUnlistedFixtures,
-  ...setParentFixtures,
+  ...permissionsChangeFixtures,
+  ...unlistedChangeFixtures,
+  ...parentChangeFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,

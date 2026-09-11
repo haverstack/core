@@ -294,7 +294,7 @@ describe('records — CRUD', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    const updated = await adapter.patchContent(record.id, { text: 'Updated' });
+    const updated = await adapter.mutateRecord(record.id, { contentPatch: { text: 'Updated' } });
     expect(updated.content).toEqual({ text: 'Updated' });
     expect(updated.version).toBe(2);
   });
@@ -303,7 +303,7 @@ describe('records — CRUD', () => {
     const adapter = await initAdapter();
     const record = makeRecord({ parentId: 'parent-abc' });
     await adapter.createRecord(record);
-    await adapter.patchContent(record.id, { text: 'Updated' });
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'Updated' } });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe('parent-abc');
   });
@@ -370,9 +370,9 @@ describe('expectedVersion', () => {
   test('patchContent applies when expectedVersion matches', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    const updated = await adapter.patchContent(
+    const updated = await adapter.mutateRecord(
       record.id,
-      { text: 'Updated' },
+      { contentPatch: { text: 'Updated' } },
       { expectedVersion: 1 },
     );
     expect(updated.version).toBe(2);
@@ -382,10 +382,10 @@ describe('expectedVersion', () => {
   test('patchContent throws StackVersionConflictError and changes nothing when stale', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.patchContent(record.id, { text: 'first' }); // -> v2
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'first' } }); // -> v2
 
     const err = await adapter
-      .patchContent(record.id, { text: 'second' }, { expectedVersion: 1 })
+      .mutateRecord(record.id, { contentPatch: { text: 'second' } }, { expectedVersion: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).recordId).toBe(record.id);
@@ -403,7 +403,11 @@ describe('expectedVersion', () => {
       makeRecord({ content: { text: 'searchable original' } }),
     );
     await adapter
-      .patchContent(record.id, { text: 'rejected update' }, { expectedVersion: 999 })
+      .mutateRecord(
+        record.id,
+        { contentPatch: { text: 'rejected update' } },
+        { expectedVersion: 999 },
+      )
       .catch(() => {});
 
     const stillFindsOriginal = await adapter.queryRecords({ filter: { search: 'original' } });
@@ -415,7 +419,7 @@ describe('expectedVersion', () => {
   test('soft deleteRecord and undeleteRecord enforce expectedVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(adapter.deleteRecord(record.id, { expectedVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
@@ -432,7 +436,7 @@ describe('expectedVersion', () => {
   test('commitMigration enforces expectedVersion and leaves typeId untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(
       adapter.commitMigration(
@@ -464,7 +468,7 @@ describe('expectedVersion', () => {
   test('hard deleteRecord enforces expectedVersion and leaves the record untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(
       adapter.deleteRecord(record.id, { hard: true, expectedVersion: 1 }),
@@ -493,15 +497,23 @@ describe('expectedVersion', () => {
     expect((await adapter.getRecord(record.id))?.version).toBe(3);
   });
 
-  test('setPermissions enforces expectedVersion', async () => {
+  test('a permissions change set enforces expectedVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
     await expect(
-      adapter.setPermissions(record.id, [{ access: 'public' }], { expectedVersion: 99 }),
+      adapter.mutateRecord(
+        record.id,
+        { permissions: [{ access: 'public' }] },
+        { expectedVersion: 99 },
+      ),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
 
-    await adapter.setPermissions(record.id, [{ access: 'public' }], { expectedVersion: 1 });
+    await adapter.mutateRecord(
+      record.id,
+      { permissions: [{ access: 'public' }] },
+      { expectedVersion: 1 },
+    );
     expect((await adapter.getRecord(record.id))?.version).toBe(2);
   });
 
@@ -514,7 +526,7 @@ describe('expectedVersion', () => {
       content: { text: 'original' },
       updatedAt: record.updatedAt,
     });
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(
       adapter.restoreVersion(record.id, 1, { expectedVersion: 1 }),
@@ -564,7 +576,7 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.setUnlisted(record.id, true);
+    await adapter.mutateRecord(record.id, { unlisted: true });
 
     const excluded = await adapter.queryRecords({});
     expect(excluded.records.some((r) => r.id === record.id)).toBe(false);
@@ -967,7 +979,7 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     const record = makeRecord({ content: { text: 'original content here' } });
     await adapter.createRecord(record);
-    await adapter.patchContent(record.id, { text: 'updated content here' });
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'updated content here' } });
 
     const staleSearch = await adapter.queryRecords({ filter: { search: 'original' } });
     expect(staleSearch.records).toEqual([]);
@@ -1102,7 +1114,7 @@ describe('file-ref indexing', () => {
       content: { coverFileId: 'file-1' },
     });
     await adapter.createRecord(record);
-    await adapter.patchContent('r1', { coverFileId: 'file-2' });
+    await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-2' } });
 
     const oldMatch = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
     expect(oldMatch.records).toEqual([]);
@@ -1154,7 +1166,7 @@ describe('file-ref indexing', () => {
 
     // Redefine the same typeId so coverFileId is no longer a file-ref field.
     await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
-    await adapter.patchContent('r1', { coverFileId: 'file-1' });
+    await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-1' } });
 
     result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
     expect(result.records).toEqual([]);
@@ -1424,24 +1436,24 @@ describe('records — relatedTo filter', () => {
 // Permissions
 // -------------------------------------------------------
 
-describe('setPermissions', () => {
+describe('mutateRecord — the `permissions` key', () => {
   test('replaces permissions and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.setPermissions(record.id, [{ access: 'public' }]);
+    await adapter.mutateRecord(record.id, { permissions: [{ access: 'public' }] });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.permissions).toEqual([{ access: 'public' }]);
     expect(retrieved?.version).toBe(2);
   });
 });
 
-describe('setUnlisted', () => {
+describe('mutateRecord — the `unlisted` key', () => {
   test('sets unlistedAt and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.setUnlisted(record.id, true);
+    await adapter.mutateRecord(record.id, { unlisted: true });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.unlistedAt).toBeInstanceOf(Date);
     expect(retrieved?.version).toBe(2);
@@ -1451,8 +1463,8 @@ describe('setUnlisted', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.setUnlisted(record.id, true);
-    await adapter.setUnlisted(record.id, false);
+    await adapter.mutateRecord(record.id, { unlisted: true });
+    await adapter.mutateRecord(record.id, { unlisted: false });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.unlistedAt).toBeUndefined();
     expect(retrieved?.version).toBe(3);
@@ -1463,9 +1475,9 @@ describe('setUnlisted', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     await expect(
-      adapter.setUnlisted(record.id, true, { expectedVersion: 99 }),
+      adapter.mutateRecord(record.id, { unlisted: true }, { expectedVersion: 99 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.setUnlisted(record.id, true, { expectedVersion: 1 });
+    await adapter.mutateRecord(record.id, { unlisted: true }, { expectedVersion: 1 });
   });
 });
 
@@ -1484,13 +1496,13 @@ describe('absent fields are read by presence, not truthiness', () => {
     expect(roots.records.map((r) => r.id)).not.toContain(record.id);
   });
 
-  test('setParent to an empty string stores it rather than clearing the parent', async () => {
+  test('a parentId of an empty string stores it rather than clearing the parent', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     await adapter.createRecord(box);
     const record = makeRecord({ parentId: box.id });
     await adapter.createRecord(record);
-    await adapter.setParent(record.id, '');
+    await adapter.mutateRecord(record.id, { parentId: '' });
     expect((await adapter.getRecord(record.id))?.parentId).toBe('');
   });
 
@@ -1522,14 +1534,14 @@ describe('absent fields are read by presence, not truthiness', () => {
   });
 });
 
-describe('setParent', () => {
+describe('mutateRecord — the `parentId` key', () => {
   test('sets parent_id and bumps version', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
-    await adapter.setParent(record.id, box.id);
+    await adapter.mutateRecord(record.id, { parentId: box.id });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe(box.id);
     expect(retrieved?.version).toBe(2);
@@ -1541,7 +1553,7 @@ describe('setParent', () => {
     await adapter.createRecord(box);
     const record = makeRecord({ parentId: box.id });
     await adapter.createRecord(record);
-    await adapter.setParent(record.id, null);
+    await adapter.mutateRecord(record.id, { parentId: null });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBeUndefined();
     expect(retrieved?.version).toBe(2);
@@ -1556,7 +1568,7 @@ describe('setParent', () => {
       associations: [{ kind: 'tag', label: 'starred' }],
     });
     await adapter.createRecord(record);
-    await adapter.setParent(record.id, box.id);
+    await adapter.mutateRecord(record.id, { parentId: box.id });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.content).toEqual({ text: 'hello' });
     expect(retrieved?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
@@ -1568,7 +1580,7 @@ describe('setParent', () => {
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
-    await adapter.setParent(record.id, box.id);
+    await adapter.mutateRecord(record.id, { parentId: box.id });
     const result = await adapter.queryRecords({ filter: { parentId: box.id } });
     expect(result.records.map((r) => r.id)).toEqual([record.id]);
   });
@@ -1580,9 +1592,9 @@ describe('setParent', () => {
     await adapter.createRecord(box);
     await adapter.createRecord(record);
     await expect(
-      adapter.setParent(record.id, box.id, { expectedVersion: 99 }),
+      adapter.mutateRecord(record.id, { parentId: box.id }, { expectedVersion: 99 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.setParent(record.id, box.id, { expectedVersion: 1 });
+    await adapter.mutateRecord(record.id, { parentId: box.id }, { expectedVersion: 1 });
   });
 });
 
@@ -1696,9 +1708,9 @@ describe('versions', () => {
         updatedAt: record.updatedAt,
       });
 
-      const updated = await adapter.patchContent(
+      const updated = await adapter.mutateRecord(
         record.id,
-        { text: 'healed' },
+        { contentPatch: { text: 'healed' } },
         {
           snapshot: {
             version: 1,
@@ -1737,9 +1749,9 @@ describe('versions', () => {
         updatedVia: 'app-stale',
       });
 
-      await adapter.patchContent(
+      await adapter.mutateRecord(
         record.id,
-        { text: 'healed' },
+        { contentPatch: { text: 'healed' } },
         {
           snapshot: {
             version: 1,
@@ -1768,9 +1780,9 @@ describe('versions', () => {
 
       // Writer A completes first, bumping the record to v2 and legitimately
       // owning the v1 history slot.
-      await adapter.patchContent(
+      await adapter.mutateRecord(
         record.id,
-        { text: 'from A' },
+        { contentPatch: { text: 'from A' } },
         {
           snapshot: {
             version: 1,
@@ -1786,9 +1798,9 @@ describe('versions', () => {
       // history entry — the record's current version is 2, not 1 — so it
       // must be rejected outright, not treated as recoverable.
       await expect(
-        adapter.patchContent(
+        adapter.mutateRecord(
           record.id,
-          { text: 'from B' },
+          { contentPatch: { text: 'from B' } },
           {
             snapshot: {
               version: 1,
@@ -1820,7 +1832,7 @@ describe('restoreVersion', () => {
       content: { text: 'original' },
       updatedAt: new Date(),
     });
-    await adapter.patchContent(record.id, { text: 'changed' });
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'changed' } });
 
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
@@ -1837,7 +1849,7 @@ describe('restoreVersion', () => {
       content: { text: 'original searchable text' },
       updatedAt: new Date(),
     });
-    await adapter.patchContent(record.id, { text: 'changed unrelated text' });
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'changed unrelated text' } });
 
     await adapter.restoreVersion(record.id, 1);
 
@@ -2059,7 +2071,11 @@ describe('actor attribution', () => {
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
 
-    await adapter.patchContent(r.id, { text: 'v2' }, { updatedBy: OTHER, updatedVia: APP });
+    await adapter.mutateRecord(
+      r.id,
+      { contentPatch: { text: 'v2' } },
+      { updatedBy: OTHER, updatedVia: APP },
+    );
     let read = await adapter.getRecord(r.id);
     expect([read?.updatedBy, read?.updatedVia]).toEqual([OTHER, APP]);
 
@@ -2070,7 +2086,7 @@ describe('actor attribution', () => {
     await adapter.dissociate(r.id, { kind: 'tag', label: 'x' }, { updatedBy: OTHER });
     expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
 
-    await adapter.setPermissions(r.id, [{ access: 'public' }], { updatedBy: ACTOR });
+    await adapter.mutateRecord(r.id, { permissions: [{ access: 'public' }] }, { updatedBy: ACTOR });
     expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
 
     await adapter.deleteRecord(r.id, { updatedBy: OTHER });
@@ -2096,7 +2112,7 @@ describe('actor attribution', () => {
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
 
-    await adapter.patchContent(r.id, { text: 'v2' }, {});
+    await adapter.mutateRecord(r.id, { contentPatch: { text: 'v2' } }, {});
 
     const read = await adapter.getRecord(r.id);
     expect(read?.updatedBy).toBeUndefined();
@@ -2109,9 +2125,9 @@ describe('actor attribution', () => {
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
 
-    await adapter.patchContent(
+    await adapter.mutateRecord(
       r.id,
-      { text: 'v2' },
+      { contentPatch: { text: 'v2' } },
       {
         updatedBy: OTHER,
         snapshot: {
@@ -2138,9 +2154,9 @@ describe('actor attribution', () => {
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
 
-    await adapter.patchContent(
+    await adapter.mutateRecord(
       r.id,
-      { text: 'v2' },
+      { contentPatch: { text: 'v2' } },
       {
         updatedBy: OTHER,
         snapshot: {

@@ -16,9 +16,9 @@ import {
   undeleteRecordFixtures,
   associateFixtures,
   dissociateFixtures,
-  setPermissionsFixtures,
-  setUnlistedFixtures,
-  setParentFixtures,
+  permissionsChangeFixtures,
+  unlistedChangeFixtures,
+  parentChangeFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -37,7 +37,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { Association, StackType } from '@haverstack/core';
+import type { Association, RecordChanges, StackType } from '@haverstack/core';
 import type { WireAuthError } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -373,18 +373,21 @@ describe('queryRecords fixtures', () => {
   }
 });
 
-describe('patchContent fixtures', () => {
+describe('change set fixtures', () => {
   for (const fixture of patchContentFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.patchContent(idFromPath(fixture.path), fixture.requestBody!);
+      const result = await adapter.mutateRecord(
+        idFromPath(fixture.path),
+        fixture.requestBody as RecordChanges,
+      );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      // The wire body is the raw patch only — never typeId, version, or updatedAt.
+      // The wire body is the change set itself — never typeId, version, or updatedAt.
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.content).toEqual(fixture.responseBody!.content);
       expect(result.version).toBe(fixture.responseBody!.version);
@@ -468,16 +471,15 @@ describe('dissociate fixtures', () => {
   }
 });
 
-describe('setPermissions fixtures', () => {
-  for (const fixture of setPermissionsFixtures) {
+describe('permissions change-set fixtures', () => {
+  for (const fixture of permissionsChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.setPermissions(
-        idFromPath(fixture.path),
-        fixture.requestBody!.permissions as never,
-      );
+      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
+        permissions: fixture.requestBody!.permissions as never,
+      });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -488,16 +490,15 @@ describe('setPermissions fixtures', () => {
   }
 });
 
-describe('setUnlisted fixtures', () => {
-  for (const fixture of setUnlistedFixtures) {
+describe('unlisted change-set fixtures', () => {
+  for (const fixture of unlistedChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.setUnlisted(
-        idFromPath(fixture.path),
-        fixture.requestBody!.unlisted,
-      );
+      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
+        unlisted: fixture.requestBody!.unlisted,
+      });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -510,16 +511,15 @@ describe('setUnlisted fixtures', () => {
   }
 });
 
-describe('setParent fixtures', () => {
-  for (const fixture of setParentFixtures) {
+describe('parentId change-set fixtures', () => {
+  for (const fixture of parentChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.setParent(
-        idFromPath(fixture.path),
-        fixture.requestBody!.parentId,
-      );
+      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
+        parentId: fixture.requestBody!.parentId,
+      });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -684,14 +684,6 @@ describe('error response fixtures', () => {
         if (fixture.method === 'GET' && fixture.path.endsWith('/versions')) {
           return adapter.getVersions(idFromPath(fixture.path));
         }
-        if (fixture.method === 'PUT' && fixture.path.endsWith('/parent')) {
-          const body = fixture.requestBody as { parentId: string | null };
-          return adapter.setParent(idFromPath(fixture.path), body.parentId);
-        }
-        if (fixture.method === 'PUT' && fixture.path.endsWith('/permissions')) {
-          const body = fixture.requestBody as { permissions: unknown[] };
-          return adapter.setPermissions(idFromPath(fixture.path), body.permissions as never);
-        }
         if (fixture.method === 'DELETE') {
           return adapter.deleteRecord(idFromPath(fixture.path));
         }
@@ -700,9 +692,9 @@ describe('error response fixtures', () => {
           // version number, matching the header APIAdapter itself sends for ifVersion.
           const ifMatch = fixture.requestHeaders?.['If-Match'];
           const expectedVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
-          return adapter.patchContent(
+          return adapter.mutateRecord(
             idFromPath(fixture.path),
-            fixture.requestBody as Record<string, unknown>,
+            fixture.requestBody as RecordChanges,
             { expectedVersion },
           );
         }

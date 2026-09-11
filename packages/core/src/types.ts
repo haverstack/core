@@ -98,6 +98,35 @@ export type RelationshipAssociation = {
 
 export type Association = TagAssociation | AttachmentAssociation | RelationshipAssociation;
 
+/**
+ * The aspects of an existing record one mutate() call may move, in any
+ * combination. Every key replaces the aspect it names except
+ * `contentPatch`, which merges at the top level — omitted keeps, `null`
+ * removes. Keys are read for presence, so `unlisted: false` and
+ * `parentId: null` are changes; an omitted key is untouched.
+ *
+ * `associations` replaces the whole set. associate()/dissociate() amend it
+ * instead, which is the spelling that survives two writers touching one
+ * record, so they stay their own verbs rather than folding in here.
+ * See docs/spec/data-model.md § Mutations.
+ */
+export type RecordChanges = {
+  contentPatch?: Record<string, unknown | null>;
+  parentId?: string | null;
+  permissions?: Permission[];
+  associations?: Association[];
+  unlisted?: boolean;
+};
+
+/** The keys of a change set, for presence checks that must not miss one. */
+export const RECORD_CHANGE_KEYS = [
+  'contentPatch',
+  'parentId',
+  'permissions',
+  'associations',
+  'unlisted',
+] as const satisfies readonly (keyof RecordChanges)[];
+
 // -------------------------------------------------------
 // Permissions
 // -------------------------------------------------------
@@ -195,7 +224,7 @@ export type RecordVersion = {
    * The container the record sat in, absent for the root — the same
    * spelling `StackRecord` uses, because a snapshot states where the
    * record *was*, not an instruction to apply. `null` is an input
-   * spelling (`setParent()`, `RecordFilter`) and never appears here.
+   * spelling (a change set's `parentId`, `RecordFilter`) and never appears here.
    * See docs/spec/versioning.md § Version history.
    */
   parentId?: RecordId;
@@ -638,7 +667,7 @@ export type AdapterCapabilities = {
     attachmentBytes: number | null;
     /**
      * Maximum serialized size in bytes of a Record's content — a create
-     * body or a merge patch. Stack.create()/Stack.update() pre-check
+     * body or a merge patch. Stack.create()/Stack.mutate() pre-check
      * against it and throw StackPayloadTooLargeError before sending.
      */
     contentBytes: number | null;
@@ -703,7 +732,7 @@ export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
  */
 export type ChangeOp =
   | 'create'
-  | 'update'
+  | 'patch'
   | 'associate'
   | 'dissociate'
   | 'permissions'
@@ -753,7 +782,15 @@ export type ChangeActor = {
  */
 export type RecordChange = {
   kind: ChangeKind;
-  op: ChangeOp;
+  /**
+   * Every aspect this version moved, derived by diffing the record against
+   * its prior state rather than read off the request — a change set that
+   * names an aspect without moving it is not reported as moving it. Never
+   * empty; multi-entry only for a mutate() change set, since every other op
+   * names a whole-record transition and is emitted alone.
+   * See docs/spec/events.md § The event shape.
+   */
+  ops: ChangeOp[];
   recordId: RecordId;
   /** As stored at the moment of the change. */
   typeId: TypeId;
@@ -887,14 +924,26 @@ export interface StackRecordAdapter {
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
-   * Apply a content-only RFC 7396 merge patch: `null` removes a field,
-   * omitted fields are retained. Bumps `version`/`updatedAt` in the same
-   * write. Never touches `typeId` — a type change goes through
-   * commitMigration() instead.
+   * Apply a change set — any combination of content patch, `parentId`,
+   * `permissions`, `associations` and `unlisted` — in one write that also
+   * bumps `version`/`updatedAt` and stores the snapshot. One call is one
+   * version, however many aspects it names: separate per-aspect methods
+   * would make a change set either several versions or an atomicity claim
+   * storage could not honor.
+   *
+   * The content patch merges at the top level only — each key it names is
+   * replaced whole. Never touches `typeId`; a type change goes through
+   * commitMigration() instead. `associations` replaces the stored set,
+   * where associate()/dissociate() amend it.
+   *
+   * `Stack` owns everything above storage: validation, the acyclicity
+   * walk, the per-key gates, and deciding there is anything to write at
+   * all — an adapter is never handed a change set that changes nothing.
+   * See docs/spec/data-model.md § Mutations.
    */
-  patchContent(
+  mutateRecord(
     id: RecordId,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
   /**
@@ -927,37 +976,6 @@ export interface StackRecordAdapter {
     opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 
-  /** Replace all permissions on a record. Bumps version internally. */
-  setPermissions(
-    id: RecordId,
-    permissions: Permission[],
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<StackRecord>;
-
-  /**
-   * Set or clear `unlistedAt`. Bumps version internally, like
-   * setPermissions(). The caller (Stack.setUnlisted()) is responsible for
-   * picking the `unlist`/`list` change op from the transition, since the
-   * adapter has no opinion on eventing.
-   */
-  setUnlisted(
-    id: RecordId,
-    unlisted: boolean,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<StackRecord>;
-
-  /**
-   * Set or clear `parentId`. Bumps version internally, like
-   * setUnlisted(). Storage only: the caller (Stack.setParent()) owns the
-   * acyclicity check, which is a `Stack` invariant every adapter
-   * inherits rather than one each reimplements.
-   */
-  setParent(
-    id: RecordId,
-    parentId: RecordId | null,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<StackRecord>;
-
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
@@ -975,7 +993,7 @@ export interface StackRecordAdapter {
    * StackNotFoundError if the version doesn't exist.
    *
    * The acyclicity check on a restore that moves the record belongs to the
-   * caller (Stack.restoreVersion()), exactly as it does for setParent().
+   * caller (Stack.restoreVersion()), exactly as it does for a change set's `parentId`.
    */
   restoreVersion(
     id: RecordId,
@@ -986,7 +1004,7 @@ export interface StackRecordAdapter {
   /**
    * Commit a migration: write new content under a new typeId in one step.
    * This is the only way a record's typeId changes after creation — used by
-   * Stack.commitMigration() and Stack.migrateAll(); Stack.update() never
+   * Stack.commitMigration() and Stack.migrateAll(); Stack.mutate() never
    * changes typeId as a side effect. Bumps version internally.
    */
   commitMigration(

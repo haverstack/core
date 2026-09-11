@@ -21,10 +21,10 @@ import type {
   TypeId,
   FileId,
   RecordVersion,
+  RecordChanges,
   StackQuery,
   QueryResult,
   Association,
-  Permission,
   ActorOptions,
   ExpectedVersionOptions,
 } from '@haverstack/core';
@@ -115,7 +115,7 @@ export class SharedSqlRecordLogic {
 
   /**
    * Precondition check for mutations that can't fold expectedVersion into
-   * their primary UPDATE's WHERE clause: patchContent/restoreVersion need
+   * their primary UPDATE's WHERE clause: mutateRecord/restoreVersion need
    * fts.remove() to run *before* the records-table content changes, so
    * the check happens first, standalone.
    */
@@ -224,35 +224,82 @@ export class SharedSqlRecordLogic {
     return rowToRecord(row, associations);
   }
 
-  async patchContent(
+  /**
+   * Apply a change set in one transaction: one UPDATE over the record row
+   * with only the columns the change set names, the association set
+   * replaced when it carries one, and the snapshot written alongside — so
+   * one call is one version whatever it moved.
+   *
+   * The expectedVersion check is standalone rather than folded into the
+   * UPDATE alone, because a content change needs fts.remove() to run
+   * *before* the records-table content changes. The guard is still in the
+   * UPDATE's WHERE, so a writer that slipped in between the read and the
+   * write is caught there rather than overwriting.
+   */
+  async mutateRecord(
     id: string,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
-    const merged = applyMergePatch(existing.content, patch);
+    const merged = changes.contentPatch
+      ? applyMergePatch(existing.content, changes.contentPatch)
+      : undefined;
+
+    // Assembled rather than written out per aspect: every one of these is
+    // the same column-and-value pair on one row, and a fixed statement per
+    // combination would be 2^5 of them.
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (merged !== undefined) {
+      sets.push('content = ?');
+      values.push(JSON.stringify(merged));
+    }
+    if (changes.parentId !== undefined) {
+      sets.push('parent_id = ?');
+      values.push(changes.parentId);
+    }
+    if (changes.permissions !== undefined) {
+      sets.push('permissions = ?');
+      values.push(changes.permissions.length ? JSON.stringify(changes.permissions) : null);
+    }
+
+    const now = toMs(new Date());
+    if (changes.unlisted !== undefined) {
+      sets.push('unlisted_at = ?');
+      // Stamped fresh because this key is only ever present on a
+      // transition — Stack narrows a change set to the aspects that
+      // actually moved before it reaches an adapter.
+      values.push(changes.unlisted ? now : null);
+    }
+
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      fts5Strategy.remove(this.exec, id);
-      this.exec.run(
-        `UPDATE records SET content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
-        [
-          JSON.stringify(merged),
-          toMs(new Date()),
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          id,
-        ],
+      if (merged !== undefined) fts5Strategy.remove(this.exec, id);
+
+      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
+      const changed = this.exec.run(
+        `UPDATE records SET ${sets.concat(['version = version + 1', 'updated_at = ?', 'updated_by = ?', 'updated_via = ?']).join(', ')} WHERE id = ?${clause}`,
+        [...values, now, opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
       );
-      fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
-      this.syncContentIndex(id, existing.typeId, merged);
+      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+
+      if (changes.associations !== undefined) {
+        this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
+        if (changes.associations.length) this.insertAssociations(id, changes.associations);
+      }
+
+      if (merged !== undefined) {
+        fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
+        this.syncContentIndex(id, existing.typeId, merged);
+      }
     });
 
     const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after patchContent: "${id}"`);
+    if (!updated) throw new Error(`Record not found after mutateRecord: "${id}"`);
     return updated;
   }
 
@@ -337,88 +384,6 @@ export class SharedSqlRecordLogic {
 
     const updated = await this.getRecord(id);
     if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
-    return updated;
-  }
-
-  async setPermissions(
-    id: string,
-    permissions: Permission[],
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.exec.transaction(() => {
-      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const changed = this.exec.run(
-        `UPDATE records SET permissions = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-        [
-          permissions.length ? JSON.stringify(permissions) : null,
-          toMs(new Date()),
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          id,
-          ...verParams,
-        ],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-    });
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after setPermissions: "${id}"`);
-    return updated;
-  }
-
-  async setUnlisted(
-    id: string,
-    unlisted: boolean,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.exec.transaction(() => {
-      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const now = toMs(new Date());
-      const changed = this.exec.run(
-        `UPDATE records SET unlisted_at = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-        [
-          unlisted ? now : null,
-          now,
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          id,
-          ...verParams,
-        ],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-    });
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after setUnlisted: "${id}"`);
-    return updated;
-  }
-
-  async setParent(
-    id: string,
-    parentId: string | null,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ): Promise<StackRecord> {
-    this.exec.transaction(() => {
-      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const changed = this.exec.run(
-        `UPDATE records SET parent_id = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-        [
-          parentId,
-          toMs(new Date()),
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          id,
-          ...verParams,
-        ],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-    });
-
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after setParent: "${id}"`);
     return updated;
   }
 

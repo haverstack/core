@@ -27,12 +27,12 @@ import type {
   StackQuery,
   QueryResult,
   Association,
-  Permission,
   RecordId,
   FileId,
   EntityId,
   ChangeFilter,
   RecordChange,
+  RecordChanges,
 } from '@haverstack/core';
 import {
   assertQueryCapabilities,
@@ -473,7 +473,9 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
 const parseChange = (raw: WireRecordChange): RecordChange => {
   const change: RecordChange = {
     kind: raw.kind,
-    op: raw.op,
+    // Copied, so a frame's array is never shared with the parsed change a
+    // handler receives.
+    ops: [...raw.ops],
     recordId: raw.recordId,
     typeId: raw.typeId,
     version: raw.version,
@@ -982,19 +984,19 @@ export class APIAdapter implements StackAdapter {
     return raw ? parseRecord(raw) : null;
   }
 
-  async patchContent(
+  async mutateRecord(
     id: RecordId,
-    patch: Record<string, unknown | null>,
+    changes: RecordChanges,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    // Content-only RFC 7396 merge patch — no record fields (typeId, version,
-    // updatedAt) travel in this body. The server merges against its own
-    // current state and assigns the new version/updatedAt; the response is
-    // authoritative.
-    const raw = await this.request<WireRecord>('PATCH', `/records/${id}`, patch, {
+    // The change set travels as-is — no record fields (typeId, version,
+    // updatedAt) ride along. The server applies it against its own current
+    // state and assigns the new version/updatedAt; the response is
+    // authoritative. One If-Match fences the whole set.
+    const raw = await this.request<WireRecord | undefined>('PATCH', `/records/${id}`, changes, {
       ifMatch: opts.expectedVersion,
     });
-    return parseRecord(raw);
+    return requireRecordBody(raw, `PATCH /records/${id}`);
   }
 
   async commitMigration(
@@ -1116,54 +1118,6 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
   // Permissions
   // -------------------------------------------------------
-
-  async setPermissions(
-    id: RecordId,
-    permissions: Permission[],
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
-      'PUT',
-      `/records/${id}/permissions`,
-      { permissions },
-      {
-        ifMatch: opts.expectedVersion,
-      },
-    );
-    return requireRecordBody(raw, `PUT /records/${id}/permissions`);
-  }
-
-  async setUnlisted(
-    id: RecordId,
-    unlisted: boolean,
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
-      'PUT',
-      `/records/${id}/unlisted`,
-      { unlisted },
-      {
-        ifMatch: opts.expectedVersion,
-      },
-    );
-    return requireRecordBody(raw, `PUT /records/${id}/unlisted`);
-  }
-
-  async setParent(
-    id: RecordId,
-    parentId: RecordId | null,
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
-      'PUT',
-      `/records/${id}/parent`,
-      { parentId },
-      {
-        ifMatch: opts.expectedVersion,
-      },
-    );
-    return requireRecordBody(raw, `PUT /records/${id}/parent`);
-  }
 
   // -------------------------------------------------------
   // Versions

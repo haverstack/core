@@ -214,21 +214,20 @@ GET    /records              — query by native fields (see query params below)
 POST   /records/query        — query including content field filters (JSON body)
 POST   /records              — create
 GET    /records/:id          — get one
-PATCH  /records/:id          — update content only (partial merge, null = delete field)
-PUT    /records/:id/parent   — move into a container, or to the root (see Parent)
+PATCH  /records/:id          — apply a change set (content, parent, permissions, associations, unlisted)
 DELETE /records/:id          — soft delete
 DELETE /records/:id?hard=true — hard delete
 POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
-**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `PUT .../parent`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
 **A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
 
-**Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted` and `PUT .../parent`, and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
+**Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./access-control.md#errors-and-information-exposure) exists to prevent.
 
 **`GET /records` query params:**
 
@@ -277,14 +276,36 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 **Filters gated by a capability fail loudly, not silently.** A `content` filter has no representation in `GET /records`' query params, and `search` behaves however the server does with an unsupported param — so `APIAdapter` checks `capabilities.filter.content`/`capabilities.filter.search` before dispatching and throws `APIAdapterCapabilityError` locally, without sending a request, when the corresponding filter is used against a server that hasn't declared the capability. The alternative — degrading to an unfiltered or partially filtered result presented as the requested query — is worse than an error for anything that trusts the filter (dedup checks, existence checks, selection-sensitive logic).
 
-`PATCH /records/:id` accepts a partial content object. Omitted fields retain their current values. A field set to `null` is removed (RFC 7396 / JSON Merge Patch). Associations and permissions are managed via their own endpoints. **A key the record's type does not declare is refused with 422**, which is what a body reaching for a native field earns: this endpoint's body is content, so `parentId` here is a content field of that name and `PUT /records/:id/parent` is the endpoint that moves a record — see [Data model § Undeclared content fields](./data-model.md#undeclared-content-fields). JSON has no third state between the two, which is why a library caller supplying `undefined` for a field gets `StackValidationError` (422) rather than either behavior — see [Data model § Undefined values in a patch](./data-model.md#undefined-values-in-a-patch).
-
-**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, `POST .../migrate`, and the association/permission/unlisted endpoints below all accept an optional `If-Match` header:
+`PATCH /records/:id` accepts a **change set**: an envelope naming any combination of aspects, applied as one write producing one version. See [Data model § Mutations](./data-model.md#mutations) for the semantics.
 
 ```
 PATCH /records/abc123
 If-Match: "5"
+
+{
+  "contentPatch": { "title": "Q3 plan" },
+  "parentId": "def456",
+  "unlisted": false
+}
 ```
+
+| Key            | Type           | Meaning                                                    |
+| -------------- | -------------- | ---------------------------------------------------------- |
+| `contentPatch` | object         | merges at the **top level**: omitted keeps, `null` removes |
+| `parentId`     | string \| null | move into a container, or to the root                      |
+| `permissions`  | array          | replaces all entries; `[]` is private                      |
+| `associations` | array          | replaces the whole set                                     |
+| `unlisted`     | boolean        | withhold from enumeration, or relist                       |
+
+**Keys are read for presence.** `"unlisted": false` and `"parentId": null` name aspects and are applied; an absent key is untouched. `null` is the root sentinel for `parentId` — the JSON spelling of the `parentId=null` that `GET /records` takes on a query string — and is **not** a removal spelling anywhere else in the envelope: a `null` value for any other key is refused with **422**, since the key that removes things already has one meaning for it.
+
+**An empty envelope is 400** (`bad_request`): it addresses no aspect, so there is nothing for it to have failed to satisfy. A well-formed envelope whose every key already matches the record answers **200** with the record unchanged, having written nothing — the [no-op rule](./data-model.md#mutations), not an error.
+
+**An unrecognized top-level key is 400**, and a key the record's type does not declare inside `contentPatch` is **422** — the [same split](#the-taxonomy-root) every other write endpoint makes, since an envelope key addresses no schema and a content key fails one. Content is its own namespace: a `parentId` inside `contentPatch` is a content field of that name and never the native one, which is exactly why the native aspects sit at the envelope's top level instead of being guessed at from a flat body — see [Data model § Undeclared content fields](./data-model.md#undeclared-content-fields). JSON has no third state between a field kept and a field removed, which is why a library caller supplying `undefined` for a content field gets `StackValidationError` (422) rather than either behavior — see [Data model § Undefined values in a patch](./data-model.md#undefined-values-in-a-patch).
+
+**Each key carries its own authorization, and one refused key refuses the whole request** with the status that key would have earned alone — `403` for a reshare a requester may not make, `404` where they cannot read the record at all. Nothing is partially applied. A server built on `ScopedStack` inherits this; one mapping bodies onto `Stack` directly has to reproduce it per key. See [Access control § Composing a change set](./access-control.md#composing-a-change-set).
+
+**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, `POST .../migrate`, and the association endpoints below all accept an optional `If-Match` header. One header fences the whole change set, so a multi-aspect edit is a single conditional write rather than a sequence a racing writer can interleave with:
 
 When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **412** with a `version_conflict` wire error and changes nothing. Omit the header to keep unconditional last-writer-wins behavior. See [Versioning & deletion](./versioning.md#optimistic-concurrency-ifversion) for the corresponding `ifVersion` API.
 
@@ -306,7 +327,7 @@ For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of gr
 
 ### Migration commit
 
-`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what `stack.update()` uses to commit a pending lazy migration alongside a content patch (a content-only `PATCH` can't carry a `typeId` change), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner** and answers `403` otherwise: migration is owner-driven, and no grant confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending lazy migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner** and answers `403` otherwise: migration is owner-driven, and no grant confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
 
 ### Response envelope
 
@@ -335,46 +356,37 @@ The mitigation therefore lives where the engine is driven, not in the sanitizers
 
 ### Request size limits
 
-**A server MUST set a request-body size limit and answer an oversized body with `413` (code `payload_too_large`).** `limits.attachmentBytes` bounds attachment bytes only; a record body or a `PATCH` body has no ceiling anywhere in core, and nothing upstream of an adapter's `JSON.parse` imposes one — so an unbounded body is parsed, stored, and full-text indexed on the server's time and memory. This is ordinary request-size-limit territory, stated here because the rest of the spec bounds its resources explicitly (validation depth, cursor-walk caps, GC grace) and a server implementer reading it could reasonably conclude this one was covered too.
+**A server MUST set a request-body size limit and answer an oversized body with `413` (code `payload_too_large`).** `limits.attachmentBytes` bounds attachment bytes only; a record body or a change-set body has no ceiling anywhere in core, and nothing upstream of an adapter's `JSON.parse` imposes one — so an unbounded body is parsed, stored, and full-text indexed on the server's time and memory. This is ordinary request-size-limit territory, stated here because the rest of the spec bounds its resources explicitly (validation depth, cursor-walk caps, GC grace) and a server implementer reading it could reasonably conclude this one was covered too.
 
 The limit applies to the whole request body, so the check belongs upstream of parsing — a body rejected only after `JSON.parse` has already cost what the limit exists to prevent.
 
-**A server SHOULD declare the limit as `limits.contentBytes` in [discovery](#discovery)**, the content-side counterpart to `limits.attachmentBytes`. `Stack.create()` and `Stack.update()` pre-check against it — the create body and the patch respectively, since the patch is what travels — and throw `StackPayloadTooLargeError` before sending. As with attachments, the client-side check is a courtesy that saves a round trip and yields a typed error; the server's own limit remains authoritative, and a server that declares `null` (or omits the field) is simply saying clients can't pre-check, not that nothing is enforced.
+**A server SHOULD declare the limit as `limits.contentBytes` in [discovery](#discovery)**, the content-side counterpart to `limits.attachmentBytes`. `Stack.create()` and `Stack.mutate()` pre-check against it — the create body and the change set respectively, since the change set is what travels — and throw `StackPayloadTooLargeError` before sending. A `contentPatch` is measured as sent rather than as merged, which is what keeps a one-field edit to a large record from being charged for the whole record. As with attachments, the client-side check is a courtesy that saves a round trip and yields a typed error; the server's own limit remains authoritative, and a server that declares `null` (or omits the field) is simply saying clients can't pre-check, not that nothing is enforced.
 
 ### Content key rules
 
-Three content-key rules are `Stack` invariants that a server built on core inherits through ordinary record validation, and that a server mapping request bodies onto storage directly has to apply itself. A content field the record's type does not declare is refused at every depth, unless it sits inside an `object` or `array` the schema declares `open: true`; `__proto__`, `constructor` and `prototype` are refused as top-level content keys; a content field name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth. All three answer **422** (code `validation`) on `POST /records` and `PATCH /records/:id`, and the first and third on `POST /records/:id/migrate` as well — a field name that collides with content-path syntax would make a filter key ambiguous, so it is refused where it is written rather than where it is read. See [Data model § Undeclared content fields](./data-model.md#undeclared-content-fields), [§ Reserved content keys](./data-model.md#reserved-content-keys) and [§ Content field names](./data-model.md#content-field-names).
+Three content-key rules are `Stack` invariants that a server built on core inherits through ordinary record validation, and that a server mapping request bodies onto storage directly has to apply itself. A content field the record's type does not declare is refused at every depth, unless it sits inside an `object` or `array` the schema declares `open: true`; `__proto__`, `constructor` and `prototype` are refused as top-level content keys; a content field name containing `.`, `[`, `]`, `$`, `"`, `*`, or `#` is refused at every depth. All three answer **422** (code `validation`) on `POST /records` and inside a `PATCH /records/:id` `contentPatch`, and the first and third on `POST /records/:id/migrate` as well — a field name that collides with content-path syntax would make a filter key ambiguous, so it is refused where it is written rather than where it is read. See [Data model § Undeclared content fields](./data-model.md#undeclared-content-fields), [§ Reserved content keys](./data-model.md#reserved-content-keys) and [§ Content field names](./data-model.md#content-field-names).
 
 ## Permissions
 
 ```
 GET  /records/:id/permissions        — get current permissions
-PUT  /records/:id/permissions        — replace all permissions (empty array = private)
 ```
 
-`GET` uses the envelope `{ "permissions": [...] }` as its response body, and `PUT` takes the same envelope as its request body. `PUT` answers `200` with the updated **Record** — it bumps `version` like any other mutation, and the rule under [Records](#records) is uniform — and accepts the same optional `If-Match` precondition described there.
+`GET` uses the envelope `{ "permissions": [...] }` as its response body. **Permissions are written through `PATCH /records/:id`'s `permissions` key**, which replaces every entry — `[]` makes the record private — and answers with the updated Record like any other change set.
 
 An entry conveying `write` without `read` is refused with `422` (code `validation`), here and wherever else a request body carries `permissions`: the write bit reaches content and history through the mutate surface, so it withholds nothing without read. See [Access control § Write implies read](./access-control.md#write-implies-read).
 
 ## Unlisted
 
-```
-PUT  /records/:id/unlisted           — withhold from enumeration, or relist
-```
-
-Request body: `{ "unlisted": boolean }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint. Orthogonal to `PUT .../permissions`: it decides whether the record is enumerable, never who may read it. See [Unlisted records](./unlisted.md).
+**Withholding is written through `PATCH /records/:id`'s `unlisted` key.** The record it answers with carries `unlistedAt` when the key was `true` and omits it when `false`. Orthogonal to the `permissions` key beside it: this one decides whether the record is enumerable, never who may read it. See [Unlisted records](./unlisted.md).
 
 **`GET /records` and `POST /records/query` accept `includeUnlisted`** (a query parameter on the former, a `filter` key on the latter), excluded by default like `includeDeleted`. **A server built on `ScopedStack` MUST refuse it with `403` for any requester but the owner acting alone** — enumeration standing rests on nothing but ownership, so no grant or delegation carries it (see [Unlisted records § `includeUnlisted` is owner-only](./unlisted.md#includeunlisted-is-owner-only)). `GET /changes` accepts the same parameter, refused on the same terms, for the change feed's own default exclusion — see [Change feed](./change-feed.md).
 
 ## Parent
 
-```
-PUT  /records/:id/parent             — move a record into a container, or to the root
-```
+**A move is written through `PATCH /records/:id`'s `parentId` key**, which names a container or `null` for the root; the record it answers with carries `parentId` in the first case and omits it in the second. A `parentId` inside `contentPatch` is a content field of that name, never this one — refused with **422** unless the record's type declares one.
 
-Request body: `{ "parentId": string | null }`. Answers `200` with the updated **Record** — it bumps `version` like any other mutation — carrying `parentId` when a container was named, absent when `null`. `null` is the root sentinel, the JSON spelling of the `parentId=null` that `GET /records` takes as a query string. Accepts the same optional `If-Match` precondition as every other mutating endpoint.
-
-This is the only endpoint that changes `parentId`; `PATCH /records/:id` is content-only, so a `parentId` key in a patch body is a content field of that name, never this — refused with **422** unless the record's type declares one. Orthogonal to `PUT .../permissions` in exactly the way `PUT .../unlisted` is: it decides which listings enumerate the record, never who may read it. A server built on `ScopedStack` serves it to any requester holding write on the record **and** read on the destination, and answers `403` otherwise.
+Orthogonal to the `permissions` key in exactly the way `unlisted` is: it decides which listings enumerate the record, never who may read it. A server built on `ScopedStack` serves it to any requester holding write on the record **and** read on the destination, and answers `403` otherwise.
 
 A move that would make the record its own ancestor answers **409** (code `conflict`), as does one naming a container that does not exist. A malformed `parentId` — one that is not a well-formed record id, the empty string included — answers **400** (code `bad_request`). A chain too deep to walk is **not** refused: the check stops and the move proceeds. `POST /records/:id/restore/:version` is exempt from the existence check, so a snapshot naming a since-deleted container restores rather than 409s. See [Data model § Reparenting](./data-model.md#reparenting).
 
@@ -382,7 +394,7 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `PUT .../permissions`, `PUT .../unlisted`, `PUT .../parent`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). A change set produces one version and therefore one snapshot, however many aspects it moved. `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
@@ -392,9 +404,9 @@ POST /records/:id/restore/:version    — restore a version (creates new version
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Snapshot `permissions` are additionally omitted from the response body for any non-owner requester, including a write-holder who passes the gate. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-A snapshot body carries `parentId` exactly as the Record body above does: present names the container the record sat in, **absent is the root**. `null` is an input spelling — what `PUT /records/:id/parent` and `?parentId=null` accept — and never appears on a response. A restore therefore always settles containment: a snapshot with no `parentId` puts the record at the root rather than leaving it where it sits, so a server that omits the field from snapshots it writes is claiming every record was at the root. A client reading a `null` here treats it as the root, so a server that mirrors the input spelling is understood rather than misread.
+A snapshot body carries `parentId` exactly as the Record body above does: present names the container the record sat in, **absent is the root**. `null` is an input spelling — what a change set's `parentId` and `?parentId=null` accept — and never appears on a response. A restore therefore always settles containment: a snapshot with no `parentId` puts the record at the root rather than leaving it where it sits, so a server that omits the field from snapshots it writes is claiming every record was at the root. A client reading a `null` here treats it as the root, so a server that mirrors the input spelling is understood rather than misread.
 
-`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals `PUT .../parent` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
+`POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals a change set's `parentId` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **That same exhaustive list is what the [change feed](./change-feed.md) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
 
@@ -415,6 +427,8 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
 Both endpoints accept the same optional `If-Match` precondition described under [Records](#records), and both answer `200` with the updated Record, per the rule under [Records](#records).
+
+**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. See [Data model § Mutations](./data-model.md#mutations).
 
 `GET .../associations` response shape is consistent regardless of kind:
 

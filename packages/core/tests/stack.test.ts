@@ -29,6 +29,9 @@ import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type {
   AttachmentContent,
   BlobFileInfo,
+  ChangeOp,
+  Permission,
+  RecordChange,
   RecordFilter,
   RelationshipTarget,
   StackAdapter,
@@ -257,7 +260,7 @@ describe('Stack.create', () => {
 
     test('includes an unlisted card', async () => {
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
-      await stack.setUnlisted(created.id, true);
+      await stack.mutate(created.id, { unlisted: true });
       const found = await stack.getEntityByDid('did:key:x');
       expect(found?.id).toBe(created.id);
     });
@@ -791,7 +794,7 @@ describe('create — backdating (createdAt/updatedAt)', () => {
 });
 
 // -------------------------------------------------------
-// Type cache — create()/update()/etc. shouldn't pay a getType()
+// Type cache — create()/mutate()/etc. shouldn't pay a getType()
 // round trip on every write for a value that can't change.
 // -------------------------------------------------------
 
@@ -833,11 +836,11 @@ describe('type cache', () => {
     expect(getTypeSpy).not.toHaveBeenCalled();
   });
 
-  test('update() reuses the type cached by an earlier create() — no getType() round trip', async () => {
+  test('a content patch reuses the type cached by an earlier create() — no getType() round trip', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const getTypeSpy = vi.spyOn(adapter, 'getType');
 
-    await stack.update(record.id, { text: 'updated' });
+    await stack.patchContent(record.id, { text: 'updated' });
 
     expect(getTypeSpy).not.toHaveBeenCalled();
   });
@@ -1234,7 +1237,7 @@ describe('update', () => {
       title: { kind: 'string' },
     });
     const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
-    const updated = await stack.update(record.id, { title: 'Updated' });
+    const updated = await stack.patchContent(record.id, { title: 'Updated' });
     expect(updated.content).toEqual({ text: 'hello', title: 'Updated' });
   });
 
@@ -1244,24 +1247,26 @@ describe('update', () => {
       title: { kind: 'string' },
     });
     const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
-    const updated = await stack.update(record.id, { title: null });
+    const updated = await stack.patchContent(record.id, { title: null });
     expect((updated.content as Record<string, unknown>).title).toBeUndefined();
   });
 
   test('null on required field fails validation', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await expect(stack.update(record.id, { text: null })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(record.id, { text: null })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   test('increments version number', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.update(record.id, { text: 'world' });
+    const updated = await stack.patchContent(record.id, { text: 'world' });
     expect(updated.version).toBe(2);
   });
 
   test('snapshots previous content to version history', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.update(record.id, { text: 'world' });
+    await stack.patchContent(record.id, { text: 'world' });
     const versions = await stack.getVersions(record.id);
     expect(versions.length).toBe(1);
     expect(versions[0].content).toEqual({ text: 'hello' });
@@ -1269,33 +1274,33 @@ describe('update', () => {
   });
 
   test('throws for unknown record', async () => {
-    await expect(stack.update('nonexistent', { text: 'hello' })).rejects.toThrow();
+    await expect(stack.patchContent('nonexistent', { text: 'hello' })).rejects.toThrow();
   });
 });
 
 // -------------------------------------------------------
-// setParent: the one native field a write reaches after create.
+// The `parentId` key: the one native field a write reaches after create.
 // -------------------------------------------------------
 
-describe('Stack.setParent', () => {
+describe('Stack.mutate — the `parentId` key', () => {
   test('moves a record into a container', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.setParent(note.id, box.id);
+    const moved = await stack.mutate(note.id, { parentId: box.id });
     expect(moved.parentId).toBe(box.id);
   });
 
   test('null moves a record to the root', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    const moved = await stack.setParent(note.id, null);
+    const moved = await stack.mutate(note.id, { parentId: null });
     expect(moved.parentId).toBeUndefined();
   });
 
   test('bumps version and snapshots the prior state', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.setParent(note.id, box.id);
+    const moved = await stack.mutate(note.id, { parentId: box.id });
     expect(moved.version).toBe(2);
     const versions = await stack.getVersions(note.id);
     expect(versions.length).toBe(1);
@@ -1305,55 +1310,57 @@ describe('Stack.setParent', () => {
   test('leaves content untouched', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.setParent(note.id, box.id);
+    const moved = await stack.mutate(note.id, { parentId: box.id });
     expect(moved.content).toEqual({ text: 'note' });
   });
 
   // A no-op must not bump version or write a snapshot, matching
-  // setUnlisted() and setPermissions().
+  // the `unlisted` key and a reshare.
   test('moving to the parent it already has is a no-op', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    const same = await stack.setParent(note.id, box.id);
+    const same = await stack.mutate(note.id, { parentId: box.id });
     expect(same.version).toBe(1);
     expect(await stack.getVersions(note.id)).toEqual([]);
   });
 
   test('a root record set to null is a no-op', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const same = await stack.setParent(note.id, null);
+    const same = await stack.mutate(note.id, { parentId: null });
     expect(same.version).toBe(1);
   });
 
   test('throws for unknown record', async () => {
-    await expect(stack.setParent('nonexistent', null)).rejects.toThrow(StackNotFoundError);
+    await expect(stack.mutate('nonexistent', { parentId: null })).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 
   test('honors ifVersion', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.setParent(note.id, box.id, { ifVersion: 99 })).rejects.toThrow(
+    await expect(stack.mutate(note.id, { parentId: box.id }, { ifVersion: 99 })).rejects.toThrow(
       StackVersionConflictError,
     );
   });
 
   test('the record itself is refused as its own parent', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.setParent(note.id, note.id)).rejects.toThrow(StackConflictError);
+    await expect(stack.mutate(note.id, { parentId: note.id })).rejects.toThrow(StackConflictError);
   });
 
   test('a descendant is refused as a parent', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const c = await stack.create(NOTE_V1, { text: 'c' }, { parentId: b.id });
-    await expect(stack.setParent(a.id, c.id)).rejects.toThrow(StackConflictError);
+    await expect(stack.mutate(a.id, { parentId: c.id })).rejects.toThrow(StackConflictError);
   });
 
   test('a sibling subtree is not a descendant, and is allowed', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' });
     const bChild = await stack.create(NOTE_V1, { text: 'b-child' }, { parentId: b.id });
-    const moved = await stack.setParent(a.id, bChild.id);
+    const moved = await stack.mutate(a.id, { parentId: bChild.id });
     expect(moved.parentId).toBe(bChild.id);
   });
 
@@ -1366,7 +1373,9 @@ describe('Stack.setParent', () => {
     for (let i = 0; i < 10; i++) {
       previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
     }
-    await expect(stack.setParent(root.id, previous.id)).rejects.toThrow(StackConflictError);
+    await expect(stack.mutate(root.id, { parentId: previous.id })).rejects.toThrow(
+      StackConflictError,
+    );
   });
 
   // A create supplying both id and parentId is the second edge-adding
@@ -1379,8 +1388,8 @@ describe('Stack.setParent', () => {
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const minted = idWithTimestamp(Date.now());
     // Straight to the adapter: it holds no opinion on references, so this
-    // plants the dangling parent Stack.setParent() would now refuse.
-    await adapter.setParent(a.id, minted);
+    // plants the dangling parent Stack.a change set's `parentId` would now refuse.
+    await adapter.mutateRecord(a.id, { parentId: minted });
     await expect(
       stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
     ).rejects.toThrow(StackConflictError);
@@ -1432,7 +1441,7 @@ describe('Stack.setParent', () => {
   test('parenting to a record that does not exist is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const gone = idWithTimestamp(Date.now());
-    await expect(stack.setParent(note.id, gone)).rejects.toThrow(StackConflictError);
+    await expect(stack.mutate(note.id, { parentId: gone })).rejects.toThrow(StackConflictError);
   });
 
   test('creating under a record that does not exist is refused', async () => {
@@ -1450,7 +1459,7 @@ describe('Stack.setParent', () => {
     ['a reserved id', '_config'],
   ])('parenting to %s is refused as malformed', async (_name, bad) => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.setParent(note.id, bad)).rejects.toThrow(StackQueryError);
+    await expect(stack.mutate(note.id, { parentId: bad })).rejects.toThrow(StackQueryError);
     await expect(stack.create(NOTE_V1, { text: 'other' }, { parentId: bad })).rejects.toThrow(
       StackQueryError,
     );
@@ -1464,14 +1473,14 @@ describe('Stack.setParent', () => {
       previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
     }
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.setParent(note.id, previous.id);
+    const moved = await stack.mutate(note.id, { parentId: previous.id });
     expect(moved.parentId).toBe(previous.id);
   });
 
   test('a parentId filter finds the record at its new home', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.setParent(note.id, box.id);
+    await stack.mutate(note.id, { parentId: box.id });
     const result = await stack.query({ filter: { parentId: box.id } });
     expect(result.records.map((r) => r.id)).toEqual([note.id]);
   });
@@ -1486,7 +1495,7 @@ describe('Stack.restoreVersion — parentId', () => {
   test('a snapshot records the container the record sat in', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.setParent(note.id, null);
+    await stack.mutate(note.id, { parentId: null });
     const [snapshot] = await stack.getVersions(note.id);
     expect(snapshot.parentId).toBe(box.id);
   });
@@ -1495,7 +1504,7 @@ describe('Stack.restoreVersion — parentId', () => {
   // root — so `null` never appears on one.
   test('a snapshot of a root record omits parentId', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
     const [snapshot] = await stack.getVersions(note.id);
     expect('parentId' in snapshot).toBe(false);
   });
@@ -1503,7 +1512,7 @@ describe('Stack.restoreVersion — parentId', () => {
   test('a snapshot carries the container the record sat in', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.update(note.id, { text: 'edited' });
+    await stack.patchContent(note.id, { text: 'edited' });
     const [snapshot] = await stack.getVersions(note.id);
     expect(snapshot.parentId).toBe(box.id);
   });
@@ -1512,7 +1521,7 @@ describe('Stack.restoreVersion — parentId', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const other = await stack.create(NOTE_V1, { text: 'other' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.setParent(note.id, other.id);
+    await stack.mutate(note.id, { parentId: other.id });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBe(box.id);
   });
@@ -1520,7 +1529,7 @@ describe('Stack.restoreVersion — parentId', () => {
   test('restoring a snapshot taken at the root moves the record back to the root', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.setParent(note.id, box.id);
+    await stack.mutate(note.id, { parentId: box.id });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBeUndefined();
   });
@@ -1528,7 +1537,7 @@ describe('Stack.restoreVersion — parentId', () => {
   test('a restore that moves the record is itself restorable', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.setParent(note.id, null);
+    await stack.mutate(note.id, { parentId: null });
     await stack.restoreVersion(note.id, 1);
     const back = await stack.restoreVersion(note.id, 2);
     expect(back.parentId).toBeUndefined();
@@ -1538,8 +1547,8 @@ describe('Stack.restoreVersion — parentId', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.associate(note.id, { kind: 'tag', label: 'pinned' });
-    await stack.update(note.id, { text: 'edited' });
-    await stack.setParent(note.id, null);
+    await stack.patchContent(note.id, { text: 'edited' });
+    await stack.mutate(note.id, { parentId: null });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
     expect(restored.associations).toBeUndefined();
@@ -1574,31 +1583,31 @@ describe('Stack.restoreVersion — parentId', () => {
       content: { text: 'older' },
       updatedAt: new Date(),
     });
-    const seen: { recordId: string; op: string }[] = [];
-    await stack.subscribe((c) => seen.push({ recordId: c.recordId, op: c.op }), {
+    const seen: { recordId: string; ops: ChangeOp[] }[] = [];
+    await stack.subscribe((c) => seen.push({ recordId: c.recordId, ops: c.ops }), {
       filter: { parentId: box.id },
     });
     await stack.restoreVersion(note.id, 1);
-    expect(seen).toEqual([{ recordId: note.id, op: 'restore' }]);
+    expect(seen).toEqual([{ recordId: note.id, ops: ['restore'] }]);
   });
 
-  // Putting a container back is an edge-adding site like setParent(): the
+  // Putting a container back is an edge-adding site like a change set's `parentId`: the
   // chain above it may have moved since the snapshot was taken.
   test('a restore that would make the record its own ancestor is refused', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.setParent(note.id, null);
-    await stack.setParent(box.id, note.id);
+    await stack.mutate(note.id, { parentId: null });
+    await stack.mutate(box.id, { parentId: note.id });
     await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(StackConflictError);
   });
 
-  // Restore is exempt from the reference check setParent() pays: it is
+  // Restore is exempt from the reference check a change set's `parentId` pays: it is
   // history being put back, not a caller naming a destination, and refusing
   // would let an unrelated deletion cost the record its content rollback.
   test('a snapshot naming a since-deleted container restores anyway', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.setParent(note.id, null);
+    await stack.mutate(note.id, { parentId: null });
     await stack.delete(box.id, { hard: true });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBe(box.id);
@@ -1608,11 +1617,11 @@ describe('Stack.restoreVersion — parentId', () => {
 
   // The contrast that makes the exemption legible: naming the same gone
   // container directly is refused.
-  test('setParent to that same deleted container is refused', async () => {
+  test('naming that same deleted container as parentId is refused', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.delete(box.id, { hard: true });
-    await expect(stack.setParent(note.id, box.id)).rejects.toThrow(StackConflictError);
+    await expect(stack.mutate(note.id, { parentId: box.id })).rejects.toThrow(StackConflictError);
   });
 });
 
@@ -1653,21 +1662,21 @@ describe('records at rest', () => {
     expect(result.records[0]?.typeId).toBe(NOTE_V1);
   });
 
-  test("update() validates against the record's own current typeId, never migrates it", async () => {
+  test("patchContent() validates against the record's own current typeId, never migrates it", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.update(record.id, { text: 'updated' });
+    const updated = await stack.patchContent(record.id, { text: 'updated' });
     expect(updated.typeId).toBe(NOTE_V1);
     const raw = await adapter.getRecord(record.id);
-    expect(raw?.typeId).toBe(NOTE_V1); // still v1 on disk — update() never migrates
+    expect(raw?.typeId).toBe(NOTE_V1); // still v1 on disk — a content patch never migrates
     expect((raw?.content as Record<string, unknown>).text).toBe('updated');
   });
 
-  test("update() validates against v1's schema — a v2-only field is refused, and the record stays at v1", async () => {
+  test("patchContent() validates against v1's schema — a v2-only field is refused, and the record stays at v1", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     // "title" is declared by v2 and not by v1. The record is a v1 record
     // until migrateAll() moves it, so v1's schema is what the patch answers
     // to — validating against the latest would accept this.
-    await expect(stack.update(record.id, { title: 'not part of v1' })).rejects.toThrow(
+    await expect(stack.patchContent(record.id, { title: 'not part of v1' })).rejects.toThrow(
       StackValidationError,
     );
     const raw = await adapter.getRecord(record.id);
@@ -2125,7 +2134,7 @@ describe('Stack.commitMigration', () => {
 // Migrate writes a full content replacement under a new typeId, so it is
 // create-shaped at the destination and update-shaped over the record as it
 // stands. These cover the checks it owes on both counts — without them,
-// migrate is a second write path to state create()/update() refuse.
+// migrate is a second write path to state create()/mutate() refuse.
 // -------------------------------------------------------
 
 describe('Stack.commitMigration — binding fields', () => {
@@ -2329,15 +2338,15 @@ describe('versions', () => {
 
   test('getVersions returns history after updates', async () => {
     const record = await stack.create(NOTE_V1, { text: 'v1' });
-    await stack.update(record.id, { text: 'v2' });
-    await stack.update(record.id, { text: 'v3' });
+    await stack.patchContent(record.id, { text: 'v2' });
+    await stack.patchContent(record.id, { text: 'v3' });
     const versions = await stack.getVersions(record.id);
     expect(versions.length).toBe(2);
   });
 
   test('restoreVersion creates a new version with old content', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' });
-    await stack.update(record.id, { text: 'changed' });
+    await stack.patchContent(record.id, { text: 'changed' });
     const restored = await stack.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.version).toBe(3); // v1 original, v2 changed, v3 restored
@@ -2345,7 +2354,7 @@ describe('versions', () => {
 
   test('restoreVersion does not rewrite history', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' });
-    await stack.update(record.id, { text: 'changed' });
+    await stack.patchContent(record.id, { text: 'changed' });
     await stack.restoreVersion(record.id, 1);
     const versions = await stack.getVersions(record.id);
     expect(versions.length).toBe(2); // v1 and v2 snapshots preserved
@@ -2359,7 +2368,7 @@ describe('versions', () => {
   test('restoreVersion restores associations captured in the snapshot', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' });
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2
-    await stack.update(record.id, { text: 'changed' }); // v3, snapshots v2 (assoc: [favourite])
+    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2 (assoc: [favourite])
     await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' }); // v4, assoc now []
     const restored = await stack.restoreVersion(record.id, 2); // v5
     expect(restored.content).toEqual({ text: 'original' });
@@ -2379,9 +2388,9 @@ describe('versions', () => {
 
   test('restoreVersion never restores permissions, even when the snapshot has them', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' });
-    await stack.setPermissions(record.id, [{ access: 'public' }]); // v2
-    await stack.update(record.id, { text: 'changed' }); // v3, snapshots v2 (permissions: [public])
-    await stack.setPermissions(record.id, []); // v4, private again
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v2
+    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2 (permissions: [public])
+    await stack.mutate(record.id, { permissions: [] }); // v4, private again
     const restored = await stack.restoreVersion(record.id, 2); // v5
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.permissions).toEqual([]);
@@ -2390,8 +2399,8 @@ describe('versions', () => {
   test('version snapshot captures associations and permissions when present', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2, snapshots v1
-    await stack.setPermissions(record.id, [{ access: 'public' }]); // v3, snapshots v2
-    await stack.update(record.id, { text: 'changed' }); // v4, snapshots v3
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3, snapshots v2
+    await stack.patchContent(record.id, { text: 'changed' }); // v4, snapshots v3
     const versions = await stack.getVersions(record.id);
     const v3snap = versions.find((v) => v.version === 3);
     expect(v3snap?.associations).toEqual([{ kind: 'tag', label: 'x' }]);
@@ -2406,9 +2415,9 @@ describe('versions', () => {
 describe('versioning rule — mixed mutations', () => {
   test('version increments by exactly one per real mutation, across mixed operation types', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v3
-    await stack.setPermissions(record.id, [{ access: 'public' }]); // v4
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v4
     await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // v5
     await stack.delete(record.id); // v6
     const undeleted = await stack.undelete(record.id); // v7
@@ -2425,7 +2434,7 @@ describe('versioning rule — mixed mutations', () => {
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no-op
     await stack.dissociate(record.id, { kind: 'tag', label: 'gone' }); // no-op
-    await stack.setPermissions(record.id, []); // no-op (already private)
+    await stack.mutate(record.id, { permissions: [] }); // no-op (already private)
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(await stack.getVersions(record.id)).toHaveLength(1);
@@ -2437,19 +2446,19 @@ describe('versioning rule — mixed mutations', () => {
 // -------------------------------------------------------
 
 describe('ifVersion', () => {
-  test('update() applies when ifVersion matches, and bumps as normal', async () => {
+  test('a content patch applies when ifVersion matches, and bumps as normal', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    const updated = await stack.update(record.id, { text: 'v2' }, { ifVersion: 1 });
+    const updated = await stack.patchContent(record.id, { text: 'v2' }, { ifVersion: 1 });
     expect(updated.version).toBe(2);
     expect(updated.content.text).toBe('v2');
   });
 
-  test('update() throws StackVersionConflictError when ifVersion is stale, and changes nothing', async () => {
+  test('patchContent() throws StackVersionConflictError when ifVersion is stale, and changes nothing', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2, no ifVersion — moves the record on
+    await stack.patchContent(record.id, { text: 'v2' }); // v2, no ifVersion — moves the record on
 
     const err = await stack
-      .update(record.id, { text: 'v3' }, { ifVersion: 1 })
+      .patchContent(record.id, { text: 'v3' }, { ifVersion: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).recordId).toBe(record.id);
@@ -2463,21 +2472,21 @@ describe('ifVersion', () => {
 
   test('omitting ifVersion keeps last-writer-wins behavior', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'from A' }); // v2
-    const updated = await stack.update(record.id, { text: 'from B' }); // v3, no precondition
+    await stack.patchContent(record.id, { text: 'from A' }); // v2
+    const updated = await stack.patchContent(record.id, { text: 'from B' }); // v3, no precondition
     expect(updated.version).toBe(3);
     expect(updated.content.text).toBe('from B');
   });
 
-  test('associate()/dissociate()/setPermissions() enforce ifVersion', async () => {
+  test('associate()/dissociate()/a reshare enforce ifVersion', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     await expect(
       stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 1 }),
     ).rejects.toThrow(StackVersionConflictError);
     await expect(
-      stack.setPermissions(record.id, [{ access: 'public' }], { ifVersion: 1 }),
+      stack.mutate(record.id, { permissions: [{ access: 'public' }] }, { ifVersion: 1 }),
     ).rejects.toThrow(StackVersionConflictError);
 
     await stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 2 }); // v3
@@ -2491,7 +2500,7 @@ describe('ifVersion', () => {
 
   test('delete() (soft) and undelete() enforce ifVersion', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     await expect(stack.delete(record.id, { ifVersion: 1 })).rejects.toThrow(
       StackVersionConflictError,
@@ -2508,7 +2517,7 @@ describe('ifVersion', () => {
 
   test('delete() (hard) enforces ifVersion atomically at the adapter', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     await expect(stack.delete(record.id, { hard: true, ifVersion: 1 })).rejects.toThrow(
       StackVersionConflictError,
@@ -2522,8 +2531,8 @@ describe('ifVersion', () => {
 
   test('restoreVersion() enforces ifVersion', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
-    await stack.update(record.id, { text: 'v3' }); // v3
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v3' }); // v3
 
     await expect(stack.restoreVersion(record.id, 1, { ifVersion: 1 })).rejects.toThrow(
       StackVersionConflictError,
@@ -2541,7 +2550,7 @@ describe('ifVersion', () => {
       { migratesFrom: NOTE_V1 },
     );
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     await expect(
       stack.commitMigration(record.id, NOTE_V2, { text: 'v2', title: '' }, { ifVersion: 1 }),
@@ -2560,9 +2569,9 @@ describe('ifVersion', () => {
   });
 
   test('ifVersion on a nonexistent record throws StackNotFoundError, not StackVersionConflictError', async () => {
-    await expect(stack.update('nonexistent', { text: 'x' }, { ifVersion: 1 })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      stack.patchContent('nonexistent', { text: 'x' }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackNotFoundError);
     await expect(
       stack.commitMigration('nonexistent', NOTE_V1, { text: 'x' }, { ifVersion: 1 }),
     ).rejects.toThrow(StackNotFoundError);
@@ -2574,7 +2583,7 @@ describe('ifVersion', () => {
 // -------------------------------------------------------
 
 describe('orphan version row recovery', () => {
-  test("a pre-existing orphan snapshot at the record's current version does not permanently block update()", async () => {
+  test("a pre-existing orphan snapshot at the record's current version does not permanently block patchContent()", async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     // Simulate an interrupted write: the v1 snapshot committed, but the
     // mutation that should have bumped past it never did — an orphan row
@@ -2586,7 +2595,7 @@ describe('orphan version row recovery', () => {
       updatedAt: record.updatedAt,
     });
 
-    const updated = await stack.update(record.id, { text: 'v2' });
+    const updated = await stack.patchContent(record.id, { text: 'v2' });
     expect(updated.version).toBe(2);
     expect(updated.content.text).toBe('v2');
 
@@ -2596,9 +2605,9 @@ describe('orphan version row recovery', () => {
     expect(versions[0].version).toBe(1);
   });
 
-  test('an orphan does not block associate()/dissociate()/setPermissions()/delete()/undelete()/restoreVersion()', async () => {
+  test('an orphan does not block associate()/dissociate()/a reshare/delete()/undelete()/restoreVersion()', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.update(record.id, { text: 'v2' }); // v2, snapshots v1
+    await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
     await adapter.saveVersion(record.id, {
       version: 2,
@@ -2616,7 +2625,7 @@ describe('orphan version row recovery', () => {
     const staleRead = await stack.get(record.id);
 
     // Writer A completes first, moving the record to v2.
-    await stack.update(record.id, { text: 'from A' });
+    await stack.patchContent(record.id, { text: 'from A' });
 
     // Writer B built its mutation from the same stale v1 read and tries to
     // snapshot v1 again — but the record has since moved to v2, so this is
@@ -2624,9 +2633,9 @@ describe('orphan version row recovery', () => {
     // with is v1's real, already-superseded history entry) and must be
     // rejected before any part of B's mutation applies.
     await expect(
-      adapter.patchContent(
+      adapter.mutateRecord(
         record.id,
-        { text: 'from B' },
+        { contentPatch: { text: 'from B' } },
         {
           snapshot: {
             version: 1,
@@ -2734,23 +2743,23 @@ describe('_config protections', () => {
     });
   }
 
-  test('update() rejects a change to entityId', async () => {
+  test('patchContent() rejects a change to entityId', async () => {
     await seedConfig();
-    await expect(stack.update(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
+    await expect(stack.patchContent(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
       StackConflictError,
     );
     expect((await adapter.getRecord(CONFIG_ID))?.content.entityId).toBe('owner-123');
   });
 
-  test('update() allows changing timezone', async () => {
+  test('patchContent() allows changing timezone', async () => {
     await seedConfig();
-    const updated = await stack.update(CONFIG_ID, { timezone: 'America/New_York' });
+    const updated = await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
   });
 
   test('setting entityId to its current value is a no-op, not an error', async () => {
     await seedConfig('owner-123');
-    await expect(stack.update(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
+    await expect(stack.patchContent(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
   });
 
   test('soft delete is rejected', async () => {
@@ -2781,7 +2790,7 @@ describe('_config protections', () => {
 
   test('restoreVersion() allows a snapshot with the same entityId', async () => {
     await seedConfig('owner-123', 'UTC');
-    await stack.update(CONFIG_ID, { timezone: 'America/New_York' });
+    await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
     expect((restored.content as Record<string, unknown>).timezone).toBe('UTC');
   });
@@ -2800,7 +2809,7 @@ describe('_config protections', () => {
   test('ScopedStack delegation: the owner cannot change entityId via scoped update either', async () => {
     await seedConfig('owner-123');
     await expect(
-      stack.asEntity('owner-123').update(CONFIG_ID, { entityId: 'someone-else' }),
+      stack.asEntity('owner-123').patchContent(CONFIG_ID, { entityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -2978,7 +2987,7 @@ describe('use after close', () => {
 
   test('writes throw StackClosedError', async () => {
     await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(StackClosedError);
-    await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
+    await expect(stack.patchContent('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
       StackClosedError,
     );
     await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
@@ -3479,13 +3488,13 @@ describe('associate / dissociate', () => {
 });
 
 // -------------------------------------------------------
-// setPermissions
+// The `permissions` key
 // -------------------------------------------------------
 
-describe('setPermissions', () => {
+describe('Stack.mutate — the `permissions` key', () => {
   test('bumps version and snapshots the prior state', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, [{ access: 'public' }]);
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(updated?.permissions).toEqual([{ access: 'public' }]);
@@ -3496,8 +3505,8 @@ describe('setPermissions', () => {
 
   test('is a no-op for a deep-equal permission set — no version bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, [{ access: 'public' }]);
-    await stack.setPermissions(record.id, [{ access: 'public' }]);
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(await stack.getVersions(record.id)).toHaveLength(1);
@@ -3505,7 +3514,7 @@ describe('setPermissions', () => {
 
   test('setting empty permissions on an already-private record is a no-op', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, []);
+    await stack.mutate(record.id, { permissions: [] });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
   });
@@ -3514,14 +3523,14 @@ describe('setPermissions', () => {
   test('rejects an entry conveying write without read', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(
-      stack.setPermissions(record.id, [
-        { access: 'entity', entityId: 'entity-abc', read: false, write: true },
-      ]),
+      stack.mutate(record.id, {
+        permissions: [{ access: 'entity', entityId: 'entity-abc', read: false, write: true }],
+      }),
     ).rejects.toThrow(StackValidationError);
     await expect(
-      stack.setPermissions(record.id, [
-        { access: 'group', groupId: 'group-abc', read: false, write: true },
-      ]),
+      stack.mutate(record.id, {
+        permissions: [{ access: 'group', groupId: 'group-abc', read: false, write: true }],
+      }),
     ).rejects.toThrow(StackValidationError);
     expect((await adapter.getRecord(record.id))?.permissions).toBeUndefined();
   });
@@ -3539,19 +3548,21 @@ describe('setPermissions', () => {
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.setPermissions('nonexistent', [{ access: 'public' }])).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      stack.mutate('nonexistent', { permissions: [{ access: 'public' }] }),
+    ).rejects.toThrow(StackNotFoundError);
   });
 
   test('adding role: "admin" to a group entry persists and bumps version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', read: true, write: true },
-    ]); // v2
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
-    ]); // v3
+    await stack.mutate(record.id, {
+      permissions: [{ access: 'group', groupId: 'group-1', read: true, write: true }],
+    }); // v2
+    await stack.mutate(record.id, {
+      permissions: [
+        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+      ],
+    }); // v3
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(3);
     expect(updated?.permissions).toEqual([
@@ -3561,12 +3572,14 @@ describe('setPermissions', () => {
 
   test('removing role: "admin" from a group entry persists and bumps version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
-    ]); // v2
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', read: true, write: true },
-    ]); // v3
+    await stack.mutate(record.id, {
+      permissions: [
+        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+      ],
+    }); // v2
+    await stack.mutate(record.id, {
+      permissions: [{ access: 'group', groupId: 'group-1', read: true, write: true }],
+    }); // v3
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(3);
     expect(updated?.permissions).toEqual([
@@ -3576,12 +3589,16 @@ describe('setPermissions', () => {
 
   test('a genuinely-identical group entry (matching role) still no-ops', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
-    ]); // v2
-    await stack.setPermissions(record.id, [
-      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
-    ]);
+    await stack.mutate(record.id, {
+      permissions: [
+        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+      ],
+    }); // v2
+    await stack.mutate(record.id, {
+      permissions: [
+        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+      ],
+    });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(await stack.getVersions(record.id)).toHaveLength(1);
@@ -3589,13 +3606,13 @@ describe('setPermissions', () => {
 });
 
 // -------------------------------------------------------
-// setUnlisted
+// The `unlisted` key
 // -------------------------------------------------------
 
-describe('setUnlisted', () => {
+describe('Stack.mutate — the `unlisted` key', () => {
   test('bumps version and sets unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setUnlisted(record.id, true);
+    await stack.mutate(record.id, { unlisted: true });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(2);
     expect(updated?.unlistedAt).toBeInstanceOf(Date);
@@ -3603,8 +3620,8 @@ describe('setUnlisted', () => {
 
   test('clears unlistedAt on the reverse call', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setUnlisted(record.id, true);
-    await stack.setUnlisted(record.id, false);
+    await stack.mutate(record.id, { unlisted: true });
+    await stack.mutate(record.id, { unlisted: false });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(3);
     expect(updated?.unlistedAt).toBeUndefined();
@@ -3612,11 +3629,11 @@ describe('setUnlisted', () => {
 
   test('is a no-op when already in the requested state — no version bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.setUnlisted(record.id, false);
+    await stack.mutate(record.id, { unlisted: false });
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
 
-    await stack.setUnlisted(record.id, true);
-    await stack.setUnlisted(record.id, true);
+    await stack.mutate(record.id, { unlisted: true });
+    await stack.mutate(record.id, { unlisted: true });
     expect((await adapter.getRecord(record.id))?.version).toBe(2);
   });
 
@@ -3626,13 +3643,15 @@ describe('setUnlisted', () => {
       { text: 'hello' },
       { permissions: [{ access: 'public' }] },
     );
-    await stack.setUnlisted(record.id, true);
+    await stack.mutate(record.id, { unlisted: true });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.permissions).toEqual([{ access: 'public' }]);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.setUnlisted('nonexistent', true)).rejects.toThrow(StackNotFoundError);
+    await expect(stack.mutate('nonexistent', { unlisted: true })).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 
   test('create({ unlisted: true }) stamps unlistedAt from the start', async () => {
@@ -3682,20 +3701,20 @@ describe('mutators return the record they produced', () => {
     expect(updated.associations).toBeUndefined();
   });
 
-  test('setPermissions returns the record carrying the new permissions', async () => {
+  test('a permissions change set returns the record carrying the new permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.setPermissions(record.id, [{ access: 'public' }]);
+    const updated = await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
     expect(updated.version).toBe(2);
     expect(updated.permissions).toEqual([{ access: 'public' }]);
   });
 
-  test('setUnlisted returns the record carrying unlistedAt', async () => {
+  test('an unlisted change set returns the record carrying unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const unlisted = await stack.setUnlisted(record.id, true);
+    const unlisted = await stack.mutate(record.id, { unlisted: true });
     expect(unlisted.version).toBe(2);
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
 
-    const relisted = await stack.setUnlisted(record.id, false);
+    const relisted = await stack.mutate(record.id, { unlisted: false });
     expect(relisted.version).toBe(3);
     expect(relisted.unlistedAt).toBeUndefined();
   });
@@ -3713,8 +3732,8 @@ describe('mutators return the record they produced', () => {
 
     expect(await stack.associate(record.id, { kind: 'tag', label: 'favourite' })).toEqual(current);
     expect(await stack.dissociate(record.id, { kind: 'tag', label: 'absent' })).toEqual(current);
-    expect(await stack.setPermissions(record.id, [{ access: 'public' }])).toEqual(current);
-    expect(await stack.setUnlisted(record.id, false)).toEqual(current);
+    expect(await stack.mutate(record.id, { permissions: [{ access: 'public' }] })).toEqual(current);
+    expect(await stack.mutate(record.id, { unlisted: false })).toEqual(current);
     expect((await adapter.getRecord(record.id))?.version).toBe(2);
   });
 });
@@ -3765,10 +3784,12 @@ describe('undeclared content fields', () => {
     );
   });
 
-  test('update() refuses an undeclared patch key and writes nothing', async () => {
+  test('patchContent() refuses an undeclared patch key and writes nothing', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi' });
 
-    await expect(stack.update(record.id, { extra: 'kept' })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(record.id, { extra: 'kept' })).rejects.toThrow(
+      StackValidationError,
+    );
 
     const after = await stack.get(record.id);
     expect(after?.content).toEqual({ text: 'hi' });
@@ -3783,7 +3804,7 @@ describe('undeclared content fields', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
 
-    await expect(stack.update(note.id, { parentId: box.id })).rejects.toThrow(
+    await expect(stack.patchContent(note.id, { parentId: box.id })).rejects.toThrow(
       /"parentId" is not declared by this type/,
     );
 
@@ -3802,7 +3823,7 @@ describe('undeclared content fields', () => {
     });
     const bookmark = await stack.create(BOOKMARK, { url: 'https://example.com' });
 
-    const updated = await stack.update(bookmark.id, { parentId: 'abcdefghjkmn' });
+    const updated = await stack.patchContent(bookmark.id, { parentId: 'abcdefghjkmn' });
 
     expect(updated.content.parentId).toBe('abcdefghjkmn');
     expect(updated.parentId).toBeUndefined();
@@ -3863,11 +3884,11 @@ describe('reserved content keys', () => {
   );
 
   test.each(['__proto__', 'constructor', 'prototype'])(
-    'update() rejects a %s patch key',
+    'patchContent() rejects a %s patch key',
     async (key) => {
       const record = await stack.create(NOTE_V1, { text: 'hi' });
 
-      await expect(stack.update(record.id, withKey(key, 'x'))).rejects.toThrow(
+      await expect(stack.patchContent(record.id, withKey(key, 'x'))).rejects.toThrow(
         StackValidationError,
       );
       // Rejected outright, so the rest of the patch doesn't land either.
@@ -3962,37 +3983,37 @@ describe('undefined patch values', () => {
     });
   });
 
-  test('update() rejects a patch key whose value is undefined', async () => {
+  test('patchContent() rejects a patch key whose value is undefined', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
 
-    await expect(stack.update(record.id, { extra: undefined })).rejects.toThrow(
+    await expect(stack.patchContent(record.id, { extra: undefined })).rejects.toThrow(
       StackValidationError,
     );
     // Rejected outright, so the rest of the patch doesn't land either.
-    await expect(stack.update(record.id, { text: 'edited', extra: undefined })).rejects.toThrow(
-      StackValidationError,
-    );
+    await expect(
+      stack.patchContent(record.id, { text: 'edited', extra: undefined }),
+    ).rejects.toThrow(StackValidationError);
     expect((await stack.get(record.id))?.content).toEqual({ text: 'hi', extra: 'kept' });
   });
 
   test('null still removes the field', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
 
-    const updated = await stack.update(record.id, { extra: null });
+    const updated = await stack.patchContent(record.id, { extra: null });
     expect(updated.content).toEqual({ text: 'hi' });
   });
 
   test('omitting the field still leaves it unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi', extra: 'kept' });
 
-    const updated = await stack.update(record.id, { text: 'edited' });
+    const updated = await stack.patchContent(record.id, { text: 'edited' });
     expect(updated.content).toEqual({ text: 'edited', extra: 'kept' });
   });
 
   test('a nested undefined is left alone — the whole value is being replaced', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi' });
 
-    const updated = await stack.update(record.id, { meta: { a: 1, b: undefined } });
+    const updated = await stack.patchContent(record.id, { meta: { a: 1, b: undefined } });
     expect(updated.content).toEqual({ text: 'hi', meta: { a: 1 } });
   });
 
@@ -4031,10 +4052,10 @@ describe('content field names', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('update() rejects a patch introducing one, and lands nothing', async () => {
+  test('patchContent() rejects a patch introducing one, and lands nothing', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi' });
 
-    await expect(stack.update(record.id, { 'a.b': 1 })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(record.id, { 'a.b': 1 })).rejects.toThrow(StackValidationError);
     expect((await stack.get(record.id))?.content).toEqual({ text: 'hi' });
   });
 
@@ -4278,14 +4299,16 @@ describe('limits.contentBytes pre-check', () => {
     expect((await limitedStack.query({ filter: { typeId: NOTE_V1 } })).records).toHaveLength(0);
   });
 
-  test('update() measures the patch, not the merged record', async () => {
+  test('patchContent() measures the patch, not the merged record', async () => {
     const limitedStack = await openLimited(64);
     const record = await limitedStack.create(NOTE_V1, { text: 'small' });
 
     // A small patch against a record near the ceiling is not oversized —
     // the patch is what travels.
-    await expect(limitedStack.update(record.id, { text: 'also small' })).resolves.toBeDefined();
-    await expect(limitedStack.update(record.id, { text: 'x'.repeat(200) })).rejects.toThrow(
+    await expect(
+      limitedStack.patchContent(record.id, { text: 'also small' }),
+    ).resolves.toBeDefined();
+    await expect(limitedStack.patchContent(record.id, { text: 'x'.repeat(200) })).rejects.toThrow(
       StackPayloadTooLargeError,
     );
   });
@@ -4435,7 +4458,7 @@ describe('putAttachment — returned record', () => {
   test('the returned id sets filename later without a lookup', async () => {
     const record = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
 
-    const renamed = await stack.update(record.id, { filename: 'renamed.png' });
+    const renamed = await stack.patchContent(record.id, { filename: 'renamed.png' });
 
     expect((renamed.content as AttachmentContent).filename).toBe('renamed.png');
   });
@@ -4734,7 +4757,7 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, 'image/png', 'old.png');
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    const updated = await stack.update(record.id, { filename: 'new.png' });
+    const updated = await stack.patchContent(record.id, { filename: 'new.png' });
 
     expect((updated.content as Record<string, unknown>).filename).toBe('new.png');
   });
@@ -4744,10 +4767,10 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, 'image/png');
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    await expect(stack.update(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
+    await expect(stack.patchContent(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
       StackValidationError,
     );
-    await expect(stack.update(record.id, { mimeType: 'image/png' })).rejects.toThrow(
+    await expect(stack.patchContent(record.id, { mimeType: 'image/png' })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -4757,7 +4780,7 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, 'image/png');
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    await expect(stack.update(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
+    await expect(stack.patchContent(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -4767,7 +4790,9 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, 'image/png');
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    await expect(stack.update(record.id, { size: 999 })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   test('setting fileId or size to their current value is a no-op, not an error', async () => {
@@ -4777,7 +4802,7 @@ describe('_attachment@1 immutable fields on update', () => {
     const content = record.content as Record<string, unknown>;
 
     await expect(
-      stack.update(record.id, { fileId: content.fileId, size: content.size }),
+      stack.patchContent(record.id, { fileId: content.fileId, size: content.size }),
     ).resolves.toBeDefined();
   });
 });
@@ -5264,7 +5289,9 @@ describe('error taxonomy', () => {
   test('errors thrown by real operations are catchable as StackError', async () => {
     await expect(stack.create(NOTE_V1, { text: 42 })).rejects.toBeInstanceOf(StackError);
     await expect(stack.get('1hk153x0a00b')).resolves.toBeNull();
-    await expect(stack.update('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(StackError);
+    await expect(stack.patchContent('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
+      StackError,
+    );
   });
 });
 
@@ -5296,7 +5323,9 @@ describe('_app.did bindings', () => {
       did: APP_DID,
     });
     const other = await stack.create('_app@1', { appId: 'com.example.other', name: 'Other App' });
-    await expect(stack.update(other.id, { did: APP_DID })).rejects.toThrow(StackConflictError);
+    await expect(stack.patchContent(other.id, { did: APP_DID })).rejects.toThrow(
+      StackConflictError,
+    );
   });
 
   test('a card may keep its own DID across an unrelated update', async () => {
@@ -5305,7 +5334,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    const updated = await stack.update(app.id, { version: '2.0.0' });
+    const updated = await stack.patchContent(app.id, { version: '2.0.0' });
     expect((updated.content as { did?: string }).did).toBe(APP_DID);
   });
 
@@ -5321,7 +5350,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    await expect(stack.update(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
+    await expect(stack.patchContent(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -5332,7 +5361,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    await expect(stack.update(app.id, { did: null })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(app.id, { did: null })).rejects.toThrow(StackValidationError);
   });
 
   test('a card carrying no DID may adopt one', async () => {
@@ -5340,7 +5369,7 @@ describe('_app.did bindings', () => {
       appId: 'com.example.later',
       name: 'Key Comes Later',
     });
-    const updated = await stack.update(app.id, { did: APP_DID });
+    const updated = await stack.patchContent(app.id, { did: APP_DID });
     expect((updated.content as { did?: string }).did).toBe(APP_DID);
   });
 
@@ -5349,7 +5378,7 @@ describe('_app.did bindings', () => {
       appId: 'com.example.later',
       name: 'Key Comes Later',
     });
-    await stack.update(app.id, { did: APP_DID });
+    await stack.patchContent(app.id, { did: APP_DID });
 
     await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackValidationError);
   });
@@ -5360,7 +5389,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    await stack.update(app.id, { version: '2.0.0' });
+    await stack.patchContent(app.id, { version: '2.0.0' });
 
     const restored = await stack.restoreVersion(app.id, 1);
     expect((restored.content as { did?: string }).did).toBe(APP_DID);
@@ -5407,7 +5436,7 @@ describe('_app.appId bindings', () => {
 
   test('rejects an update that moves a card off the appId it holds', async () => {
     const app = await stack.create('_app@1', { appId: 'com.example.notes', name: 'My Notes App' });
-    await expect(stack.update(app.id, { appId: 'com.example.bank' })).rejects.toThrow(
+    await expect(stack.patchContent(app.id, { appId: 'com.example.bank' })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -5418,7 +5447,7 @@ describe('_app.appId bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    const updated = await stack.update(app.id, { name: 'Renamed', version: '2.0.0' });
+    const updated = await stack.patchContent(app.id, { name: 'Renamed', version: '2.0.0' });
     expect(updated.content).toMatchObject({
       appId: 'com.example.notes',
       name: 'Renamed',
@@ -5456,18 +5485,20 @@ describe('_entity.did bindings', () => {
 
   test('rejects an update that repoints a card at another key', async () => {
     const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
-    await expect(stack.update(alice.id, { did: MALLORY })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(alice.id, { did: MALLORY })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   test('a card may be relabelled without touching its binding', async () => {
     const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
-    const updated = await stack.update(alice.id, { name: 'Alice Smith', handle: 'alice' });
+    const updated = await stack.patchContent(alice.id, { name: 'Alice Smith', handle: 'alice' });
     expect(updated.content).toMatchObject({ did: ALICE, name: 'Alice Smith', handle: 'alice' });
   });
 
   test('a rollback that would move the binding is refused', async () => {
     const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
-    await stack.update(alice.id, { name: 'Alice Smith' });
+    await stack.patchContent(alice.id, { name: 'Alice Smith' });
     // v1 holds the same did, so this rollback is a relabel and is allowed.
     const restored = await stack.restoreVersion(alice.id, 1);
     expect((restored.content as { did: string }).did).toBe(ALICE);
@@ -5830,5 +5861,206 @@ describe('undefined types stay inside the error taxonomy', () => {
       .catch((e) => e);
     expect(err).toBeInstanceOf(StackQueryError);
     expect(err.code).toBe('bad_request');
+  });
+});
+
+// -------------------------------------------------------
+// Change sets
+// -------------------------------------------------------
+
+describe('Stack.mutate — one call, one version', () => {
+  let box: StackRecord;
+  let note: StackRecord;
+
+  beforeEach(async () => {
+    box = await stack.create(NOTE_V1, { text: 'box' });
+    note = await stack.create(NOTE_V1, { text: 'hello' });
+  });
+
+  test('moves every named aspect in a single version', async () => {
+    const moved = await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      parentId: box.id,
+      permissions: [{ access: 'public' }],
+      unlisted: true,
+    });
+
+    expect(moved.version).toBe(note.version + 1);
+    expect(moved.content).toEqual({ text: 'edited' });
+    expect(moved.parentId).toBe(box.id);
+    expect(moved.permissions).toEqual([{ access: 'public' }]);
+    expect(moved.unlistedAt).toBeInstanceOf(Date);
+  });
+
+  test('snapshots the prior state once, whatever the change set moved', async () => {
+    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: box.id });
+    const versions = await stack.getVersions(note.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ version: 1, content: { text: 'hello' } });
+    expect(versions[0]!.parentId).toBeUndefined();
+  });
+
+  test('emits one event naming every aspect that actually moved', async () => {
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c));
+    await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      parentId: box.id,
+      permissions: [{ access: 'public' }],
+    });
+
+    expect(seen).toHaveLength(1);
+    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'permissions', 'reparent']);
+    expect(seen[0]!.kind).toBe('changed');
+    expect(seen[0]!.version).toBe(2);
+  });
+
+  // ops comes from the record's own diff, so restating a value is not a
+  // change — which is also what keeps the no-op rule and the event agreeing.
+  test('reports only the aspects that moved, not the keys that were named', async () => {
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c));
+    await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      parentId: null,
+      unlisted: false,
+    });
+
+    expect(seen[0]!.ops).toEqual(['patch']);
+  });
+
+  test('a change set already satisfied in every key writes nothing', async () => {
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c));
+    const same = await stack.mutate(note.id, {
+      contentPatch: { text: 'hello' },
+      parentId: null,
+      permissions: [],
+      unlisted: false,
+    });
+
+    expect(same.version).toBe(note.version);
+    expect(seen).toHaveLength(0);
+    expect(await stack.getVersions(note.id)).toHaveLength(0);
+  });
+
+  test('a change set naming no key at all is refused', async () => {
+    await expect(stack.mutate(note.id, {})).rejects.toThrow(StackQueryError);
+  });
+
+  // Presence, not truthiness: both of these name an aspect.
+  test('parentId: null moves to the root and unlisted: false relists', async () => {
+    const inBox = await stack.mutate(note.id, { parentId: box.id, unlisted: true });
+    expect(inBox.parentId).toBe(box.id);
+
+    const out = await stack.mutate(note.id, { parentId: null, unlisted: false });
+    expect(out.parentId).toBeUndefined();
+    expect(out.unlistedAt).toBeUndefined();
+  });
+
+  test('one ifVersion fences the whole change set', async () => {
+    await expect(
+      stack.mutate(
+        note.id,
+        { contentPatch: { text: 'edited' }, parentId: box.id },
+        { ifVersion: 99 },
+      ),
+    ).rejects.toThrow(StackVersionConflictError);
+
+    const unchanged = await stack.get(note.id);
+    expect(unchanged!.version).toBe(1);
+    expect(unchanged!.content).toEqual({ text: 'hello' });
+    expect(unchanged!.parentId).toBeUndefined();
+  });
+
+  // A refused key refuses the call, so nothing lands — the content patch
+  // here is perfectly valid and must still not be applied.
+  test('a refused key leaves every other key unapplied', async () => {
+    // Format is checked before existence, so a malformed destination is a
+    // 400 naming the problem and a well-formed absent one is a 409 — and
+    // neither lets the content patch beside it land.
+    await expect(
+      stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: 'nosuchrecord' }),
+    ).rejects.toThrow(StackQueryError);
+    await expect(
+      stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: generateId() }),
+    ).rejects.toThrow(StackConflictError);
+
+    const unchanged = await stack.get(note.id);
+    expect(unchanged!.version).toBe(1);
+    expect(unchanged!.content).toEqual({ text: 'hello' });
+  });
+
+  test('an invalid content patch refuses the move beside it', async () => {
+    await expect(
+      stack.mutate(note.id, { contentPatch: { text: 42 }, parentId: box.id }),
+    ).rejects.toThrow(StackValidationError);
+    expect((await stack.get(note.id))!.parentId).toBeUndefined();
+  });
+
+  test('replaces the association set, and reports the diff as add and remove', async () => {
+    await stack.associate(note.id, { kind: 'tag', label: 'old' });
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c));
+
+    const swapped = await stack.mutate(note.id, {
+      associations: [{ kind: 'tag', label: 'new' }],
+    });
+
+    expect(swapped.associations).toEqual([{ kind: 'tag', label: 'new' }]);
+    expect([...seen[0]!.ops].sort()).toEqual(['associate', 'dissociate']);
+  });
+
+  // unlist is the one op that must survive being bundled: a subscriber
+  // holding the record has to be told to drop it, so kind stays 'deleted'.
+  test('an unlist bundled with an edit is still kind deleted', async () => {
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c), { includeUnlisted: true });
+    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, unlisted: true });
+
+    expect(seen[0]!.kind).toBe('deleted');
+    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'unlist']);
+  });
+
+  test('a reparent bundled with an edit still reaches the origin container', async () => {
+    await stack.mutate(note.id, { parentId: box.id });
+    const seen: RecordChange[] = [];
+    await stack.subscribe((c) => seen.push(c), { filter: { parentId: box.id } });
+
+    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: null });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.ops).toContain('reparent');
+  });
+
+  test('refuses a move that would make the record its own ancestor', async () => {
+    await stack.mutate(note.id, { parentId: box.id });
+    await expect(
+      stack.mutate(box.id, { contentPatch: { text: 'x' }, parentId: note.id }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // The adapter is handed only what moved, so restating an aspect cannot
+  // rewrite it — an unlistedAt dragged forward by an unrelated edit would
+  // move the record's publish moment with no op reporting it.
+  test('restating an aspect does not rewrite it', async () => {
+    const unlistedAt = (await stack.mutate(note.id, { unlisted: true })).unlistedAt;
+    const perms: Permission[] = [{ access: 'public' }];
+    await stack.mutate(note.id, { permissions: perms });
+
+    await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      unlisted: true,
+      permissions: perms,
+    });
+
+    const after = await stack.get(note.id);
+    expect(after!.unlistedAt).toEqual(unlistedAt);
+    expect(after!.permissions).toEqual(perms);
+  });
+
+  test('patchContent is mutate with contentPatch alone', async () => {
+    const patched = await stack.patchContent(note.id, { text: 'edited' });
+    expect(patched.content).toEqual({ text: 'edited' });
+    expect(patched.version).toBe(2);
   });
 });

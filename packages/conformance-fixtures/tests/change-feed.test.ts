@@ -30,7 +30,7 @@ const recordFrames = connections.flatMap((c) =>
 
 const KIND_OF_OP: Record<string, string> = {
   create: 'created',
-  update: 'changed',
+  patch: 'changed',
   associate: 'changed',
   dissociate: 'changed',
   permissions: 'changed',
@@ -90,9 +90,23 @@ describe('every connection', () => {
 });
 
 describe('every record frame', () => {
-  it('carries the kind its op maps to', () => {
+  it('names at least one op', () => {
     for (const { connection, change } of recordFrames) {
-      expect(KIND_OF_OP[change.op], `${connection}: ${change.op}`).toBe(change.kind);
+      expect(change.ops, `${connection}`).not.toHaveLength(0);
+    }
+  });
+
+  // A set resolves to the most conservative entry: `unlist` makes a frame
+  // `deleted` whatever else it carries, and nothing else competes, since
+  // `created` and `purged` ops are only ever emitted alone.
+  it('carries the kind its ops resolve to', () => {
+    for (const { connection, change } of recordFrames) {
+      const expected = change.ops.includes('unlist')
+        ? 'deleted'
+        : change.ops.length === 1
+          ? KIND_OF_OP[change.ops[0]!]
+          : 'changed';
+      expect(expected, `${connection}: ${change.ops.join()}`).toBe(change.kind);
     }
   });
 

@@ -6,6 +6,7 @@ import type {
   AdapterCapabilities,
   BlobFileInfo,
   StackRecord,
+  RecordChanges,
   FileId,
   TypeId,
 } from '../src/types.js';
@@ -47,7 +48,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     timezone: 'UTC',
     createRecord: async (r) => r,
     getRecord: async () => null,
-    patchContent: async () => {
+    mutateRecord: async () => {
       throw new Error('not implemented');
     },
     deleteRecord: async () => null,
@@ -59,15 +60,6 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
       throw new Error('not implemented');
     },
     dissociate: async () => {
-      throw new Error('not implemented');
-    },
-    setPermissions: async () => {
-      throw new Error('not implemented');
-    },
-    setUnlisted: async () => {
-      throw new Error('not implemented');
-    },
-    setParent: async () => {
       throw new Error('not implemented');
     },
     getVersions: async () => [],
@@ -142,36 +134,39 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
-  test('forwards setUnlisted to the record adapter', async () => {
-    let calledWith: [string, boolean] | undefined;
+  test('forwards a change set to the record adapter', async () => {
+    let calledWith: [string, RecordChanges] | undefined;
     const adapter = combineAdapters({
       record: makeRecordAdapter({
-        setUnlisted: async (id, unlisted) => {
-          calledWith = [id, unlisted];
-          return { ...purgedRecord, unlistedAt: unlisted ? new Date() : undefined };
+        mutateRecord: async (id, changes) => {
+          calledWith = [id, changes];
+          return { ...purgedRecord, unlistedAt: changes.unlisted ? new Date() : undefined };
         },
       }),
       blob: makeBlobAdapter(),
     });
 
-    await adapter.setUnlisted('r1', true);
-    expect(calledWith).toEqual(['r1', true]);
+    await adapter.mutateRecord('r1', { unlisted: true });
+    expect(calledWith).toEqual(['r1', { unlisted: true }]);
   });
 
-  test('forwards setParent to the record adapter', async () => {
-    let calledWith: [string, string | null] | undefined;
+  test('forwards every key of a change set, not just the first', async () => {
+    let calledWith: [string, RecordChanges] | undefined;
     const adapter = combineAdapters({
       record: makeRecordAdapter({
-        setParent: async (id, parentId) => {
-          calledWith = [id, parentId];
-          return { ...purgedRecord, ...(parentId !== null && { parentId }) };
+        mutateRecord: async (id, changes) => {
+          calledWith = [id, changes];
+          return {
+            ...purgedRecord,
+            ...(changes.parentId != null && { parentId: changes.parentId }),
+          };
         },
       }),
       blob: makeBlobAdapter(),
     });
 
-    await adapter.setParent('r1', 'box1');
-    expect(calledWith).toEqual(['r1', 'box1']);
+    await adapter.mutateRecord('r1', { parentId: 'box1', contentPatch: { text: 'x' } });
+    expect(calledWith).toEqual(['r1', { parentId: 'box1', contentPatch: { text: 'x' } }]);
   });
 
   // putAttachmentWithMetadata promises bytes + record as one atomic

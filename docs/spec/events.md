@@ -28,7 +28,7 @@ type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
 
 type ChangeOp =
   | 'create'
-  | 'update'
+  | 'patch'
   | 'associate'
   | 'dissociate'
   | 'permissions'
@@ -43,7 +43,7 @@ type ChangeOp =
 
 type RecordChange = {
   kind: ChangeKind;
-  op: ChangeOp;
+  ops: ChangeOp[]; // non-empty; one entry per aspect this version changed
   recordId: RecordId;
   typeId: TypeId; // as stored at the moment of the change
   version: number; // the version this change produced
@@ -55,16 +55,22 @@ type RecordChange = {
 };
 ```
 
-`kind` and `op` map deterministically:
+`kind` and `ops` map deterministically:
 
-| `kind`    | `op`                                                                                                     |
-| --------- | -------------------------------------------------------------------------------------------------------- |
-| `created` | `create`                                                                                                 |
-| `changed` | `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
-| `deleted` | `delete` (soft), `unlist`                                                                                |
-| `purged`  | `hard-delete`                                                                                            |
+| `kind`    | `ops`                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| `created` | `create`                                                                                                |
+| `changed` | `patch`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
+| `deleted` | `delete` (soft), `unlist`                                                                               |
+| `purged`  | `hard-delete`                                                                                           |
 
-**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `op` is the precise verb, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
+**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
+
+**`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
+
+Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op even though it puts back content, associations and `parentId` together.
+
+**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `permissions`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
 Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other ten verbs, and the bug is invisible until an index drifts from the records it describes.
 
@@ -98,7 +104,7 @@ The record's own provenance — `entityId`, `appId`, `principalId` as stored —
 
 ## Purged records carry nothing
 
-**A `purged` frame carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt` and `actor` — nothing else.** No `parentId`, no record provenance, and `record` is never present, whatever the subscriber asked for.
+**A `purged` frame carries `kind`, `ops`, `recordId`, `typeId`, `version`, `updatedAt` and `actor` — nothing else.** No `parentId`, no record provenance, and `record` is never present, whatever the subscriber asked for.
 
 Hard delete is the erasure primitive: it destroys the record and its version history, and the reason to reach for it over soft delete is that no trace should remain (see [Versioning § Deletion](./versioning.md#deletion)).
 
@@ -125,8 +131,8 @@ There is no `previous`. Prior state is already a first-class, addressable thing:
 **Handlers never block, delay, or fail a write.**
 
 - **The write is durable before any handler runs.** A handler cannot veto, amend, or roll back what it is being told about.
-- **A throwing handler cannot fail the write**, because there is nothing left to fail. The error goes to the subscription's `onError`; with no `onError` it is rethrown asynchronously so that it surfaces as an unhandled error rather than vanishing. It never reaches the caller of `create()`/`update()`.
-- **Handlers are invoked after the adapter write resolves and before the mutating method's promise settles.** So `await stack.update(...)` guarantees subscribers have been _notified_, and guarantees nothing about work they deferred.
+- **A throwing handler cannot fail the write**, because there is nothing left to fail. The error goes to the subscription's `onError`; with no `onError` it is rethrown asynchronously so that it surfaces as an unhandled error rather than vanishing. It never reaches the caller of `create()`/`mutate()`.
+- **Handlers are invoked after the adapter write resolves and before the mutating method's promise settles.** So `await stack.mutate(...)` guarantees subscribers have been _notified_, and guarantees nothing about work they deferred.
 
 **An `async` handler is permitted; it is simply not awaited.** The handler type is `(change: RecordChange) => void`, and a `void` return means the value is ignored, not that the function must be synchronous. Passing an `async` function is the normal way to defer work: it runs to its first `await`, yields, and the emitter moves on. What it does not buy is ordering or completion.
 
@@ -238,7 +244,7 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
 | Hard delete while unlisted   |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which op produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated `op` (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `permissions`'s pattern of one op for both directions.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `permissions`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 
@@ -246,7 +252,7 @@ Only the second row needs special-casing. Every other row falls out of checking 
 
 A `parentId` filter is answered by the record, not the envelope, so a record that moves between containers would otherwise be announced only to the container it arrived in — the departure would be silent, and a subscriber watching the origin would keep a record that is no longer there. A move is therefore matched against **both** sides of it: the record's post-change `parentId` for the destination, and the pre-change one for the origin. Same shape as the [`unlist` transition](#the-unlisted-transition), which likewise cannot be decided from the post-change record alone.
 
-**Two ops move a record**, and both are matched this way: `reparent`, and a `restore` whose snapshot [puts a different container back](./versioning.md#restore-semantics). Which one a subscriber is looking at is the ordinary `op` distinction and changes nothing about the routing — undoing a move is a move. Every other op leaves `parentId` where it was, so for those the two sides are the same container and the second match is a no-op.
+**Two ops move a record**, and both are matched this way: `reparent`, and a `restore` whose snapshot [puts a different container back](./versioning.md#restore-semantics). Which one a subscriber is looking at is an ordinary `ops` distinction and changes nothing about the routing — undoing a move is a move. A frame carrying `reparent` is matched against both containers however many other aspects share the change set with it. Every frame without one leaves `parentId` where it was, so the two sides are the same container and the second match is a no-op.
 
 **A frame carries only the destination.** `parentId` on a frame means what it means everywhere — the record's state at the moment of the change — and a subscriber tells the two cases apart by comparing it to the filter it subscribed with: equal is an arrival, unequal is a departure. Nothing more is needed, and adding a `previousParentId` to the wire would give every subscriber a second container's ID to reason about for the sake of a comparison they can already make.
 

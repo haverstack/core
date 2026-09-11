@@ -80,7 +80,7 @@ export { StackValidationError } from './stack.js';
 // No in-repo caller: the create half of the same contract, so a server
 // inherits which half of a record body it may trust rather than deciding
 // field by field. See docs/spec/wire-format.md § Records.
-export { createOptionsFromWireRecord } from './wire-record.js';
+export { createOptionsFromWireRecord, changesFromWireBody } from './wire-record.js';
 export type { WireCreateRequest } from './wire-record.js';
 
 // The tier gating hard delete, commitMigration() and includeUnlisted, which
