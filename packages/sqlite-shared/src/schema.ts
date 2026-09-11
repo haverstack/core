@@ -1,3 +1,5 @@
+import type { SqlExecutor } from './executor.js';
+
 /**
  * Schema DDL shared by SQLite-backed record adapters. TOKENS_SCHEMA_SQL
  * is split out from RECORD_SCHEMA_SQL because token storage lives in its
@@ -175,3 +177,25 @@ export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
  * meaningful for a real file (a :memory: database silently ignores it).
  */
 export const PRAGMA_JOURNAL_MODE_WAL = `PRAGMA journal_mode = WAL;`;
+
+export type RecordSchemaOptions = {
+  /**
+   * Whether to put the connection in WAL mode. False for an engine that
+   * owns its own durability and rejects the pragma outright, as Durable
+   * Object storage does.
+   */
+  wal: boolean;
+};
+
+/**
+ * Brings a records database up to the schema every SQLite record adapter
+ * expects: foreign keys on, then the tables and the FTS5 index. Every
+ * statement is idempotent, so an engine that has no
+ * initialize()/open() split can run this on each attach.
+ */
+export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
+  exec.exec(PRAGMA_FOREIGN_KEYS_ON);
+  if (opts.wal) exec.exec(PRAGMA_JOURNAL_MODE_WAL);
+  exec.exec(RECORD_SCHEMA_SQL);
+  exec.exec(FTS5_SCHEMA_SQL);
+};

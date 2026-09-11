@@ -17,35 +17,24 @@
  * package, which implements @haverstack/core's StackTokenStore against
  * its own file rather than this adapter's records database.
  *
- * This class itself is a thin node:sqlite binding: schema setup,
- * pragmas, and the storage-ownership lock are genuinely engine-specific
- * and live here. The actual StackRecordAdapter logic lives in
- * @haverstack/sqlite-shared's SharedSqlRecordLogic, reached through the
- * SqlExecutor interface (NativeSqliteExecutor here normalizes
- * node:sqlite's spread-args run/get/all calls to it).
+ * This class itself is a thin node:sqlite binding: opening the file, the
+ * storage-ownership lock, and the WAL checkpoint are what's genuinely
+ * engine-specific and live here. Everything above storage comes from
+ * @haverstack/sqlite-shared's SharedSqlRecordAdapter, reached through the
+ * SqlExecutor interface (NativeSqliteExecutor here normalizes node:sqlite's
+ * spread-args run/get/all calls to it).
  */
 
 import { DatabaseSync } from './node-sqlite.js';
 import { existsSync } from 'fs';
-import type { StackType, TypeId, FileId, RecordVersion, ActorOptions } from '@haverstack/core';
-import type {
-  StackRecord,
-  StackQuery,
-  QueryResult,
-  Association,
-  RecordChanges,
-} from '@haverstack/core';
-import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
 import {
-  RECORD_SCHEMA_SQL,
-  FTS5_SCHEMA_SQL,
-  PRAGMA_FOREIGN_KEYS_ON,
-  PRAGMA_JOURNAL_MODE_WAL,
+  applyRecordSchema,
   acquireLock,
   releaseLock,
   insertConfigRecord,
   readStackConfig,
-  SharedSqlRecordLogic,
+  SharedSqlRecordAdapter,
+  type StackConfig,
 } from '@haverstack/sqlite-shared';
 import { NativeSqliteExecutor } from './executor.js';
 
@@ -80,34 +69,31 @@ export type NativeRecordOpenOptions = {
 // NativeSQLiteRecordAdapter
 // -------------------------------------------------------
 
-export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
-  readonly capabilities: AdapterCapabilities = {
-    filter: {
-      content: 'path',
-      contentPresent: true,
-      search: true,
-    },
-    sort: {
-      fields: ['createdAt', 'updatedAt', 'version'],
-      contentField: true,
-    },
-    limits: {
-      attachmentBytes: null,
-      contentBytes: null,
-    },
-  };
+export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
+  private constructor(
+    private readonly path: string,
+    private readonly db: DatabaseSync,
+    exec: NativeSqliteExecutor,
+    config: StackConfig,
+  ) {
+    super(exec, config);
+  }
 
-  ownerEntityId!: string;
-  timezone: string | undefined;
-
-  private db!: DatabaseSync;
-  private record!: SharedSqlRecordLogic;
-
-  private constructor(private readonly path: string) {}
-
-  private wire(): void {
-    const exec = new NativeSqliteExecutor(this.db);
-    this.record = new SharedSqlRecordLogic({ exec });
+  /**
+   * Takes the storage-ownership lock, opens the file, and brings the
+   * schema up. Shared by initialize() and open(), which differ only in
+   * whether the file may already exist and in where the config record
+   * comes from.
+   */
+  private static attach(
+    path: string,
+    force: boolean | undefined,
+  ): [DatabaseSync, NativeSqliteExecutor] {
+    acquireLock(path, force);
+    const db = new DatabaseSync(path);
+    const exec = new NativeSqliteExecutor(db);
+    applyRecordSchema(exec, { wal: true });
+    return [db, exec];
   }
 
   /**
@@ -121,18 +107,9 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
           `Use NativeSQLiteRecordAdapter.open() instead.`,
       );
     }
-    acquireLock(opts.path, opts.force);
-    const adapter = new NativeSQLiteRecordAdapter(opts.path);
-    adapter.db = new DatabaseSync(opts.path);
-    adapter.db.exec(PRAGMA_FOREIGN_KEYS_ON);
-    adapter.db.exec(PRAGMA_JOURNAL_MODE_WAL);
-    adapter.db.exec(RECORD_SCHEMA_SQL);
-    adapter.db.exec(FTS5_SCHEMA_SQL);
-    adapter.wire();
-    insertConfigRecord(new NativeSqliteExecutor(adapter.db), opts.entityId, opts.timezone);
-    adapter.ownerEntityId = opts.entityId;
-    adapter.timezone = opts.timezone;
-    return adapter;
+    const [db, exec] = NativeSQLiteRecordAdapter.attach(opts.path, opts.force);
+    const config = insertConfigRecord(exec, opts.entityId, opts.timezone);
+    return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
   }
 
   /**
@@ -146,134 +123,8 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
           `Use NativeSQLiteRecordAdapter.initialize() to create one.`,
       );
     }
-    acquireLock(opts.path, opts.force);
-    const adapter = new NativeSQLiteRecordAdapter(opts.path);
-    adapter.db = new DatabaseSync(opts.path);
-    adapter.db.exec(PRAGMA_FOREIGN_KEYS_ON);
-    adapter.db.exec(PRAGMA_JOURNAL_MODE_WAL);
-    adapter.db.exec(RECORD_SCHEMA_SQL);
-    adapter.db.exec(FTS5_SCHEMA_SQL);
-    adapter.wire();
-    const config = readStackConfig(new NativeSqliteExecutor(adapter.db));
-    adapter.ownerEntityId = config.entityId;
-    adapter.timezone = config.timezone;
-    return adapter;
-  }
-
-  // -------------------------------------------------------
-  // Records
-  // -------------------------------------------------------
-
-  createRecord(record: StackRecord): Promise<StackRecord> {
-    return this.record.createRecord(record);
-  }
-
-  getRecord(id: string): Promise<StackRecord | null> {
-    return this.record.getRecord(id);
-  }
-
-  mutateRecord(
-    id: string,
-    changes: RecordChanges,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
-  }
-
-  deleteRecord(
-    id: string,
-    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord | null> {
-    return this.record.deleteRecord(id, opts);
-  }
-
-  undeleteRecord(
-    id: string,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.undeleteRecord(id, opts);
-  }
-
-  restoreVersion(
-    id: string,
-    version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
-      restoreAssociations?: boolean;
-    } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.restoreVersion(id, version, opts);
-  }
-
-  commitMigration(
-    id: string,
-    toTypeId: TypeId,
-    content: Record<string, unknown>,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.commitMigration(id, toTypeId, content, opts);
-  }
-
-  queryRecords(query: StackQuery): Promise<QueryResult> {
-    return this.record.queryRecords(query);
-  }
-
-  deleteUnreferencedAttachmentRecords(
-    fileId: FileId,
-    metadataTypeIds: TypeId[],
-  ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
-  }
-
-  // -------------------------------------------------------
-  // Versions
-  // -------------------------------------------------------
-
-  getVersions(id: string): Promise<RecordVersion[]> {
-    return this.record.getVersions(id);
-  }
-
-  getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    return this.record.getVersion(id, version);
-  }
-
-  saveVersion(id: string, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
-  }
-
-  // -------------------------------------------------------
-  // Types
-  // -------------------------------------------------------
-
-  saveType(type: StackType): Promise<void> {
-    return this.record.saveType(type);
-  }
-
-  getType(id: TypeId): Promise<StackType | null> {
-    return this.record.getType(id);
-  }
-
-  listTypes(): Promise<StackType[]> {
-    return this.record.listTypes();
-  }
-
-  // -------------------------------------------------------
-  // Associations
-  // -------------------------------------------------------
-
-  associate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.associate(recordId, association, opts);
-  }
-
-  dissociate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(recordId, association, opts);
+    const [db, exec] = NativeSQLiteRecordAdapter.attach(opts.path, opts.force);
+    return new NativeSQLiteRecordAdapter(opts.path, db, exec, readStackConfig(exec));
   }
 
   // -------------------------------------------------------

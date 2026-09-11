@@ -21,6 +21,8 @@ export {
   FTS5_SCHEMA_SQL,
   PRAGMA_FOREIGN_KEYS_ON,
   PRAGMA_JOURNAL_MODE_WAL,
+  applyRecordSchema,
+  type RecordSchemaOptions,
 } from './schema.js';
 export { buildQueryPlan, atBudget, type QueryStatement } from './query.js';
 export {
@@ -40,5 +42,11 @@ export {
   isForeignKeyViolation,
   isUniqueConstraintViolation,
 } from './executor.js';
-export { insertConfigRecord, readStackConfig, type StackConfig } from './config.js';
+export {
+  insertConfigRecord,
+  readStackConfig,
+  tryReadStackConfig,
+  type StackConfig,
+} from './config.js';
 export { SharedSqlRecordLogic, type SharedSqlRecordLogicDeps } from './record-logic.js';
+export { SharedSqlRecordAdapter, SQLITE_RECORD_CAPABILITIES } from './record-adapter.js';

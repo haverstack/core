@@ -14,30 +14,20 @@
  * call returns, so flush()/close() are no-ops kept only to satisfy the
  * optional StackRecordAdapter methods.
  *
- * This class itself is a thin binding: schema setup and the one piece of
- * genuinely engine-specific wiring — SqlExecutor.transaction() reaching
+ * This class itself is a thin binding: the one piece of genuinely
+ * engine-specific wiring — SqlExecutor.transaction() reaching
  * ctx.storage.transactionSync() instead of raw SQL BEGIN/COMMIT/ROLLBACK,
- * which DO SQLite rejects outright — live here (see executor.ts). The
- * actual StackRecordAdapter logic lives in @haverstack/sqlite-shared's
- * SharedSqlRecordLogic, exactly as it does for record-adapter-sqlite.
+ * which DO SQLite rejects outright — lives in executor.ts. Everything
+ * above storage comes from @haverstack/sqlite-shared's
+ * SharedSqlRecordAdapter, exactly as it does for record-adapter-sqlite.
  */
 
-import type { StackType, TypeId, FileId, RecordVersion, ActorOptions } from '@haverstack/core';
-import type {
-  StackRecord,
-  StackQuery,
-  QueryResult,
-  Association,
-  RecordChanges,
-} from '@haverstack/core';
-import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
 import {
-  RECORD_SCHEMA_SQL,
-  FTS5_SCHEMA_SQL,
-  PRAGMA_FOREIGN_KEYS_ON,
+  applyRecordSchema,
   insertConfigRecord,
-  readStackConfig,
-  SharedSqlRecordLogic,
+  tryReadStackConfig,
+  SharedSqlRecordAdapter,
+  type StackConfig,
 } from '@haverstack/sqlite-shared/record';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
@@ -56,30 +46,9 @@ export type DoRecordCreateOptions = {
 // DoSQLiteRecordAdapter
 // -------------------------------------------------------
 
-export class DoSQLiteRecordAdapter implements StackRecordAdapter {
-  readonly capabilities: AdapterCapabilities = {
-    filter: {
-      content: 'path',
-      contentPresent: true,
-      search: true,
-    },
-    sort: {
-      fields: ['createdAt', 'updatedAt', 'version'],
-      contentField: true,
-    },
-    limits: {
-      attachmentBytes: null,
-      contentBytes: null,
-    },
-  };
-
-  ownerEntityId!: string;
-  timezone: string | undefined;
-
-  private readonly record: SharedSqlRecordLogic;
-
-  private constructor(private readonly exec: DurableObjectSqliteExecutor) {
-    this.record = new SharedSqlRecordLogic({ exec });
+export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
+  private constructor(exec: DurableObjectSqliteExecutor, config: StackConfig) {
+    super(exec, config);
   }
 
   /**
@@ -90,149 +59,20 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
    * or it doesn't (first call — opts.entityId/timezone become the config).
    * Schema DDL is `CREATE TABLE IF NOT EXISTS`, so running it every call
    * is idempotent and cheap.
+   *
+   * DO SQLite manages its own durability and rejects PRAGMA journal_mode
+   * outright ("not authorized") — verified against the real runtime, not
+   * assumed — hence `wal: false`, unlike record-adapter-sqlite.
    */
   static async create(
     storage: DurableObjectStorage,
     opts: DoRecordCreateOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    exec.exec(RECORD_SCHEMA_SQL);
-    exec.exec(FTS5_SCHEMA_SQL);
-    exec.exec(PRAGMA_FOREIGN_KEYS_ON);
-    // DO SQLite manages its own durability and rejects PRAGMA journal_mode
-    // outright ("not authorized") — verified against the real runtime, not
-    // assumed — so unlike record-adapter-sqlite, no WAL pragma runs here.
-
-    const adapter = new DoSQLiteRecordAdapter(exec);
-    const existing = exec.get<{ content: string }>(
-      `SELECT content FROM records WHERE id = '_config'`,
-    );
-    if (existing) {
-      const config = readStackConfig(exec);
-      adapter.ownerEntityId = config.entityId;
-      adapter.timezone = config.timezone;
-    } else {
-      insertConfigRecord(exec, opts.entityId, opts.timezone);
-      adapter.ownerEntityId = opts.entityId;
-      adapter.timezone = opts.timezone;
-    }
-    return adapter;
-  }
-
-  // -------------------------------------------------------
-  // Records
-  // -------------------------------------------------------
-
-  createRecord(record: StackRecord): Promise<StackRecord> {
-    return this.record.createRecord(record);
-  }
-
-  getRecord(id: string): Promise<StackRecord | null> {
-    return this.record.getRecord(id);
-  }
-
-  mutateRecord(
-    id: string,
-    changes: RecordChanges,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
-  }
-
-  deleteRecord(
-    id: string,
-    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord | null> {
-    return this.record.deleteRecord(id, opts);
-  }
-
-  undeleteRecord(
-    id: string,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.undeleteRecord(id, opts);
-  }
-
-  restoreVersion(
-    id: string,
-    version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
-      restoreAssociations?: boolean;
-    } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.restoreVersion(id, version, opts);
-  }
-
-  commitMigration(
-    id: string,
-    toTypeId: TypeId,
-    content: Record<string, unknown>,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.commitMigration(id, toTypeId, content, opts);
-  }
-
-  queryRecords(query: StackQuery): Promise<QueryResult> {
-    return this.record.queryRecords(query);
-  }
-
-  deleteUnreferencedAttachmentRecords(
-    fileId: FileId,
-    metadataTypeIds: TypeId[],
-  ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
-  }
-
-  // -------------------------------------------------------
-  // Versions
-  // -------------------------------------------------------
-
-  getVersions(id: string): Promise<RecordVersion[]> {
-    return this.record.getVersions(id);
-  }
-
-  getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    return this.record.getVersion(id, version);
-  }
-
-  saveVersion(id: string, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
-  }
-
-  // -------------------------------------------------------
-  // Types
-  // -------------------------------------------------------
-
-  saveType(type: StackType): Promise<void> {
-    return this.record.saveType(type);
-  }
-
-  getType(id: TypeId): Promise<StackType | null> {
-    return this.record.getType(id);
-  }
-
-  listTypes(): Promise<StackType[]> {
-    return this.record.listTypes();
-  }
-
-  // -------------------------------------------------------
-  // Associations
-  // -------------------------------------------------------
-
-  associate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.associate(recordId, association, opts);
-  }
-
-  dissociate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(recordId, association, opts);
+    applyRecordSchema(exec, { wal: false });
+    const config =
+      tryReadStackConfig(exec) ?? insertConfigRecord(exec, opts.entityId, opts.timezone);
+    return new DoSQLiteRecordAdapter(exec, config);
   }
 
   // -------------------------------------------------------
