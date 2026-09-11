@@ -1,5 +1,38 @@
 # @haverstack/core
 
+## 0.30.0
+
+### Minor Changes
+
+- [#272](https://github.com/haverstack/core/pull/272) [`1010033`](https://github.com/haverstack/core/commit/101003350a4bb8e590c1942339fc405bef31aeb8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `generateId()` carries into the next millisecond when a millisecond's suffix space is spent, instead of throwing. The suffix opens on a random draw and increments from there, so the room a millisecond has left was itself random — a draw near the top of the range could exhaust it after a single further ID, and minting failed with `IdGenerationOverflowError` while the millisecond looked far from full. The prefix now advances and a fresh suffix is drawn, so IDs stay unique, strictly ascending, and well-formed, and minting never fails for want of room.
+
+  `IdGenerationOverflowError` is removed; nothing can throw it.
+
+- [#275](https://github.com/haverstack/core/pull/275) [`974f10a`](https://github.com/haverstack/core/commit/974f10aec3ebc1ebf47041152da105dbbecfd1a2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `NATIVE_SORT_FIELDS` is exported from `@haverstack/core`, and
+  `NativeSortField` is derived from it. The three native sort columns had
+  been spelled out four times across three packages — core's own wire-request
+  parser, `normalizeCapabilities()` in wire-types, the cursor decoder in
+  sqlite-shared, and the type itself — so adding a fourth column meant
+  finding all four. Each site now narrows against the one array, following
+  the same array-is-the-source-of-truth shape `GRANT_ACTIONS` already uses.
+  No behavior change: the set of accepted sort fields is what it was.
+
+### Patch Changes
+
+- [#275](https://github.com/haverstack/core/pull/275) [`e1420b0`](https://github.com/haverstack/core/commit/e1420b0e27a9027d4d00e61e47874e8b1685cff7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `assertValidSort()` narrows against `NATIVE_SORT_FIELDS` rather than its
+  own copy of the three column names, and names that array's contents in the
+  error a rejected sort field gets. It is the gate every query passes through
+  before an adapter sees it, so it was the copy a fourth native column could
+  least afford to be missing from — the wire parser would accept the field
+  and this would still refuse it, with no error pointing at the cause. No
+  behavior change: the set of accepted sort fields is what it was.
+
+- [#274](https://github.com/haverstack/core/pull/274) [`fca0f79`](https://github.com/haverstack/core/commit/fca0f79196c2703d4fea168e983d519249012719) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Split `stack.ts` into focused modules. The `Stack` and `ScopedStack`
+  classes, the error taxonomy, the query sanitizers, grant coverage, DID
+  bindings, record-id validation and the change-set helpers now live in
+  their own files. Exported names and their types are unchanged — nothing a
+  consumer can observe.
+
 ## 0.29.0
 
 ### Minor Changes
