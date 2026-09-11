@@ -1866,6 +1866,62 @@ describe('restoreVersion', () => {
     await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
   });
 
+  // The adapter applies the list it is handed and asks nothing about what
+  // it means — the rule deciding which associations a restore may put back
+  // lives in core. See StackRecordAdapter.restoreVersion().
+  test('applies a caller-resolved association list in place of the snapshot’s', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1, {
+      associations: [{ kind: 'tag', label: 'resolved-by-caller' }],
+    });
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'resolved-by-caller' }]);
+  });
+
+  test('falls back to the snapshot’s associations when handed none', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'from-snapshot' }]);
+  });
+
+  test('an empty caller-resolved list clears the associations', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1, { associations: [] });
+    expect(restored.associations ?? []).toEqual([]);
+  });
+
   test('restores typeId from the snapshot, even when it differs from the record’s current typeId', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ typeId: 'com.example.test/note@1' });

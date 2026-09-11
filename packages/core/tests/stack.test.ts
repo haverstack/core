@@ -27,6 +27,7 @@ import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type {
+  Association,
   AttachmentContent,
   BlobFileInfo,
   ChangeOp,
@@ -2240,6 +2241,206 @@ describe('Stack.commitMigration — _attachment protections', () => {
         size: 1,
       }),
     ).rejects.toThrow(StackValidationError);
+  });
+});
+
+// -------------------------------------------------------
+// _group — "at least one admin" invariant
+// -------------------------------------------------------
+
+describe('_group — at least one admin', () => {
+  const admin = (entityId: string): Association => ({
+    kind: 'relationship',
+    label: 'admin',
+    target: { scope: 'entity', entityId },
+  });
+  const member = (entityId: string): Association => ({
+    kind: 'relationship',
+    label: 'member',
+    target: { scope: 'entity', entityId },
+  });
+
+  // The roster the write would produce is what is measured, so every case
+  // below is about the post-state rather than about who is being removed.
+  describe('change-set associations', () => {
+    test('refuses a roster replacement that leaves no admin', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(stack.mutate(group.id, { associations: [member('member-1')] })).rejects.toThrow(
+        StackConflictError,
+      );
+    });
+
+    test('refuses emptying the roster wholesale', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow(
+        /without an admin/,
+      );
+    });
+
+    test('leaves the record untouched when it refuses', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow();
+      const after = await stack.get(group.id);
+      expect(after?.associations).toEqual([admin('owner-123')]);
+      expect(after?.version).toBe(group.version);
+    });
+
+    test('refuses the whole change set, including the keys that would have applied', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(
+        stack.mutate(group.id, { contentPatch: { name: 'Renamed' }, associations: [] }),
+      ).rejects.toThrow(StackConflictError);
+      const after = await stack.get(group.id);
+      expect((after?.content as { name: string }).name).toBe('Editors');
+    });
+
+    test('allows a replacement that keeps an admin', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      const updated = await stack.mutate(group.id, {
+        associations: [admin('owner-123'), member('member-1')],
+      });
+      expect(updated.associations).toEqual([admin('owner-123'), member('member-1')]);
+    });
+
+    test('allows swapping one admin for another in a single write', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      const updated = await stack.mutate(group.id, { associations: [admin('successor')] });
+      expect(updated.associations).toEqual([admin('successor')]);
+    });
+
+    // An `admin` label on a record target is not a roster entry, so it must
+    // not satisfy the invariant either.
+    test('does not count a record-targeted admin relationship as a roster admin', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      await expect(
+        stack.mutate(group.id, {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'admin',
+              target: { scope: 'record', recordId: note.id },
+            },
+          ],
+        }),
+      ).rejects.toThrow(StackConflictError);
+    });
+
+    test('does not constrain a non-_group record', async () => {
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      const updated = await stack.mutate(note.id, { associations: [] });
+      expect(updated.associations ?? []).toEqual([]);
+    });
+  });
+
+  describe('dissociate', () => {
+    test('refuses removing the last admin', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(stack.dissociate(group.id, admin('owner-123'))).rejects.toThrow(
+        StackConflictError,
+      );
+    });
+
+    test('allows an admin to remove themselves while another remains', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.associate(group.id, admin('co-admin'));
+      const updated = await stack.dissociate(group.id, admin('owner-123'));
+      expect(updated.associations).toEqual([admin('co-admin')]);
+    });
+
+    test('allows removing a member when one admin remains', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.associate(group.id, member('member-1'));
+      const updated = await stack.dissociate(group.id, member('member-1'));
+      expect(updated.associations).toEqual([admin('owner-123')]);
+    });
+
+    test('a no-op dissociate of an absent admin is still a no-op, not a refusal', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      const updated = await stack.dissociate(group.id, admin('never-was-admin'));
+      expect(updated.version).toBe(group.version);
+    });
+  });
+
+  // The invariant binds the record, not the requester: an owner bypass
+  // would mean nothing downstream could rely on it. Plain `Stack` is the
+  // owner's own unscoped path, so these cases are the bypass's absence.
+  describe('no owner bypass', () => {
+    test('the owner cannot empty a roster through plain Stack', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow(
+        StackConflictError,
+      );
+    });
+
+    // Data predating the rule can still be repaired: the check reads the
+    // post-state, so a write that names the incoming admin passes.
+    test('an admin-less roster is repairable by a write that adds an admin', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      // Reach past Stack to manufacture the pre-rule state.
+      await adapter.mutateRecord(group.id, { associations: [member('member-1')] }, {});
+      const orphaned = await stack.get(group.id);
+      expect(orphaned?.associations).toEqual([member('member-1')]);
+
+      const repaired = await stack.mutate(group.id, {
+        associations: [member('member-1'), admin('rescuer')],
+      });
+      expect(repaired.associations).toEqual([member('member-1'), admin('rescuer')]);
+    });
+
+    test('a write that leaves an admin-less roster admin-less is still refused', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await adapter.mutateRecord(group.id, { associations: [member('member-1')] }, {});
+      await expect(stack.mutate(group.id, { associations: [member('member-2')] })).rejects.toThrow(
+        StackConflictError,
+      );
+    });
+  });
+
+  // Membership is data and rolls back; administration is authority and
+  // does not. See docs/spec/versioning.md § Restore semantics.
+  describe('restoreVersion carries admin entries forward', () => {
+    test('restores members from the snapshot while keeping current admins', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.mutate(group.id, {
+        associations: [admin('owner-123'), member('alice'), member('bob')],
+      });
+      const v = (await stack.get(group.id))!.version;
+
+      await stack.mutate(group.id, { associations: [admin('successor'), member('carol')] });
+      const restored = await stack.restoreVersion(group.id, v);
+
+      // alice and bob come back; successor stays, owner-123 does not return.
+      expect(restored.associations).toEqual([member('alice'), member('bob'), admin('successor')]);
+    });
+
+    test('a snapshot whose admins were deliberately removed does not re-grant them', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.mutate(group.id, { associations: [admin('owner-123'), admin('departing')] });
+      const v = (await stack.get(group.id))!.version;
+
+      await stack.dissociate(group.id, admin('departing'));
+      const restored = await stack.restoreVersion(group.id, v);
+
+      expect(restored.associations).toEqual([admin('owner-123')]);
+    });
+
+    test('content still rolls back on a group restore', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.patchContent(group.id, { name: 'Renamed' });
+      const restored = await stack.restoreVersion(group.id, group.version);
+      expect((restored.content as { name: string }).name).toBe('Editors');
+    });
+
+    test('a non-_group record still restores its associations verbatim', async () => {
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      await stack.mutate(note.id, { associations: [admin('someone')] });
+      const v = (await stack.get(note.id))!.version;
+      await stack.mutate(note.id, { associations: [member('other')] });
+
+      const restored = await stack.restoreVersion(note.id, v);
+      expect(restored.associations).toEqual([admin('someone')]);
+    });
   });
 });
 

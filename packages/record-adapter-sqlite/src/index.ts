@@ -197,7 +197,9 @@ export class NativeSQLiteRecordAdapter implements StackRecordAdapter {
   restoreVersion(
     id: string,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
+      associations?: Association[];
+    } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }

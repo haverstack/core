@@ -703,6 +703,18 @@ export type SnapshotOptions = {
 };
 
 /**
+ * The associations a restore should apply, resolved by the caller, in
+ * place of the ones its target snapshot carries. Accepted by
+ * StackRecordAdapter.restoreVersion() alone — see its own doc for why a
+ * restore is the one write whose associations are decided above the
+ * adapter. Absent means "use the snapshot's", which is every restore but a
+ * `_group` Record's.
+ */
+export type RestoreAssociationsOptions = {
+  associations?: Association[];
+};
+
+/**
  * Who is performing a mutation, stamped onto the record in the same write.
  * `ScopedStack` supplies it from the request's identities; a caller of
  * plain `Stack` supplies it only when reconstructing an attributed write.
@@ -992,13 +1004,23 @@ export interface StackRecordAdapter {
    * restores permissions. Bumps version internally. Throws
    * StackNotFoundError if the version doesn't exist.
    *
+   * `opts.associations`, when present, is the association list to apply
+   * instead of the snapshot's — already resolved by the caller, and
+   * applied as given. It exists so a rule about *which* associations a
+   * restore may put back can be decided where the record's meaning is
+   * known, rather than by each adapter: `Stack.restoreVersion()` uses it to
+   * hold a `_group` Record's `admin` roster entries at their current values
+   * while the rest of the roster rolls back. An adapter needs no knowledge
+   * of that rule — it writes the list it is handed, and falls back to the
+   * snapshot's when handed none.
+   *
    * The acyclicity check on a restore that moves the record belongs to the
    * caller (Stack.restoreVersion()), exactly as it does for a change set's `parentId`.
    */
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & RestoreAssociationsOptions,
   ): Promise<StackRecord>;
 
   /**

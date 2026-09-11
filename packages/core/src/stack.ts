@@ -45,6 +45,8 @@ import { applyMergePatch } from './merge.js';
 import {
   checkAccess,
   groupRoleFromAssociations,
+  hasGroupAdmin,
+  isGroupAdminAssociation,
   isOwnerActingAlone,
   validatePermissions,
 } from './access.js';
@@ -1998,12 +2000,43 @@ export class Stack implements StackClient {
       }
     }
 
+    if (associations !== undefined) {
+      this.assertGroupAdminRemains(existing, associations);
+    }
+
     if (parentId !== undefined && parentId !== null && parentId !== (existing.parentId ?? null)) {
       await this.assertParentExists(id, parentId);
       await this.assertNoParentCycle(id, parentId);
     }
 
     return merged;
+  }
+
+  /**
+   * Refuse a write that would leave a `_group` Record with no `admin` on
+   * its roster. Asked of the roster the write would *produce* — the one
+   * place a change-set check reads the post-state rather than the
+   * pre-state, because the rule is about what is left behind rather than
+   * what the caller named.
+   *
+   * That framing is the whole of the self-removal question: an `admin`
+   * removing themselves passes while another remains and is refused when
+   * they are the last, and neither case needs to know whose entry went.
+   *
+   * Lives here rather than in `ScopedStack` deliberately. Who may write a
+   * `_group` is a permission question and belongs to the gate up there;
+   * this is an integrity constraint on the Record, so it binds every
+   * requester — the stack owner included, who would otherwise be the hole
+   * that stops anything downstream relying on the invariant.
+   * See docs/spec/identity.md § Group.
+   */
+  private assertGroupAdminRemains(record: StackRecord, next: Association[]): void {
+    if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GROUP) return;
+    if (hasGroupAdmin(next)) return;
+    throw new StackConflictError(
+      `Cannot leave group "${record.id}" without an admin: a _group record's roster keeps at ` +
+        'least one `admin` relationship association. Name the incoming admin in the same write.',
+    );
   }
 
   /**
@@ -2060,6 +2093,16 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) {
       return existing;
+    }
+    // Removing anything else cannot take the roster to zero, so only an
+    // admin entry is worth deriving the post-state for. Derived rather than
+    // counted so this path and the change set's reach the invariant through
+    // the same helper, asking the same question of the same shape of list.
+    if (isGroupAdminAssociation(association)) {
+      this.assertGroupAdminRemains(
+        existing,
+        (existing.associations ?? []).filter((a) => !associationEqual(a, association)),
+      );
     }
 
     const updated = await this.adapter.dissociate(id, association, {
@@ -2344,11 +2387,13 @@ export class Stack implements StackClient {
       await this.assertNoParentCycle(id, targetParentId);
     }
 
+    const associations = restoredAssociations(existing, target);
     const restored = await this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
+      ...(associations !== undefined && { associations }),
     });
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
@@ -3499,6 +3544,36 @@ function stampGroupAdmin(
   return [
     ...list,
     { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: creator } },
+  ];
+}
+
+/**
+ * The associations a restore should write, or `undefined` to leave the
+ * record's alone — which is what a snapshot carrying no association list
+ * means, and every restore of a non-`_group` Record answers with the
+ * snapshot's list unchanged.
+ *
+ * A `_group` Record is the exception: its `admin` roster entries are
+ * authority rather than data, so they are held at the values the record
+ * currently carries while `member` entries roll back like any other
+ * association. Rolling them back would reshuffle who administers a Group as
+ * a side effect of a content rollback — the surprise `permissions` is
+ * already withheld from a restore to avoid — and its worse half is rolling
+ * *forward*, re-granting management to an admin who had been deliberately
+ * removed. Holding them is also what keeps every version restorable while
+ * "a group has at least one admin" stays an invariant: the admins the
+ * restore must produce are the ones already there, so no snapshot is ever
+ * refused on that ground. See docs/spec/versioning.md § Restore semantics.
+ */
+function restoredAssociations(
+  record: StackRecord,
+  target: RecordVersion,
+): Association[] | undefined {
+  if (target.associations === undefined) return undefined;
+  if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GROUP) return target.associations;
+  return [
+    ...target.associations.filter((a) => !isGroupAdminAssociation(a)),
+    ...(record.associations ?? []).filter(isGroupAdminAssociation),
   ];
 }
 
@@ -4665,7 +4740,14 @@ export class ScopedStack implements StackClient {
           throw new StackPermissionError();
         }
         await this.requireFileRefAccess(target.typeId, target.content);
-        for (const association of target.associations ?? []) {
+        // The list the restore will actually write, not the snapshot's:
+        // a `_group`'s `admin` entries are carried forward from the record
+        // rather than introduced by the snapshot, so they create no
+        // reference to gate — the same reason a `parentId` the restore
+        // would not change is not re-gated above.
+        const isGroup = baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
+        for (const association of restoredAssociations(record, target) ?? []) {
+          if (isGroup && isGroupAdminAssociation(association)) continue;
           await this.requireAssociationAccess(target.typeId, association);
         }
       }
