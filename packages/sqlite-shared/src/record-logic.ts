@@ -390,7 +390,11 @@ export class SharedSqlRecordLogic {
   async restoreVersion(
     id: string,
     version: number,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: {
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+      restoreAssociations?: boolean;
+    } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
@@ -414,9 +418,13 @@ export class SharedSqlRecordLogic {
           id,
         ],
       );
-      if (target.associations !== undefined) {
+      // Whether a restore rolls associations back at all is decided where
+      // the record's meaning is known; the snapshot's list is the only one
+      // that ever lands here. See StackRecordAdapter.restoreVersion().
+      const applied = opts.restoreAssociations === false ? undefined : target.associations;
+      if (applied !== undefined) {
         this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
-        if (target.associations.length) this.insertAssociations(id, target.associations);
+        if (applied.length) this.insertAssociations(id, applied);
       }
       fts5Strategy.insert(this.exec, id, JSON.stringify(target.content));
       this.syncContentIndex(id, target.typeId, target.content);

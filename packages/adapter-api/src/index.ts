@@ -1144,6 +1144,14 @@ export class APIAdapter implements StackAdapter {
     // in the wire protocol.
   }
 
+  /**
+   * `opts.restoreAssociations` is deliberately not sent. The wire protocol
+   * has no field for it, and needs none: the server runs the same `Stack`
+   * logic over its own adapter and reaches the same answer from the same
+   * record — a `_group`'s roster held where it stands, everything else
+   * rolled back. A wire field would only let a client *propose* that
+   * answer. See docs/spec/versioning.md § Restore semantics.
+   */
   async restoreVersion(
     id: RecordId,
     version: number,

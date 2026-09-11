@@ -152,6 +152,36 @@ export function groupRoleFromAssociations(
 }
 
 /**
+ * Whether a roster carries at least one `admin` — the invariant every write
+ * to a `_group` Record must leave standing. Asked of the roster a write
+ * would *produce*, never the one it started from: that is what lets an
+ * admin remove themselves while another remains, and refuses the same
+ * removal when they are the last, without either case naming who is going.
+ *
+ * Reads associations alone, on the same terms as
+ * groupRoleFromAssociations() above: the caller must have established that
+ * the Record is in the `_group` family first. See docs/spec/identity.md
+ * § Group.
+ */
+export function hasGroupAdmin(associations: Association[] | undefined): boolean {
+  return (associations ?? []).some(isGroupAdminAssociation);
+}
+
+/**
+ * Whether one association is an `admin` roster entry. The `entity` scope is
+ * what makes a roster entry a roster entry — a `record` target carrying the
+ * same label confers nothing, so it must not count toward the invariant
+ * either. See docs/spec/data-model.md § Relationship targets.
+ */
+export function isGroupAdminAssociation(association: Association): boolean {
+  return (
+    association.kind === 'relationship' &&
+    association.label === 'admin' &&
+    association.target.scope === 'entity'
+  );
+}
+
+/**
  * Whether a request is the stack owner acting alone — the tier behind every
  * unconditional owner authority. Being the owner is never sufficient on its
  * own, whichever side of a delegation the owner is on. Both identities are

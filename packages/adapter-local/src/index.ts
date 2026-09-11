@@ -274,7 +274,9 @@ export class LocalAdapter implements StackAdapter {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
+      restoreAssociations?: boolean;
+    } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }

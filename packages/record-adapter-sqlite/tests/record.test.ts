@@ -1866,6 +1866,83 @@ describe('restoreVersion', () => {
     await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
   });
 
+  // The adapter obeys the flag and asks nothing about what it means — the
+  // rule deciding whether a restore rolls associations back lives in core.
+  // See StackRecordAdapter.restoreVersion().
+  test('leaves the record’s associations alone when restoreAssociations is false', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1, { restoreAssociations: false });
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'current' }]);
+  });
+
+  test('applies the snapshot’s associations when handed no flag', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'from-snapshot' }]);
+  });
+
+  test('an empty snapshot list clears the associations', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: record.content,
+      associations: [],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+
+    const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.associations ?? []).toEqual([]);
+  });
+
+  // Restoring content while the roster stays put is the shape a `_group`
+  // restore takes; the adapter reaches it without knowing what a group is.
+  test('rolls content back while leaving associations in place', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ content: { text: 'original' } });
+    await adapter.createRecord(record);
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      associations: [{ kind: 'tag', label: 'from-snapshot' }],
+      updatedAt: new Date(),
+    });
+    await adapter.mutateRecord(record.id, {
+      contentPatch: { text: 'changed' },
+      associations: [{ kind: 'tag', label: 'current' }],
+    });
+
+    const restored = await adapter.restoreVersion(record.id, 1, { restoreAssociations: false });
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'current' }]);
+  });
+
   test('restores typeId from the snapshot, even when it differs from the record’s current typeId', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ typeId: 'com.example.test/note@1' });

@@ -51,6 +51,92 @@ beforeEach(async () => {
 const COMMENT = 'com.example.test/comment@1';
 
 // -------------------------------------------------------
+// _group — the invariant through the permission layer
+// -------------------------------------------------------
+
+describe('ScopedStack — a group keeps at least one admin', () => {
+  const admin = (entityId: string): Association => ({
+    kind: 'relationship',
+    label: 'admin',
+    target: { scope: 'entity', entityId },
+  });
+  const member = (entityId: string): Association => ({
+    kind: 'relationship',
+    label: 'member',
+    target: { scope: 'entity', entityId },
+  });
+
+  // Creating the group as MEMBER is what makes them its first admin, which
+  // is the position every case below starts from.
+  beforeEach(async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_group@1' }]);
+  });
+
+  // The management gate answers "may this requester write the group";
+  // the invariant answers "may the group be left like this". A requester
+  // who passes the first still meets the second.
+  test('an admin cannot remove themselves as the last admin', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await expect(stack.asEntity(MEMBER).dissociate(group.id, admin(MEMBER))).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('an admin may remove themselves once a second admin exists', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await stack.asEntity(MEMBER).associate(group.id, admin(OWNER));
+    const updated = await stack.asEntity(MEMBER).dissociate(group.id, admin(MEMBER));
+    expect(updated.associations).toEqual([admin(OWNER)]);
+  });
+
+  test('an admin cannot empty the roster through a change set', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await expect(
+      stack.asEntity(MEMBER).mutate(group.id, { associations: [member('someone')] }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  // The owner's management authority is unconditional; the invariant is
+  // not an authority question, so it still holds for them.
+  test('the owner cannot empty the roster either', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await expect(stack.asEntity(OWNER).mutate(group.id, { associations: [] })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  // A non-admin is refused by the management gate before the invariant is
+  // ever consulted — the refusal must stay a permission error, not become
+  // a conflict that tells a stranger what the roster looks like.
+  test('a non-admin is still refused as a permission error, not a conflict', async () => {
+    const group = await stack.asEntity(OWNER).create('_group@1', { name: 'Editors' });
+    await expect(stack.asEntity(MEMBER).mutate(group.id, { associations: [] })).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  // Through the permission layer as through `Stack`: a restore rolls the
+  // content back and leaves the roster alone. The reference gate has
+  // nothing to check on a group restore for the same reason — no
+  // association is introduced.
+  test('a restore rolls content back and leaves the roster alone', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await stack.asEntity(MEMBER).mutate(group.id, {
+      associations: [admin(MEMBER), member('alice')],
+    });
+    const v = (await stack.get(group.id))!.version;
+    await stack.asEntity(MEMBER).mutate(group.id, {
+      contentPatch: { name: 'Renamed' },
+      associations: [admin(MEMBER)],
+    });
+
+    const restored = await stack.asEntity(MEMBER).restoreVersion(group.id, v);
+    expect((restored.content as { name: string }).name).toBe('Editors');
+    expect(restored.associations).toEqual([admin(MEMBER)]);
+  });
+});
+
+// -------------------------------------------------------
 // Read access
 // -------------------------------------------------------
 
