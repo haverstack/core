@@ -26,6 +26,7 @@
  */
 
 import { StackQueryError } from './errors.js';
+import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   ChangeFilter,
   ChangeKind,
@@ -49,7 +50,7 @@ export function parseDate(val: unknown): Date | undefined {
 }
 
 const POSITIVE_INTEGER = /^\d+$/;
-const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(['createdAt', 'updatedAt', 'version']);
+const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 const TARGET_SCOPES: ReadonlySet<string> = new Set(['record', 'entity', 'external']);

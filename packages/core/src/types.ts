@@ -535,8 +535,16 @@ export type RecordFilter = {
   includeUnlisted?: boolean;
 };
 
-/** The Record columns every adapter stores natively, and can order by. */
-export type NativeSortField = 'createdAt' | 'updatedAt' | 'version';
+/**
+ * The Record columns every adapter stores natively, and can order by. The
+ * array is the source of truth — NativeSortField is derived from it so the
+ * runtime checks that narrow a wire value or a cursor to this set (see
+ * parseQuery(), normalizeCapabilities(), and the SQLite adapters' cursor
+ * decoding) can't drift from the type.
+ */
+export const NATIVE_SORT_FIELDS = ['createdAt', 'updatedAt', 'version'] as const;
+
+export type NativeSortField = (typeof NATIVE_SORT_FIELDS)[number];
 
 /**
  * Order by a native column or by a top-level content field — two members
