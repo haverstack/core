@@ -17,6 +17,7 @@
 import { StackQueryError } from './errors.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
+import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   Association,
   QuerySort,
@@ -113,8 +114,13 @@ export function parseContentFilterKey(key: string): string[] {
   return segments;
 }
 
-/** The only sort fields any adapter maps; anything else is a caller error. */
-const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'version']);
+/**
+ * The only sort fields any adapter maps; anything else is a caller error.
+ * Narrowed against the one array NativeSortField is derived from, so this
+ * gate — which every query passes through before an adapter sees it —
+ * can't be the copy that a fourth native column is missing from.
+ */
+const VALID_SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 /** The only two sort directions; see assertValidSort. */
 const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 
@@ -136,7 +142,7 @@ export function assertValidSort(sort: QuerySort | undefined): void {
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
     throw new StackQueryError(
-      `Invalid sort field "${sort.field}": expected one of createdAt, updatedAt, version.`,
+      `Invalid sort field "${sort.field}": expected one of ${NATIVE_SORT_FIELDS.join(', ')}.`,
     );
   }
   if (sort.contentField !== undefined) {

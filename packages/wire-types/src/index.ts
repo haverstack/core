@@ -1,3 +1,4 @@
+import { NATIVE_SORT_FIELDS } from '@haverstack/core';
 import type {
   NativeSortField,
   StackRecord,
@@ -367,7 +368,7 @@ export type DiscoveryCapabilities = {
 };
 
 const CONTENT_FILTER_REACHES = new Set<string>(['none', 'field', 'path']);
-const NATIVE_SORT_FIELDS = new Set<string>(['createdAt', 'updatedAt', 'version']);
+const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
  * Read a discovery response's capabilities, resolving anything absent,
@@ -396,7 +397,7 @@ export function normalizeCapabilities(
       search: filter?.search === true,
     },
     sort: {
-      fields: (sort?.fields ?? []).filter((f): f is NativeSortField => NATIVE_SORT_FIELDS.has(f)),
+      fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
       contentField: sort?.contentField === true,
     },
     limits: {

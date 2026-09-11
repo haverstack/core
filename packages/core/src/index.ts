@@ -106,7 +106,7 @@ export type {
   ConfigContent,
 } from './types.js';
 
-export { SYSTEM_TYPES } from './types.js';
+export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types.js';
 
 // Utilities
 

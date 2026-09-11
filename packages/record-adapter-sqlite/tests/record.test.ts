@@ -546,6 +546,114 @@ describe('expectedVersion', () => {
 });
 
 // -------------------------------------------------------
+// expectedVersion — enforced against the row actually written
+// -------------------------------------------------------
+
+/**
+ * restoreVersion() and commitMigration() settle their precondition against
+ * a record read before the transaction opens, because fts5Strategy.remove()
+ * needs the old content still on the row. That read is not the enforcement:
+ * the UPDATE carries the guard too, so a writer landing in the window loses
+ * rather than being silently overwritten.
+ *
+ * The window is reachable from a test because both methods `await` that
+ * read: calling one runs its body up to the await and hands control back
+ * here with the precondition already satisfied, so the next synchronous
+ * statement below lands squarely between the check and the write.
+ */
+describe('expectedVersion is re-checked by the statement that writes', () => {
+  /**
+   * A second writer, on its own connection — the adapter holds a lock
+   * *file*, which only initialize()/open() consult, so this is the real
+   * race rather than a stand-in for one.
+   */
+  const bumpVersionBehindTheAdapter = (id: string): void => {
+    const other = new DatabaseSync(dbPath);
+    try {
+      other.prepare('UPDATE records SET version = version + 1 WHERE id = ?').run(id);
+    } finally {
+      other.close();
+    }
+  };
+
+  test('restoreVersion loses to a writer that lands after the precondition check', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
+    await adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: record.typeId,
+      content: { text: 'original' },
+      updatedAt: record.updatedAt,
+    });
+    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
+
+    const restoring = adapter.restoreVersion(record.id, 1, { expectedVersion: 2 });
+    bumpVersionBehindTheAdapter(record.id); // -> v3, after the check, before the write
+
+    const err = await restoring.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackVersionConflictError);
+    expect((err as StackVersionConflictError).actualVersion).toBe(3);
+
+    // And the restore left nothing behind: the content the other writer
+    // found is the content still there.
+    const after = await adapter.getRecord(record.id);
+    expect(after?.content).toEqual({ text: 'v2' });
+    expect(after?.version).toBe(3);
+  });
+
+  test('commitMigration loses to a writer that lands after the precondition check', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
+
+    const migrating = adapter.commitMigration(
+      record.id,
+      'com.example/note@2',
+      { text: 'migrated' },
+      { expectedVersion: 1 },
+    );
+    bumpVersionBehindTheAdapter(record.id); // -> v2, after the check, before the write
+
+    const err = await migrating.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackVersionConflictError);
+    expect((err as StackVersionConflictError).actualVersion).toBe(2);
+
+    const after = await adapter.getRecord(record.id);
+    expect(after?.typeId).toBe(record.typeId);
+    expect(after?.content).toEqual({ text: 'original' });
+  });
+
+  test('a soft delete stamps deleted_at and updated_at from one timestamp', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+
+    // Every no-arg `new Date()` reads a millisecond later than the last, so
+    // two of them can never agree — which is exactly what a soft delete
+    // taking its two columns from separate clock reads would do, and what
+    // taking them from one cannot.
+    const RealDate = Date;
+    let tick = RealDate.now();
+    vi.stubGlobal(
+      'Date',
+      class extends RealDate {
+        constructor(...args: unknown[]) {
+          // Only the no-arg form is the clock read under test; every other
+          // form (fromMs() reading a row back, say) passes straight through.
+          if (args.length === 0) super(tick++);
+          else super(...(args as [number]));
+        }
+      },
+    );
+
+    try {
+      const deleted = await adapter.deleteRecord(record.id);
+      expect(deleted?.deletedAt?.getTime()).toBe(deleted?.updatedAt.getTime());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// -------------------------------------------------------
 // Records — queries
 // -------------------------------------------------------
 

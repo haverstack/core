@@ -66,6 +66,48 @@ const asStackQueryError = <T>(query: StackQuery, run: () => T): T => {
   }
 };
 
+/**
+ * One spelling of the optimistic-concurrency failure, so the message a
+ * caller sees never depends on which of the three places noticed it.
+ */
+const versionConflict = (id: string, expected: number, actual: number): StackVersionConflictError =>
+  new StackVersionConflictError(
+    `Record "${id}" is at version ${actual}, expected ${expected}`,
+    id,
+    expected,
+    actual,
+  );
+
+/**
+ * Every `versions` column beyond the (record_id, version) key, and the
+ * values for them in the same order — one list, so the INSERT that writes a
+ * snapshot and the UPDATE that replaces one can't drift apart on which
+ * columns a snapshot is made of.
+ */
+const VERSION_COLUMNS = [
+  'type_id',
+  'content',
+  'updated_at',
+  'entity_id',
+  'updated_by',
+  'updated_via',
+  'parent_id',
+  'associations',
+  'permissions',
+] as const;
+
+const versionRowValues = (version: RecordVersion): unknown[] => [
+  version.typeId,
+  JSON.stringify(version.content),
+  toMs(version.updatedAt),
+  version.entityId ?? null,
+  version.updatedBy ?? null,
+  version.updatedVia ?? null,
+  version.parentId ?? null,
+  version.associations ? JSON.stringify(version.associations) : null,
+  version.permissions ? JSON.stringify(version.permissions) : null,
+];
+
 export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
 };
@@ -103,34 +145,22 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * SQL fragment (plus its bind params) that gates a records-table
-   * UPDATE/DELETE on the opt-in `expectedVersion` precondition. Empty when
-   * expectedVersion is omitted, keeping today's unconditional behavior.
-   */
-  private versionGuard(expectedVersion: number | undefined): { clause: string; params: unknown[] } {
-    return expectedVersion === undefined
-      ? { clause: '', params: [] }
-      : { clause: ' AND version = ?', params: [expectedVersion] };
-  }
-
-  /**
-   * Precondition check for mutations that can't fold expectedVersion into
-   * their primary UPDATE's WHERE clause: mutateRecord/restoreVersion need
-   * fts.remove() to run *before* the records-table content changes, so
-   * the check happens first, standalone.
+   * Precondition check for a mutation that has already read the record —
+   * either because it can't fold the check into its own statement
+   * (hardDeleteRecord: children reference the row, so the DELETE can't
+   * carry it), or because it has to settle the precondition *before*
+   * fts5Strategy.remove() runs, which needs the records row still holding
+   * the old content. In the latter case versionedUpdate() re-checks it
+   * inside the statement, and that is the enforcement; this is what lets
+   * the work before it be skipped.
    */
   private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
     if (expectedVersion === undefined || record.version === expectedVersion) return;
-    throw new StackVersionConflictError(
-      `Record "${record.id}" is at version ${record.version}, expected ${expectedVersion}`,
-      record.id,
-      expectedVersion,
-      record.version,
-    );
+    throw versionConflict(record.id, expectedVersion, record.version);
   }
 
   /**
-   * Called after a versionGuard()-gated statement affected zero rows.
+   * Called after a version-gated statement affected zero rows.
    * Distinguishes "record doesn't exist" (StackNotFoundError) from "it
    * exists but isn't at expectedVersion" (StackVersionConflictError, with
    * the actual current version for the caller to act on).
@@ -140,12 +170,58 @@ export class SharedSqlRecordLogic {
       id,
     ]);
     if (!row) throw new StackNotFoundError(`Record not found: "${id}"`);
-    throw new StackVersionConflictError(
-      `Record "${id}" is at version ${row.version}, expected ${expectedVersion}`,
-      id,
-      expectedVersion as number,
-      row.version,
+    throw versionConflict(id, expectedVersion as number, row.version);
+  }
+
+  /**
+   * The one shape every mutating UPDATE in this class has: whatever columns
+   * the caller is changing, then the version bump and the actor/timestamp
+   * stamp that every mutation owes, gated on the opt-in `expectedVersion`
+   * precondition and failing loudly when nothing matched.
+   *
+   * The guard rides in the WHERE clause even where the caller has already
+   * checked the version against a record it read: that read is outside this
+   * statement, so a writer slipping in between the two is caught here
+   * rather than silently overwritten.
+   */
+  private versionedUpdate(
+    id: string,
+    sets: string[],
+    values: unknown[],
+    opts: ExpectedVersionOptions & ActorOptions,
+    now = toMs(new Date()),
+  ): void {
+    const guarded = opts.expectedVersion !== undefined;
+    const changed = this.exec.run(
+      `UPDATE records SET ${[...sets, 'version = version + 1', 'updated_at = ?', 'updated_by = ?', 'updated_via = ?'].join(', ')}` +
+        ` WHERE id = ?${guarded ? ' AND version = ?' : ''}`,
+      [
+        ...values,
+        now,
+        opts.updatedBy ?? null,
+        opts.updatedVia ?? null,
+        id,
+        ...(guarded ? [opts.expectedVersion] : []),
+      ],
     );
+    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+  }
+
+  /**
+   * Read a record back after its own mutation committed, for the caller to
+   * return. Its absence is not a "not found" for the caller to handle — the
+   * mutation just succeeded against it — so it fails as the invariant
+   * breach it would be.
+   *
+   * Synchronous, via readRecord() rather than getRecord(), so the read
+   * cannot be separated from the commit by anything: an async caller
+   * returning this still hands back a record read in the same tick its
+   * transaction committed. See readRecord() for why that matters.
+   */
+  private reread(id: string, verb: string): StackRecord {
+    const updated = this.readRecord(id);
+    if (!updated) throw new Error(`Record not found after ${verb}: "${id}"`);
+    return updated;
   }
 
   // -------------------------------------------------------
@@ -211,11 +287,11 @@ export class SharedSqlRecordLogic {
    * reason (see SqlExecutor.transaction).
    *
    * The same synchrony is what lets the post-commit reads below report the
-   * version their own mutation produced: `getRecord()` runs its body before
-   * the `await` yields, so nothing interleaves between the commit and the
-   * read. A backend that made these reads genuinely asynchronous would open
-   * that window, and a concurrent mutation could be reported under this
-   * one's verb.
+   * version their own mutation produced: reread() calls this directly, so
+   * nothing interleaves between the commit and the read even though the
+   * method returning it is async. A backend that made these reads genuinely
+   * asynchronous would open that window, and a concurrent mutation could be
+   * reported under this one's verb.
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
@@ -280,16 +356,10 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       if (merged !== undefined) fts5Strategy.remove(this.exec, id);
 
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const changed = this.exec.run(
-        `UPDATE records SET ${sets.concat(['version = version + 1', 'updated_at = ?', 'updated_by = ?', 'updated_via = ?']).join(', ')} WHERE id = ?${clause}`,
-        [...values, now, opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.versionedUpdate(id, sets, values, opts, now);
 
       if (changes.associations !== undefined) {
-        this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
-        if (changes.associations.length) this.insertAssociations(id, changes.associations);
+        this.replaceAssociations(id, changes.associations);
       }
 
       if (merged !== undefined) {
@@ -298,9 +368,7 @@ export class SharedSqlRecordLogic {
       }
     });
 
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after mutateRecord: "${id}"`);
-    return updated;
+    return this.reread(id, 'mutateRecord');
   }
 
   async deleteRecord(
@@ -313,28 +381,18 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord | null> {
     if (opts.hard) {
       return this.exec.transaction(() => this.hardDeleteRecord(id, opts.expectedVersion));
-    } else {
-      this.exec.transaction(() => {
-        if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-        const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-        const changed = this.exec.run(
-          `UPDATE records SET deleted_at = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-          [
-            toMs(new Date()),
-            toMs(new Date()),
-            opts.updatedBy ?? null,
-            opts.updatedVia ?? null,
-            id,
-            ...verParams,
-          ],
-        );
-        if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
-      });
     }
 
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after deleteRecord: "${id}"`);
-    return updated;
+    // One timestamp for both columns: a soft delete is a single event, and
+    // two `new Date()` calls can straddle a millisecond boundary and leave
+    // deleted_at and updated_at disagreeing about when it happened.
+    const now = toMs(new Date());
+    this.exec.transaction(() => {
+      if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+      this.versionedUpdate(id, ['deleted_at = ?'], [now], opts, now);
+    });
+
+    return this.reread(id, 'deleteRecord');
   }
 
   /**
@@ -348,18 +406,14 @@ export class SharedSqlRecordLogic {
    */
   private hardDeleteRecord(id: string, expectedVersion?: number): StackRecord | null {
     const purged = this.readRecord(id);
-    if (expectedVersion !== undefined) {
-      if (!purged) throw new StackNotFoundError(`Record not found: "${id}"`);
-      if (purged.version !== expectedVersion) {
-        throw new StackVersionConflictError(
-          `Record "${id}" is at version ${purged.version}, expected ${expectedVersion}`,
-          id,
-          expectedVersion,
-          purged.version,
-        );
-      }
+    if (!purged) {
+      // A CAS against a record that isn't there is a failed precondition,
+      // not the "nothing to delete" that an unconditional hard delete
+      // reports by returning null.
+      if (expectedVersion !== undefined) throw new StackNotFoundError(`Record not found: "${id}"`);
+      return null;
     }
-    if (!purged) return null;
+    this.checkExpectedVersion(purged, expectedVersion);
     fts5Strategy.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
@@ -374,17 +428,10 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-      const changed = this.exec.run(
-        `UPDATE records SET deleted_at = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-        [toMs(new Date()), opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
-      );
-      if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+      this.versionedUpdate(id, ['deleted_at = NULL'], [], opts);
     });
 
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after undelete: "${id}"`);
-    return updated;
+    return this.reread(id, 'undelete');
   }
 
   async restoreVersion(
@@ -405,34 +452,22 @@ export class SharedSqlRecordLogic {
 
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      fts5Strategy.remove(this.exec, id);
-      this.exec.run(
-        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ?, parent_id = ? WHERE id = ?`,
-        [
-          target.typeId,
-          JSON.stringify(target.content),
-          toMs(new Date()),
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          target.parentId ?? null,
-          id,
-        ],
+      this.rewriteContent(
+        id,
+        target.typeId,
+        target.content,
+        opts,
+        ['parent_id = ?'],
+        [target.parentId ?? null],
       );
       // Whether a restore rolls associations back at all is decided where
       // the record's meaning is known; the snapshot's list is the only one
       // that ever lands here. See StackRecordAdapter.restoreVersion().
       const applied = opts.restoreAssociations === false ? undefined : target.associations;
-      if (applied !== undefined) {
-        this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
-        if (applied.length) this.insertAssociations(id, applied);
-      }
-      fts5Strategy.insert(this.exec, id, JSON.stringify(target.content));
-      this.syncContentIndex(id, target.typeId, target.content);
+      if (applied !== undefined) this.replaceAssociations(id, applied);
     });
 
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after restoreVersion: "${id}"`);
-    return updated;
+    return this.reread(id, 'restoreVersion');
   }
 
   async commitMigration(
@@ -441,35 +476,53 @@ export class SharedSqlRecordLogic {
     content: Record<string, unknown>,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    // Checked here rather than folded into the UPDATE's WHERE clause:
-    // fts5Strategy.remove() has to run before the content changes, so the
-    // precondition has to settle first — same shape as patchContent() and
-    // restoreVersion().
+    // Checked against a read record first, rather than left to the
+    // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before
+    // the content changes, so the precondition has to settle before that
+    // work starts. rewriteContent()'s UPDATE still carries the guard, so a
+    // writer slipping in between the two is caught rather than overwritten
+    // — same shape as mutateRecord() and restoreVersion().
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      fts5Strategy.remove(this.exec, id);
-      this.exec.run(
-        `UPDATE records SET type_id = ?, content = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?`,
-        [
-          toTypeId,
-          JSON.stringify(content),
-          toMs(new Date()),
-          opts.updatedBy ?? null,
-          opts.updatedVia ?? null,
-          id,
-        ],
-      );
-      fts5Strategy.insert(this.exec, id, JSON.stringify(content));
-      this.syncContentIndex(id, toTypeId, content);
+      this.rewriteContent(id, toTypeId, content, opts);
     });
 
-    const updated = await this.getRecord(id);
-    if (!updated) throw new Error(`Record not found after commitMigration: "${id}"`);
-    return updated;
+    return this.reread(id, 'commitMigration');
+  }
+
+  /**
+   * Replace a record's type and content wholesale — what restoreVersion and
+   * commitMigration each do, differing only in where the content came from
+   * and whether the container moves with it.
+   *
+   * The order is the constraint: fts5Strategy.remove() has to read the old
+   * content off the records row, so it runs before the UPDATE, and the
+   * re-index runs after. Every caller must already sit inside
+   * exec.transaction() — a failure between the two halves would otherwise
+   * leave the record unindexed.
+   */
+  private rewriteContent(
+    id: string,
+    typeId: TypeId,
+    content: Record<string, unknown>,
+    opts: ExpectedVersionOptions & ActorOptions,
+    extraSets: string[] = [],
+    extraValues: unknown[] = [],
+  ): void {
+    const json = JSON.stringify(content);
+    fts5Strategy.remove(this.exec, id);
+    this.versionedUpdate(
+      id,
+      ['type_id = ?', 'content = ?', ...extraSets],
+      [typeId, json, ...extraValues],
+      opts,
+    );
+    fts5Strategy.insert(this.exec, id, json);
+    this.syncContentIndex(id, typeId, content);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -568,11 +621,11 @@ export class SharedSqlRecordLogic {
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    const rows = this.exec.all<Record<string, unknown>>(
+    const row = this.exec.get<Record<string, unknown>>(
       'SELECT * FROM versions WHERE record_id = ? AND version = ?',
       [id, version],
     );
-    return rows.length ? rowToVersion(rows[0]) : null;
+    return row ? rowToVersion(row) : null;
   }
 
   /**
@@ -585,22 +638,9 @@ export class SharedSqlRecordLogic {
     try {
       this.exec.run(
         `INSERT INTO versions
-          (record_id, version, type_id, content, updated_at, entity_id,
-           updated_by, updated_via, parent_id, associations, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          version.version,
-          version.typeId,
-          JSON.stringify(version.content),
-          toMs(version.updatedAt),
-          version.entityId ?? null,
-          version.updatedBy ?? null,
-          version.updatedVia ?? null,
-          version.parentId ?? null,
-          version.associations ? JSON.stringify(version.associations) : null,
-          version.permissions ? JSON.stringify(version.permissions) : null,
-        ],
+          (record_id, version, ${VERSION_COLUMNS.join(', ')})
+         VALUES (?, ?, ${VERSION_COLUMNS.map(() => '?').join(', ')})`,
+        [id, version.version, ...versionRowValues(version)],
       );
     } catch (err) {
       if (isUniqueConstraintViolation(err)) {
@@ -614,30 +654,17 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Replaces every column insertVersionRow writes, so an overwritten row is
-   * indistinguishable from a freshly inserted one — a column left out here
-   * would keep the replaced row's value and surface later as a restore
-   * putting back something the snapshot never said.
+   * Replaces every column insertVersionRow writes — structurally, off the
+   * same VERSION_COLUMNS list, because a column left out here would keep
+   * the replaced row's value and surface later as a restore putting back
+   * something the snapshot never said.
    */
   private overwriteVersionRow(id: string, version: RecordVersion): void {
     this.exec.run(
       `UPDATE versions
-         SET type_id = ?, content = ?, updated_at = ?, entity_id = ?,
-             updated_by = ?, updated_via = ?, parent_id = ?, associations = ?, permissions = ?
+         SET ${VERSION_COLUMNS.map((c) => `${c} = ?`).join(', ')}
        WHERE record_id = ? AND version = ?`,
-      [
-        version.typeId,
-        JSON.stringify(version.content),
-        toMs(version.updatedAt),
-        version.entityId ?? null,
-        version.updatedBy ?? null,
-        version.updatedVia ?? null,
-        version.parentId ?? null,
-        version.associations ? JSON.stringify(version.associations) : null,
-        version.permissions ? JSON.stringify(version.permissions) : null,
-        id,
-        version.version,
-      ],
+      [...versionRowValues(version), id, version.version],
     );
   }
 
@@ -697,8 +724,8 @@ export class SharedSqlRecordLogic {
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
-    const rows = this.exec.all<Record<string, unknown>>('SELECT * FROM types WHERE id = ?', [id]);
-    return rows.length ? rowToType(rows[0]) : null;
+    const row = this.exec.get<Record<string, unknown>>('SELECT * FROM types WHERE id = ?', [id]);
+    return row ? rowToType(row) : null;
   }
 
   async listTypes(): Promise<StackType[]> {
@@ -721,13 +748,11 @@ export class SharedSqlRecordLogic {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
       // Bump (and CAS-check) first, before the associations-table write, so
       // a lost race never partially applies.
-      this.bumpVersion(recordId, opts);
+      this.versionedUpdate(recordId, [], [], opts);
       this.insertAssociations(recordId, [association]);
     });
 
-    const updated = await this.getRecord(recordId);
-    if (!updated) throw new Error(`Record not found after associate: "${recordId}"`);
-    return updated;
+    return this.reread(recordId, 'associate');
   }
 
   async dissociate(
@@ -737,7 +762,7 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
-      this.bumpVersion(recordId, opts);
+      this.versionedUpdate(recordId, [], [], opts);
       this.exec.run(
         `DELETE FROM associations
        WHERE record_id = ?
@@ -752,18 +777,18 @@ export class SharedSqlRecordLogic {
       );
     });
 
-    const updated = await this.getRecord(recordId);
-    if (!updated) throw new Error(`Record not found after dissociate: "${recordId}"`);
-    return updated;
+    return this.reread(recordId, 'dissociate');
   }
 
-  private bumpVersion(id: string, opts: ExpectedVersionOptions & ActorOptions = {}): void {
-    const { clause, params: verParams } = this.versionGuard(opts.expectedVersion);
-    const changed = this.exec.run(
-      `UPDATE records SET version = version + 1, updated_at = ?, updated_by = ?, updated_via = ? WHERE id = ?${clause}`,
-      [toMs(new Date()), opts.updatedBy ?? null, opts.updatedVia ?? null, id, ...verParams],
-    );
-    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+  /**
+   * Swap a record's association set for `associations` wholesale — the
+   * "replace, don't merge" semantics a change set's association list and a
+   * version snapshot's both carry. Caller-transactional, like every write
+   * below.
+   */
+  private replaceAssociations(recordId: string, associations: Association[]): void {
+    this.exec.run('DELETE FROM associations WHERE record_id = ?', [recordId]);
+    if (associations.length) this.insertAssociations(recordId, associations);
   }
 
   /**

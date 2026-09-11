@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import { StackQueryError } from '@haverstack/core';
-import { encodeCursor, decodeCursor, makeCursor } from '../src/cursor.js';
+import { NATIVE_SORT_FIELDS, StackQueryError } from '@haverstack/core';
+import { encodeCursor, decodeCursor, makeCursor, SORT_FIELDS } from '../src/cursor.js';
 import type { ScalarFieldKind, StackRecord } from '@haverstack/core';
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
@@ -118,5 +118,26 @@ describe('makeCursor', () => {
     expect(
       decodeCursor(makeCursor(record, { contentField: 'missing' }, kindOf('title', 'string'))),
     ).toEqual({ kind: 'absent', field: 'missing', id: 'rec01' });
+  });
+});
+
+describe('SORT_FIELDS', () => {
+  // This package's name for the set, not a second copy of it: a cursor's
+  // `native` field is narrowed against exactly what core admits as a sort
+  // field, and a fourth column added there must not need finding here too.
+  test('is exactly the set core admits as a sort field', () => {
+    expect(SORT_FIELDS).toEqual([...NATIVE_SORT_FIELDS]);
+  });
+
+  test('round-trips a cursor on every field it names', () => {
+    const record = makeRecord();
+    for (const field of NATIVE_SORT_FIELDS) {
+      expect(decodeCursor(makeCursor(record, { field }))).toEqual({
+        kind: 'native',
+        field,
+        value: expect.any(Number),
+        id: record.id,
+      });
+    }
   });
 });

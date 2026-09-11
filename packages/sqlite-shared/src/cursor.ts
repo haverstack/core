@@ -7,13 +7,19 @@
  * stays runtime-agnostic and a non-Latin-1 value survives the round trip.
  */
 
-import { StackQueryError } from '@haverstack/core';
+import { NATIVE_SORT_FIELDS, StackQueryError } from '@haverstack/core';
 import { contentSortEntry } from '@haverstack/core/adapter';
 import type { StackRecord, NativeSortField, QuerySort, ScalarFieldKind } from '@haverstack/core';
 
 export type SortField = NativeSortField;
 
-export const SORT_FIELDS: readonly SortField[] = ['createdAt', 'updatedAt', 'version'];
+/**
+ * Re-exported under this package's own name rather than re-spelled: the
+ * set a cursor's `native` field is narrowed against is the same set core
+ * narrows a wire request's sort field to, and a fourth column added there
+ * must not need finding here too.
+ */
+export const SORT_FIELDS: readonly SortField[] = NATIVE_SORT_FIELDS;
 
 /**
  * Which partition of the ordering a cursor sits in: a native column or a

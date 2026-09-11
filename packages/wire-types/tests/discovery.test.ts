@@ -6,6 +6,7 @@ import {
   normalizeCapabilities,
 } from '../src/index.js';
 import type { DiscoveryCapabilities } from '../src/index.js';
+import { NATIVE_SORT_FIELDS } from '@haverstack/core';
 import type { AdapterCapabilities } from '@haverstack/core/adapter';
 
 describe('parseProtocolVersion', () => {
@@ -70,6 +71,15 @@ describe('normalizeCapabilities', () => {
       sort: { fields: ['createdAt', 'version'], contentField: true },
       limits: { attachmentBytes: 52428800, contentBytes: 1048576 },
     });
+  });
+
+  // The gate this package puts on a sort field is one of four that narrow
+  // to the same set; each rejects silently, so a column added to
+  // NATIVE_SORT_FIELDS and missed here would simply stop being advertised.
+  it('keeps every field NATIVE_SORT_FIELDS names, and nothing else', () => {
+    expect(
+      normalizeCapabilities({ sort: { fields: [...NATIVE_SORT_FIELDS, 'name'] } }).sort.fields,
+    ).toEqual([...NATIVE_SORT_FIELDS]);
   });
 
   it('reads an absent capabilities object as declaring nothing', () => {

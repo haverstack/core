@@ -64,15 +64,15 @@ const readLock = (lockPath: string): LockInfo | null => {
   }
 };
 
-/** Release the lock, if it's still owned by this process. */
+/**
+ * Release the lock, if it's still owned by this process. An unreadable lock
+ * is removed rather than left behind: readLock() treats it as absent and
+ * acquireLock() would reclaim it anyway, so leaving it would only make
+ * storage look permanently locked to a reader that doesn't get that far.
+ */
 export const releaseLock = (dbPath: string): void => {
   const lockPath = lockPathFor(dbPath);
   if (!existsSync(lockPath)) return;
-  try {
-    const info = JSON.parse(readFileSync(lockPath, 'utf-8')) as LockInfo;
-    if (info.pid === process.pid) unlinkSync(lockPath);
-  } catch {
-    // Corrupt lock file — remove it rather than leaving storage permanently unopenable.
-    unlinkSync(lockPath);
-  }
+  const info = readLock(lockPath);
+  if (!info || info.pid === process.pid) unlinkSync(lockPath);
 };

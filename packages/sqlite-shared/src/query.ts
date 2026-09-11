@@ -24,9 +24,6 @@ import {
 } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
-export { getSortField, getSortColumn };
-export type { SortField };
-
 /** One statement plus the parameters it binds, in textual order. */
 export type QueryStatement = { sql: string; params: unknown[] };
 
@@ -157,6 +154,34 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   const params: unknown[] = [];
   const f = query.filter ?? {};
 
+  /**
+   * A filter that accepts one value or a list of them, as the `IN` that
+   * covers both. Written even for a single value rather than as `= ?`,
+   * since SQLite plans a one-element IN identically and one form means one
+   * place for the filter's placeholder count and its bindings to agree.
+   */
+  const inFilter = (column: string, value: string | readonly string[] | undefined): void => {
+    if (value === undefined) return;
+    const values = Array.isArray(value) ? value : [value as string];
+    conditions.push(`r.${column} IN (${values.map(() => '?').join(',')})`);
+    params.push(...values);
+  };
+
+  /** One side of a date range, as the open-ended comparison it is. */
+  const rangeFilter = (
+    column: string,
+    range: { after?: Date; before?: Date } | undefined,
+  ): void => {
+    if (range?.after) {
+      conditions.push(`r.${column} > ?`);
+      params.push(range.after.getTime());
+    }
+    if (range?.before) {
+      conditions.push(`r.${column} < ?`);
+      params.push(range.before.getTime());
+    }
+  };
+
   if (!f.includeDeleted) {
     conditions.push('r.deleted_at IS NULL');
   }
@@ -165,12 +190,10 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     conditions.push('r.unlisted_at IS NULL');
   }
 
-  if (f.typeId !== undefined) {
-    const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    conditions.push(`r.type_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
+  inFilter('type_id', f.typeId);
 
+  // Not an inFilter: parentId takes an explicit null for "at the root",
+  // which is a different SQL predicate rather than a different value.
   if (f.parentId !== undefined) {
     if (f.parentId === null) {
       conditions.push('r.parent_id IS NULL');
@@ -180,40 +203,12 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     }
   }
 
-  if (f.appId !== undefined) {
-    const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
-    conditions.push(`r.app_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
+  inFilter('app_id', f.appId);
+  inFilter('entity_id', f.entityId);
+  inFilter('principal_id', f.principalId);
 
-  if (f.entityId !== undefined) {
-    const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-    conditions.push(`r.entity_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
-
-  if (f.principalId !== undefined) {
-    const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
-    conditions.push(`r.principal_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
-  }
-
-  if (f.createdAt?.after) {
-    conditions.push('r.created_at > ?');
-    params.push(f.createdAt.after.getTime());
-  }
-  if (f.createdAt?.before) {
-    conditions.push('r.created_at < ?');
-    params.push(f.createdAt.before.getTime());
-  }
-  if (f.updatedAt?.after) {
-    conditions.push('r.updated_at > ?');
-    params.push(f.updatedAt.after.getTime());
-  }
-  if (f.updatedAt?.before) {
-    conditions.push('r.updated_at < ?');
-    params.push(f.updatedAt.before.getTime());
-  }
+  rangeFilter('created_at', f.createdAt);
+  rangeFilter('updated_at', f.updatedAt);
 
   // Every association filter below is a semi-join rather than a correlated
   // EXISTS, so the planner drives from the association side — reading the
@@ -224,21 +219,27 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   // proportional to how many records match, not to how many the stack
   // holds.
 
+  /**
+   * The semi-join itself. `kind` is one of this module's own literals, never
+   * caller text, and each clause carries its own placeholder — so the only
+   * thing interpolated here is SQL this file wrote.
+   */
+  const hasAssociation = (kind: 'tag' | 'attachment' | 'relationship', clauses: string[]): string =>
+    `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = '${kind}'` +
+    clauses.map((c) => ` AND ${c}`).join('') +
+    `)`;
+
   // Tag filter — record must have ALL specified tags
   if (f.tags?.length) {
     for (const tag of f.tags) {
-      conditions.push(
-        `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND a.label = ?)`,
-      );
+      conditions.push(hasAssociation('tag', ['a.label = ?']));
       params.push(tag);
     }
   }
 
   // Attachment label filter
   if (f.hasAttachment) {
-    conditions.push(
-      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.label = ?)`,
-    );
+    conditions.push(hasAssociation('attachment', ['a.label = ?']));
     params.push(f.hasAttachment);
   }
 
@@ -246,7 +247,7 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   // either via an attachment association or a top-level file-ref content field
   if (f.attachmentFileId) {
     conditions.push(
-      `(r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'attachment' AND a.file_id = ?)
+      `(${hasAssociation('attachment', ['a.file_id = ?'])}
         OR r.id IN (SELECT ci.record_id FROM content_index ci WHERE ci.file_id = ?))`,
     );
     params.push(f.attachmentFileId, f.attachmentFileId);
@@ -285,11 +286,7 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
         }
       }
     }
-    conditions.push(
-      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'relationship'` +
-        clauses.map((c) => ` AND ${c}`).join('') +
-        `)`,
-    );
+    conditions.push(hasAssociation('relationship', clauses));
   }
 
   // Content field filters — a dot-separated path, matched element-wise
