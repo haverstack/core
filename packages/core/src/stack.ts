@@ -317,6 +317,19 @@ const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> =
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
 ]);
 
+/**
+ * The `_attachment@1` fields a write may not move, each with the message it
+ * is refused by. Ordered as reported. See docs/spec/attachments.md § The
+ * `_attachment` record type.
+ */
+const ATTACHMENT_IMMUTABLE_FIELDS = [
+  ['mimeType', 'mimeType is immutable after creation; delete and re-upload to change it'],
+  ['fileId', 'fileId is immutable'],
+  ['size', 'size is immutable'],
+] as const;
+
+type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
+
 const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
   BINDING_FIELDS.get(family) ?? [];
 
@@ -834,6 +847,17 @@ async function lookupEntityByDid(
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
+
+/**
+ * Every `_grant` Record, cursor-walked. Read through an unscoped query at
+ * every call site: a grant is what decides who may read, so it can never
+ * itself sit behind a read check. No content prefilter — a stored grant's
+ * typeId may be a bare baseId or versioned, so exact matching would wrongly
+ * exclude family versions.
+ */
+function loadGrantRecords(query: (q: StackQuery) => Promise<QueryResult>): Promise<StackRecord[]> {
+  return queryAllPages(query, { filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } });
+}
 
 export class Stack implements StackClient {
   private readonly migrations = new Map<TypeId, Migration>();
@@ -1465,12 +1489,11 @@ export class Stack implements StackClient {
     if (ops.length === 0) return existing;
 
     const previousParentId = existing.parentId ?? null;
-    const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.mutateRecord(
+      id,
+      effectiveChanges(changes, ops),
+      this.writeOptions(existing, opts),
+    );
     this.emitChange(ops, updated, ops.includes('reparent') ? { previousParentId } : {});
     return updated;
   }
@@ -1535,10 +1558,15 @@ export class Stack implements StackClient {
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
       if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-        this.checkAttachmentImmutableFields(
-          contentPatch,
-          existing.content as AttachmentContent,
-          merged as AttachmentContent,
+        // Presence decides mimeType and value decides the rest: re-sending
+        // the mimeType a record already holds is refused outright, while a
+        // client round-tripping fileId or size unchanged has claimed nothing.
+        this.assertAttachmentImmutable(
+          (field) =>
+            Object.prototype.hasOwnProperty.call(contentPatch, field) &&
+            (field === 'mimeType' ||
+              (merged as AttachmentContent)[field] !==
+                (existing.content as AttachmentContent)[field]),
         );
       }
 
@@ -1615,12 +1643,11 @@ export class Stack implements StackClient {
       return existing;
     }
 
-    const updated = await this.adapter.associate(id, association, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.associate(
+      id,
+      association,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('associate', updated);
     return updated;
   }
@@ -1657,12 +1684,11 @@ export class Stack implements StackClient {
       );
     }
 
-    const updated = await this.adapter.dissociate(id, association, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.dissociate(
+      id,
+      association,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('dissociate', updated);
     return updated;
   }
@@ -1761,12 +1787,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
-    const deleted = await this.adapter.deleteRecord(id, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const deleted = await this.adapter.deleteRecord(id, this.writeOptions(existing, opts));
     if (deleted) this.emitChange('delete', deleted);
   }
 
@@ -1785,12 +1806,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    const undeleted = await this.adapter.undeleteRecord(id, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const undeleted = await this.adapter.undeleteRecord(id, this.writeOptions(existing, opts));
     this.emitChange('undelete', undeleted);
     return undeleted;
   }
@@ -1942,10 +1958,7 @@ export class Stack implements StackClient {
     // A `_group`'s roster is authority, not data: it does not roll back.
     // See docs/spec/versioning.md § Restore semantics.
     const restored = await this.adapter.restoreVersion(id, version, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
+      ...this.writeOptions(existing, opts),
       ...(isGroupRecord(existing) && { restoreAssociations: false }),
     });
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
@@ -2045,9 +2058,12 @@ export class Stack implements StackClient {
     }
 
     if (fromFamily === SYSTEM_TYPES.ATTACHMENT) {
-      this.checkAttachmentImmutableOnMigrate(
-        existingContent as unknown as AttachmentContent,
-        content as unknown as AttachmentContent,
+      // Value-wise throughout: a migration re-sends all three required
+      // fields, so presence would refuse every migration of the family.
+      this.assertAttachmentImmutable(
+        (field) =>
+          (content as unknown as AttachmentContent)[field] !==
+          (existingContent as unknown as AttachmentContent)[field],
       );
     } else if (toFamily === SYSTEM_TYPES.ATTACHMENT) {
       // A record arriving from outside the family stakes a fresh claim on
@@ -2064,12 +2080,12 @@ export class Stack implements StackClient {
       );
     }
 
-    const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const migrated = await this.adapter.commitMigration(
+      id,
+      toTypeId,
+      content,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('migrate', migrated);
     return migrated;
   }
@@ -2256,66 +2272,22 @@ export class Stack implements StackClient {
   }
 
   /**
-   * filename is the only mutable field on an _attachment@1 record; fileId,
-   * size, and mimeType are immutable (even a same-value mimeType rewrite
-   * is refused). The correction flow is delete + re-upload. See
-   * docs/spec/attachments.md § The `_attachment` record type.
-   */
-  private checkAttachmentImmutableFields(
-    patch: Record<string, unknown | null>,
-    existing: AttachmentContent,
-    merged: AttachmentContent,
-  ): void {
-    const errors: ValidationError[] = [];
-    if (Object.prototype.hasOwnProperty.call(patch, 'mimeType')) {
-      errors.push({
-        path: 'mimeType',
-        message: 'mimeType is immutable after creation; delete and re-upload to change it',
-      });
-    }
-    if (
-      Object.prototype.hasOwnProperty.call(patch, 'fileId') &&
-      merged.fileId !== existing.fileId
-    ) {
-      errors.push({ path: 'fileId', message: 'fileId is immutable' });
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'size') && merged.size !== existing.size) {
-      errors.push({ path: 'size', message: 'size is immutable' });
-    }
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
-  }
-
-  /**
-   * The same immutability checkAttachmentImmutableFields() enforces, asked
-   * value-wise instead of presence-wise: a migration replaces content
-   * wholesale, so it necessarily re-sends `mimeType`, `fileId` and `size`
-   * (all required) and a presence check would refuse every migration. Only
-   * an actual change is a violation.
+   * filename is the only mutable field on an `_attachment@1` record; fileId,
+   * size and mimeType are immutable, and the correction flow is delete +
+   * re-upload. `violates` decides what counts as touching one, because the
+   * two write shapes disagree: a patch names only what it changes, while a
+   * migration replaces content wholesale and necessarily re-sends all three.
    *
    * Repointing `fileId` is the one that matters most: an `_attachment@1`
    * record naming a fileId is what canAccessFile()'s uploader clause reads,
    * so moving an existing record onto another file's hash is a route to
    * bytes the record's author never uploaded.
+   * See docs/spec/attachments.md § The `_attachment` record type.
    */
-  private checkAttachmentImmutableOnMigrate(
-    existing: AttachmentContent,
-    next: AttachmentContent,
-  ): void {
-    const errors: ValidationError[] = [];
-    if (next.mimeType !== existing.mimeType) {
-      errors.push({
-        path: 'mimeType',
-        message: 'mimeType is immutable after creation; delete and re-upload to change it',
-      });
-    }
-    if (next.fileId !== existing.fileId) {
-      errors.push({ path: 'fileId', message: 'fileId is immutable' });
-    }
-    if (next.size !== existing.size) {
-      errors.push({ path: 'size', message: 'size is immutable' });
-    }
+  private assertAttachmentImmutable(violates: (field: AttachmentImmutableField) => boolean): void {
+    const errors = ATTACHMENT_IMMUTABLE_FIELDS.filter(([field]) => violates(field)).map(
+      ([path, message]) => ({ path, message }),
+    );
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
@@ -2733,9 +2705,7 @@ export class Stack implements StackClient {
   async listGrants(target?: GrantTarget): Promise<StackRecord[]> {
     this.assertOpen();
     if (target !== undefined) validateGrantTarget(target);
-    const all = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-    });
+    const all = await loadGrantRecords((q) => this.query(q));
     if (target === undefined) return all;
     if (target === null || typeof target === 'object') {
       return all.filter((r) => matchesGrantTarget(r.content as GrantContent, target));
@@ -2771,9 +2741,7 @@ export class Stack implements StackClient {
   ): Promise<void> {
     this.assertOpen();
     validateGrantTarget(target);
-    const all = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-    });
+    const all = await loadGrantRecords((q) => this.query(q));
     for (const g of grants) {
       const familyId = baseIdOf(g.typeId);
       const actionSet = new Set(g.actions);
@@ -2899,6 +2867,23 @@ export class Stack implements StackClient {
       ifVersion,
       existing.version,
     );
+  }
+
+  /**
+   * The options every version-bumping adapter write carries: the `ifVersion`
+   * precondition, the prior-state snapshot that has to land in the same
+   * atomic write, and who to attribute the change to. Taken together so a
+   * new mutating verb cannot quietly omit one — `updatedVia` most of all,
+   * whose absence reads as an undelegated write.
+   * See docs/spec/versioning.md § Version history.
+   */
+  private writeOptions(existing: StackRecord, opts: IfVersionOptions & ActorOptions) {
+    return {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
+    };
   }
 
   /**
@@ -3300,6 +3285,9 @@ export class ScopedStack implements StackClient {
 
   private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
 
+  /** Every `_grant` Record — see loadGrantRecords(). */
+  private loadGrants = (): Promise<StackRecord[]> => loadGrantRecords((q) => this.stack.query(q));
+
   /** Whether a delegated app is acting for someone other than itself. */
   private get delegated(): boolean {
     return this.subjectEntityId !== this.principalEntityId;
@@ -3334,6 +3322,15 @@ export class ScopedStack implements StackClient {
       { principalId: this.principalEntityId, subjectId: this.subjectEntityId },
       this.stack.ownerEntityId,
     );
+  }
+
+  /**
+   * Refuse anything but the owner acting as itself. The verbs resting on
+   * this tier are irreversible or disclose the sharing graph, so delegation
+   * never carries one to a subject — see ownerActingAlone.
+   */
+  private requireOwnerActingAlone(message: string): void {
+    if (!this.ownerActingAlone) throw new StackPermissionError(message);
   }
 
   private checkRead(record: StackRecord): Promise<boolean> {
@@ -3411,9 +3408,7 @@ export class ScopedStack implements StackClient {
       // No content-field prefilter: a stored grant's typeId may be a bare
       // baseId or versioned, so exact matching would wrongly exclude family
       // versions. Cursor-walked to see grants past page one.
-      grantRecords = await queryAllPages((q) => this.stack.query(q), {
-        filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-      });
+      grantRecords = await this.loadGrants();
     }
 
     for (const r of grantRecords) {
@@ -3510,11 +3505,7 @@ export class ScopedStack implements StackClient {
     // at all, and that path must not pay for this one. Both halves of
     // canRead share the one scan.
     const grants =
-      this.principalEntityId || this.subjectEntityId
-        ? await queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-          })
-        : undefined;
+      this.principalEntityId || this.subjectEntityId ? await this.loadGrants() : undefined;
     if (await this.canRead(record, grants)) return new StackPermissionError(message);
     return new StackNotFoundError(`Record not found: "${record.id}"`);
   }
@@ -3572,20 +3563,40 @@ export class ScopedStack implements StackClient {
     id: string,
     opts: { mutating?: boolean } = {},
   ): Promise<StackRecord> {
+    const mutating = opts.mutating ?? true;
+    // The `_grant` write fence applies to mutating callers only: reading a
+    // grant Record's history is not the escalation that fence exists to stop.
+    const record = await this.requireVerb(id, ['update-own', 'update-any'], {
+      fenceGrantRecord: mutating,
+    });
+    return this.refuseIfDeleted(record, mutating);
+  }
+
+  /**
+   * The write gate both requireUpdatable() and requireDeletable() are: the
+   * subject can reach the record (record-level permission or a grant) and
+   * the principal holds the same verb, intersected — or, for a `_group`, the
+   * stricter management rule that no grant reaches.
+   * See docs/spec/access-control.md § Delegation: principal and subject.
+   */
+  private async requireVerb(
+    id: string,
+    actions: GrantAction[],
+    opts: { fenceGrantRecord: boolean },
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const mutating = opts.mutating ?? true;
-    if (mutating) await this.requireOwnerForGrantRecord(record);
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
+    if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
+    if (isGroupRecord(record)) {
       if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return this.refuseIfDeleted(record, mutating);
+      return record;
     }
     const allowed =
       ((await this.checkWrite(record)) ||
-        (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
-      (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
+        (await this.subjectAllows(record.typeId, actions, { record }))) &&
+      (await this.principalAllows(record.typeId, actions));
     if (!allowed) throw await this.denialFor(record);
-    return this.refuseIfDeleted(record, mutating);
+    return record;
   }
 
   /**
@@ -3608,20 +3619,10 @@ export class ScopedStack implements StackClient {
    * Fetch a record the subject can reach and the principal holds `delete` on
    * (via permissions or a delete grant), or throw.
    */
-  private async requireDeletable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    await this.requireOwnerForGrantRecord(record);
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return record;
-    }
-    const allowed =
-      ((await this.checkWrite(record)) ||
-        (await this.subjectAllows(record.typeId, ['delete-own', 'delete-any'], { record }))) &&
-      (await this.principalAllows(record.typeId, ['delete-own', 'delete-any']));
-    if (!allowed) throw await this.denialFor(record);
-    return record;
+  private requireDeletable(id: string): Promise<StackRecord> {
+    // No soft-delete refusal: undelete() shares this gate, and a tombstone
+    // is exactly what it addresses.
+    return this.requireVerb(id, ['delete-own', 'delete-any'], { fenceGrantRecord: true });
   }
 
   /**
@@ -3649,11 +3650,7 @@ export class ScopedStack implements StackClient {
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
-    const prefetchedGrants = this.subjectEntityId
-      ? await queryAllPages((q) => this.stack.query(q), {
-          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-        })
-      : undefined;
+    const prefetchedGrants = this.subjectEntityId ? await this.loadGrants() : undefined;
     const groupRoles = new Map<string, GroupRole | null>();
 
     const match = await findFirstMatch(
@@ -3926,11 +3923,7 @@ export class ScopedStack implements StackClient {
     const maxFetched = limit * 10;
     let totalFetched = 0;
 
-    const prefetchedGrants = this.principalEntityId
-      ? await queryAllPages((q) => this.stack.query(q), {
-          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-        })
-      : undefined;
+    const prefetchedGrants = this.principalEntityId ? await this.loadGrants() : undefined;
     // Scoped to this query, like prefetchedGrants beside it: every
     // candidate Record shares one roster resolution per group, and nothing
     // is carried into the next operation.
@@ -4096,9 +4089,7 @@ export class ScopedStack implements StackClient {
   ): void {
     if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
     if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may set an _app record’s did or appId');
-    }
+    this.requireOwnerActingAlone('Only the stack owner may set an _app record’s did or appId');
   }
 
   /**
@@ -4145,9 +4136,7 @@ export class ScopedStack implements StackClient {
   private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
     if (baseIdOf(typeId) !== SYSTEM_TYPES.ENTITY) return;
     if (did !== this.stack.ownerEntityId) return;
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may claim the owner’s own did');
-    }
+    this.requireOwnerActingAlone('Only the stack owner may claim the owner’s own did');
   }
 
   /**
@@ -4319,9 +4308,7 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may commit a migration');
-    }
+    this.requireOwnerActingAlone('Only the stack owner may commit a migration');
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 
@@ -4381,9 +4368,7 @@ export class ScopedStack implements StackClient {
    * Delegates to Stack.deleteAttachment(), which enforces the "not referenced" check.
    */
   async deleteAttachment(fileId: string): Promise<void> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner can delete attachments');
-    }
+    this.requireOwnerActingAlone('Only the stack owner can delete attachments');
     return this.stack.deleteAttachment(fileId, this.actor);
   }
 
@@ -4394,9 +4379,7 @@ export class ScopedStack implements StackClient {
   async collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner can collect attachment garbage');
-    }
+    this.requireOwnerActingAlone('Only the stack owner can collect attachment garbage');
     return this.stack.collectAttachmentGarbage({ ...opts, ...this.actor });
   }
 
@@ -4440,13 +4423,7 @@ export class ScopedStack implements StackClient {
    * the stack makes.
    */
   private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.principalEntityId
-      ? await cache.grants(() =>
-          queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-          }),
-        )
-      : undefined;
+    const grants = this.principalEntityId ? await cache.grants(() => this.loadGrants()) : undefined;
     return this.canRead(record, grants, cache.roles);
   }
 }
