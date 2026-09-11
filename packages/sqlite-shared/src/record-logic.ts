@@ -476,10 +476,12 @@ export class SharedSqlRecordLogic {
     content: Record<string, unknown>,
     opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
   ): Promise<StackRecord> {
-    // Checked here rather than folded into the UPDATE's WHERE clause:
-    // fts5Strategy.remove() has to run before the content changes, so the
-    // precondition has to settle first — same shape as patchContent() and
-    // restoreVersion().
+    // Checked against a read record first, rather than left to the
+    // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before
+    // the content changes, so the precondition has to settle before that
+    // work starts. rewriteContent()'s UPDATE still carries the guard, so a
+    // writer slipping in between the two is caught rather than overwritten
+    // — same shape as mutateRecord() and restoreVersion().
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
