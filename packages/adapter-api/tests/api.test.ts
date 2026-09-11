@@ -889,7 +889,7 @@ describe('commitMigration', () => {
 });
 
 // -------------------------------------------------------
-// setPermissions
+// The `permissions` key
 // -------------------------------------------------------
 
 describe('permissions through a change set', () => {

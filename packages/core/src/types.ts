@@ -224,7 +224,7 @@ export type RecordVersion = {
    * The container the record sat in, absent for the root — the same
    * spelling `StackRecord` uses, because a snapshot states where the
    * record *was*, not an instruction to apply. `null` is an input
-   * spelling (`a change set's `parentId``, `RecordFilter`) and never appears here.
+   * spelling (a change set's `parentId`, `RecordFilter`) and never appears here.
    * See docs/spec/versioning.md § Version history.
    */
   parentId?: RecordId;

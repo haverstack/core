@@ -1279,10 +1279,10 @@ describe('update', () => {
 });
 
 // -------------------------------------------------------
-// setParent: the one native field a write reaches after create.
+// The `parentId` key: the one native field a write reaches after create.
 // -------------------------------------------------------
 
-describe('Stack.setParent', () => {
+describe('Stack.mutate — the `parentId` key', () => {
   test('moves a record into a container', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
@@ -1617,7 +1617,7 @@ describe('Stack.restoreVersion — parentId', () => {
 
   // The contrast that makes the exemption legible: naming the same gone
   // container directly is refused.
-  test('setParent to that same deleted container is refused', async () => {
+  test('naming that same deleted container as parentId is refused', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.delete(box.id, { hard: true });
@@ -3488,10 +3488,10 @@ describe('associate / dissociate', () => {
 });
 
 // -------------------------------------------------------
-// setPermissions
+// The `permissions` key
 // -------------------------------------------------------
 
-describe('setPermissions', () => {
+describe('Stack.mutate — the `permissions` key', () => {
   test('bumps version and snapshots the prior state', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
@@ -3606,10 +3606,10 @@ describe('setPermissions', () => {
 });
 
 // -------------------------------------------------------
-// setUnlisted
+// The `unlisted` key
 // -------------------------------------------------------
 
-describe('setUnlisted', () => {
+describe('Stack.mutate — the `unlisted` key', () => {
   test('bumps version and sets unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, { unlisted: true });
@@ -3701,14 +3701,14 @@ describe('mutators return the record they produced', () => {
     expect(updated.associations).toBeUndefined();
   });
 
-  test('setPermissions returns the record carrying the new permissions', async () => {
+  test('a permissions change set returns the record carrying the new permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const updated = await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
     expect(updated.version).toBe(2);
     expect(updated.permissions).toEqual([{ access: 'public' }]);
   });
 
-  test('setUnlisted returns the record carrying unlistedAt', async () => {
+  test('an unlisted change set returns the record carrying unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const unlisted = await stack.mutate(record.id, { unlisted: true });
     expect(unlisted.version).toBe(2);

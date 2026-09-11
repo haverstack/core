@@ -1315,7 +1315,7 @@ export class Stack implements StackClient {
   /**
    * Announce a mutation that has already been persisted. Called after the
    * adapter write resolves and before the mutating method settles, so
-   * `await stack.update(...)` guarantees subscribers have been notified —
+   * `await stack.mutate(...)` guarantees subscribers have been notified —
    * and nothing about work they deferred. A handler cannot fail the write:
    * there is nothing left to fail. See docs/spec/events.md § Handlers.
    */
@@ -3547,7 +3547,7 @@ const presentDeleted = (record: StackRecord): StackRecord =>
  *
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Grant lookup and the privilege-bearing gates that
- * no grant reaches (setPermissions, group management, hard delete, widening
+ * no grant reaches (resharing, group management, hard delete, widening
  * access at create time) key on `principalEntityId`; authorship, `-own`
  * matching, record-level permission resolution, and "files I uploaded"
  * lookups key on `subjectEntityId`.

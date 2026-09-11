@@ -105,6 +105,14 @@ set to the aspects that actually moved before it reaches an adapter, so every ke
 receives is one it must write — which is what keeps a restated `unlisted: true` from
 dragging `unlistedAt` forward with no op reporting it.
 
+## Conformance fixtures
+
+The three fixture groups named for retired endpoints are renamed for the change-set keys
+they now exercise: `setPermissionsFixtures` → **`permissionsChangeFixtures`**,
+`setUnlistedFixtures` → **`unlistedChangeFixtures`**, `setParentFixtures` →
+**`parentChangeFixtures`**. `patchContentFixtures` keeps its name, since `patchContent()`
+does.
+
 ## Also
 
 **Fixed: the content merge was documented as RFC 7396, which recurses, but is one level

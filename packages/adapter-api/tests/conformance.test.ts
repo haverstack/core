@@ -16,9 +16,9 @@ import {
   undeleteRecordFixtures,
   associateFixtures,
   dissociateFixtures,
-  setPermissionsFixtures,
-  setUnlistedFixtures,
-  setParentFixtures,
+  permissionsChangeFixtures,
+  unlistedChangeFixtures,
+  parentChangeFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -471,8 +471,8 @@ describe('dissociate fixtures', () => {
   }
 });
 
-describe('setPermissions fixtures', () => {
-  for (const fixture of setPermissionsFixtures) {
+describe('permissions change-set fixtures', () => {
+  for (const fixture of permissionsChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
@@ -490,8 +490,8 @@ describe('setPermissions fixtures', () => {
   }
 });
 
-describe('setUnlisted fixtures', () => {
-  for (const fixture of setUnlistedFixtures) {
+describe('unlisted change-set fixtures', () => {
+  for (const fixture of unlistedChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
@@ -511,8 +511,8 @@ describe('setUnlisted fixtures', () => {
   }
 });
 
-describe('setParent fixtures', () => {
-  for (const fixture of setParentFixtures) {
+describe('parentId change-set fixtures', () => {
+  for (const fixture of parentChangeFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));

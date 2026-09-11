@@ -85,7 +85,7 @@ describe('attribution — updatedBy tracks the actor', () => {
   // Resharing is owner-or-creator-only and never delegated, so the creator
   // is the only non-owner who can perform it — but it still restamps, which
   // is what makes "who widened access to this" answerable at all.
-  test('setPermissions records who reshared', async () => {
+  test('a permissions change set records who reshared', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);

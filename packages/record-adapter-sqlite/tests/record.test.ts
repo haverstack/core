@@ -497,7 +497,7 @@ describe('expectedVersion', () => {
     expect((await adapter.getRecord(record.id))?.version).toBe(3);
   });
 
-  test('setPermissions enforces expectedVersion', async () => {
+  test('a permissions change set enforces expectedVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
@@ -1436,7 +1436,7 @@ describe('records — relatedTo filter', () => {
 // Permissions
 // -------------------------------------------------------
 
-describe('setPermissions', () => {
+describe('mutateRecord — the `permissions` key', () => {
   test('replaces permissions and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
@@ -1448,7 +1448,7 @@ describe('setPermissions', () => {
   });
 });
 
-describe('setUnlisted', () => {
+describe('mutateRecord — the `unlisted` key', () => {
   test('sets unlistedAt and bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
@@ -1496,7 +1496,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     expect(roots.records.map((r) => r.id)).not.toContain(record.id);
   });
 
-  test('setParent to an empty string stores it rather than clearing the parent', async () => {
+  test('a parentId of an empty string stores it rather than clearing the parent', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     await adapter.createRecord(box);
@@ -1534,7 +1534,7 @@ describe('absent fields are read by presence, not truthiness', () => {
   });
 });
 
-describe('setParent', () => {
+describe('mutateRecord — the `parentId` key', () => {
   test('sets parent_id and bumps version', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();

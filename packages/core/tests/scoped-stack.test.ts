@@ -291,7 +291,7 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeUndefined();
   });
 
-  test('associate/dissociate/setPermissions enforce write access', async () => {
+  test('associate/dissociate and a permissions change set enforce write access', async () => {
     const record = await adapter.createRecord(makeRecord());
     const tag: Association = { kind: 'tag', label: 'starred' };
     const perms: Permission[] = [{ access: 'public' }];
@@ -310,7 +310,7 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.associations).toContainEqual(tag);
   });
 
-  test('setPermissions rejects write-access holder that is not creator or stack owner', async () => {
+  test('a permissions change set rejects a write-access holder that is not creator or stack owner', async () => {
     const record = await adapter.createRecord(
       makeRecord({
         entityId: OWNER,
@@ -337,12 +337,12 @@ describe('ScopedStack — write access', () => {
 });
 
 // -------------------------------------------------------
-// setUnlisted — gated exactly like setPermissions, since both decide who
-// or what can discover a record rather than merely read one already found.
-// See docs/spec/unlisted.md.
+// The `unlisted` key — gated exactly like `permissions`, since both decide
+// who or what can discover a record rather than merely read one already
+// found. See docs/spec/unlisted.md.
 // -------------------------------------------------------
 
-describe('ScopedStack.setUnlisted', () => {
+describe('ScopedStack.mutate — the `unlisted` key', () => {
   test('rejects write-access holder that is not creator or stack owner', async () => {
     const record = await adapter.createRecord(
       makeRecord({
@@ -378,7 +378,7 @@ describe('ScopedStack.setUnlisted', () => {
 // -------------------------------------------------------
 
 describe('ScopedStack mutators return the record they produced', () => {
-  test('associate, dissociate, setPermissions and setUnlisted all answer', async () => {
+  test('associate, dissociate and permissions/unlisted change sets all answer', async () => {
     const record = await adapter.createRecord(makeRecord({ entityId: OWNER }));
     const scoped = stack.asEntity(OWNER);
 
@@ -788,7 +788,7 @@ describe('ScopedStack — versions', () => {
     });
 
     // A restore to the root reaches no container, so there is nothing to
-    // gate — the same way setParent(id, null) is ungated.
+    // gate — the same way a change set's `parentId: null` is ungated.
     test('restoring to the root needs no read on anything', async () => {
       const box = await adapter.createRecord(makeRecord());
       const record = await adapter.createRecord(
@@ -2489,7 +2489,7 @@ describe('ScopedStack — group role gating', () => {
     );
   });
 
-  test('setPermissions on a group requires admin, not just record authorship', async () => {
+  test('a permissions change set on a group requires admin, not just record authorship', async () => {
     const group = await makeGroup({ entityId: MEMBER });
     const perms: Permission[] = [{ access: 'public' }];
     // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
@@ -2500,7 +2500,7 @@ describe('ScopedStack — group role gating', () => {
     expect((await adapter.getRecord(group.id))?.permissions).toEqual(perms);
   });
 
-  test('setUnlisted on a group requires admin, not just record authorship', async () => {
+  test('an unlisted change set on a group requires admin, not just record authorship', async () => {
     const group = await makeGroup({ entityId: MEMBER });
     // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
     await expect(stack.asEntity(MEMBER).mutate(group.id, { unlisted: true })).rejects.toThrow(
@@ -3111,11 +3111,11 @@ describe('ScopedStack.create — relationship association and parentId gating', 
 });
 
 // -------------------------------------------------------
-// ScopedStack.setParent — an ordinary write on the record, plus the
+// ScopedStack.mutate — the `parentId` key: an ordinary write on the record, plus the
 // destination gate create() applies to a parentId.
 // -------------------------------------------------------
 
-describe('ScopedStack.setParent', () => {
+describe('ScopedStack.mutate — the `parentId` key', () => {
   let readableBox: StackRecord;
   let unreadableBox: StackRecord;
   let writable: StackRecord;
@@ -3465,7 +3465,7 @@ describe('ScopedStack — delegation', () => {
     ).rejects.toThrow(StackPermissionError);
   });
 
-  // setPermissions has no grant fence at all, so authorship is deliberately
+  // The `permissions` key has no grant fence at all, so authorship is deliberately
   // not enough: a contained app can never reshare its subject's data.
   test('an app delegated for the owner cannot set permissions on its subject records', async () => {
     await grantAll(APP);
@@ -3562,7 +3562,7 @@ describe('ScopedStack — delegation', () => {
     );
   });
 
-  // The create-time counterpart of the setPermissions gate above. Denying
+  // The create-time counterpart of the reshare gate above. Denying
   // the app a reshare only contains it if the same reach isn't
   // available one step earlier, while it is authoring the record.
   test('an app delegated for the owner cannot publish its subject records at create time', async () => {
@@ -3645,7 +3645,7 @@ describe('ScopedStack — delegation', () => {
   // Unconditional owner authority belongs to the owner acting as itself.
   // The verbs resting on it are irreversible or disclose the sharing
   // graph, so delegation carries none of them, whichever side the owner
-  // is on. The group rule below is two-sided instead, like setPermissions.
+  // is on. The group rule below is two-sided instead, like a reshare.
   test('an owner principal cannot hard delete for its subject', async () => {
     await grantAll(MEMBER);
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });

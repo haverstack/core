@@ -281,8 +281,8 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     description:
       'A create body carrying unlistedAt is honoured verbatim — creating a record already ' +
       'unlisted, so there is no window where it exists and is enumerable before a later ' +
-      'PUT .../unlisted catches up. Excluded from an unfiltered GET/POST /records/query and the ' +
-      'change feed by default, the same as any other unlisted record. See ' +
+      "change set's `unlisted` key catches up. Excluded from an unfiltered GET/POST /records/query " +
+      'and the change feed by default, the same as any other unlisted record. See ' +
       'docs/spec/unlisted.md.',
     method: 'POST',
     path: '/records',
@@ -948,59 +948,61 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
 // Permissions
 // -------------------------------------------------------
 
-export const setPermissionsFixtures: ConformanceFixture<{ permissions: unknown[] }, WireRecord>[] =
-  [
-    {
-      name: 'set-permissions-public',
-      description:
-        "A change set's `permissions` key replaces all permissions. The response is the " +
-        'updated Record, since this bumps version like any other mutation. See ' +
-        'docs/spec/wire-format.md § Records.',
-      method: 'PATCH',
-      path: '/records/1hk153x00001',
-      requestBody: { permissions: [{ access: 'public' }] },
-      responseStatus: 200,
-      responseBody: {
-        id: '1hk153x00001',
-        typeId: 'com.example/note@1',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-02T00:00:00.000Z',
-        content: { title: 'Hello', body: 'World' },
-        version: 2,
-        permissions: [{ access: 'public' }],
-      },
+export const permissionsChangeFixtures: ConformanceFixture<
+  { permissions: unknown[] },
+  WireRecord
+>[] = [
+  {
+    name: 'set-permissions-public',
+    description:
+      "A change set's `permissions` key replaces all permissions. The response is the " +
+      'updated Record, since this bumps version like any other mutation. See ' +
+      'docs/spec/wire-format.md § Records.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { permissions: [{ access: 'public' }] },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      permissions: [{ access: 'public' }],
     },
-    {
-      name: 'set-permissions-empty-is-private',
-      description:
-        'An empty permissions array makes the record private (owner-only), and the record comes ' +
-        'back with no permissions field at all rather than an empty one.',
-      method: 'PATCH',
-      path: '/records/1hk153x00001',
-      requestBody: { permissions: [] },
-      responseStatus: 200,
-      responseBody: {
-        id: '1hk153x00001',
-        typeId: 'com.example/note@1',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-03T00:00:00.000Z',
-        content: { title: 'Hello', body: 'World' },
-        version: 3,
-      },
+  },
+  {
+    name: 'set-permissions-empty-is-private',
+    description:
+      'An empty permissions array makes the record private (owner-only), and the record comes ' +
+      'back with no permissions field at all rather than an empty one.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { permissions: [] },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
     },
-  ];
+  },
+];
 
 // -------------------------------------------------------
 // Unlisted
 // -------------------------------------------------------
 
-export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, WireRecord>[] = [
+export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, WireRecord>[] = [
   {
     name: 'set-unlisted-true',
     description:
       "A change set's `unlisted` key withholds a record from enumeration without changing who may " +
       'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
-      'are untouched. Orthogonal to PUT .../permissions — see docs/spec/unlisted.md.',
+      "are untouched. Orthogonal to the change set's `permissions` key — see docs/spec/unlisted.md.",
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { unlisted: true },
@@ -1040,7 +1042,7 @@ export const setUnlistedFixtures: ConformanceFixture<{ unlisted: boolean }, Wire
 // Parent
 // -------------------------------------------------------
 
-export const setParentFixtures: ConformanceFixture<{ parentId: string | null }, WireRecord>[] = [
+export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null }, WireRecord>[] = [
   {
     name: 'set-parent-moves-a-record-into-a-container',
     description:
@@ -1573,7 +1575,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-permission-write-without-read',
     description:
-      'A permissions entry with write and no read returns 422 with code "validation". A ' +
+      "A change set's `permissions` key carrying an entry with write and no read returns 422 " +
+      'with code "validation". A ' +
       'write-holder reaches the record and its whole history through the mutate surface, so the ' +
       'combination withholds nothing while appearing to — the server refuses it wherever a ' +
       'request body carries permissions, POST /records included. See ' +
@@ -1581,11 +1584,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: {
-      contentPatch: {
-        permissions: [
-          { access: 'entity', entityId: 'did:key:z6MkMember', read: false, write: true },
-        ],
-      },
+      permissions: [{ access: 'entity', entityId: 'did:key:z6MkMember', read: false, write: true }],
     },
     responseStatus: 422,
     responseBody: {
@@ -3369,9 +3368,9 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...undeleteRecordFixtures,
   ...associateFixtures,
   ...dissociateFixtures,
-  ...setPermissionsFixtures,
-  ...setUnlistedFixtures,
-  ...setParentFixtures,
+  ...permissionsChangeFixtures,
+  ...unlistedChangeFixtures,
+  ...parentChangeFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,

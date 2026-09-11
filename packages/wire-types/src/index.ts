@@ -76,7 +76,7 @@ export type WireType = {
  * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
  * root. A snapshot is state, not an instruction, so it takes the same
  * shape the record it describes takes — `null` is an input spelling
- * (`PUT /records/:id/parent`, a `parentId=null` filter) and never appears
+ * (a change set's `parentId`, a `parentId=null` filter) and never appears
  * on a response. See docs/spec/wire-format.md § Versions.
  */
 export type WireVersion = {

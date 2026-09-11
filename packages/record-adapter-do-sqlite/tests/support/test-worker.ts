@@ -12,7 +12,7 @@ import type {
   StackRecord,
   StackQuery,
   Association,
-  Permission,
+  RecordChanges,
   RecordVersion,
   StackType,
   TypeId,
@@ -71,14 +71,9 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.undeleteRecord(id, opts);
   }
 
-  async setPermissions(id: string, permissions: Permission[], opts?: MutationOpts) {
+  async mutateRecord(id: string, changes: RecordChanges, opts?: MutationOpts) {
     await this.ready;
-    return this.adapter.mutateRecord(id, { permissions: permissions }, opts);
-  }
-
-  async setUnlisted(id: string, unlisted: boolean, opts?: MutationOpts) {
-    await this.ready;
-    return this.adapter.mutateRecord(id, { unlisted: unlisted }, opts);
+    return this.adapter.mutateRecord(id, changes, opts);
   }
 
   async restoreVersion(id: string, version: number, opts?: MutationOpts) {
