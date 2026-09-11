@@ -157,7 +157,7 @@ export class DoSQLiteRecordAdapter implements StackRecordAdapter {
     id: string,
     version: number,
     opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
-      associations?: Association[];
+      restoreAssociations?: boolean;
     } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);

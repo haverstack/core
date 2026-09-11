@@ -469,7 +469,7 @@ export class MemoryAdapter implements StackAdapter {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-      associations?: Association[];
+      restoreAssociations?: boolean;
     } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
@@ -482,10 +482,10 @@ export class MemoryAdapter implements StackAdapter {
     // A snapshot always settles containment: absent is the root, so a
     // restore moves the record there rather than leaving it where it sits.
     const withParent = withParentId(merged, target.parentId ?? null);
-    // A caller-resolved list wins over the snapshot's: the decision about
-    // which associations a restore may put back is made where the record's
-    // meaning is known. See StackRecordAdapter.restoreVersion().
-    const applied = opts.associations ?? target.associations;
+    // Whether a restore rolls associations back at all is decided where the
+    // record's meaning is known; the snapshot's list is the only one that
+    // ever lands here. See StackRecordAdapter.restoreVersion().
+    const applied = opts.restoreAssociations === false ? undefined : target.associations;
     const withAssoc = applied !== undefined ? withAssociations(withParent, applied) : withParent;
     const updated = this.bump(withAssoc, opts);
     this.records.set(id, updated);

@@ -2031,7 +2031,7 @@ export class Stack implements StackClient {
    * See docs/spec/identity.md § Group.
    */
   private assertGroupAdminRemains(record: StackRecord, next: Association[]): void {
-    if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GROUP) return;
+    if (!isGroupRecord(record)) return;
     if (hasGroupAdmin(next)) return;
     throw new StackConflictError(
       `Cannot leave group "${record.id}" without an admin: a _group record's roster keeps at ` +
@@ -2387,13 +2387,14 @@ export class Stack implements StackClient {
       await this.assertNoParentCycle(id, targetParentId);
     }
 
-    const associations = restoredAssociations(existing, target);
+    // A `_group`'s roster is authority, not data: it does not roll back.
+    // See docs/spec/versioning.md § Restore semantics.
     const restored = await this.adapter.restoreVersion(id, version, {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       updatedBy: opts.updatedBy,
       updatedVia: opts.updatedVia,
-      ...(associations !== undefined && { associations }),
+      ...(isGroupRecord(existing) && { restoreAssociations: false }),
     });
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
@@ -3548,33 +3549,11 @@ function stampGroupAdmin(
 }
 
 /**
- * The associations a restore should write, or `undefined` to leave the
- * record's alone — which is what a snapshot carrying no association list
- * means, and every restore of a non-`_group` Record answers with the
- * snapshot's list unchanged.
- *
- * A `_group` Record is the exception: its `admin` roster entries are
- * authority rather than data, so they are held at the values the record
- * currently carries while `member` entries roll back like any other
- * association. Rolling them back would reshuffle who administers a Group as
- * a side effect of a content rollback — the surprise `permissions` is
- * already withheld from a restore to avoid — and its worse half is rolling
- * *forward*, re-granting management to an admin who had been deliberately
- * removed. Holding them is also what keeps every version restorable while
- * "a group has at least one admin" stays an invariant: the admins the
- * restore must produce are the ones already there, so no snapshot is ever
- * refused on that ground. See docs/spec/versioning.md § Restore semantics.
+ * Whether a Record is a `_group`, in any of its type versions — the family
+ * whose roster rules apply.
  */
-function restoredAssociations(
-  record: StackRecord,
-  target: RecordVersion,
-): Association[] | undefined {
-  if (target.associations === undefined) return undefined;
-  if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GROUP) return target.associations;
-  return [
-    ...target.associations.filter((a) => !isGroupAdminAssociation(a)),
-    ...(record.associations ?? []).filter(isGroupAdminAssociation),
-  ];
+function isGroupRecord(record: StackRecord): boolean {
+  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
 }
 
 /**
@@ -4740,15 +4719,15 @@ export class ScopedStack implements StackClient {
           throw new StackPermissionError();
         }
         await this.requireFileRefAccess(target.typeId, target.content);
-        // The list the restore will actually write, not the snapshot's:
-        // a `_group`'s `admin` entries are carried forward from the record
-        // rather than introduced by the snapshot, so they create no
-        // reference to gate — the same reason a `parentId` the restore
-        // would not change is not re-gated above.
-        const isGroup = baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
-        for (const association of restoredAssociations(record, target) ?? []) {
-          if (isGroup && isGroupAdminAssociation(association)) continue;
-          await this.requireAssociationAccess(target.typeId, association);
+        // Gated against the associations the restore will actually write.
+        // A `_group`'s don't roll back at all, so such a restore introduces
+        // no association and there is nothing here to gate — the same
+        // reason a `parentId` the restore would not change is not re-gated
+        // above.
+        if (!isGroupRecord(record)) {
+          for (const association of target.associations ?? []) {
+            await this.requireAssociationAccess(target.typeId, association);
+          }
         }
       }
     }

@@ -115,16 +115,24 @@ describe('ScopedStack — a group keeps at least one admin', () => {
     );
   });
 
-  test('a restore keeps the current admins and rolls the members back', async () => {
+  // Through the permission layer as through `Stack`: a restore rolls the
+  // content back and leaves the roster alone. The reference gate has
+  // nothing to check on a group restore for the same reason — no
+  // association is introduced.
+  test('a restore rolls content back and leaves the roster alone', async () => {
     const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
     await stack.asEntity(MEMBER).mutate(group.id, {
       associations: [admin(MEMBER), member('alice')],
     });
     const v = (await stack.get(group.id))!.version;
-    await stack.asEntity(MEMBER).mutate(group.id, { associations: [admin(MEMBER)] });
+    await stack.asEntity(MEMBER).mutate(group.id, {
+      contentPatch: { name: 'Renamed' },
+      associations: [admin(MEMBER)],
+    });
 
     const restored = await stack.asEntity(MEMBER).restoreVersion(group.id, v);
-    expect(restored.associations).toEqual([member('alice'), admin(MEMBER)]);
+    expect((restored.content as { name: string }).name).toBe('Editors');
+    expect(restored.associations).toEqual([admin(MEMBER)]);
   });
 });
 

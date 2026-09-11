@@ -38,47 +38,53 @@ invariant. It therefore lives in `Stack` alongside the other integrity constrain
 than in `ScopedStack`'s group gate: who may write a `_group` is a permission question, and
 this is not one.
 
-A Group that already holds an admin-less roster is not bricked. The post-state check permits
-the write that repairs it — one naming the incoming admin — and refuses every write that
-would leave it as it is.
+Taken with the restore rule below, the three together close the invariant by construction:
+every `_group` holds an admin from its first version, no write takes a roster to zero, and no
+restore moves a roster at all. An admin-less roster is not a state the API can reach. Because
+the check reads the post-state it would still behave correctly on one manufactured by a
+direct adapter write — permitting a write that names an incoming admin, refusing one that
+does not — but that falls out of the framing rather than being a repair path the rules
+promise.
 
 What this does **not** promise is that an `admin` is _reachable_: an admin who loses their
 key strands a Group as thoroughly as an empty roster would. The invariant closes an
 accidental write, not the general problem of custody.
 
-## A restore rolls back membership, not administration
+## A restore does not roll back a Group's roster
 
-The invariant has to hold without making any version unrestorable, and a post-state check on
-`restoreVersion()` would have done exactly that — refusing a rollback to a snapshot that was
-legal when it was taken.
+On a `_group` Record, `content` and `parentId` roll back as they do anywhere, and the
+Record's **`associations` are left exactly as they stand** — the snapshot's are not put back,
+and the current ones are not taken away.
 
-So on a `_group` Record, **`member` associations restore from the snapshot like any other
-association, while `admin` entries carry forward from the record as it currently stands.**
-This is the stance restore already takes on `permissions`, applied to the roster entries that
-are authority rather than data: silently reshuffling who administers a Group as a side effect
-of rolling back its display name is the same surprise the permissions rule exists to avoid —
-and rolling _forward_ is the worse half of it, since a restore of old content would otherwise
-re-grant management to an admin who had been deliberately removed.
+This is the stance restore already takes on `permissions`, applied to the whole roster on the
+grounds that a roster is authority rather than data. A Group's `member` and `admin` entries
+are what group ACLs and group-targeted grants resolve against, so rolling either half back
+silently re-grants access as a side effect of a verb the caller asked for its content:
+management to an `admin` who had been deliberately removed, reach to a `member` who had been
+dropped. Recovering a former roster is a deliberate `associate()`, which is the point.
 
-Every version stays restorable, including one taken when the roster had no admin: the admins
-such a restore must produce are the ones the record already has. Recovering a _former_ admin
-set is a deliberate `associate()`, which is the point.
+It is also what lets the invariant hold here without a check. A restore cannot move a roster,
+so it cannot be the write that empties one, and no version of a `_group` is unrestorable on
+that ground.
 
 ## Adapters
 
-`StackRecordAdapter.restoreVersion()` gains an optional **`associations`** in `opts`: the
-association list to apply in place of the target snapshot's, already resolved by the caller.
-An adapter writes the list it is handed and falls back to the snapshot's when handed none —
-it needs no knowledge of `_group` or of roster labels, which keeps the rule in core where the
-record's meaning is known. This is the only reason the key exists; `Stack.restoreVersion()`
-is its only caller.
+`StackRecordAdapter.restoreVersion()` gains an optional **`restoreAssociations`** in `opts`.
+`false` rolls back everything but the associations, leaving the record's current list where
+it stands; absent or `true` applies the snapshot's, as before. An adapter needs no knowledge
+of `_group` or of roster labels, which keeps the rule in core where the record's meaning is
+known. `Stack.restoreVersion()` is its only caller.
 
-`@haverstack/adapter-api` deliberately does not send it. The wire protocol has no field for
-it and needs none: the server runs the same `Stack` logic over its own adapter and resolves
-the identical list from the identical record. A wire field would let a client _propose_ that
-list instead, which is the one thing the rule exists to prevent.
+No association list travels to an adapter, which is deliberate: there is no list resolved
+above the adapter and written below it, so nothing a restore writes can disagree with what
+the record already holds, and no read-then-write window exists for a concurrent roster change
+to be undone through.
 
-`ScopedStack.restoreVersion()`'s reference-creation gate now runs against the associations a
-restore will actually apply rather than the snapshot's — a `_group`'s carried-forward `admin`
-entries are already on the record, so they create no reference to gate, on the same reasoning
-that leaves a `parentId` the restore would not change un-regated.
+`@haverstack/adapter-api` does not send it. The wire protocol has no field for it and needs
+none: the server runs the same `Stack` logic over its own adapter and reaches the same answer
+from the same record. A wire field would only let a client _propose_ that answer.
+
+`ScopedStack.restoreVersion()`'s reference-creation gate skips a `_group` Record's
+associations entirely — a restore does not move the roster, so it introduces no association
+to gate, on the same reasoning that leaves a `parentId` the restore would not change
+un-regated.

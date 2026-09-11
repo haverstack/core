@@ -2373,8 +2373,10 @@ describe('_group — at least one admin', () => {
       );
     });
 
-    // Data predating the rule can still be repaired: the check reads the
-    // post-state, so a write that names the incoming admin passes.
+    // No route through `Stack` produces an admin-less roster, so this state
+    // is manufactured behind its back. The post-state framing means the
+    // check still does the right thing if one ever appears: the write that
+    // names an incoming admin passes.
     test('an admin-less roster is repairable by a write that adds an admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       // Reach past Stack to manufacture the pre-rule state.
@@ -2397,21 +2399,22 @@ describe('_group — at least one admin', () => {
     });
   });
 
-  // Membership is data and rolls back; administration is authority and
-  // does not. See docs/spec/versioning.md § Restore semantics.
-  describe('restoreVersion carries admin entries forward', () => {
-    test('restores members from the snapshot while keeping current admins', async () => {
+  // A Group's roster is authority, not data: a restore rolls back the
+  // record's content and containment and leaves the roster exactly where it
+  // stands. See docs/spec/versioning.md § Restore semantics.
+  describe('restoreVersion does not roll back the roster', () => {
+    test('content rolls back while the roster stays put', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
+      const v = group.version;
       await stack.mutate(group.id, {
-        associations: [admin('owner-123'), member('alice'), member('bob')],
+        contentPatch: { name: 'Renamed' },
+        associations: [admin('successor'), member('carol')],
       });
-      const v = (await stack.get(group.id))!.version;
 
-      await stack.mutate(group.id, { associations: [admin('successor'), member('carol')] });
       const restored = await stack.restoreVersion(group.id, v);
 
-      // alice and bob come back; successor stays, owner-123 does not return.
-      expect(restored.associations).toEqual([member('alice'), member('bob'), admin('successor')]);
+      expect((restored.content as { name: string }).name).toBe('Editors');
+      expect(restored.associations).toEqual([admin('successor'), member('carol')]);
     });
 
     test('a snapshot whose admins were deliberately removed does not re-grant them', async () => {
@@ -2425,11 +2428,33 @@ describe('_group — at least one admin', () => {
       expect(restored.associations).toEqual([admin('owner-123')]);
     });
 
-    test('content still rolls back on a group restore', async () => {
+    // Members do not come back either: they are the half a group ACL
+    // conveys access through, so rolling them forward would re-convey it as
+    // a side effect of a content rollback.
+    test('removed members are not restored', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.mutate(group.id, {
+        associations: [admin('owner-123'), member('alice'), member('bob')],
+      });
+      const v = (await stack.get(group.id))!.version;
+
+      await stack.mutate(group.id, { associations: [admin('owner-123')] });
+      const restored = await stack.restoreVersion(group.id, v);
+
+      expect(restored.associations).toEqual([admin('owner-123')]);
+    });
+
+    // The invariant needs no post-state check here: a restore cannot move
+    // the roster, so it cannot be what empties one.
+    test('every version of a group stays restorable', async () => {
+      const group = await stack.create('_group@1', { name: 'Editors' });
+      await stack.mutate(group.id, { associations: [admin('successor')] });
       await stack.patchContent(group.id, { name: 'Renamed' });
+
       const restored = await stack.restoreVersion(group.id, group.version);
+
       expect((restored.content as { name: string }).name).toBe('Editors');
+      expect(restored.associations).toEqual([admin('successor')]);
     });
 
     test('a non-_group record still restores its associations verbatim', async () => {

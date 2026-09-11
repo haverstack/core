@@ -393,7 +393,7 @@ export class SharedSqlRecordLogic {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-      associations?: Association[];
+      restoreAssociations?: boolean;
     } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
@@ -418,10 +418,10 @@ export class SharedSqlRecordLogic {
           id,
         ],
       );
-      // A caller-resolved list wins over the snapshot's: the decision about
-      // which associations a restore may put back is made where the record's
-      // meaning is known. See StackRecordAdapter.restoreVersion().
-      const applied = opts.associations ?? target.associations;
+      // Whether a restore rolls associations back at all is decided where
+      // the record's meaning is known; the snapshot's list is the only one
+      // that ever lands here. See StackRecordAdapter.restoreVersion().
+      const applied = opts.restoreAssociations === false ? undefined : target.associations;
       if (applied !== undefined) {
         this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
         if (applied.length) this.insertAssociations(id, applied);
