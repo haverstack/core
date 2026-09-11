@@ -9,7 +9,6 @@ import {
   RAND_SUFFIX_LENGTH,
   BASE,
   IdGenerationError,
-  IdGenerationOverflowError,
   MAX_ID_TIMESTAMP,
   _setLastNowId,
   _setLastRandChars,
@@ -173,15 +172,35 @@ describe('generateId', () => {
     }
   });
 
-  test('throws IdGenerationOverflowError when same-millisecond IDs are exhausted', () => {
-    const generateAllSuffixes = () => {
-      const now = Date.now();
-      const count = Math.pow(BASE, RAND_SUFFIX_LENGTH) - 1;
-      for (let i = 0; i < count; i++) {
-        generateId(now);
-      }
-    };
-    expect(generateAllSuffixes).toThrow(IdGenerationOverflowError);
+  test('a spent suffix space carries into the next millisecond, still ascending', () => {
+    const now = new Date('2024-01-01T00:00:00.0').valueOf();
+    const ids = Array.from({ length: Math.pow(BASE, RAND_SUFFIX_LENGTH) + 1 }, () =>
+      generateId(now),
+    );
+
+    expect(new Set(ids).size).toBe(ids.length);
+    for (let i = 1; i < ids.length; i++) {
+      expect(ids[i] > ids[i - 1]).toBe(true);
+    }
+    expect(idTimestamp(ids[ids.length - 1])).toBeGreaterThan(now);
+  });
+
+  // The suffix a millisecond opens on is random, so its remaining room is
+  // too — an ID minted right behind a top-of-range draw is the case that
+  // has to carry rather than fail.
+  test('a second ID in a millisecond opened at the maximum suffix still ascends', () => {
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((arr) => {
+      (arr as Uint32Array)[0] = Math.pow(BASE, RAND_SUFFIX_LENGTH) - 1; // 'zzz'
+      return arr;
+    });
+    const now = new Date('2024-01-01T00:00:00.0').valueOf();
+    const first = generateId(now);
+    const second = generateId(now);
+    spy.mockRestore();
+
+    expect(second > first).toBe(true);
+    expect(isValidIdFormat(second)).toBe(true);
+    expect(idTimestamp(second)).toBe(now + 1);
   });
 
   test('incremented suffix with leading zero is padded correctly (regression)', () => {
