@@ -11,8 +11,11 @@ import {
   APIAdapterAuthError,
 } from '../src/index.js';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
+import type { WireRecordChange } from '@haverstack/wire-types';
 import { StackQueryError, StackTimeoutError } from '@haverstack/core';
 import type { RecordChange } from '@haverstack/core';
+import { changeFeedFixtures, discoveryFixtures } from '@haverstack/conformance-fixtures';
+import type { ChangeFeedFrame } from '@haverstack/conformance-fixtures';
 
 const BASE_URL = 'https://stack.example.com';
 const TOKEN = 'test-token-abc';
@@ -37,8 +40,14 @@ const DISCOVERY = {
       contentBytes: null,
     },
   },
-  changes: { transports: ['sse'], resume: true, records: true },
+  changes: discoveryFixtures.find((f) => f.name === 'discovery-advertises-a-change-feed')!
+    .responseBody!.changes,
 };
+
+/** The other shape discovery may advertise: a feed with no cursor and no bodies. */
+const LIMITED_FEED = discoveryFixtures.find(
+  (f) => f.name === 'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
+)!.responseBody!.changes;
 
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -67,20 +76,37 @@ const feed = () => {
   };
 };
 
-const READY = 'event: ready\ndata: {"seq":"AA3f1Q"}\n\n';
+/**
+ * A fixture frame as the bytes a server puts on the wire. The fixtures
+ * carry frames parsed, since the SSE encoding around them belongs to the
+ * transport rather than to the protocol they pin.
+ */
+const sse = (frame: ChangeFeedFrame): string =>
+  `${frame.id === undefined ? '' : `id: ${frame.id}\n`}event: ${frame.event}\n` +
+  `data: ${JSON.stringify(frame.data)}\n\n`;
 
+const connection = (name: string) => changeFeedFixtures.find((f) => f.name === name)!;
+
+/** The record frame a change-feed fixture's activity produces. */
+const recordFrameOf = (name: string): ChangeFeedFrame =>
+  (connection(name).activity ?? []).flatMap((a) => a.frames).find((f) => f.event === 'record')!;
+
+const changeOf = (frame: ChangeFeedFrame): WireRecordChange => frame.data as WireRecordChange;
+
+const READY = sse(connection('change-feed-ready-leads-every-connection').openingFrames[0]!);
+
+/** An explicit id, so a test placing two frames in one stream can order them. */
 const recordFrame = (id: string, change: Record<string, unknown>): string =>
-  `id: ${id}\nevent: record\ndata: ${JSON.stringify(change)}\n\n`;
+  sse({ id, event: 'record', data: change });
 
-const CHANGED = {
-  kind: 'changed',
-  ops: ['patch'],
-  recordId: '1hk153x00001',
-  typeId: 'com.example/note@1',
-  version: 7,
-  updatedAt: '2026-08-13T12:00:00.000Z',
-  actor: { entityId: EDITOR },
-};
+const CHANGED_FRAME = recordFrameOf('change-feed-changed-frame-names-the-verb');
+const CHANGED = changeOf(CHANGED_FRAME);
+
+const WITH_RECORD_FRAME = recordFrameOf('change-feed-include-record-carries-the-body');
+const WITH_RECORD = changeOf(WITH_RECORD_FRAME);
+
+const PURGED_FRAME = recordFrameOf('change-feed-purged-frame-carries-nothing-about-the-record');
+const PURGED = changeOf(PURGED_FRAME);
 
 let mockFetch: ReturnType<typeof vi.fn>;
 
@@ -132,7 +158,7 @@ describe('the discovery gate', () => {
   test('accepts a feed that neither resumes nor includes records', async () => {
     const adapter = await openAdapter({
       ...DISCOVERY,
-      changes: { transports: ['sse'], resume: false, records: false },
+      changes: LIMITED_FEED,
     });
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
@@ -264,36 +290,27 @@ describe('frames', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
     expect(seen[0]).toMatchObject({
-      kind: 'changed',
-      ops: ['patch'],
-      recordId: '1hk153x00001',
-      version: 7,
-      actor: { entityId: EDITOR },
+      kind: CHANGED.kind,
+      ops: CHANGED.ops,
+      recordId: CHANGED.recordId,
+      version: CHANGED.version,
+      actor: CHANGED.actor,
     });
     expect(seen[0]!.updatedAt).toBeInstanceOf(Date);
-    expect(seen[0]!.updatedAt.toISOString()).toBe('2026-08-13T12:00:00.000Z');
+    expect(seen[0]!.updatedAt.toISOString()).toBe(CHANGED.updatedAt);
     stop();
   });
 
   test('parses the record body when the frame carries one', async () => {
     const { stream, seen, stop } = await subscribe({ includeRecords: true });
 
-    stream.write(
-      recordFrame('AA3f1R', {
-        ...CHANGED,
-        record: {
-          id: '1hk153x00001',
-          typeId: 'com.example/note@1',
-          createdAt: '2026-08-01T00:00:00.000Z',
-          updatedAt: '2026-08-13T12:00:00.000Z',
-          content: { title: 'Hello' },
-          version: 7,
-        },
-      }),
-    );
+    stream.write(sse(WITH_RECORD_FRAME));
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
-    expect(seen[0]!.record).toMatchObject({ id: '1hk153x00001', version: 7 });
+    expect(seen[0]!.record).toMatchObject({
+      id: WITH_RECORD.record!.id,
+      version: WITH_RECORD.record!.version,
+    });
     expect(seen[0]!.record!.createdAt).toBeInstanceOf(Date);
     stop();
   });
@@ -304,24 +321,23 @@ describe('frames', () => {
   test('drops a record and parent a purge frame should never have carried', async () => {
     const { stream, seen, stop } = await subscribe({ includeRecords: true });
 
+    // The fixture carries neither field, since a conformant server sends
+    // neither. These are what a broken one would add.
     stream.write(
-      recordFrame('AA3f1S', {
-        kind: 'purged',
-        ops: ['hard-delete'],
-        recordId: '1hk153x00002',
-        typeId: 'com.example/note@1',
-        version: 4,
-        updatedAt: '2026-08-13T12:00:03.000Z',
-        actor: { entityId: OWNER },
-        parentId: '1hk153x00000',
-        record: { id: '1hk153x00002', content: { secret: 'erased' } },
+      sse({
+        ...PURGED_FRAME,
+        data: {
+          ...PURGED,
+          parentId: '1hk153x00000',
+          record: { id: PURGED.recordId, content: { secret: 'erased' } },
+        },
       }),
     );
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
     expect(seen[0]).not.toHaveProperty('record');
     expect(seen[0]).not.toHaveProperty('parentId');
-    expect(seen[0]!.actor).toEqual({ entityId: OWNER });
+    expect(seen[0]!.actor).toEqual(PURGED.actor);
     stop();
   });
 
@@ -334,7 +350,7 @@ describe('frames', () => {
     stream.write(whole.slice(40));
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
-    expect(seen[0]!.recordId).toBe('1hk153x00001');
+    expect(seen[0]!.recordId).toBe(CHANGED.recordId);
     stop();
   });
 
@@ -351,8 +367,8 @@ describe('frames', () => {
     stream.write(crlf.slice(cut));
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
-    expect(seen[0]!.recordId).toBe('1hk153x00001');
-    expect(seen[0]!.version).toBe(7);
+    expect(seen[0]!.recordId).toBe(CHANGED.recordId);
+    expect(seen[0]!.version).toBe(CHANGED.version);
     stop();
   });
 
@@ -369,7 +385,7 @@ describe('frames', () => {
 
     stream.write(recordFrame('AA3f1S', CHANGED));
     await vi.waitFor(() => expect(seen).toHaveLength(1));
-    expect(seen[0]!.recordId).toBe('1hk153x00001');
+    expect(seen[0]!.recordId).toBe(CHANGED.recordId);
     stop();
   });
 
@@ -393,7 +409,7 @@ describe('frames', () => {
     stream.write(recordFrame('AA3f1S', CHANGED));
     await vi.waitFor(() => expect(seen).toHaveLength(1));
 
-    expect(seen[0]!.recordId).toBe('1hk153x00001');
+    expect(seen[0]!.recordId).toBe(CHANGED.recordId);
     stop();
   });
 
