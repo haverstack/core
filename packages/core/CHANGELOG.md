@@ -1,5 +1,312 @@
 # @haverstack/core
 
+## 0.29.0
+
+### Minor Changes
+
+- [#269](https://github.com/haverstack/core/pull/269) [`06b791c`](https://github.com/haverstack/core/commit/06b791cb4c5e15dd06442ab2ebfabb82cd014745) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Move a record's aspects in one call, one version
+
+  **`mutate(id, changes, opts)` replaces `update()`, `setPermissions()`, `setUnlisted()` and
+  `setParent()`.** It takes a change set naming any combination of `contentPatch`, `parentId`,
+  `permissions`, `associations` and `unlisted`, applies it as one atomic write, and produces
+  exactly one version carrying one snapshot.
+
+  ```ts
+  await stack.mutate(note.id, {
+    contentPatch: { title: 'Q3 plan' },
+    parentId: folder.id,
+    unlisted: false,
+  });
+  ```
+
+  Each aspect used to have its own verb, so "save and move", "save and share" and "save and
+  publish" each cost a version apiece and three round trips — and could not be fenced by one
+  `ifVersion`, since the second call had to be pinned against a version only the first call's
+  response could supply.
+
+  **Keys are read for presence, not truthiness.** `unlisted: false` and `parentId: null` name
+  aspects and are applied; an omitted key is untouched. A change set naming no key at all is
+  `StackQueryError` (wire: 400) — it addresses nothing, so there is nothing it could have
+  failed to satisfy. A change set already satisfied in every key writes nothing and returns
+  the record unchanged.
+
+  **`patchContent(id, patch, opts)` is the content-only spelling**, and the name the adapter
+  primitive already used. `update()` is gone: it promised a symmetry with `create()` that a
+  merge patch does not have.
+
+  ## `contentPatch` is the one key that merges
+
+  Every other key replaces the aspect it names. Content stays a patch for three concrete
+  reasons: `limits.contentBytes` bounds what travels, so a whole-document write would charge a
+  one-field edit against the full ceiling; two apps editing different top-level fields both
+  survive a patch and clobber one another under replacement; and content read through
+  `presentAt: 'latest'` cannot be written back wholesale at all, since a write validates
+  against the record's _own stored_ type and a read-modify-write across a pending migration
+  would submit migrated content to the schema it was migrated away from.
+
+  The key is named for its semantic so that asymmetry is visible at the call site rather than
+  resident in prose.
+
+  ## Authority resolves per key, against the record as it stands
+
+  The aspects do not share a gate — content is reachable by a write-holder or an `update-*`
+  grantee, `permissions` and `unlisted` only by the owner or the record's own creator. So a
+  change set resolves each key on its own and lands exactly where the same caller would have
+  landed one key at a time: **a requester who may perform every key may perform the set, and a
+  requester who may not perform one of them may not perform any of it.**
+
+  Every gate reads the record's **pre-change** state. A widened `permissions` in a change set
+  never satisfies the read check on a `parentId` named in the same call, and a `_group` roster
+  never satisfies the admin check that same call must pass — either would be a one-call
+  escalation out of a gate the single-key spelling enforces. A refused key refuses the whole
+  call: nothing is partially applied and no key is silently dropped.
+
+  ## `associate()` / `dissociate()` stay their own verbs
+
+  They amend the association set where the `associations` key replaces it. Two apps tagging
+  one record both succeed through the methods and race through the key, so the delta spelling
+  is kept for the operation that most needs it rather than folded into a declarative envelope,
+  where "add this one" is not a thing that can be said.
+
+  ## Change events name every aspect that moved
+
+  `RecordChange.op` becomes **`ops: ChangeOp[]`**, derived by diffing the record against its
+  prior state rather than read off the request — so naming an aspect without moving it is
+  never reported as moving it. The `update` op is renamed **`patch`**. `kind` resolves to the
+  most conservative entry: a change set carrying `unlist` is `deleted` whatever else it
+  carries, because a subscriber holding the record still has to drop it. Every op outside
+  `mutate()`'s reach (`create`, `delete`, `undelete`, `hard-delete`, `migrate`, `restore`) is
+  still emitted alone, so a multi-entry `ops` is always a change set.
+
+  ## Wire format
+
+  `PATCH /records/:id` now takes the change-set envelope, and `PUT .../parent`,
+  `PUT .../permissions` and `PUT .../unlisted` are gone — one `If-Match` fences a whole
+  multi-aspect edit. `GET /records/:id/permissions` stays. An unrecognized top-level key is
+  **400** and a key the type does not declare inside `contentPatch` is **422**, the same split
+  every other write endpoint makes. `changesFromWireBody()` in `@haverstack/core/wire` applies
+  this for servers built on core.
+
+  The envelope also retires a wart: `contentPatch.parentId` and the native `parentId` are now
+  unambiguous by construction, rather than by a rule the spec had to state twice.
+
+  ## Adapters
+
+  The four single-aspect adapter methods (`patchContent`, `setPermissions`, `setUnlisted`,
+  `setParent`) collapse into one **`mutateRecord(id, changes, opts)`**. This shrinks the
+  contract rather than growing it: in `sqlite-shared` those four were already the same
+  `UPDATE records SET <col>, version = version + 1, updated_at = ?, ...` with one column
+  swapped, and they are now one statement with a variable SET list. `Stack` narrows a change
+  set to the aspects that actually moved before it reaches an adapter, so every key an adapter
+  receives is one it must write — which is what keeps a restated `unlisted: true` from
+  dragging `unlistedAt` forward with no op reporting it.
+
+  ## Conformance fixtures
+
+  The three fixture groups named for retired endpoints are renamed for the change-set keys
+  they now exercise: `setPermissionsFixtures` → **`permissionsChangeFixtures`**,
+  `setUnlistedFixtures` → **`unlistedChangeFixtures`**, `setParentFixtures` →
+  **`parentChangeFixtures`**. `patchContentFixtures` keeps its name, since `patchContent()`
+  does.
+
+  ## Also
+
+  **Fixed: the content merge was documented as RFC 7396, which recurses, but is one level
+  deep.** `applyMergePatch` iterates top-level keys and replaces each value whole, so a nested
+  object in a patch replaces rather than merges. The spec now states the top-level rule and
+  drops the RFC citation; an app author trusting the reference would have expected a nested
+  patch to preserve sibling keys and silently lost them. Behavior is unchanged — only the
+  claim about it.
+
+- [#271](https://github.com/haverstack/core/pull/271) [`c8e70ab`](https://github.com/haverstack/core/commit/c8e70ab0576336d1f58bfd8054406e7f445ea2b4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A group keeps at least one admin
+
+  **"A `_group` Record's roster carries at least one `admin`" becomes an invariant of the
+  Record rather than a convenience at create time.** `stampGroupAdmin()` already made the
+  creator the first admin, and `identity.md` already promised that "no Group is ever
+  management-orphaned" — but nothing re-asserted it on a subsequent write, so a roster could
+  be emptied and the Group left manageable by the stack owner alone.
+
+  Any write that would leave the roster with no `admin` is now refused with
+  `StackConflictError` (wire: 409), whether it arrives through a change set's `associations`,
+  which replaces the roster wholesale, or through `dissociate()`, which removes one entry.
+
+  ```ts
+  // Refused: nothing would be left to manage the group.
+  await stack.mutate(group.id, { associations: [] });
+
+  // Fine: an admin may step down while another remains.
+  await stack.dissociate(group.id, { kind: 'relationship', label: 'admin', target: me });
+  ```
+
+  **The check reads the roster the write would produce, not the one it started from.** That is
+  what makes it precise without special cases: an `admin` may remove themselves while another
+  remains, and may not remove the last one, and neither case needs to name who is being
+  removed. It is also the one place a change-set check reads the post-state — the rule is
+  about what a write leaves behind rather than about what the caller named.
+
+  **The stack owner does not bypass it.** They can already manage any Group, so the rule costs
+  them nothing they wanted, and a bypass would mean nothing downstream could rely on the
+  invariant. It therefore lives in `Stack` alongside the other integrity constraints rather
+  than in `ScopedStack`'s group gate: who may write a `_group` is a permission question, and
+  this is not one.
+
+  Taken with the restore rule below, the three together close the invariant by construction:
+  every `_group` holds an admin from its first version, no write takes a roster to zero, and no
+  restore moves a roster at all. An admin-less roster is not a state the API can reach. Because
+  the check reads the post-state it would still behave correctly on one manufactured by a
+  direct adapter write — permitting a write that names an incoming admin, refusing one that
+  does not — but that falls out of the framing rather than being a repair path the rules
+  promise.
+
+  What this does **not** promise is that an `admin` is _reachable_: an admin who loses their
+  key strands a Group as thoroughly as an empty roster would. The invariant closes an
+  accidental write, not the general problem of custody.
+
+  ## A restore does not roll back a Group's roster
+
+  On a `_group` Record, `content` and `parentId` roll back as they do anywhere, and the
+  Record's **`associations` are left exactly as they stand** — the snapshot's are not put back,
+  and the current ones are not taken away.
+
+  This is the stance restore already takes on `permissions`, applied to the whole roster on the
+  grounds that a roster is authority rather than data. A Group's `member` and `admin` entries
+  are what group ACLs and group-targeted grants resolve against, so rolling either half back
+  silently re-grants access as a side effect of a verb the caller asked for its content:
+  management to an `admin` who had been deliberately removed, reach to a `member` who had been
+  dropped. Recovering a former roster is a deliberate `associate()`, which is the point.
+
+  It is also what lets the invariant hold here without a check. A restore cannot move a roster,
+  so it cannot be the write that empties one, and no version of a `_group` is unrestorable on
+  that ground.
+
+  ## Adapters
+
+  `StackRecordAdapter.restoreVersion()` gains an optional **`restoreAssociations`** in `opts`.
+  `false` rolls back everything but the associations, leaving the record's current list where
+  it stands; absent or `true` applies the snapshot's, as before. An adapter needs no knowledge
+  of `_group` or of roster labels, which keeps the rule in core where the record's meaning is
+  known. `Stack.restoreVersion()` is its only caller.
+
+  No association list travels to an adapter, which is deliberate: there is no list resolved
+  above the adapter and written below it, so nothing a restore writes can disagree with what
+  the record already holds, and no read-then-write window exists for a concurrent roster change
+  to be undone through.
+
+  `@haverstack/adapter-api` does not send it. The wire protocol has no field for it and needs
+  none: the server runs the same `Stack` logic over its own adapter and reaches the same answer
+  from the same record. A wire field would only let a client _propose_ that answer.
+
+  `ScopedStack.restoreVersion()`'s reference-creation gate skips a `_group` Record's
+  associations entirely — a restore does not move the roster, so it introduces no association
+  to gate, on the same reasoning that leaves a `parentId` the restore would not change
+  un-regated.
+
+- [#267](https://github.com/haverstack/core/pull/267) [`64cda3b`](https://github.com/haverstack/core/commit/64cda3bb5b7b21ec9277695fea8fd78516d0e6ca) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Hold content to the type's schema, and hold a schema to being one
+
+  **Behavior change: a content field the record's type does not declare is refused with
+  `StackValidationError` (wire: 422)** — on `create()`, in a content patch, and on
+  `commitMigration()` against the destination type — naming the field and the path it
+  sits at. It holds at every depth: an undeclared key inside a declared `object`, or
+  inside the `object` an `array` declares as its items, is refused with its full path
+  (`address.postcode`, `emails[1].label`).
+
+  The schema is the record's shape. A key outside it is a typo, a stale writer, or a
+  caller reaching for something that is not content at all, and accepting it makes all
+  three look like a write that worked. The third is what motivated this: content is its
+  own namespace, so a `parentId` in a content patch writes a content field of that name and
+  never the native one, leaving a `content.parentId` beside a native `parentId` holding
+  something else, with nothing downstream reading it. That now names the field and
+  points the caller back at the verb they wanted.
+
+  **The rule is about the schema, not about the names.** A type is free to declare
+  `parentId`, `version` or `createdAt` as content — a bookmark's `parentId` naming the
+  upstream record it was clipped from is an ordinary field — and once declared it is
+  patched like any other. Nothing is reserved by resemblance to a native field, and the
+  same check catches `titel` and `craetedAt`, which no list of names would.
+
+  ## Open containers
+
+  An `object` or `array` field declared `open: true` is not validated inside — the
+  schema places a container there and says nothing about its interior. That is the
+  deliberate way to store a shape a schema cannot describe: an imported blob, a payload
+  whose keys are data, or a heterogeneous or null-bearing list (a declared array has
+  never accepted a `null` element, so this is the only spelling for one).
+
+  A container declares either its interior or `open`, never neither: `ArrayFieldDef` and
+  `ObjectFieldDef` are unions, so `{ kind: 'object' }` on its own does not type-check.
+  Opacity is a claim the schema makes rather than something inferred from a missing
+  `items`/`properties`, so forgetting to describe a container's elements is a compile
+  error instead of a silently unchecked field.
+
+  An open container is still held to its own kind — an open `object` refuses an array,
+  an open `array` refuses an object — which is why this is a flag on the container kinds
+  rather than an "any JSON here" kind of its own: a type meaning "a list, contents
+  unspecified" can still say so. It is exempt from the schema only. Content field names
+  are still checked at every depth inside one, since that rule is about what a filter
+  path can address rather than about what the type promised. Query reach is unchanged: a
+  content path walks into an open container, because the query engine reads the content
+  rather than the schema.
+
+  Open and declared are different shapes, not degrees of one. They hash differently, so
+  `schemaHash` tells them apart. Changing a type from one to the other is schema drift in
+  **both** directions — closing an open container refuses content it used to accept, and
+  opening a declared one accepts content it used to refuse — so neither is an
+  additive-in-place change, and the remedy is a version bump. `isCompatible()` reads them
+  the same way: an open candidate satisfies a required container only where the required
+  side asks nothing of its interior, since a bag promises a consumer nothing to read.
+
+  ## What a schema may declare
+
+  A schema is a promise that a field is meaningful, so a promise nothing can satisfy is
+  refused where it is written. `defineType()` already applied that to a declared name no
+  filter could ever address; two more cases join it, both answering
+  `StackValidationError` (wire: 422 on `POST /types`).
+
+  **`defineType()` refuses a schema declaring `__proto__`, `constructor` or `prototype`
+  as a top-level field name**, at exactly the scope the write rule holds — a nested
+  declaration names a field a record can carry, so it is left alone. A declaration
+  cannot license what the write rule refuses, so accepting one defined a field no record
+  could carry; where the declaration was `required`, it defined a type no record could
+  satisfy at all, since supplying the field is refused as a reserved key and omitting it
+  is refused as a missing required field.
+
+  **Fixed: `defineType()` reports a malformed schema instead of failing inside the
+  machinery that reads it.** It takes a `TypeSchema`, but a schema arriving at
+  `POST /types` is parsed JSON no compiler has seen, so every malformed shape is
+  reachable: a definition that is not an object, one naming no `kind` or an unrecognized
+  one, a non-boolean `required`/`open`, a container declaring neither its interior nor
+  `open`, and a container declaring both (contradictory — one of the two would have to be
+  ignored, and nothing says which). Two of them threw a raw `TypeError` out of schema
+  hashing; the rest were accepted and defined a field whose every write failed against an
+  expectation the schema never stated (`Expected undefined, got string`), sending the
+  caller looking through their content for a bug that was in their type. All now name
+  each bad field and what is wrong with it, checked recursively through `properties` and
+  `items`.
+
+  `__proto__`, `constructor` and `prototype` remain refused as top-level _content_ keys
+  independently of the schema, including inside an open container.
+
+  ## What does not change
+
+  **Additive-in-place evolution is unchanged in mechanism and narrower in what it
+  licenses.** Validation runs on write and the schema lives in the stack, so a reader
+  holding an older idea of a type still reads records carrying fields it was never taught
+  about, and a content patch still preserves fields the caller didn't name. What
+  changed is that _writing_ a new field means declaring it first — a `defineType()` call
+  with the field added, which is already the additive-legal path, not a version bump.
+
+  A content patch validating against the record's **own stored type** rather than the latest is
+  what keeps this safe across a migration: an unswept `@1` record answers to `@1`'s
+  schema, so a field that exists only in `@2` is refused until `migrateAll()` moves the
+  record. A field can only ever be added to a schema in place, so a stored record cannot
+  accumulate content its own type does not declare.
+
+  **For server authors:** the content rule is a `Stack` invariant that a server built on
+  core inherits through ordinary record validation, and a third content-key rule for a
+  server mapping request bodies onto storage directly to apply itself. It answers **422**
+  (code `validation`) on `POST /records`, inside a `PATCH /records/:id` content patch, and on
+  `POST /records/:id/migrate`. The two schema rules answer **422** on `POST /types`.
+
 ## 0.28.0
 
 ### Minor Changes
