@@ -50,6 +50,10 @@ beforeEach(async () => {
 
 const COMMENT = 'com.example.test/comment@1';
 
+// Well-formed and naming nothing: the destination checks answer for absence,
+// not for shape.
+const MISSING_ID = '1hk153xffffz';
+
 // -------------------------------------------------------
 // _group — the invariant through the permission layer
 // -------------------------------------------------------
@@ -906,6 +910,55 @@ describe('ScopedStack — versions', () => {
       });
       const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
       expect(restored.parentId).toBe(box.id);
+    });
+
+    // The one write that may produce a dangling parent: history put back is
+    // not a caller naming a destination, so an unrelated deletion does not
+    // cost the record its rollback. See docs/spec/versioning.md § Restore
+    // semantics.
+    test('the owner restores a snapshot whose container has since been hard-deleted', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      await stack.delete(box.id, { hard: true });
+
+      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
+      expect(restored.parentId).toBe(box.id);
+    });
+
+    // Not by the existence check, which restore is exempt from, but by the
+    // reference gate, which cannot grant read on a container that is gone.
+    test('a non-owner is still refused that restore', async () => {
+      const box = await adapter.createRecord(makeRecord());
+      const record = await adapter.createRecord(
+        makeRecord({
+          version: 2,
+          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        }),
+      );
+      await adapter.saveVersion(record.id, {
+        version: 1,
+        typeId: NOTE,
+        content: {},
+        updatedAt: new Date(),
+        parentId: box.id,
+      });
+      await stack.delete(box.id, { hard: true });
+
+      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
     });
   });
 });
@@ -3178,7 +3231,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
   });
 
   test('the owner is exempt from parentId and relationship gates', async () => {
-    const record = await stack.create(
+    const record = await stack.asEntity(OWNER).create(
       COMMENT,
       { text: 'hi' },
       {
@@ -3193,6 +3246,67 @@ describe('ScopedStack.create — relationship association and parentId gating', 
       },
     );
     expect(record.parentId).toBe(unreadableNote.id);
+  });
+
+  test('the owner naming a parentId that does not exist gets the conflict, not a refusal', async () => {
+    await expect(
+      stack.asEntity(OWNER).create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('the owner naming a malformed parentId gets the format error, not a refusal', async () => {
+    await expect(
+      stack.asEntity(OWNER).create(COMMENT, { text: 'hi' }, { parentId: '' }),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('the owner may name a relationship target that does not exist', async () => {
+    const record = await stack.asEntity(OWNER).create(
+      COMMENT,
+      { text: 'hi' },
+      {
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'related',
+            target: { scope: 'record', recordId: MISSING_ID },
+          },
+        ],
+      },
+    );
+    expect(record.associations).toContainEqual({
+      kind: 'relationship',
+      label: 'related',
+      target: { scope: 'record', recordId: MISSING_ID },
+    });
+  });
+
+  test('a delegated principal does not inherit the owner exemption', async () => {
+    await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
+    await expect(
+      stack
+        .asEntity(MEMBER, { onBehalfOf: OWNER })
+        .create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID }),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(
+      stack
+        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a non-owner cannot tell a missing parentId from an unreadable one', async () => {
+    const missing = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID })
+      .catch((e: Error) => e);
+    const unreadable = await stack
+      .asEntity(MEMBER)
+      .create(COMMENT, { text: 'hi' }, { parentId: unreadableNote.id })
+      .catch((e: Error) => e);
+    expect(missing).toBeInstanceOf(StackPermissionError);
+    expect(unreadable).toBeInstanceOf(StackPermissionError);
+    expect((missing as Error).message).toBe((unreadable as Error).message);
   });
 });
 
@@ -3236,6 +3350,26 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
   test('a missing destination is refused identically to an unreadable one', async () => {
     await expect(
       stack.asEntity(MEMBER).mutate(writable.id, { parentId: 'nonexistent' }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  // The owner's path reaches Stack, which answers the two checks a
+  // caller-named parentId owes instead of the gate standing in for both.
+  test('the owner moving a record to a destination that does not exist gets the conflict', async () => {
+    await expect(
+      stack.asEntity(OWNER).mutate(writable.id, { parentId: MISSING_ID }),
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('the owner naming a malformed destination gets the format error', async () => {
+    await expect(stack.asEntity(OWNER).mutate(writable.id, { parentId: '' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('a delegated principal does not inherit the owner exemption', async () => {
+    await expect(
+      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).mutate(writable.id, { parentId: MISSING_ID }),
     ).rejects.toThrow(StackPermissionError);
   });
 
