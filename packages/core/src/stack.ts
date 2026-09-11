@@ -14,13 +14,7 @@
  * Apps should never talk to a StackAdapter directly.
  */
 
-import {
-  generateId,
-  generateIdForTimestamp,
-  isValidIdFormat,
-  idTimestamp,
-  MAX_ID_TIMESTAMP,
-} from './id.js';
+import { generateId, generateIdForTimestamp } from './id.js';
 import {
   hashSchema,
   isCompatible,
@@ -29,10 +23,7 @@ import {
   diffSchemas,
   isWellFormedTypeId,
 } from './schema.js';
-import type { SchemaDriftViolation } from './schema.js';
 import {
-  CONTENT_SEGMENT_METACHARACTERS,
-  SEGMENT_METACHARACTER_RE,
   validateContent,
   validateContentKeys,
   validatePatchValues,
@@ -42,26 +33,11 @@ import {
   validateSchemaShape,
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
-import {
-  checkAccess,
-  groupRoleFromAssociations,
-  hasGroupAdmin,
-  isGroupAdminAssociation,
-  isOwnerActingAlone,
-  validatePermissions,
-} from './access.js';
+import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
-import {
-  ChangeEmitter,
-  RelayDelivery,
-  Subscription,
-  buildEmission,
-  matchesFilter,
-  passesUnlistedBoundary,
-} from './changes.js';
-import type { EmittedChange } from './changes.js';
-import { SYSTEM_TYPES, GRANT_ACTIONS, RECORD_CHANGE_KEYS } from './types.js';
+import { ChangeEmitter, RelayDelivery, buildEmission, assertSinceUsable } from './changes.js';
+import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -70,12 +46,9 @@ import type {
   TypeId,
   StackAdapter,
   StackQuery,
-  QuerySort,
   RecordFilter,
   QueryResult,
   Association,
-  RelationshipTarget,
-  RelationshipTargetPattern,
   Permission,
   Migration,
   MigrationFn,
@@ -89,7 +62,6 @@ import type {
   EntityId,
   EntityContent,
   AppId,
-  AppContent,
   RecordId,
   TokenSession,
   ActorOptions,
@@ -101,208 +73,96 @@ import type {
   Unsubscribe,
 } from './types.js';
 
+import {
+  StackClosedError,
+  StackConflictError,
+  StackMigrationError,
+  StackNotFoundError,
+  StackPermissionError,
+  StackQueryError,
+  StackSchemaDriftError,
+  StackValidationError,
+  StackVersionConflictError,
+} from './errors.js';
+import {
+  assertQueryCapabilities,
+  assertSortCapability,
+  assertValidRelatedTo,
+  assertValidSort,
+  filtersContent,
+  validateAssociation,
+  validateAssociations,
+} from './query-validation.js';
+import {
+  GRANT_ACTION_SET,
+  READ_COMPANIONS,
+  grantConveys,
+  matchesGrantTarget,
+  validateGrantTarget,
+  grantCoversGrantee,
+  UNGRANTABLE_SYSTEM_TYPES,
+  loadGrantRecords,
+} from './grants.js';
+import type { GrantTarget } from './grants.js';
+import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+import { assertAttachmentSize, assertContentSize } from './limits.js';
+import {
+  validateParentId,
+  validateRecordId,
+  validateClockField,
+  validateIdTimestampSkew,
+  DEFAULT_ID_TIMESTAMP_SKEW_MS,
+} from './record-id.js';
+import {
+  queryAllPages,
+  findFirstMatch,
+  lookupEntityByDid,
+  MAX_QUERY_LIMIT,
+} from './stack-reads.js';
+import {
+  associationEqual,
+  assertNonEmptyChangeSet,
+  changeSetOps,
+  effectiveChanges,
+  stampGroupAdmin,
+  isGroupRecord,
+} from './record-changes.js';
+import { ScopedStack } from './scoped-stack.js';
+
 // -------------------------------------------------------
 // Supporting types
 // -------------------------------------------------------
+
+/**
+ * Default grace period for Stack.collectAttachmentGarbage(), covering the
+ * upload-then-associate window. See docs/spec/attachments.md § Garbage
+ * collection.
+ */
+const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How far a change set's `parentId` will walk a proposed ancestor chain before refusing
+ * the move. Bounds the reads one call can cost; a hierarchy deeper than
+ * this is beyond what `parentId` is for. See docs/spec/data-model.md
+ * § Reparenting.
+ */
+const MAX_PARENT_DEPTH = 64;
 
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
 /**
- * Valid GrantAction values, for runtime validation in Stack.grant().
- * Built from GRANT_ACTIONS (types.ts), the source of truth GrantAction is
- * itself derived from — so this can't drift from the type.
+ * The `_attachment@1` fields a write may not move, each with the message it
+ * is refused by. Ordered as reported. See docs/spec/attachments.md § The
+ * `_attachment` record type.
  */
-const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
+const ATTACHMENT_IMMUTABLE_FIELDS = [
+  ['mimeType', 'mimeType is immutable after creation; delete and re-upload to change it'],
+  ['fileId', 'fileId is immutable'],
+  ['size', 'size is immutable'],
+] as const;
 
-/**
- * The read actions that make a mutate action coherent, scope for scope: a
- * `-any` verb needs read over the same reach it can mutate, a `-own` verb
- * needs read over its author's own. A grant carrying neither conveys the
- * verb to nobody. `create` has no companion — writing a Record you then
- * cannot read is the drop-box, and it discloses nothing.
- * See docs/spec/access-control.md § Write implies read.
- */
-const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
-  ['update-own', ['read-own', 'read-any']],
-  ['delete-own', ['read-own', 'read-any']],
-  ['update-any', ['read-any']],
-  ['delete-any', ['read-any']],
-]);
-
-/**
- * Whether one grant's action list conveys `action`. The companion has to
- * sit in the same `_grant` Record, not merely somewhere in the grantee's
- * set: a grant is revoked whole, so a rule satisfied across two records
- * would let revoking the read one leave a mutate-without-read grant
- * standing — the configuration this rule exists to refuse, arrived at
- * without anyone writing it.
- */
-function grantConveys(actions: readonly string[], action: GrantAction): boolean {
-  if (!actions.includes(action)) return false;
-  const companions = READ_COMPANIONS.get(action);
-  return !companions || companions.some((c) => actions.includes(c));
-}
-
-/**
- * Who a grant() / revoke() / listGrants() call targets: a specific entity
- * (DID), a `_group` Record's roster (by ID), or `null` for the default
- * grant / default-only listing. See docs/spec/access-control.md § Type-level
- * grants.
- */
-export type GrantTarget = EntityId | { groupId: RecordId } | null;
-
-/** Direct (non-roster) match between a stored _grant's content and a GrantTarget. */
-function matchesGrantTarget(content: GrantContent, target: GrantTarget): boolean {
-  if (target !== null && typeof target === 'object') {
-    // Guarded so an absent groupId can't match the absent granteeGroupId on
-    // every entity-targeted and default grant — `undefined === undefined`
-    // would otherwise sweep them all into a revoke aimed at one group.
-    if (!target.groupId) return false;
-    return content.granteeGroupId === target.groupId;
-  }
-  if (target === null) {
-    return !content.granteeEntityId && !content.granteeGroupId;
-  }
-  return content.granteeEntityId === target;
-}
-
-/**
- * Reject a grant target that names nobody. An empty groupId or entityId is
- * falsy, so a stored record carrying one reads as a *default* grant — every
- * authenticated entity — instead of the target the caller meant. `null` is
- * the only way to say "default".
- */
-function validateGrantTarget(target: GrantTarget): void {
-  if (target === null) return;
-  if (typeof target === 'string') {
-    if (target.length === 0) {
-      throw new StackQueryError(
-        'A grant target entityId cannot be empty. Pass null for a default grant.',
-      );
-    }
-    return;
-  }
-  if (typeof target.groupId !== 'string' || target.groupId.length === 0) {
-    throw new StackQueryError('A group grant target requires a non-empty groupId.');
-  }
-  // Not a format check: granteeGroupId is a reference to an existing
-  // Record, like parentId or an association's recordId, and none of those
-  // are parsed either. One that resolves to nothing simply denies.
-}
-
-/**
- * Whether a stored _grant covers `grantee`: a direct DID match, roster
- * membership when `allowGroup`, or a default when `allowDefault`. Presence
- * decides the tier, never truthiness — an empty grantee field names nobody.
- * Module-level so the access checks and listGrants() cannot drift apart.
- * See docs/spec/access-control.md § Type-level grants.
- */
-async function grantCoversGrantee(
-  c: GrantContent,
-  grantee: EntityId,
-  opts: {
-    allowDefault: boolean;
-    allowGroup: boolean;
-    groupRoles: Map<string, GroupRole | null>;
-    resolveRecord: (id: RecordId) => Promise<StackRecord | null>;
-  },
-): Promise<boolean> {
-  const namesEntity = c.granteeEntityId !== undefined;
-  const namesGroup = c.granteeGroupId !== undefined;
-  if (!namesEntity && !namesGroup) return opts.allowDefault;
-  if (namesEntity && c.granteeEntityId !== grantee) return false;
-  if (namesGroup) {
-    if (!opts.allowGroup) return false;
-    if (!c.granteeGroupId) return false;
-    const role = await resolveGroupRoleMemoized(
-      c.granteeGroupId,
-      grantee,
-      opts.groupRoles,
-      opts.resolveRecord,
-    );
-    if (role === null) return false;
-  }
-  return true;
-}
-
-/**
- * An entity's role on a `_group` roster, memoized in the caller's
- * `groupRoles` map. That map is built per operation and threaded alongside
- * `prefetchedGrants`, so no resolved role outlives the operation that
- * resolved it — removal from a group must never go stale.
- * See docs/spec/access-control.md § Type-level grants.
- */
-async function resolveGroupRoleMemoized(
-  groupId: RecordId,
-  entityId: EntityId,
-  groupRoles: Map<string, GroupRole | null>,
-  resolveRecord: (id: RecordId) => Promise<StackRecord | null>,
-): Promise<GroupRole | null> {
-  const key = `${groupId}:${entityId}`;
-  const cached = groupRoles.get(key);
-  if (cached !== undefined) return cached;
-  const group = await resolveRecord(groupId);
-  // Only a real `_group` Record carries a roster. Without the family check
-  // any Record's relationship associations would serve as one, and a group
-  // migrated out of the family would keep resolving after it had stopped
-  // being a group.
-  const role =
-    group && baseIdOf(group.typeId) === SYSTEM_TYPES.GROUP
-      ? groupRoleFromAssociations(group.associations, entityId)
-      : null;
-  groupRoles.set(key, role);
-  return role;
-}
-
-/**
- * System type families grant() refuses to target: a grant on any of them
- * would let the grantee mint their own grants, touch stack config, or
- * register an app card claiming a DID that isn't theirs — the last of
- * which is what verified app attribution rests on. See
- * docs/spec/access-control.md § Type-level grants.
- */
-const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
-  SYSTEM_TYPES.GRANT,
-  SYSTEM_TYPES.CONFIG,
-  SYSTEM_TYPES.APP,
-]);
-
-/**
- * Content fields that are lookup keys rather than display values: a card
- * claims one, and something later resolves through it. Every one of them is
- * immutable once set. See docs/spec/identity.md § DID bindings.
- */
-const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
-  [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
-  [SYSTEM_TYPES.ENTITY, ['did'] as const],
-]);
-
-/**
- * The subset that is additionally unique per stack: the fields something
- * resolves *by*. A Record's `principalId` finds its card by `_app.did` and
- * its `entityId` by `_entity.did`, so a second card claiming either leaves
- * that lookup without a single answer — and ambiguity is all an
- * impersonating card needs.
- *
- * `_app.appId` is deliberately absent. Nothing resolves a card by it — the
- * cross-check reaches the card by `did` and only compares `appId` — so
- * uniqueness would buy no disambiguation, while forbidding the second card
- * key rotation is supposed to produce: `appId` is required, so a
- * replacement card for the same software necessarily repeats it. Moving one
- * card onto another's `appId` is what immutability already refuses.
- * See docs/spec/identity.md § DID bindings.
- */
-const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
-  [SYSTEM_TYPES.APP, ['did'] as const],
-  [SYSTEM_TYPES.ENTITY, ['did'] as const],
-]);
-
-const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
-  BINDING_FIELDS.get(family) ?? [];
-
-const uniqueBindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
-  UNIQUE_BINDING_FIELDS.get(family) ?? [];
+type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
 
 export type CreateRecordOptions = {
   /**
@@ -435,680 +295,6 @@ export type DefineTypeOptions = {
   migratesFrom?: TypeId;
 };
 
-/**
- * The wire-protocol discriminator vocabulary, one code per Stack-domain
- * error class. Lives here rather than in @haverstack/wire-types because the
- * classes that carry these codes are defined here; wire-types re-exports it
- * as WireErrorCode. See docs/spec/wire-format.md § Wire error body.
- */
-export type StackErrorCode =
-  | 'bad_request'
-  | 'permission'
-  | 'not_found'
-  | 'conflict'
-  | 'version_conflict'
-  | 'validation'
-  | 'migration'
-  | 'schema_drift'
-  | 'payload_too_large'
-  | 'timeout';
-
-/**
- * Root of the Stack error taxonomy. A single `instanceof StackError` answers
- * "is this a Stack-domain error or a bug?" — the question a server's error
- * middleware asks before serializing a wire body, and one a nine-arm
- * instanceof ladder answers only by exhaustion. Every subclass carries its
- * discriminator as an instance `code`, so serialization is a lookup rather
- * than a chain of class tests.
- *
- * Membership implies a wire mapping: every code has an entry in
- * WIRE_ERROR_STATUS. Errors with no wire representation (IdGenerationError,
- * InvalidDidError) deliberately stay outside this hierarchy.
- *
- * Subclassing adds no hierarchy beyond this root — notably
- * StackVersionConflictError is a sibling of StackConflictError, not a
- * subtype. See docs/spec/wire-format.md § Error responses.
- */
-export abstract class StackError extends Error {
-  abstract readonly code: StackErrorCode;
-}
-
-export class StackValidationError extends StackError {
-  static readonly code = 'validation' as const;
-  override readonly code = StackValidationError.code;
-  constructor(public readonly errors: ValidationError[]) {
-    super(
-      `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
-    );
-    this.name = 'StackValidationError';
-  }
-}
-
-export class StackMigrationError extends StackError {
-  static readonly code = 'migration' as const;
-  override readonly code = StackMigrationError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackMigrationError';
-  }
-}
-
-/** Thrown by ScopedStack when a requester lacks permission for the operation. */
-export class StackPermissionError extends StackError {
-  static readonly code = 'permission' as const;
-  override readonly code = StackPermissionError.code;
-  constructor(message = 'Permission denied') {
-    super(message);
-    this.name = 'StackPermissionError';
-  }
-}
-
-/** Thrown when a record (or specific version) does not exist. */
-export class StackNotFoundError extends StackError {
-  static readonly code = 'not_found' as const;
-  override readonly code = StackNotFoundError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackNotFoundError';
-  }
-}
-
-/** Thrown when an operation cannot proceed due to a constraint violation (e.g. deleting an attachment that is still referenced). */
-export class StackConflictError extends StackError {
-  static readonly code = 'conflict' as const;
-  override readonly code = StackConflictError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackConflictError';
-  }
-}
-
-/**
- * Thrown when an `ifVersion` precondition doesn't match a record's current
- * version. Deliberately not a StackConflictError subtype — the two have
- * different recovery stories and HTTP statuses (409 vs. 412). See
- * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
- */
-export class StackVersionConflictError extends StackError {
-  static readonly code = 'version_conflict' as const;
-  override readonly code = StackVersionConflictError.code;
-  constructor(
-    message: string,
-    readonly recordId: string,
-    readonly expectedVersion: number,
-    readonly actualVersion: number,
-  ) {
-    super(message);
-    this.name = 'StackVersionConflictError';
-  }
-}
-
-/**
- * Thrown when a request is structurally malformed — not a content-validation
- * failure, but input the adapter/server can't even interpret (e.g. an
- * undecodable pagination cursor, a malformed TypeId, search text the engine
- * cannot parse, or a typeId no definition exists for). Distinct from
- * StackValidationError, which means the request was well-formed but content
- * failed schema validation.
- *
- * Naming something absent belongs here rather than under `not_found`: a
- * request whose *type* is undefined never addressed a record, so answering
- * 404 would say a record was missing when none was asked for.
- */
-export class StackQueryError extends StackError {
-  static readonly code = 'bad_request' as const;
-  override readonly code = StackQueryError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackQueryError';
-  }
-}
-
-/**
- * Fail loud rather than silently widen: a filter the adapter can't honor
- * would otherwise be dropped, returning an unfiltered superset presented
- * as the filtered result. Shared by Stack.query() and
- * APIAdapter.queryRecords(). See docs/spec/data-model.md
- * § Capability-gated filters.
- */
-export function assertQueryCapabilities(
-  filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'filter'>,
-): void {
-  const { content: reach, contentPresent, search } = capabilities.filter;
-  if (filter?.search && !search) {
-    throw new StackQueryError(
-      'Query uses filter.search, but this adapter does not declare the filter.search capability.',
-    );
-  }
-  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
-  if (!filter?.content && !present) return;
-  if (reach === 'none') {
-    throw new StackQueryError(
-      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
-        'but this adapter declares filter.content: "none".',
-    );
-  }
-  if (present && !contentPresent) {
-    throw new StackQueryError(
-      'Query uses filter.contentPresent, but this adapter does not declare the ' +
-        'filter.contentPresent capability.',
-    );
-  }
-  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
-    if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
-      throw new StackQueryError(
-        `Query uses the nested content path "${key}", but this adapter declares ` +
-          `filter.content: "${reach}".`,
-      );
-    }
-  }
-}
-
-/**
- * Whether a single-segment content filter can be pushed down to the
- * adapter. Callers that read a content field pair this with an in-memory
- * predicate over the wider result, so the query stays correct against an
- * adapter that reaches no content at all — the rung comparison lives here
- * rather than at each of them.
- */
-function filtersContent(features: Pick<StackFeatures, 'filter'>): boolean {
-  return features.filter.content !== 'none';
-}
-
-/** The longest path both SQLite engines can execute — see the spec link below. */
-const MAX_CONTENT_PATH_SEGMENTS = 32;
-
-/**
- * Split a content filter key into path segments. Write-time validation
- * keeps stored field names free of the path metacharacters, but a filter
- * arrives from a request body and has made no such promise, so the same
- * rule is enforced here. See docs/spec/data-model.md § Content field names.
- */
-export function parseContentFilterKey(key: string): string[] {
-  const segments = key.split('.');
-  // A SQLite adapter spends two json_each joins per segment against a
-  // 64-table join limit, so a path past the cap is one the engine could
-  // not execute. See docs/spec/data-model.md § Nested content paths.
-  if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
-    throw new StackQueryError(
-      `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
-    );
-  }
-  for (const segment of segments) {
-    if (segment === '') {
-      throw new StackQueryError(
-        `Invalid content filter path "${key}": a path segment cannot be empty.`,
-      );
-    }
-    if (SEGMENT_METACHARACTER_RE.test(segment)) {
-      throw new StackQueryError(
-        `Invalid content filter path "${key}": a segment cannot contain any of ` +
-          `${CONTENT_SEGMENT_METACHARACTERS.join(' ')}.`,
-      );
-    }
-  }
-  return segments;
-}
-
-/** The only sort fields any adapter maps; anything else is a caller error. */
-const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'version']);
-/** The only two sort directions; see assertValidSort. */
-const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
-
-/**
- * Reject a sort whose field or direction is outside the closed set the
- * types promise. `QuerySort` is typed `'asc' | 'desc'`, but a type is not a
- * runtime guard: a server mapping `?direction=` onto a query, or a
- * delegated app calling query(), supplies a raw string. A SQLite record
- * adapter interpolates the direction straight into `ORDER BY`, so an
- * unvalidated value there is a SQL-injection sink reachable from every
- * untrusted caller. Validating in the invariant layer — the same reason
- * emission and _config protection live here — means no adapter can forget
- * it. See docs/spec/data-model.md § Sorting and pagination.
- */
-export function assertValidSort(sort: QuerySort | undefined): void {
-  if (!sort) return;
-  if (sort.field !== undefined && sort.contentField !== undefined) {
-    throw new StackQueryError('A sort names either a native field or a content field, never both.');
-  }
-  if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
-    throw new StackQueryError(
-      `Invalid sort field "${sort.field}": expected one of createdAt, updatedAt, version.`,
-    );
-  }
-  if (sort.contentField !== undefined) {
-    // Parsed by the same rule a filter key is, so a name a filter could
-    // never address is not one a sort can either — then held to one
-    // segment, because a value inside an array or object has no single
-    // position to order its record by (docs/spec/data-model.md
-    // § Sorting by a content field).
-    if (parseContentFilterKey(sort.contentField).length > 1) {
-      throw new StackQueryError(
-        `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
-      );
-    }
-  }
-  if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
-    throw new StackQueryError(
-      `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
-    );
-  }
-}
-
-/**
- * Fail loud rather than silently reorder: an adapter that can't honor the
- * requested sort would otherwise answer in some other order, which a
- * caller paging a bounded window has no way to notice. The companion to
- * assertQueryCapabilities(), split from it because a sort is not a filter
- * — see docs/spec/data-model.md § Capability-gated filters.
- */
-export function assertSortCapability(
-  sort: QuerySort | undefined,
-  capabilities: Pick<StackFeatures, 'sort'>,
-): void {
-  if (!sort) return;
-  if (sort.contentField !== undefined) {
-    if (!capabilities.sort.contentField) {
-      throw new StackQueryError(
-        'Query uses sort.contentField, but this adapter does not declare the sort.contentField ' +
-          'capability.',
-      );
-    }
-    return;
-  }
-  const field = sort.field ?? 'createdAt';
-  if (!capabilities.sort.fields.includes(field)) {
-    throw new StackQueryError(
-      `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
-    );
-  }
-}
-
-/** The identifier spaces a relationship target may name. */
-const TARGET_SCOPES = new Set(['record', 'entity', 'external']);
-
-/**
- * Collect what makes a relationship target malformed. Absence is
- * meaningful on `stackUrl` and an external `id` — this stack, and the
- * whole namespace — so every part that names something must be non-empty:
- * an empty string stores and matches as though it were absent.
- * See docs/spec/data-model.md § Relationship targets.
- */
-function targetErrors(
-  target: RelationshipTarget | RelationshipTargetPattern,
-  path: string,
-  opts: { externalIdOptional?: boolean } = {},
-): ValidationError[] {
-  const fail = (message: string): ValidationError[] => [{ path, message }];
-  if (!target || typeof target !== 'object')
-    return fail('A relationship target must be an object.');
-  if (!TARGET_SCOPES.has(target.scope)) {
-    return fail(
-      `Unknown relationship target scope "${target.scope}": expected "record", "entity" or "external".`,
-    );
-  }
-  if (target.scope === 'record') {
-    if (!target.recordId) return fail('A record target requires a non-empty recordId.');
-    if (target.stackUrl !== undefined && !target.stackUrl) {
-      return fail("A record target's stackUrl must be non-empty; omit it to name this stack.");
-    }
-    return [];
-  }
-  if (target.scope === 'entity') {
-    return target.entityId ? [] : fail('An entity target requires a non-empty entityId.');
-  }
-  if (!target.ns) return fail('An external target requires a non-empty ns.');
-  if (target.id === undefined) {
-    return opts.externalIdOptional ? [] : fail('An external target requires an id.');
-  }
-  return target.id ? [] : fail("An external target's id must be non-empty when present.");
-}
-
-/**
- * Reject a relationship target outside the closed set the types promise.
- * A discriminated union is not a runtime guard — a server mapping a
- * request body onto an association supplies raw JSON — and an
- * unrecognized scope would otherwise be stored under the one arm that
- * names a Record in this stack. See docs/spec/data-model.md
- * § Relationship targets.
- */
-function validateAssociation(association: Association, path = 'association'): ValidationError[] {
-  if (association?.kind !== 'relationship') return [];
-  return targetErrors(association.target, `${path}.target`);
-}
-
-/** validateAssociation() over a create's `associations` array. */
-function validateAssociations(
-  associations: Association[] | undefined,
-  path = 'associations',
-): ValidationError[] {
-  return (associations ?? []).flatMap((a, i) => validateAssociation(a, `${path}[${i}]`));
-}
-
-/**
- * Reject a relationship filter that names neither a label nor a target,
- * or whose target is malformed. `RelatedToFilter` promises one half is
- * always present; without the runtime check a filter decoded from a
- * request could arrive empty and match every record carrying any
- * relationship. See docs/spec/data-model.md § Filter.
- */
-export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void {
-  if (!relatedTo) return;
-  if (relatedTo.label === undefined && relatedTo.target === undefined) {
-    throw new StackQueryError(
-      'filter.relatedTo must name a label, a target, or both — "any relationship at all" is not a filter.',
-    );
-  }
-  if (relatedTo.target === undefined) return;
-  const errors = targetErrors(relatedTo.target, 'filter.relatedTo.target', {
-    externalIdOptional: true,
-  });
-  if (errors.length > 0) throw new StackQueryError(errors[0].message);
-}
-
-/**
- * Thrown when an attachment upload exceeds the adapter's declared
- * `limits.attachmentBytes` ceiling — checked client-side before any bytes
- * are sent; a server still enforces 413 authoritatively regardless. See
- * docs/spec/wire-format.md § Attachments.
- */
-export class StackPayloadTooLargeError extends StackError {
-  static readonly code = 'payload_too_large' as const;
-  override readonly code = StackPayloadTooLargeError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackPayloadTooLargeError';
-  }
-}
-
-/**
- * Thrown when a server abandons an operation for taking too long — in
- * practice a full-text search, the one query whose cost the sanitizers
- * bound the *grammar* of but not the execution of (see
- * docs/spec/data-model.md § Capability-gated filters).
- *
- * Never produced in-process: both SQLite engines run synchronously, so
- * there is nothing to interrupt from inside the call. It exists so a
- * server that bounds query time has a class to serialize, and so the app
- * catching it can tell "too expensive, narrow it and retry" from
- * StackQueryError's "malformed, don't bother retrying" — the distinction
- * that would be lost if a timeout reused `bad_request`.
- */
-export class StackTimeoutError extends StackError {
-  static readonly code = 'timeout' as const;
-  override readonly code = StackTimeoutError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackTimeoutError';
-  }
-}
-
-/** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
-function assertAttachmentSize(byteLength: number, attachmentBytes: number | null): void {
-  if (attachmentBytes !== null && byteLength > attachmentBytes) {
-    throw new StackPayloadTooLargeError(
-      `Attachment (${byteLength} bytes) exceeds the ${attachmentBytes}-byte limit.`,
-    );
-  }
-}
-
-/**
- * The content half of the same pre-check, on Stack.create() and
- * Stack.mutate(). Local adapters declare `limits.contentBytes: null` and skip
- * the serialization entirely; only a server declares a ceiling, and its
- * own request-size limit stays authoritative — this just spares an app the
- * round trip and gives it a typed failure instead of a 413 it has to
- * interpret. See docs/spec/wire-format.md § Request size limits.
- */
-function assertContentSize(
-  content: Record<string, unknown>,
-  contentBytes: number | null,
-  what: 'Content' | 'Patch',
-): void {
-  if (contentBytes === null) return;
-  const byteLength = new TextEncoder().encode(JSON.stringify(content)).length;
-  if (byteLength > contentBytes) {
-    throw new StackPayloadTooLargeError(
-      `${what} (${byteLength} bytes) exceeds the ${contentBytes}-byte limit.`,
-    );
-  }
-}
-
-/**
- * Thrown by defineType() when redefining an existing typeId with a schema
- * change beyond additive evolution. The remedy is a new version, never an
- * in-place redefinition. See docs/spec/data-model.md § Schema drift
- * detection.
- */
-export class StackSchemaDriftError extends StackError {
-  static readonly code = 'schema_drift' as const;
-  override readonly code = StackSchemaDriftError.code;
-  constructor(
-    public readonly typeId: TypeId,
-    public readonly violations: SchemaDriftViolation[],
-  ) {
-    super(
-      `Schema drift detected for type "${typeId}": the stored schema and the new definition ` +
-        `differ beyond additive evolution (new optional fields only). Bump the version instead ` +
-        `of redefining "${typeId}" in place — e.g. defineType(\`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ...) plus registerMigration().\n` +
-        violations.map((v) => `  ${v.path || '(root)'}: ${v.message}`).join('\n'),
-    );
-    this.name = 'StackSchemaDriftError';
-  }
-}
-
-/**
- * Thrown when a Stack or ScopedStack is used after close(). Deliberately
- * outside the StackError taxonomy, alongside IdGenerationError and
- * InvalidDidError: a caller holding a closed client is a local programming
- * error with no wire representation — no server ever responds with it.
- * See docs/spec/adapters.md § Lifecycle.
- */
-export class StackClosedError extends Error {
-  constructor(message = 'This Stack has been closed.') {
-    super(message);
-    this.name = 'StackClosedError';
-  }
-}
-
-/**
- * Thrown when a scoped view is asked to observe a stack whose adapter
- * relays a remote feed. Outside the StackError taxonomy for the same
- * reason StackClosedError is: it reports a topology the caller assembled,
- * not a state a request can be in.
- *
- * A relayed frame is scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that decision — a purge leaves no record
- * to check `canRead` against. Delivering anyway would break the promise
- * that a subscriber never sees what it may not read; delivering only local
- * writes would silently drop every change made elsewhere, which is the
- * failure that looks fine in testing. So it refuses.
- * See docs/spec/events.md § Permission scoping.
- */
-export class StackRelayScopeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackRelayScopeError';
-  }
-}
-
-/**
- * A resume cursor is opaque, but not arbitrary: it travels in an SSE `id:`
- * field, so a value spanning a line would truncate the frame carrying it.
- * Same charset and same reason as the auth nonce — see
- * docs/spec/change-feed.md § Frames.
- */
-const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
-
-/**
- * `since` only means something where a relay exists: a stack with no
- * third party whose writes could have been missed has no cursor it could
- * ever have minted. Silently starting from the present would let the
- * caller believe it resumed when it did not, so a stack that cannot honor
- * `since` refuses it rather than ignoring it.
- *
- * Its shape is checked here rather than left to the adapter, so that a
- * malformed cursor is the same error whoever is underneath — the posture
- * query() already takes with a filter no adapter declared. The value stays
- * opaque: this asks whether it is framable, never what it means. See
- * docs/spec/events.md § Subscribing.
- */
-function assertSinceUsable(since: string | undefined, relaysChanges: boolean): void {
-  if (since === undefined) return;
-  if (!relaysChanges) {
-    throw new StackQueryError(
-      'subscribe() was passed `since`, but this stack relays no changes from elsewhere and so ' +
-        'has no cursor it could ever have minted. Omit `since` — or, for a stack that relays ' +
-        'from a server, use the seq off a previously delivered RecordChange.',
-    );
-  }
-  if (!SEQ_FORMAT.test(since)) {
-    throw new StackQueryError(
-      `subscribe() was passed the resume cursor "${since}", which is not a valid seq: a cursor ` +
-        'carries unreserved base64url characters only, because it travels in a frame id. Use ' +
-        'the seq off a previously delivered RecordChange, unaltered.',
-    );
-  }
-}
-
-// -------------------------------------------------------
-// Record ID validation
-// -------------------------------------------------------
-
-const RESERVED_ID_PREFIX = '_';
-const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Default grace period for Stack.collectAttachmentGarbage(), covering the
- * upload-then-associate window. See docs/spec/attachments.md § Garbage
- * collection.
- */
-const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Format and reserved-prefix checks — full-trust context (Stack.create()).
- * Checked before the format check: the Crockford charset already excludes
- * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
- * as a generic format error instead of a specific, actionable one.
- *
- * Throws StackQueryError, not StackValidationError: a malformed id is
- * structurally bad input the request never gets past — it doesn't reach
- * type-schema validation — the same reasoning that makes an undecodable
- * pagination cursor a StackQueryError rather than a content-validation
- * failure. See StackQueryError's doc comment.
- */
-/**
- * The same format rule applied to a `parentId` a caller names. Separate
- * from validateRecordId() only for its message: the id under discussion is
- * the destination, not the record being written, and a shared message would
- * report the wrong one. See docs/spec/data-model.md § Reparenting.
- */
-function validateParentId(parentId: string): void {
-  if (parentId.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackQueryError(
-      `Invalid parentId "${parentId}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
-    );
-  }
-  if (!isValidIdFormat(parentId)) {
-    throw new StackQueryError(
-      `Invalid parentId "${parentId}": expected 12 lowercase Crockford base-32 characters.`,
-    );
-  }
-}
-
-function validateRecordId(id: string): void {
-  if (id.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
-  }
-  if (!isValidIdFormat(id)) {
-    throw new StackQueryError(
-      `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
-    );
-  }
-}
-
-/**
- * Validity and range check for the backdating options on unscoped
- * Stack.create(). A Date is only as good as what the caller parsed it
- * from, and the two failure modes both need catching here rather than
- * downstream:
- *
- * - **Invalid Date** (`new Date('13/45/2020')` off a malformed import row)
- *   has a NaN getTime(), and every comparison against NaN is false — so an
- *   unchecked Invalid Date passes the updatedAt/createdAt ordering check
- *   and the id/createdAt skew check by turning them off, mints the
- *   epoch-zero ID `000000000xxx`, and persists a record whose
- *   `createdAt.toISOString()` throws RangeError in serializeRecord() —
- *   making that record, and any wire response containing it,
- *   permanently unreadable.
- * - **Out of encodable range** — before 1970 crockford32Encode() throws a
- *   bare RangeError from deep inside the ID encoder, and past
- *   MAX_ID_TIMESTAMP the derived ID silently grows to 13 characters and
- *   fails isValidIdFormat().
- *
- * Checked at the door for both, as a StackValidationError naming the
- * field. Applies whether or not an `id` is supplied: a clock field outside
- * this range is unrepresentable regardless of where the ID came from.
- */
-function validateClockField(value: Date | undefined, path: string): ValidationError[] {
-  if (value === undefined) return [];
-  // Type-checked callers always pass a Date, but this option is now
-  // reachable from the wire: JSON has no Date, so a server that forwards a
-  // parsed `POST /records` body hands us the ISO *string* it deserialized.
-  // Without this the very next line is `"2020-…".getTime()` — an unhandled
-  // TypeError, a 500 where the caller should have got a 400 naming the
-  // field.
-  if (!(value instanceof Date)) {
-    return [{ path, message: `${path} must be a Date.` }];
-  }
-  const ms = value.getTime();
-  if (Number.isNaN(ms)) {
-    return [{ path, message: `${path} is not a valid Date.` }];
-  }
-  if (ms < 0 || ms > MAX_ID_TIMESTAMP) {
-    return [
-      {
-        path,
-        message:
-          `${path} is outside the representable range ` +
-          `(1970-01-01T00:00:00.000Z…${new Date(MAX_ID_TIMESTAMP).toISOString()}).`,
-      },
-    ];
-  }
-  return [];
-}
-
-/**
- * Timestamp-prefix plausibility check, shared by callers that compare an
- * ID's embedded millisecond against a different reference each:
- * ScopedStack.create() against the current time for any non-backdated
- * create (a grantee is untrusted and could otherwise mint an ID that
- * forges its sort position, and this is the one check standing between a
- * delegated or grantee caller and doing so), and Stack.create() — reached
- * directly when unscoped, or via ScopedStack.create() when the requester
- * is the owner acting alone with an explicit `createdAt` — against that
- * `createdAt` instead (the two must agree, not silently diverge — see
- * docs/spec/data-model.md § Record IDs). Pass null to disable.
- */
-function validateIdTimestampSkew(
-  id: string,
-  toleranceMs: number | null,
-  referenceMs: number,
-  referenceLabel: string,
-): void {
-  if (toleranceMs === null) return;
-  const skew = Math.abs(referenceMs - idTimestamp(id));
-  if (skew > toleranceMs) {
-    throw new StackValidationError([
-      {
-        path: 'id',
-        message: `ID "${id}" timestamp disagrees with ${referenceLabel} by more than the allowed clock-skew tolerance (${toleranceMs}ms).`,
-      },
-    ]);
-  }
-}
-
 // -------------------------------------------------------
 // StackClient interface
 // -------------------------------------------------------
@@ -1186,97 +372,6 @@ export interface StackClient {
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
-}
-
-// -------------------------------------------------------
-// Query helpers
-// -------------------------------------------------------
-
-/**
- * Walks `cursor` to exhaustion for the internal call sites that need every
- * match (grant checks, attachment cleanup) — query() itself always
- * paginates. Throws StackQueryError past `max` rather than silently
- * truncating a runaway scan. Not a public API.
- */
-async function queryAllPages(
-  run: (query: StackQuery) => Promise<QueryResult>,
-  query: StackQuery,
-  max = QUERY_ALL_MAX,
-): Promise<StackRecord[]> {
-  const records: StackRecord[] = [];
-  let cursor = query.cursor;
-  do {
-    const page = await run({ ...query, cursor });
-    records.push(...page.records);
-    if (records.length > max) {
-      throw new StackQueryError(
-        `queryAllPages: exceeded max of ${max} records without exhausting the cursor`,
-      );
-    }
-    cursor = page.cursor ?? undefined;
-  } while (cursor);
-  return records;
-}
-
-/** Safety cap for queryAllPages() — generous for personal-stack scale. */
-const QUERY_ALL_MAX = 10_000;
-
-/**
- * Cursor-walks `run(query)` looking for the first record matching
- * `predicate`, short-circuiting on a match. Same bounded-scan discipline
- * as queryAllPages(): a match past page one is still found, and a
- * non-terminating scan throws StackQueryError.
- */
-async function findFirstMatch(
-  run: (query: StackQuery) => Promise<QueryResult>,
-  query: StackQuery,
-  predicate: (record: StackRecord) => boolean | Promise<boolean>,
-  max = QUERY_ALL_MAX,
-): Promise<StackRecord | undefined> {
-  let cursor = query.cursor;
-  let totalFetched = 0;
-  do {
-    const page = await run({ ...query, cursor });
-    totalFetched += page.records.length;
-    if (totalFetched > max) {
-      throw new StackQueryError(
-        `findFirstMatch: exceeded max of ${max} records without exhausting the cursor`,
-      );
-    }
-    for (const record of page.records) {
-      if (await predicate(record)) return record;
-    }
-    cursor = page.cursor ?? undefined;
-  } while (cursor);
-  return undefined;
-}
-
-/**
- * Shared implementation behind Stack.getEntityByDid() and
- * ScopedStack.getEntityByDid() — see docs/spec/identity.md § DID bindings
- * for the matching rules. `includeUnlisted` is a parameter rather than
- * hardcoded, so a caller not permitted to set it can omit it instead of
- * having query() throw.
- */
-async function lookupEntityByDid(
-  run: (query: StackQuery) => Promise<QueryResult>,
-  did: EntityId,
-  canFilterContent: boolean,
-  includeUnlisted: boolean,
-): Promise<StackRecord | null> {
-  const record = await findFirstMatch(
-    run,
-    {
-      filter: {
-        baseId: SYSTEM_TYPES.ENTITY,
-        includeDeleted: true,
-        ...(includeUnlisted && { includeUnlisted: true }),
-        ...(canFilterContent && { content: { did } }),
-      },
-    },
-    (r) => (r.content as EntityContent).did === did,
-  );
-  return record ?? null;
 }
 
 // -------------------------------------------------------
@@ -1913,12 +1008,11 @@ export class Stack implements StackClient {
     if (ops.length === 0) return existing;
 
     const previousParentId = existing.parentId ?? null;
-    const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.mutateRecord(
+      id,
+      effectiveChanges(changes, ops),
+      this.writeOptions(existing, opts),
+    );
     this.emitChange(ops, updated, ops.includes('reparent') ? { previousParentId } : {});
     return updated;
   }
@@ -1983,10 +1077,15 @@ export class Stack implements StackClient {
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
       if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-        this.checkAttachmentImmutableFields(
-          contentPatch,
-          existing.content as AttachmentContent,
-          merged as AttachmentContent,
+        // Presence decides mimeType and value decides the rest: re-sending
+        // the mimeType a record already holds is refused outright, while a
+        // client round-tripping fileId or size unchanged has claimed nothing.
+        this.assertAttachmentImmutable(
+          (field) =>
+            Object.prototype.hasOwnProperty.call(contentPatch, field) &&
+            (field === 'mimeType' ||
+              (merged as AttachmentContent)[field] !==
+                (existing.content as AttachmentContent)[field]),
         );
       }
 
@@ -2063,12 +1162,11 @@ export class Stack implements StackClient {
       return existing;
     }
 
-    const updated = await this.adapter.associate(id, association, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.associate(
+      id,
+      association,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('associate', updated);
     return updated;
   }
@@ -2105,14 +1203,34 @@ export class Stack implements StackClient {
       );
     }
 
-    const updated = await this.adapter.dissociate(id, association, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const updated = await this.adapter.dissociate(
+      id,
+      association,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('dissociate', updated);
     return updated;
+  }
+
+  /**
+   * The checks a *caller-named* destination owes, before the cycle walk:
+   * `parentId` is a real, well-formed record id. Format first, so a
+   * malformed one is a 400 naming the problem rather than a read that
+   * cannot match. Existence closes the gap between the owner path and a
+   * non-owner's, where canReadReferent() already refuses a parent that
+   * isn't there.
+   *
+   * restoreVersion() deliberately does not call this — see its own comment.
+   * See docs/spec/data-model.md § Reparenting.
+   */
+  private async assertParentExists(id: string, parentId: string): Promise<void> {
+    validateParentId(parentId);
+    if (!(await this.adapter.getRecord(parentId))) {
+      throw new StackConflictError(
+        `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
+          'exist when it is named.',
+      );
+    }
   }
 
   /**
@@ -2136,27 +1254,6 @@ export class Stack implements StackClient {
    * the same posture applied here.
    * See docs/spec/data-model.md § Reparenting.
    */
-  /**
-   * The checks a *caller-named* destination owes, before the cycle walk:
-   * `parentId` is a real, well-formed record id. Format first, so a
-   * malformed one is a 400 naming the problem rather than a read that
-   * cannot match. Existence closes the gap between the owner path and a
-   * non-owner's, where canReadReferent() already refuses a parent that
-   * isn't there.
-   *
-   * restoreVersion() deliberately does not call this — see its own comment.
-   * See docs/spec/data-model.md § Reparenting.
-   */
-  private async assertParentExists(id: string, parentId: string): Promise<void> {
-    validateParentId(parentId);
-    if (!(await this.adapter.getRecord(parentId))) {
-      throw new StackConflictError(
-        `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
-          'exist when it is named.',
-      );
-    }
-  }
-
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
     let cursor: string | undefined = parentId;
     for (let depth = 0; cursor !== undefined; depth++) {
@@ -2209,12 +1306,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
-    const deleted = await this.adapter.deleteRecord(id, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const deleted = await this.adapter.deleteRecord(id, this.writeOptions(existing, opts));
     if (deleted) this.emitChange('delete', deleted);
   }
 
@@ -2233,12 +1325,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    const undeleted = await this.adapter.undeleteRecord(id, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const undeleted = await this.adapter.undeleteRecord(id, this.writeOptions(existing, opts));
     this.emitChange('undelete', undeleted);
     return undeleted;
   }
@@ -2390,10 +1477,7 @@ export class Stack implements StackClient {
     // A `_group`'s roster is authority, not data: it does not roll back.
     // See docs/spec/versioning.md § Restore semantics.
     const restored = await this.adapter.restoreVersion(id, version, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
+      ...this.writeOptions(existing, opts),
       ...(isGroupRecord(existing) && { restoreAssociations: false }),
     });
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
@@ -2493,9 +1577,12 @@ export class Stack implements StackClient {
     }
 
     if (fromFamily === SYSTEM_TYPES.ATTACHMENT) {
-      this.checkAttachmentImmutableOnMigrate(
-        existingContent as unknown as AttachmentContent,
-        content as unknown as AttachmentContent,
+      // Value-wise throughout: a migration re-sends all three required
+      // fields, so presence would refuse every migration of the family.
+      this.assertAttachmentImmutable(
+        (field) =>
+          (content as unknown as AttachmentContent)[field] !==
+          (existingContent as unknown as AttachmentContent)[field],
       );
     } else if (toFamily === SYSTEM_TYPES.ATTACHMENT) {
       // A record arriving from outside the family stakes a fresh claim on
@@ -2512,12 +1599,12 @@ export class Stack implements StackClient {
       );
     }
 
-    const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
-      expectedVersion: opts.ifVersion,
-      snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
-    });
+    const migrated = await this.adapter.commitMigration(
+      id,
+      toTypeId,
+      content,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('migrate', migrated);
     return migrated;
   }
@@ -2704,66 +1791,22 @@ export class Stack implements StackClient {
   }
 
   /**
-   * filename is the only mutable field on an _attachment@1 record; fileId,
-   * size, and mimeType are immutable (even a same-value mimeType rewrite
-   * is refused). The correction flow is delete + re-upload. See
-   * docs/spec/attachments.md § The `_attachment` record type.
-   */
-  private checkAttachmentImmutableFields(
-    patch: Record<string, unknown | null>,
-    existing: AttachmentContent,
-    merged: AttachmentContent,
-  ): void {
-    const errors: ValidationError[] = [];
-    if (Object.prototype.hasOwnProperty.call(patch, 'mimeType')) {
-      errors.push({
-        path: 'mimeType',
-        message: 'mimeType is immutable after creation; delete and re-upload to change it',
-      });
-    }
-    if (
-      Object.prototype.hasOwnProperty.call(patch, 'fileId') &&
-      merged.fileId !== existing.fileId
-    ) {
-      errors.push({ path: 'fileId', message: 'fileId is immutable' });
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'size') && merged.size !== existing.size) {
-      errors.push({ path: 'size', message: 'size is immutable' });
-    }
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
-  }
-
-  /**
-   * The same immutability checkAttachmentImmutableFields() enforces, asked
-   * value-wise instead of presence-wise: a migration replaces content
-   * wholesale, so it necessarily re-sends `mimeType`, `fileId` and `size`
-   * (all required) and a presence check would refuse every migration. Only
-   * an actual change is a violation.
+   * filename is the only mutable field on an `_attachment@1` record; fileId,
+   * size and mimeType are immutable, and the correction flow is delete +
+   * re-upload. `violates` decides what counts as touching one, because the
+   * two write shapes disagree: a patch names only what it changes, while a
+   * migration replaces content wholesale and necessarily re-sends all three.
    *
    * Repointing `fileId` is the one that matters most: an `_attachment@1`
    * record naming a fileId is what canAccessFile()'s uploader clause reads,
    * so moving an existing record onto another file's hash is a route to
    * bytes the record's author never uploaded.
+   * See docs/spec/attachments.md § The `_attachment` record type.
    */
-  private checkAttachmentImmutableOnMigrate(
-    existing: AttachmentContent,
-    next: AttachmentContent,
-  ): void {
-    const errors: ValidationError[] = [];
-    if (next.mimeType !== existing.mimeType) {
-      errors.push({
-        path: 'mimeType',
-        message: 'mimeType is immutable after creation; delete and re-upload to change it',
-      });
-    }
-    if (next.fileId !== existing.fileId) {
-      errors.push({ path: 'fileId', message: 'fileId is immutable' });
-    }
-    if (next.size !== existing.size) {
-      errors.push({ path: 'size', message: 'size is immutable' });
-    }
+  private assertAttachmentImmutable(violates: (field: AttachmentImmutableField) => boolean): void {
+    const errors = ATTACHMENT_IMMUTABLE_FIELDS.filter(([field]) => violates(field)).map(
+      ([path, message]) => ({ path, message }),
+    );
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
@@ -3016,12 +2059,6 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Flush pending writes to the underlying storage. A no-op for adapters
-   * that commit on every call (SQLite, the API adapter); meaningful for
-   * ones that buffer, and for checkpointing a stack that stays open —
-   * close() covers the teardown case on its own.
-   */
-  /**
    * Observe every change made through this Stack. Unscoped, so no
    * permission filter applies — a caller holding a `Stack` already reaches
    * every record by other means; `ScopedStack.subscribe()` is the filtered
@@ -3095,6 +2132,12 @@ export class Stack implements StackClient {
     return typeof this.adapter.subscribeChanges === 'function';
   }
 
+  /**
+   * Flush pending writes to the underlying storage. A no-op for adapters
+   * that commit on every call (SQLite, the API adapter); meaningful for
+   * ones that buffer, and for checkpointing a stack that stays open —
+   * close() covers the teardown case on its own.
+   */
   async flush(): Promise<void> {
     this.assertOpen();
     await this.adapter.flush?.();
@@ -3181,9 +2224,7 @@ export class Stack implements StackClient {
   async listGrants(target?: GrantTarget): Promise<StackRecord[]> {
     this.assertOpen();
     if (target !== undefined) validateGrantTarget(target);
-    const all = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-    });
+    const all = await loadGrantRecords((q) => this.query(q));
     if (target === undefined) return all;
     if (target === null || typeof target === 'object') {
       return all.filter((r) => matchesGrantTarget(r.content as GrantContent, target));
@@ -3219,9 +2260,7 @@ export class Stack implements StackClient {
   ): Promise<void> {
     this.assertOpen();
     validateGrantTarget(target);
-    const all = await queryAllPages((q) => this.query(q), {
-      filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-    });
+    const all = await loadGrantRecords((q) => this.query(q));
     for (const g of grants) {
       const familyId = baseIdOf(g.typeId);
       const actionSet = new Set(g.actions);
@@ -3350,6 +2389,23 @@ export class Stack implements StackClient {
   }
 
   /**
+   * The options every version-bumping adapter write carries: the `ifVersion`
+   * precondition, the prior-state snapshot that has to land in the same
+   * atomic write, and who to attribute the change to. Taken together so a
+   * new mutating verb cannot quietly omit one — `updatedVia` most of all,
+   * whose absence reads as an undelegated write.
+   * See docs/spec/versioning.md § Version history.
+   */
+  private writeOptions(existing: StackRecord, opts: IfVersionOptions & ActorOptions) {
+    return {
+      expectedVersion: opts.ifVersion,
+      snapshot: this.buildVersionSnapshot(existing),
+      updatedBy: opts.updatedBy,
+      updatedVia: opts.updatedVia,
+    };
+  }
+
+  /**
    * Snapshot of a record's prior state, passed with the mutating adapter
    * call so snapshot and mutation land in one atomic write. `associations`
    * and `parentId` are always present (`[]` and `null` where the record has
@@ -3370,1531 +2426,5 @@ export class Stack implements StackClient {
       associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
-  }
-}
-
-// -------------------------------------------------------
-// Equality helpers
-// -------------------------------------------------------
-
-/**
- * Matches the SQLite adapter's association primary key (kind, label,
- * file_id, related_scope, related_id, related_ns, related_stack).
- */
-function associationEqual(a: Association, b: Association): boolean {
-  if (a.kind !== b.kind || a.label !== b.label) return false;
-  if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') {
-    return targetEqual(a.target, b.target);
-  }
-  return true;
-}
-
-/** Structural equality per target arm — what dissociate() matches on. */
-export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
-  if (a.scope !== b.scope) return false;
-  if (a.scope === 'record' && b.scope === 'record') {
-    return a.recordId === b.recordId && (a.stackUrl ?? '') === (b.stackUrl ?? '');
-  }
-  if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
-  if (a.scope === 'external' && b.scope === 'external') return a.ns === b.ns && a.id === b.id;
-  return false;
-}
-
-function permissionEqual(a: Permission, b: Permission): boolean {
-  if (a.access !== b.access) return false;
-  if (a.access === 'public') return true;
-  if (a.access === 'entity' && b.access === 'entity') {
-    return a.entityId === b.entityId && a.read === b.read && a.write === b.write;
-  }
-  if (a.access === 'group' && b.access === 'group') {
-    return a.groupId === b.groupId && a.role === b.role && a.read === b.read && a.write === b.write;
-  }
-  return false;
-}
-
-/**
- * A change set has to name at least one aspect. Refused rather than read
- * as a no-op: it addresses nothing, so there is nothing it could have
- * failed to satisfy, and every way of producing one is a caller bug —
- * typically a conditional that built an empty object.
- * See docs/spec/data-model.md § Mutations.
- */
-function assertNonEmptyChangeSet(changes: RecordChanges): void {
-  // Presence, not truthiness: `unlisted: false` and `parentId: null` are
-  // aspects this call names, and reading them as absent would drop a
-  // change the caller asked for.
-  if (RECORD_CHANGE_KEYS.some((key) => changes[key] !== undefined)) return;
-  throw new StackQueryError(
-    'A change set names at least one of: ' + RECORD_CHANGE_KEYS.join(', ') + '.',
-  );
-}
-
-/**
- * Which aspects a change set actually moves, against the record as it
- * stands — the no-op decision and the change event's `ops` are the same
- * comparison, so they can never disagree. A key naming the value a record
- * already holds contributes nothing.
- *
- * `merged` is the content the patch produces, computed once by the
- * caller that had to validate it anyway.
- * See docs/spec/events.md § The event shape.
- */
-function changeSetOps(
-  existing: StackRecord,
-  changes: RecordChanges,
-  merged: Record<string, unknown> | undefined,
-): ChangeOp[] {
-  const ops: ChangeOp[] = [];
-
-  if (merged !== undefined && !contentEqual(existing.content, merged)) ops.push('patch');
-
-  if (changes.parentId !== undefined && changes.parentId !== (existing.parentId ?? null)) {
-    ops.push('reparent');
-  }
-
-  if (changes.permissions && !permissionsEqual(existing.permissions ?? [], changes.permissions)) {
-    ops.push('permissions');
-  }
-
-  if (changes.associations) {
-    const before = existing.associations ?? [];
-    const after = changes.associations;
-    if (after.some((a) => !before.some((b) => associationEqual(a, b)))) ops.push('associate');
-    if (before.some((b) => !after.some((a) => associationEqual(a, b)))) ops.push('dissociate');
-  }
-
-  if (changes.unlisted !== undefined && Boolean(existing.unlistedAt) !== changes.unlisted) {
-    ops.push(changes.unlisted ? 'unlist' : 'list');
-  }
-
-  return ops;
-}
-
-/**
- * The change set narrowed to the aspects that actually moved. An adapter
- * is handed this rather than what the caller wrote, so restating an aspect
- * cannot rewrite it: `unlisted: true` on an already-unlisted record would
- * otherwise drag `unlistedAt` forward, moving the record's publish moment
- * with no op reporting it. It also keeps the adapter contract honest —
- * every key an adapter receives is one it must write.
- */
-function effectiveChanges(changes: RecordChanges, ops: ChangeOp[]): RecordChanges {
-  const effective: RecordChanges = {};
-  if (ops.includes('patch')) effective.contentPatch = changes.contentPatch;
-  if (ops.includes('reparent')) effective.parentId = changes.parentId;
-  if (ops.includes('permissions')) effective.permissions = changes.permissions;
-  if (ops.includes('associate') || ops.includes('dissociate')) {
-    effective.associations = changes.associations;
-  }
-  if (ops.includes('unlist') || ops.includes('list')) effective.unlisted = changes.unlisted;
-  return effective;
-}
-
-/**
- * Whether a merge patch produced the content the record already held.
- * Compared by serialization: content is JSON by construction — it round
- * trips through storage that way — and a patch preserves key order for
- * every field it does not name, so the encoding of an unchanged record is
- * stable. A reordering patch that changes nothing else is the one case
- * this reports as a change, which costs an empty version rather than a
- * wrong answer.
- */
-function contentEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function permissionsEqual(a: Permission[], b: Permission[]): boolean {
-  return a.length === b.length && a.every((p, i) => permissionEqual(p, b[i]));
-}
-
-// -------------------------------------------------------
-// ScopedStack
-// -------------------------------------------------------
-
-/** Default page size used to fill a permission-filtered query result. */
-const DEFAULT_QUERY_LIMIT = 50;
-const MAX_QUERY_LIMIT = 1000;
-
-/**
- * How far a change set's `parentId` will walk a proposed ancestor chain before refusing
- * the move. Bounds the reads one call can cost; a hierarchy deeper than
- * this is beyond what `parentId` is for. See docs/spec/data-model.md
- * § Reparenting.
- */
-const MAX_PARENT_DEPTH = 64;
-
-/**
- * Ensures `creator` carries an `admin` relationship association, adding one
- * if it's not already present. Used to bootstrap a `_group` record's first
- * admin at create time.
- */
-function stampGroupAdmin(
-  associations: Association[] | undefined,
-  creator: EntityId,
-): Association[] {
-  const list = associations ?? [];
-  const alreadyAdmin = list.some(
-    (a) =>
-      a.kind === 'relationship' &&
-      a.label === 'admin' &&
-      a.target.scope === 'entity' &&
-      a.target.entityId === creator,
-  );
-  if (alreadyAdmin) return list;
-  return [
-    ...list,
-    { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: creator } },
-  ];
-}
-
-/**
- * Whether a Record is a `_group`, in any of its type versions — the family
- * whose roster rules apply.
- */
-function isGroupRecord(record: StackRecord): boolean {
-  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
-}
-
-/**
- * Drops a snapshot's `permissions` — owner-only audit data, never served
- * to a non-owner history reader. `entityId` (change attribution) stays.
- * See docs/spec/versioning.md § History access.
- */
-function stripVersionPermissions(version: RecordVersion): RecordVersion {
-  if (version.permissions === undefined) return version;
-  const { permissions: _permissions, ...rest } = version;
-  return rest;
-}
-
-/**
- * The tombstone a soft-deleted Record is presented as. `permissions` is
- * retained because it decides whether the caller may undelete; history is
- * exempt, which is why getVersions() still serves the content this
- * withholds. See docs/spec/versioning.md § The tombstone is literal.
- */
-function tombstoneOf(record: StackRecord): StackRecord {
-  return {
-    id: record.id,
-    typeId: record.typeId,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-    version: record.version,
-    content: {},
-    ...(record.deletedAt !== undefined && { deletedAt: record.deletedAt }),
-    ...(record.unlistedAt !== undefined && { unlistedAt: record.unlistedAt }),
-    ...(record.permissions !== undefined && { permissions: record.permissions }),
-  };
-}
-
-/** A soft-deleted Record presented as its tombstone; anything else untouched. */
-const presentDeleted = (record: StackRecord): StackRecord =>
-  record.deletedAt ? tombstoneOf(record) : record;
-
-/**
- * A permission-enforcing view of a Stack for a single (principal, subject)
- * pair, obtained via `stack.asEntity(entityId)`. A record the request
- * cannot read answers exactly as a missing one does — null on reads,
- * StackNotFoundError on the verbs that name one — so only a requester who
- * could have read it is told a refusal was about access.
- * See docs/spec/access-control.md § Errors and information exposure.
- *
- * Two identities, one rule: **the principal governs authority, the subject
- * governs attribution.** Grant lookup and the privilege-bearing gates that
- * no grant reaches (resharing, group management, hard delete, widening
- * access at create time) key on `principalEntityId`; authorship, `-own`
- * matching, record-level permission resolution, and "files I uploaded"
- * lookups key on `subjectEntityId`.
- *
- * Unconditional owner access follows that same split rather than one
- * identity: it answers *what data is reachable* for the subject (an owner
- * subject resolves past every permission check) and *who may exercise a
- * privileged verb* for the principal (an owner app is not bounded by
- * grants). Under delegation both halves apply, and a mistake on the
- * authority side is an escalation rather than a preference.
- */
-/**
- * The authority lookups canRead needs, held for the life of one
- * subscription. A subscription is long-lived where a query is not, so the
- * cache is only safe because every write that can change canRead's answer
- * arrives as an event that drops it — see ScopedSubscription.
- */
-class FeedAuthorityCache {
-  private grantRecords: StackRecord[] | null = null;
-  /**
-   * Bumped by every invalidation, so a load that was already in flight can
-   * tell that its result is stale before seating it.
-   */
-  private generation = 0;
-  /** Roster roles, memoized per group, as ScopedStack.query() does per query. */
-  roles = new Map<string, GroupRole | null>();
-
-  /** Every `_grant` record, refilled through `load` after an invalidation. */
-  async grants(load: () => Promise<StackRecord[]>): Promise<StackRecord[]> {
-    if (this.grantRecords !== null) return this.grantRecords;
-    const generation = this.generation;
-    const loaded = await load();
-    // An invalidation during the load already dropped the set these
-    // replace, so seating them would outlive the write that expired them
-    // and no later event would drop them again. The event being decided
-    // precedes that write, so it is still decided on what was loaded.
-    if (this.generation === generation) this.grantRecords = loaded;
-    return loaded;
-  }
-
-  invalidateFor(typeFamily: string): void {
-    if (typeFamily === SYSTEM_TYPES.GRANT) {
-      this.grantRecords = null;
-      this.generation++;
-    }
-    if (typeFamily === SYSTEM_TYPES.GROUP) this.roles = new Map();
-  }
-}
-
-/**
- * A ScopedStack's delivery: canRead per event, with the grant and roster
- * lookups it needs cached for the life of the subscription and dropped the
- * moment anything that feeds them changes.
- *
- * Two properties do the work, and neither is optional:
- *
- * **Deliveries are serialized.** The permission decision is asynchronous,
- * so without a queue two changes to one record could resolve out of order
- * and be delivered newest-first — breaking the one ordering guarantee the
- * feed makes. Every emission is appended to a chain instead.
- *
- * **The filter fails closed.** A permission check that throws drops the
- * event and reports the error; it never delivers on the assumption that a
- * failed check would have passed.
- *
- * See docs/spec/events.md § Permission scoping.
- */
-class ScopedSubscription extends Subscription {
-  private readonly cache = new FeedAuthorityCache();
-  /** Tail of the delivery chain — see the class comment. */
-  private queue: Promise<void> = Promise.resolve();
-
-  constructor(
-    private readonly canRead: (record: StackRecord, cache: FeedAuthorityCache) => Promise<boolean>,
-    handler: (change: RecordChange) => void,
-    opts: SubscribeOptions,
-  ) {
-    super(handler, opts);
-  }
-
-  accept(emission: EmittedChange): void {
-    // Invalidation reads every emission, including the ones this
-    // subscriber may not see: a revocation the subscriber cannot read is
-    // exactly the one that must still expire its cache.
-    this.invalidateFor(emission);
-    if (!matchesFilter(emission, this.opts.filter)) return;
-    this.queue = this.queue.then(() => this.filterAndDeliver(emission));
-  }
-
-  /**
-   * A cached grant set outlives the write that revokes it unless something
-   * drops it. Both writes that can change canRead's answer — a `_grant`
-   * record, or a `_group` roster — arrive here as ordinary events, which
-   * is what makes the cache safe to hold at all. A future authority change
-   * that did not emit would silently strand it.
-   */
-  private invalidateFor(emission: EmittedChange): void {
-    this.cache.invalidateFor(baseIdOf(emission.change.typeId));
-  }
-
-  private async filterAndDeliver(emission: EmittedChange): Promise<void> {
-    if (this.isClosed) return;
-    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
-    try {
-      if (!(await this.canRead(emission.record, this.cache))) return;
-    } catch (err) {
-      // Fail closed: an undecided permission question is not a yes.
-      this.reportError(err);
-      return;
-    }
-    // After the permission decision, which needs the whole record: a frame
-    // carrying a deleted record's body would be a read channel around the
-    // tombstone. See docs/spec/events.md § Soft-deleted records reach the
-    // feed as tombstones.
-    this.deliver(this.project(emission));
-  }
-
-  private project(emission: EmittedChange): EmittedChange {
-    const record = presentDeleted(emission.record);
-    return record === emission.record ? emission : { ...emission, record };
-  }
-}
-
-export class ScopedStack implements StackClient {
-  constructor(
-    private readonly stack: Stack,
-    private readonly principalEntityId: EntityId | null,
-    private readonly subjectEntityId: EntityId | null,
-    private readonly idTimestampSkewMs: number | null,
-    // Bytes-storage primitive for putAttachment(). Held directly because
-    // ScopedStack always composes bytes + its own create() — the record
-    // must carry the subject's entityId and the principal behind it,
-    // neither of which the adapter-level atomic capability takes.
-    private readonly adapter: StackAdapter,
-    // The stack's own stream, filtered by subscribe(). Held here rather
-    // than reached through a method on Stack so the unfiltered stream
-    // stays inside this module.
-    private readonly changes: ChangeEmitter,
-  ) {}
-
-  get features(): StackFeatures {
-    return this.stack.features;
-  }
-
-  private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
-
-  /** Whether a delegated app is acting for someone other than itself. */
-  private get delegated(): boolean {
-    return this.subjectEntityId !== this.principalEntityId;
-  }
-
-  /**
-   * Who this request is, for stamping onto whatever it mutates. Attribution
-   * follows record-level authorship: the subject is the actor, and the
-   * principal is named beside it only when the two differ.
-   * See docs/spec/data-model.md § Authorship and attribution.
-   */
-  private get actor(): ActorOptions {
-    // Both keys are always present, so spreading this last overrides
-    // anything a caller passed: a scoped requester names itself by making
-    // the request, never by describing itself in the options.
-    return {
-      updatedBy: this.subjectEntityId ?? undefined,
-      updatedVia: this.delegated ? (this.principalEntityId ?? undefined) : undefined,
-    };
-  }
-
-  /**
-   * Whether unconditional owner authority applies — the owner acting as
-   * itself. The verbs that rest on it are irreversible or disclose the
-   * sharing graph, so delegation never carries one to a subject, whichever
-   * side the owner is on. Shared with the predicate a server applies to a
-   * session, which decides the same tier one step earlier. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private get ownerActingAlone(): boolean {
-    return isOwnerActingAlone(
-      { principalId: this.principalEntityId, subjectId: this.subjectEntityId },
-      this.stack.ownerEntityId,
-    );
-  }
-
-  private checkRead(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.subjectEntityId,
-      this.stack.ownerEntityId,
-      'read',
-      this.resolveRecord,
-    );
-  }
-
-  private checkWrite(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.subjectEntityId,
-      this.stack.ownerEntityId,
-      'write',
-      this.resolveRecord,
-    );
-  }
-
-  /**
-   * Whether `grantee` holds a _grant covering one of `actions` for the
-   * type's family (grants match by baseId, so a version bump never orphans
-   * one). -own actions additionally require record.entityId === grantee,
-   * unless `matchOwn` is false — on the principal side of a delegated
-   * request the suffix is read as the bare verb, since which records are
-   * reachable is the subject's business. `allowDefault` decides whether a
-   * grant naming nobody counts. Anonymous grantees always return false.
-   *
-   * Reached only through subjectAllows()/principalAllows(), which fix those
-   * two flags per side of the intersection. Call one of those instead.
-   * See docs/spec/access-control.md § Type-level grants.
-   */
-  private async hasGrant(
-    typeId: TypeId,
-    actions: GrantAction[],
-    opts: {
-      grantee: EntityId | null;
-      record?: StackRecord;
-      prefetchedGrants?: StackRecord[];
-      groupRoles?: Map<string, GroupRole | null>;
-      matchOwn?: boolean;
-      allowDefault?: boolean;
-      allowGroup?: boolean;
-    },
-  ): Promise<boolean> {
-    const {
-      grantee,
-      record,
-      prefetchedGrants,
-      matchOwn = true,
-      allowDefault = true,
-      allowGroup = true,
-    } = opts;
-    if (!grantee) return false;
-    // Absent when the caller has no operation-scoped map to share — one
-    // call's worth of memoization, which is still every grant record in
-    // this loop naming the same group.
-    const groupRoles = opts.groupRoles ?? new Map<string, GroupRole | null>();
-
-    const familyId = baseIdOf(typeId);
-
-    // grant() refuses to write these, but a _grant record is an ordinary
-    // Record: an unscoped Stack, an import, or a server mapping a request
-    // body onto Stack can mint one anyway. Refusing at the point of use is
-    // what makes the rule hold regardless of how the record got there.
-    if (UNGRANTABLE_SYSTEM_TYPES.has(familyId)) return false;
-
-    let grantRecords: StackRecord[];
-    if (prefetchedGrants !== undefined) {
-      grantRecords = prefetchedGrants;
-    } else {
-      // No content-field prefilter: a stored grant's typeId may be a bare
-      // baseId or versioned, so exact matching would wrongly exclude family
-      // versions. Cursor-walked to see grants past page one.
-      grantRecords = await queryAllPages((q) => this.stack.query(q), {
-        filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-      });
-    }
-
-    for (const r of grantRecords) {
-      const c = r.content as GrantContent;
-      if (baseIdOf(c.typeId) !== familyId) continue;
-      const covers = await grantCoversGrantee(c, grantee, {
-        allowDefault,
-        allowGroup,
-        groupRoles,
-        resolveRecord: this.resolveRecord,
-      });
-      if (!covers) continue;
-      const matches = actions.some((action) => {
-        if (!grantConveys(c.actions as string[], action)) return false;
-        if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
-        return true;
-      });
-      if (matches) return true;
-    }
-    return false;
-  }
-
-  /**
-   * The principal half of a delegated request's authority: does the app
-   * hold any grant permitting these verbs on this type at all. Bounds what
-   * the subject's own authority can reach through it, so a powerful app
-   * can never lend its reach to a weaker subject — nor the reverse.
-   * Vacuously true when there's no delegation, where the principal and
-   * subject checks would be the same question asked twice.
-   *
-   * Default grants don't count here. "Any authenticated entity" is about
-   * people who turn up, not software the owner installed — an app reaches
-   * only the types named to it, which is the whole of what containment
-   * promises.
-   *
-   * Group-targeted grants don't count here either, one step removed: a
-   * roster is editable by any of the group's admins, so authority reaching
-   * a principal through one would let someone other than the owner name an
-   * app to a type. See docs/spec/access-control.md § Type-level grants.
-   */
-  private principalAllows(
-    typeId: TypeId,
-    actions: GrantAction[],
-    prefetchedGrants?: StackRecord[],
-  ): Promise<boolean> {
-    if (!this.delegated) return Promise.resolve(true);
-    if (this.principalEntityId === this.stack.ownerEntityId) return Promise.resolve(true);
-    return this.hasGrant(typeId, actions, {
-      grantee: this.principalEntityId,
-      prefetchedGrants,
-      matchOwn: false,
-      allowDefault: false,
-      allowGroup: false,
-    });
-  }
-
-  /**
-   * The subject half: which records are reachable, answered with `-own`
-   * matching and default grants both in force — the ordinary reading of a
-   * grant, since the subject is the entity a grant is written about.
-   *
-   * Paired with principalAllows() so that the two halves of the
-   * intersection are the only callers of hasGrant(): its flags differ per
-   * side and mean nothing on their own, so no call site sets them by hand.
-   */
-  private subjectAllows(
-    typeId: TypeId,
-    actions: GrantAction[],
-    opts: {
-      record?: StackRecord;
-      prefetchedGrants?: StackRecord[];
-      groupRoles?: Map<string, GroupRole | null>;
-    } = {},
-  ): Promise<boolean> {
-    return this.hasGrant(typeId, actions, {
-      grantee: this.subjectEntityId,
-      record: opts.record,
-      prefetchedGrants: opts.prefetchedGrants,
-      groupRoles: opts.groupRoles,
-    });
-  }
-
-  /**
-   * How to refuse a record this request addressed by ID. A requester who
-   * can read the record is told it exists and the verb was refused;
-   * everyone else is told what a missing ID is told, so no one learns an ID
-   * is live who could not have learned it by reading. `message` therefore
-   * only ever reaches someone holding the record already.
-   * See docs/spec/access-control.md § Errors and information exposure.
-   */
-  private async denialFor(record: StackRecord, message?: string): Promise<StackError> {
-    // Prefetched here rather than threaded down from the gate: a write
-    // carried by a record-level permission settles without reading a grant
-    // at all, and that path must not pay for this one. Both halves of
-    // canRead share the one scan.
-    const grants =
-      this.principalEntityId || this.subjectEntityId
-        ? await queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-          })
-        : undefined;
-    if (await this.canRead(record, grants)) return new StackPermissionError(message);
-    return new StackNotFoundError(`Record not found: "${record.id}"`);
-  }
-
-  private async canRead(
-    record: StackRecord,
-    prefetchedGrants?: StackRecord[],
-    groupRoles?: Map<string, GroupRole | null>,
-  ): Promise<boolean> {
-    const reachable =
-      (await this.checkRead(record)) ||
-      (await this.subjectAllows(record.typeId, ['read-own', 'read-any'], {
-        record,
-        prefetchedGrants,
-        groupRoles,
-      }));
-    if (!reachable) return false;
-    return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
-  }
-
-  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.ownerActingAlone) return true;
-    const reachable =
-      this.subjectEntityId === this.stack.ownerEntityId ||
-      (await this.subjectAllows(typeId, ['create']));
-    if (!reachable) return false;
-    return this.principalAllows(typeId, ['create']);
-  }
-
-  /**
-   * `_group` records are managed, not merely written: only the owner or an
-   * `admin` roster holder may mutate them — ordinary write permissions and
-   * grants don't apply. Asked of both identities under delegation, like
-   * a reshare. See docs/spec/identity.md § Group.
-   */
-  private isGroupManager(record: StackRecord): boolean {
-    if (!this.managesGroup(this.principalEntityId, record)) return false;
-    return !this.delegated || this.managesGroup(this.subjectEntityId, record);
-  }
-
-  /** Whether one identity, on its own, manages `record` — see isGroupManager(). */
-  private managesGroup(entityId: EntityId | null, record: StackRecord): boolean {
-    if (!entityId) return false;
-    if (entityId === this.stack.ownerEntityId) return true;
-    return groupRoleFromAssociations(record.associations, entityId) === 'admin';
-  }
-
-  /**
-   * Fetch a record the subject can reach and the principal holds `update` on
-   * (via permissions or an update grant), or throw. `mutating: false` marks
-   * the history readers, which borrow this gate without changing anything —
-   * the one way through it a `_grant` Record stays open to.
-   */
-  private async requireUpdatable(
-    id: string,
-    opts: { mutating?: boolean } = {},
-  ): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const mutating = opts.mutating ?? true;
-    if (mutating) await this.requireOwnerForGrantRecord(record);
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return this.refuseIfDeleted(record, mutating);
-    }
-    const allowed =
-      ((await this.checkWrite(record)) ||
-        (await this.subjectAllows(record.typeId, ['update-own', 'update-any'], { record }))) &&
-      (await this.principalAllows(record.typeId, ['update-own', 'update-any']));
-    if (!allowed) throw await this.denialFor(record);
-    return this.refuseIfDeleted(record, mutating);
-  }
-
-  /**
-   * Refuse a mutation aimed at a soft-deleted Record. Asked only of a
-   * mutating caller, so the history readers borrowing this gate still work,
-   * and only after the authority decision, so "exists but deleted" is never
-   * a probe a stranger can run. See docs/spec/versioning.md § Mutations are
-   * refused, not applied to a tombstone.
-   */
-  private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
-    if (mutating && record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
-      );
-    }
-    return record;
-  }
-
-  /**
-   * Fetch a record the subject can reach and the principal holds `delete` on
-   * (via permissions or a delete grant), or throw.
-   */
-  private async requireDeletable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    await this.requireOwnerForGrantRecord(record);
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return record;
-    }
-    const allowed =
-      ((await this.checkWrite(record)) ||
-        (await this.subjectAllows(record.typeId, ['delete-own', 'delete-any'], { record }))) &&
-      (await this.principalAllows(record.typeId, ['delete-own', 'delete-any']));
-    if (!allowed) throw await this.denialFor(record);
-    return record;
-  }
-
-  /**
-   * Whether this request may reference `recordId` (as a parentId or
-   * relationship target). Missing and unreadable both return false —
-   * indistinguishable, so this can't probe for a record's existence.
-   */
-  private async canReadReferent(recordId: string): Promise<boolean> {
-    const record = await this.stack.get(recordId);
-    if (!record) return false;
-    return this.canRead(record);
-  }
-
-  /**
-   * Whether this request can read some record referencing `fileId` —
-   * shared by canAccessFile() and the non-owner _attachment@1 create()
-   * carve-out, which deliberately excludes the uploader clause. Walks
-   * every referencing record, short-circuiting on the first readable one.
-   * `_attachment@1` records are excluded from matching outright: the
-   * carve-out must be satisfied by some *other* record referencing the
-   * file, never by the requester's own prior metadata record for it —
-   * allowing that would let one successful guess unlock unlimited further
-   * metadata records for the same fileId, reintroducing the circularity
-   * the carve-out's uploader-clause exclusion closes.
-   * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
-   */
-  private async hasReadableReference(fileId: string): Promise<boolean> {
-    const prefetchedGrants = this.subjectEntityId
-      ? await queryAllPages((q) => this.stack.query(q), {
-          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-        })
-      : undefined;
-    const groupRoles = new Map<string, GroupRole | null>();
-
-    const match = await findFirstMatch(
-      (q) => this.stack.query(q),
-      // Reach, not enumeration: a record readable by ID conveys the file it
-      // references. See docs/spec/unlisted.md.
-      { filter: { attachmentFileId: fileId, includeUnlisted: true } },
-      (record) =>
-        baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT &&
-        this.canRead(record, prefetchedGrants, groupRoles),
-    );
-    return match !== undefined;
-  }
-
-  /**
-   * Whether this request may reference or download `fileId` — the dual of
-   * getAttachment()'s access rule. Nonexistent and inaccessible are
-   * indistinguishable (both false), so no confirmation oracle for guessed
-   * hashes. See docs/spec/access-control.md § Reference-creation gating.
-   */
-  private async canAccessFile(fileId: string): Promise<boolean> {
-    if (this.ownerActingAlone) return true;
-
-    // Reaching a file through a record this request can read is already
-    // fully intersected — canRead() applied the principal's mask against
-    // that record's own type, which is the type the reference lives on.
-    if (await this.hasReadableReference(fileId)) return true;
-
-    if (!this.subjectEntityId) return false;
-
-    // The remaining paths are authorship facts about the subject, so they
-    // decide *which* files match — they are not themselves a grant, and the
-    // principal still needs one of its own on the attachment type.
-    if (!(await this.principalAllows(`${SYSTEM_TYPES.ATTACHMENT}@1`, ['read-own', 'read-any']))) {
-      return false;
-    }
-
-    if (this.subjectEntityId === this.stack.ownerEntityId) return true;
-
-    return filtersContent(this.stack.features)
-      ? (
-          await this.stack.query({
-            filter: {
-              typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              entityId: this.subjectEntityId,
-              content: { fileId },
-            },
-            limit: 1,
-          })
-        ).records.length > 0
-      : (
-          await queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, entityId: this.subjectEntityId },
-          })
-        ).some((r) => (r.content as AttachmentContent).fileId === fileId);
-  }
-
-  /** Names of the type's top-level file-ref fields — the content-reference half of attachmentFileId matching. */
-  private async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
-    const type = await this.stack.getType(typeId);
-    if (!type) return [];
-    return Object.entries(type.schema)
-      .filter(([, def]) => def.kind === 'file-ref')
-      .map(([field]) => field);
-  }
-
-  /**
-   * Gates file-ref content fields on file access, mirroring the
-   * attachment-association gate — a file-ref field conveys attachment
-   * access exactly like an `attachment` association. Only fields present
-   * in `content` are checked (a content patch is a merge patch; untouched fields
-   * carry no new reference).
-   */
-  private async requireFileRefAccess(
-    typeId: TypeId,
-    content: Record<string, unknown | null>,
-  ): Promise<void> {
-    for (const field of await this.fileRefFieldNames(typeId)) {
-      const value = content[field];
-      if (typeof value !== 'string') continue;
-      if (!(await this.canAccessFile(value))) throw new StackPermissionError();
-    }
-  }
-
-  /**
-   * Reference-creation gate for one association: `attachment` requires
-   * file access, and a `relationship` naming a record in this stack
-   * requires read access to it. `tag` is unchecked, and `_group` roster
-   * associations are gated by the stricter isGroupManager() instead.
-   *
-   * The other target arms are ungated because the gate's purpose —
-   * refusing a reference that would convey access to, or confirm the
-   * existence of, an unreadable record — has nothing to bite on: core
-   * never resolves them, so no access flows through one.
-   * See docs/spec/access-control.md § Reference-creation gating.
-   */
-  private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
-    if (association.kind === 'attachment') {
-      if (!(await this.canAccessFile(association.fileId))) throw new StackPermissionError();
-    } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
-      const { target } = association;
-      // `stackUrl` is tested for a value, not for presence: absent and
-      // empty are one target — storage, targetEqual() and the filter all
-      // read them as this stack — so a check on presence alone would
-      // leave one spelling of a local Record ungated.
-      if (target.scope !== 'record' || target.stackUrl) return;
-      if (!(await this.canReadReferent(target.recordId))) throw new StackPermissionError();
-    }
-  }
-
-  /**
-   * Create a record on behalf of the subject: create grant required,
-   * anonymous denied, entityId set to the subject, client IDs skew-checked,
-   * reference-creating options gated, and non-owner `_attachment@1`
-   * creation refused save one carve-out. A scoped create always stamps
-   * authorship — an absent entityId means an unscoped `Stack` wrote it.
-   * `createdAt`/`updatedAt` are refused to everyone but the owner acting
-   * alone — see the guard below and docs/spec/data-model.md § Record IDs.
-   * See also docs/spec/access-control.md and docs/spec/attachments.md.
-   */
-  async create<T extends Record<string, unknown> = Record<string, unknown>>(
-    typeId: TypeId,
-    content: T,
-    opts: BackdatableCreateRecordOptions = {},
-  ): Promise<StackRecord & { content: T }> {
-    const principal = this.principalEntityId;
-    if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
-    // createdAt/updatedAt let a caller backdate a record's clock fields —
-    // and, without `id` also supplied, its sort position too. Refused to
-    // everyone but the owner acting alone (undelegated, authenticated as
-    // themselves): a grantee is exactly the untrusted actor the `id`
-    // skew check below already exists to stop from forging a sort
-    // position, and a delegated app acting for the owner inherits none of
-    // the owner's extra trust — same reasoning as mayGrantAccess() below.
-    // Refused rather than silently dropped, so an app never believes it
-    // published something it didn't — asked value-wise, since an
-    // `undefined` carries no date and Stack.create() reads it as absent.
-    // This is also the enforcement a server built on ScopedStack inherits
-    // for `POST /records`: an owner-authenticated request may carry both
-    // fields, anyone else's has them ignored.
-    if ((opts.createdAt !== undefined || opts.updatedAt !== undefined) && !this.ownerActingAlone) {
-      throw new StackPermissionError(
-        'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
-      );
-    }
-    if (!(await this.checkCreateGrant(typeId))) {
-      throw new StackPermissionError(`No create grant for type "${typeId}"`);
-    }
-    // The exemption is the owner's own, so delegation doesn't carry it: an
-    // owner principal acting for someone else would otherwise let that
-    // subject name any fileId and reach the bytes through the uploader
-    // clause, which matches on the subject this create stamps.
-    if (!this.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
-      const fileId = (content as Record<string, unknown>).fileId;
-      if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
-        throw new StackPermissionError();
-      }
-    }
-    if (opts.permissions?.length && !this.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot set permissions, at create time or after',
-      );
-    }
-    if (opts.unlisted && !this.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot create an unlisted record, at create time or after',
-      );
-    }
-    this.requireOwnerForOwnerDid(typeId, (content as Record<string, unknown>).did);
-    await this.requireAppIdMatchesPrincipal(opts.appId);
-    if (opts.id !== undefined) {
-      validateRecordId(opts.id);
-      // Skipped when createdAt is also supplied: only the owner reaches
-      // here with that combination (checked above), and Stack.create()
-      // below checks the id against createdAt instead of "now" — the
-      // check here exists for a live grantee write, and a backdated
-      // owner create is deliberately not one. See
-      // docs/spec/data-model.md § Record IDs.
-      if (opts.createdAt === undefined) {
-        validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
-      }
-    }
-    if (opts.parentId !== undefined && !(await this.canReadReferent(opts.parentId))) {
-      throw new StackPermissionError();
-    }
-    for (const assoc of opts.associations ?? []) {
-      await this.requireAssociationAccess(typeId, assoc);
-    }
-    await this.requireFileRefAccess(typeId, content);
-    return this.stack.create(typeId, content, {
-      ...opts,
-      entityId: this.subjectEntityId ?? undefined,
-      principalId: this.delegated ? principal : undefined,
-    });
-  }
-
-  /**
-   * Whether this request may decide who else reaches a record — the rule
-   * a reshare enforces, asked at create time too so the reach it
-   * withholds can't be taken one step earlier while authoring. A delegated
-   * app is denied it: widening access is the one thing containment most
-   * needs to hold. Refused rather than silently ignored, so an app never
-   * believes it published something it didn't. Not `ownerActingAlone`:
-   * the record is the subject's own, so an owner principal grants it no
-   * reach the subject lacks.
-   * See docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private mayGrantAccess(): boolean {
-    return !this.delegated || this.principalEntityId === this.stack.ownerEntityId;
-  }
-
-  /**
-   * Whether one identity, on its own, may decide who else reaches `record`
-   * — the owner-or-creator rule a reshare enforces, asked of one
-   * side at a time. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private mayReshare(entityId: EntityId | null, record: StackRecord): boolean {
-    if (!entityId) return false;
-    return entityId === this.stack.ownerEntityId || entityId === record.entityId;
-  }
-
-  /**
-   * A record this request may read, or null. Never throws
-   * StackPermissionError: an unreadable record answers exactly as a missing
-   * one does, so a caller learns only what it may read.
-   * See docs/spec/access-control.md § Errors and information exposure.
-   */
-  async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
-    const record = await this.stack.get(id, opts);
-    if (!record) return null;
-    if (!(await this.canRead(record))) return null;
-    return presentDeleted(record);
-  }
-
-  /**
-   * Runs through this.query(), so canRead() still applies — this answers a
-   * question the caller asks on its own behalf. includeUnlisted is passed
-   * only when the request is the owner acting alone, per
-   * docs/spec/identity.md § DID bindings.
-   */
-  async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid(
-      (q) => this.query(q),
-      did,
-      filtersContent(this.stack.features),
-      this.ownerActingAlone,
-    );
-  }
-
-  async getOwnerEntity(): Promise<StackRecord | null> {
-    return this.getEntityByDid(this.stack.ownerEntityId);
-  }
-
-  /**
-   * Query records, filtered to those this request can read. Pages are
-   * filtered then refilled, so a page may slightly overshoot `limit` but
-   * never skips a record. Grants are prefetched once, cursor-walked to
-   * exhaustion.
-   */
-  async query(query: StackQuery = {}): Promise<QueryResult> {
-    assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.stack.features);
-    assertValidRelatedTo(query.filter?.relatedTo);
-    if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
-      throw new StackPermissionError('includeUnlisted is owner-only');
-    }
-    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
-    const records: StackRecord[] = [];
-    const maxFetched = limit * 10;
-    let totalFetched = 0;
-
-    const prefetchedGrants = this.principalEntityId
-      ? await queryAllPages((q) => this.stack.query(q), {
-          filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-        })
-      : undefined;
-    // Scoped to this query, like prefetchedGrants beside it: every
-    // candidate Record shares one roster resolution per group, and nothing
-    // is carried into the next operation.
-    const groupRoles = new Map<string, GroupRole | null>();
-
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
-    do {
-      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
-      totalFetched += page.records.length;
-      for (const record of page.records) {
-        // Projected here as well as in get(), or `includeDeleted` would be
-        // a strictly better read channel than the fetch-by-ID it is
-        // supposed to match.
-        if (await this.canRead(record, prefetchedGrants, groupRoles)) {
-          records.push(presentDeleted(record));
-        }
-      }
-    } while (records.length < limit && page.cursor && totalFetched < maxFetched);
-
-    return { records, cursor: page.cursor };
-  }
-
-  /**
-   * Apply a change set on behalf of the subject. Authority is resolved
-   * **per key** and every gate reads the record as it stands, never as the
-   * change set would leave it: a widened `permissions` never satisfies the
-   * read check on a `parentId` named in the same call, and a `_group`
-   * roster never satisfies the admin check that same call has to pass.
-   * One refused key refuses the whole call, so nothing is partially
-   * applied and no key is silently dropped.
-   * See docs/spec/access-control.md § Composing a change set.
-   */
-  async mutate(
-    id: string,
-    changes: RecordChanges,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    // Ahead of every gate: a malformed change set is a validation error
-    // for every requester, rather than one for the owner and a permission
-    // refusal for everyone else.
-    assertNonEmptyChangeSet(changes);
-    if (changes.contentPatch) {
-      const patchErrors = validatePatchValues(changes.contentPatch);
-      if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
-    }
-
-    const reshares = changes.permissions !== undefined || changes.unlisted !== undefined;
-    const writes =
-      changes.contentPatch !== undefined ||
-      changes.associations !== undefined ||
-      changes.parentId !== undefined;
-
-    // requireUpdatable() reads the record and applies the write gate; the
-    // reshare keys need the record before their own gate, and a change set
-    // carrying only those must not be held to the write gate it doesn't
-    // need. One read either way.
-    const record = writes ? await this.requireUpdatable(id) : await this.requireReshareable(id);
-    if (writes && reshares) await this.requireReshareOf(record);
-
-    if (changes.contentPatch) {
-      const patch = changes.contentPatch;
-      // Value-wise, not presence-wise: a client that reads a card, edits
-      // its `name` and sends the whole content object back is not setting
-      // the binding it round-trips, and `name` is writable by record-level
-      // permission. Same predicate restoreVersion() applies to a snapshot.
-      this.requireOwnerForAppIdentity(
-        record.typeId,
-        (field) =>
-          field in patch && patch[field] !== (record.content as Record<string, unknown>)[field],
-      );
-      // Likewise value-wise: re-sending the DID a card already holds
-      // claims nothing, and immutability refuses changing it regardless.
-      if ('did' in patch && patch.did !== (record.content as Record<string, unknown>).did) {
-        this.requireOwnerForOwnerDid(record.typeId, patch.did);
-      }
-      await this.requireFileRefAccess(record.typeId, patch);
-    }
-
-    // Every association the change set would add is a reference this
-    // requester has to be allowed to create — asked against the stored
-    // set, so an association already on the record is not re-gated.
-    for (const assoc of changes.associations ?? []) {
-      if ((record.associations ?? []).some((a) => associationEqual(a, assoc))) continue;
-      await this.requireAssociationAccess(record.typeId, assoc);
-    }
-
-    if (changes.parentId != null && !(await this.canReadReferent(changes.parentId))) {
-      throw new StackPermissionError();
-    }
-
-    return this.stack.mutate(id, changes, { ...opts, ...this.actor });
-  }
-
-  async patchContent(
-    id: string,
-    patch: Record<string, unknown | null>,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    return this.mutate(id, { contentPatch: patch }, opts);
-  }
-
-  /**
-   * The record, having established that this request may decide who else
-   * reaches it — the owner-or-creator rule, asked of both sides of a
-   * delegation, or a Group's admin rule for a `_group`. The gate the
-   * `permissions` and `unlisted` keys carry, which the write bit
-   * deliberately does not confer.
-   */
-  private async requireReshareable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    await this.requireOwnerForGrantRecord(record);
-    await this.requireReshareOf(record);
-    // Reached through its own gate rather than requireUpdatable(), so the
-    // soft-delete refusal has to be asked here too — after the authority
-    // decision above, for the reason refuseIfDeleted() gives.
-    return this.refuseIfDeleted(record, true);
-  }
-
-  /** The reshare decision alone, for a record already read and write-gated. */
-  private async requireReshareOf(record: StackRecord): Promise<void> {
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      // Group management, not authorship: a creator later demoted from the
-      // admin roster shouldn't retain a side door to reassign who can read
-      // or write the group record.
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return;
-    }
-    // Intersected like every other authority here: the principal must hold
-    // the verb, and the subject must be able to reach this record —
-    // without which an owner principal would carry its subject to records
-    // the subject cannot touch. create() withholds the same reach via
-    // mayGrantAccess().
-    if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
-    if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
-      throw await this.denialFor(record);
-    }
-  }
-
-  /**
-   * Naming the software behind a key is the trust decision the `_app`
-   * registry exists to record, so both halves of that binding — `did` and
-   * `appId` — belong to the owner alone. Same reasoning that makes `_app`
-   * ungrantable, applied to the fields a lookup reads. Registering a card
-   * is already owner-only; without this, record-level `write` shared on a
-   * card would be a second way in: a card carrying no DID yet could be
-   * pointed at a write-holder's own key while keeping the name the owner
-   * gave it, or relabelled to claim another app's `appId`. `name` and
-   * `version` stay writable — they are display, not lookup.
-   *
-   * Owner *acting alone*, in both directions: a delegated app never holds
-   * it, and an owner principal doesn't lend it to a subject holding
-   * record-level `write` on a card — which would reopen the same route
-   * from the other side.
-   *
-   * `_entity` deliberately does not get this rule: naming people is what a
-   * contacts app does, so its cards stay writable by grant. Uniqueness and
-   * immutability still bind them. See docs/spec/identity.md § DID bindings.
-   */
-  private requireOwnerForAppIdentity(
-    typeId: TypeId,
-    touches: (field: 'did' | 'appId') => boolean,
-  ): void {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
-    if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may set an _app record’s did or appId');
-    }
-  }
-
-  /**
-   * A self-reported `appId` must agree with the `_app` card naming the
-   * principal's DID, where the owner registered one. `principalId` is
-   * verified, so letting the pair disagree would leave a verified principal
-   * claiming a name the owner gave different software — the cross-check the
-   * registry exists for, refused at the write instead of left to each reader.
-   * A principal with no card keeps `appId` as the bare self-report it is for
-   * every undelegated writer.
-   * See docs/spec/identity.md § Attribution and what can be trusted.
-   */
-  private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
-    if (appId === undefined || !this.delegated) return;
-    const card = await findFirstMatch(
-      (q) => this.stack.query(q),
-      {
-        filter: {
-          baseId: SYSTEM_TYPES.APP,
-          includeDeleted: true,
-          includeUnlisted: true,
-          ...(filtersContent(this.stack.features) && {
-            content: { did: this.principalEntityId },
-          }),
-        },
-      },
-      (r) => (r.content as AppContent).did === this.principalEntityId,
-    );
-    if (card && (card.content as AppContent).appId !== appId) {
-      throw new StackPermissionError(
-        `appId "${appId}" is not the appId registered for this principal`,
-      );
-    }
-  }
-
-  /**
-   * The owner's own DID is the one `_entity` binding a grantee may not claim.
-   * `ownerProfile` adopts whichever card holds it, so a card minted by
-   * someone else becomes the stack's own profile, and uniqueness then makes
-   * that permanent. Every other DID stays open to a contacts app, which is
-   * the reach `_entity` is grantable for.
-   * See docs/spec/identity.md § DID bindings.
-   */
-  private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.ENTITY) return;
-    if (did !== this.stack.ownerEntityId) return;
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may claim the owner’s own did');
-    }
-  }
-
-  /**
-   * A `_grant` Record *is* authority, so rewriting one is the escalation
-   * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
-   * existing grant rather than minting a fresh one. `grant()` and `revoke()`
-   * live on `Stack`, never `StackClient`, so no scoped write is lost. Writes
-   * only: reading a grant Record and its history stays on the ordinary gate.
-   * See docs/spec/access-control.md § Type-level grants.
-   */
-  private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
-    if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GRANT) return;
-    if (this.ownerActingAlone) return;
-    throw await this.denialFor(record, 'Only the stack owner may write a _grant record');
-  }
-
-  async associate(
-    id: string,
-    association: Association,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id);
-    await this.requireAssociationAccess(record.typeId, association);
-    return this.stack.associate(id, association, { ...opts, ...this.actor });
-  }
-
-  async dissociate(
-    id: string,
-    association: Association,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    await this.requireUpdatable(id);
-    return this.stack.dissociate(id, association, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Hard delete is owner-only: it is irreversible and destroys version
-   * history, so neither the write bit nor delete-own/delete-any grants
-   * reach it, and delegation doesn't carry it either. Everyone else is
-   * limited to soft delete.
-   */
-  async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
-    await this.requireDeletable(id);
-    if (opts.hard && !this.ownerActingAlone) {
-      throw new StackPermissionError('Hard delete is owner-only');
-    }
-    return this.stack.delete(id, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Reverse a soft delete. Gated the same as delete() — undelete is the
-   * inverse of soft delete, so granting one direction without the other
-   * would be backwards. Idempotent, per Stack.undelete().
-   */
-  async undelete(id: string, opts: IfVersionOptions = {}): Promise<StackRecord> {
-    await this.requireDeletable(id);
-    return this.stack.undelete(id, { ...opts, ...this.actor });
-  }
-
-  /**
-   * History is the mutation/recovery surface, not a read surface — gated
-   * like patchContent(), with snapshot `permissions` stripped for everyone but
-   * the owner acting alone — a snapshot's permissions are the stack's
-   * sharing graph, which delegation is not a route to. Reading history
-   * changes nothing, so it is the one path the `_grant` write fence leaves
-   * alone: seeing how a Record you can already read got that way is not
-   * the escalation that fence exists to stop, and losing it would leave a
-   * write-holder unable to audit the Record they hold.
-   * See docs/spec/versioning.md § History access.
-   */
-  async getVersions(id: string): Promise<RecordVersion[]> {
-    await this.requireUpdatable(id, { mutating: false });
-    const versions = await this.stack.getVersions(id);
-    return this.ownerActingAlone ? versions : versions.map(stripVersionPermissions);
-  }
-
-  /** See getVersions() — same mutate-surface gate, same permissions stripping. */
-  async getVersion(id: string, version: number): Promise<RecordVersion | null> {
-    await this.requireUpdatable(id, { mutating: false });
-    const target = await this.stack.getVersion(id, version);
-    if (!target) return null;
-    return this.ownerActingAlone ? target : stripVersionPermissions(target);
-  }
-
-  /**
-   * Re-runs the reference-creation checks against the snapshot, so a
-   * restore can't re-convey access to a file or record the subject can no
-   * longer reach today — the snapshot's `parentId` among them, gated
-   * exactly as a change set's `parentId` gates a destination named directly. Only the
-   * owner acting alone is exempt: under delegation the checks resolve
-   * against the subject, which is whose reach the restore would widen.
-   * See docs/spec/versioning.md § Restore semantics.
-   */
-  async restoreVersion(
-    id: string,
-    version: number,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id);
-    if (!this.ownerActingAlone) {
-      const target = await this.stack.getVersion(id, version);
-      if (target) {
-        // A rollback that would move a card's binding is the same trust
-        // decision a content patch reserves to the owner, reached by another route.
-        this.requireOwnerForAppIdentity(
-          record.typeId,
-          (field) =>
-            (target.content as Record<string, unknown>)[field] !==
-            (record.content as Record<string, unknown>)[field],
-        );
-        // Only a restore that moves the record *into* a container creates a
-        // reference. A snapshot at the root names nothing, and a parentId
-        // the restore would not change is not re-gated: the record is
-        // already there, so a content rollback is not refused over a move
-        // it isn't making.
-        if (
-          target.parentId !== undefined &&
-          target.parentId !== record.parentId &&
-          !(await this.canReadReferent(target.parentId))
-        ) {
-          throw new StackPermissionError();
-        }
-        await this.requireFileRefAccess(target.typeId, target.content);
-        // Gated against the associations the restore will actually write.
-        // A `_group`'s don't roll back at all, so such a restore introduces
-        // no association and there is nothing here to gate — the same
-        // reason a `parentId` the restore would not change is not re-gated
-        // above.
-        if (!isGroupRecord(record)) {
-          for (const association of target.associations ?? []) {
-            await this.requireAssociationAccess(target.typeId, association);
-          }
-        }
-      }
-    }
-    return this.stack.restoreVersion(id, version, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Commit a per-record migration — **the owner acting alone, only**.
-   *
-   * Migration is owner-driven by design: `migrateAll()`, the bulk path,
-   * lives on `Stack` and is deliberately absent from `StackClient`, the
-   * same way `grant()`/`revoke()` are. This is its per-record counterpart
-   * and carries the same restriction, rather than inventing a grant model
-   * that the bulk path deliberately doesn't have.
-   *
-   * The restriction is what makes the verb safe to expose at all. Migrate
-   * replaces `content` and `typeId` wholesale, so a grant-based version
-   * would have to re-derive every gate `create()` applies at the
-   * destination *and* every gate `mutate()` applies over the existing
-   * content, and would reopen each one it missed. The sharpest is the
-   * non-owner `_attachment@1` refusal create() carries: without it, a
-   * requester holding a create grant on `_attachment@1` and write access
-   * to any record they authored could migrate that record into the family
-   * naming any `fileId`, then read the bytes through canAccessFile()'s
-   * uploader clause — the exact escalation that carve-out exists to refuse
-   * (see docs/spec/attachments.md § Creating `_attachment@1` records
-   * directly). Ordinary write access to a record is not consent to move it
-   * between families.
-   *
-   * A server implementing `POST /records/:id/migrate` therefore serves it
-   * to the stack owner and answers 403 otherwise. See
-   * docs/spec/data-model.md § Type migrations.
-   */
-  async commitMigration(
-    id: string,
-    toTypeId: TypeId,
-    content: Record<string, unknown>,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner may commit a migration');
-    }
-    return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
-  }
-
-  /**
-   * Store bytes and create an _attachment@1 metadata record (create grant
-   * on `_attachment@1` required; anonymous denied), returning that record.
-   * Authorship and principal are stamped exactly as create() does.
-   */
-  async putAttachment(
-    data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: AppId,
-  ): Promise<StackRecord & { content: AttachmentContent }> {
-    // The one ScopedStack path that reaches the adapter without going
-    // through Stack first — without this, a closed stack would still write
-    // bytes before the delegated create() refused.
-    this.stack.assertOpen();
-    const principal = this.principalEntityId;
-    if (!principal) {
-      throw new StackPermissionError('Anonymous requesters cannot upload attachments');
-    }
-    if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
-      throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
-    }
-    await this.requireAppIdMatchesPrincipal(appId);
-    assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
-    const fileId = await this.adapter.putAttachment(data);
-    return this.stack.create<AttachmentContent>(
-      `${SYSTEM_TYPES.ATTACHMENT}@1`,
-      {
-        fileId,
-        mimeType,
-        size: data.byteLength,
-        ...(filename && { filename }),
-      },
-      {
-        entityId: this.subjectEntityId ?? undefined,
-        principalId: this.delegated ? principal : undefined,
-        appId,
-      },
-    );
-  }
-
-  /**
-   * Download attachment bytes. Accessible to the owner, a reader of any
-   * referencing record, or the uploader pre-association — the same
-   * predicate as the reference-creation gate (canAccessFile).
-   */
-  async getAttachment(fileId: string): Promise<Uint8Array> {
-    if (!(await this.canAccessFile(fileId))) throw new StackPermissionError();
-    return this.stack.getAttachment(fileId);
-  }
-
-  /**
-   * Delete an attachment. Only the stack owner may delete attachments.
-   * Delegates to Stack.deleteAttachment(), which enforces the "not referenced" check.
-   */
-  async deleteAttachment(fileId: string): Promise<void> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner can delete attachments');
-    }
-    return this.stack.deleteAttachment(fileId, this.actor);
-  }
-
-  /**
-   * Sweep for unreferenced attachment bytes and delete them. Only the stack
-   * owner may run this. Delegates to Stack.collectAttachmentGarbage().
-   */
-  async collectAttachmentGarbage(
-    opts?: CollectAttachmentGarbageOptions,
-  ): Promise<CollectAttachmentGarbageResult> {
-    if (!this.ownerActingAlone) {
-      throw new StackPermissionError('Only the stack owner can collect attachment garbage');
-    }
-    return this.stack.collectAttachmentGarbage({ ...opts, ...this.actor });
-  }
-
-  /**
-   * Observe the changes this request may read. The predicate is canRead
-   * applied per event — the same one get() and query() answer with, so a
-   * feed can't disagree with them about what this session sees.
-   *
-   * A record the subscriber cannot read produces no event at all, rather
-   * than an empty or redacted one: the existence of a change is itself a
-   * disclosure, the same reasoning that keeps a count of the whole match
-   * off a query result. See docs/spec/events.md § Permission scoping.
-   */
-  async subscribe(
-    handler: (change: RecordChange) => void,
-    opts: SubscribeOptions = {},
-  ): Promise<Unsubscribe> {
-    this.stack.assertOpen();
-    if (this.stack.relaysChanges) {
-      throw new StackRelayScopeError(
-        'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
-          'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
-          'no record to re-check. Subscribe with a session-scoped stack instead.',
-      );
-    }
-    // A relaying stack was already refused above, so relaysChanges is
-    // always false here — `since` never has a cursor to mean anything by.
-    assertSinceUsable(opts.since, false);
-    if (opts.includeUnlisted && !this.ownerActingAlone) {
-      throw new StackPermissionError('includeUnlisted is owner-only');
-    }
-    return this.changes.add(
-      new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),
-    );
-  }
-
-  /**
-   * canRead for one event, through the subscription's own cache. Grants
-   * are prefetched once and refilled after an invalidation rather than
-   * re-queried per event, which would be a `_grant` scan for every change
-   * the stack makes.
-   */
-  private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.principalEntityId
-      ? await cache.grants(() =>
-          queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` },
-          }),
-        )
-      : undefined;
-    return this.canRead(record, grants, cache.roles);
   }
 }

@@ -1,13 +1,13 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { Stack } from '../src/stack.js';
 import {
-  Stack,
   StackPermissionError,
   StackNotFoundError,
   StackValidationError,
   StackConflictError,
   StackPayloadTooLargeError,
   StackQueryError,
-} from '../src/stack.js';
+} from '../src/errors.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import type { StackRecord, Association, Permission } from '../src/types.js';

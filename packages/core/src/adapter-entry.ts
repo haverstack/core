@@ -23,6 +23,6 @@ export {
   assertValidSort,
   assertValidRelatedTo,
   parseContentFilterKey,
-} from './stack.js';
+} from './query-validation.js';
 export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';
 export type { SortEntry } from './sort.js';

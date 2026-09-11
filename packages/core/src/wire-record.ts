@@ -12,7 +12,7 @@
  */
 
 import { isOwnerActingAlone } from './access.js';
-import { StackQueryError, StackValidationError } from './stack.js';
+import { StackQueryError, StackValidationError } from './errors.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
 import { RECORD_CHANGE_KEYS } from './types.js';
 import type {

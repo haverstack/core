@@ -16,9 +16,22 @@
  */
 
 // Core class and client interface
+export { Stack } from './stack.js';
+export { ScopedStack } from './scoped-stack.js';
+export type {
+  StackClient,
+  CreateRecordOptions,
+  BackdatableCreateRecordOptions,
+  StackOptions,
+  GetRecordOptions,
+  DeleteRecordOptions,
+  IfVersionOptions,
+  CollectAttachmentGarbageOptions,
+  CollectAttachmentGarbageResult,
+} from './stack.js';
+
+// The error taxonomy
 export {
-  Stack,
-  ScopedStack,
   StackError,
   StackValidationError,
   StackMigrationError,
@@ -32,19 +45,8 @@ export {
   StackTimeoutError,
   StackClosedError,
   StackRelayScopeError,
-} from './stack.js';
-export type {
-  StackErrorCode,
-  StackClient,
-  CreateRecordOptions,
-  BackdatableCreateRecordOptions,
-  StackOptions,
-  GetRecordOptions,
-  DeleteRecordOptions,
-  IfVersionOptions,
-  CollectAttachmentGarbageOptions,
-  CollectAttachmentGarbageResult,
-} from './stack.js';
+} from './errors.js';
+export type { StackErrorCode } from './errors.js';
 
 // Types
 export type {
