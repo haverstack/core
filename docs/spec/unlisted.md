@@ -42,7 +42,7 @@ await stack.setUnlisted(recordId, true); // withhold an existing Record — answ
 await stack.setUnlisted(recordId, false); // relist it
 ```
 
-`setUnlisted()` is gated exactly like [`setPermissions()`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule `setPermissions()` uses there too. No-op if the Record is already in the requested state, which answers with the Record unchanged — see [Versioning § Version history](./versioning.md#version-history).
+The `unlisted` key is gated exactly like [`permissions`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule there too. Naming it beside other keys in one [change set](./data-model.md#mutations) relaxes neither gate. No-op if the Record is already in the requested state, which answers with the Record unchanged — see [Versioning § Version history](./versioning.md#version-history).
 
 ## `includeUnlisted` is owner-only
 
