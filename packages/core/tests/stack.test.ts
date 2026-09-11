@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { Stack } from '../src/stack.js';
 import {
-  Stack,
   StackError,
   StackValidationError,
   StackMigrationError,
@@ -12,7 +12,7 @@ import {
   StackQueryError,
   StackPayloadTooLargeError,
   StackClosedError,
-} from '../src/stack.js';
+} from '../src/errors.js';
 import {
   generateId,
   crockford32Encode,

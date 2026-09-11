@@ -25,7 +25,7 @@
  * responses.
  */
 
-import { StackQueryError } from './stack.js';
+import { StackQueryError } from './errors.js';
 import type {
   ChangeFilter,
   ChangeKind,

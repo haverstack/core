@@ -8,7 +8,7 @@ import {
   parsePositiveInt,
   parseDate,
 } from '../src/wire-entry.js';
-import { StackQueryError } from '../src/stack.js';
+import { StackQueryError } from '../src/errors.js';
 
 const url = (qs: string): URL => new URL(`https://stack.example.com/records${qs}`);
 const changes = (qs: string): URL => new URL(`https://stack.example.com/changes${qs}`);

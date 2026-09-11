@@ -18,13 +18,9 @@ import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
-import {
-  StackVersionConflictError,
-  StackConflictError,
-  StackNotFoundError,
-  parseContentFilterKey,
-  targetEqual,
-} from './stack.js';
+import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './errors.js';
+import { parseContentFilterKey } from './query-validation.js';
+import { targetEqual } from './stack.js';
 
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);

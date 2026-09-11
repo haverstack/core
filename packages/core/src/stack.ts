@@ -29,10 +29,7 @@ import {
   diffSchemas,
   isWellFormedTypeId,
 } from './schema.js';
-import type { SchemaDriftViolation } from './schema.js';
 import {
-  CONTENT_SEGMENT_METACHARACTERS,
-  SEGMENT_METACHARACTER_RE,
   validateContent,
   validateContentKeys,
   validatePatchValues,
@@ -70,12 +67,10 @@ import type {
   TypeId,
   StackAdapter,
   StackQuery,
-  QuerySort,
   RecordFilter,
   QueryResult,
   Association,
   RelationshipTarget,
-  RelationshipTargetPattern,
   Permission,
   Migration,
   MigrationFn,
@@ -100,6 +95,30 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types.js';
+
+import {
+  StackClosedError,
+  StackConflictError,
+  StackError,
+  StackMigrationError,
+  StackNotFoundError,
+  StackPayloadTooLargeError,
+  StackPermissionError,
+  StackQueryError,
+  StackRelayScopeError,
+  StackSchemaDriftError,
+  StackValidationError,
+  StackVersionConflictError,
+} from './errors.js';
+import {
+  assertQueryCapabilities,
+  assertSortCapability,
+  assertValidRelatedTo,
+  assertValidSort,
+  filtersContent,
+  validateAssociation,
+  validateAssociations,
+} from './query-validation.js';
 
 // -------------------------------------------------------
 // Supporting types
@@ -435,415 +454,6 @@ export type DefineTypeOptions = {
   migratesFrom?: TypeId;
 };
 
-/**
- * The wire-protocol discriminator vocabulary, one code per Stack-domain
- * error class. Lives here rather than in @haverstack/wire-types because the
- * classes that carry these codes are defined here; wire-types re-exports it
- * as WireErrorCode. See docs/spec/wire-format.md § Wire error body.
- */
-export type StackErrorCode =
-  | 'bad_request'
-  | 'permission'
-  | 'not_found'
-  | 'conflict'
-  | 'version_conflict'
-  | 'validation'
-  | 'migration'
-  | 'schema_drift'
-  | 'payload_too_large'
-  | 'timeout';
-
-/**
- * Root of the Stack error taxonomy. A single `instanceof StackError` answers
- * "is this a Stack-domain error or a bug?" — the question a server's error
- * middleware asks before serializing a wire body, and one a nine-arm
- * instanceof ladder answers only by exhaustion. Every subclass carries its
- * discriminator as an instance `code`, so serialization is a lookup rather
- * than a chain of class tests.
- *
- * Membership implies a wire mapping: every code has an entry in
- * WIRE_ERROR_STATUS. Errors with no wire representation (IdGenerationError,
- * InvalidDidError) deliberately stay outside this hierarchy.
- *
- * Subclassing adds no hierarchy beyond this root — notably
- * StackVersionConflictError is a sibling of StackConflictError, not a
- * subtype. See docs/spec/wire-format.md § Error responses.
- */
-export abstract class StackError extends Error {
-  abstract readonly code: StackErrorCode;
-}
-
-export class StackValidationError extends StackError {
-  static readonly code = 'validation' as const;
-  override readonly code = StackValidationError.code;
-  constructor(public readonly errors: ValidationError[]) {
-    super(
-      `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
-    );
-    this.name = 'StackValidationError';
-  }
-}
-
-export class StackMigrationError extends StackError {
-  static readonly code = 'migration' as const;
-  override readonly code = StackMigrationError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackMigrationError';
-  }
-}
-
-/** Thrown by ScopedStack when a requester lacks permission for the operation. */
-export class StackPermissionError extends StackError {
-  static readonly code = 'permission' as const;
-  override readonly code = StackPermissionError.code;
-  constructor(message = 'Permission denied') {
-    super(message);
-    this.name = 'StackPermissionError';
-  }
-}
-
-/** Thrown when a record (or specific version) does not exist. */
-export class StackNotFoundError extends StackError {
-  static readonly code = 'not_found' as const;
-  override readonly code = StackNotFoundError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackNotFoundError';
-  }
-}
-
-/** Thrown when an operation cannot proceed due to a constraint violation (e.g. deleting an attachment that is still referenced). */
-export class StackConflictError extends StackError {
-  static readonly code = 'conflict' as const;
-  override readonly code = StackConflictError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackConflictError';
-  }
-}
-
-/**
- * Thrown when an `ifVersion` precondition doesn't match a record's current
- * version. Deliberately not a StackConflictError subtype — the two have
- * different recovery stories and HTTP statuses (409 vs. 412). See
- * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
- */
-export class StackVersionConflictError extends StackError {
-  static readonly code = 'version_conflict' as const;
-  override readonly code = StackVersionConflictError.code;
-  constructor(
-    message: string,
-    readonly recordId: string,
-    readonly expectedVersion: number,
-    readonly actualVersion: number,
-  ) {
-    super(message);
-    this.name = 'StackVersionConflictError';
-  }
-}
-
-/**
- * Thrown when a request is structurally malformed — not a content-validation
- * failure, but input the adapter/server can't even interpret (e.g. an
- * undecodable pagination cursor, a malformed TypeId, search text the engine
- * cannot parse, or a typeId no definition exists for). Distinct from
- * StackValidationError, which means the request was well-formed but content
- * failed schema validation.
- *
- * Naming something absent belongs here rather than under `not_found`: a
- * request whose *type* is undefined never addressed a record, so answering
- * 404 would say a record was missing when none was asked for.
- */
-export class StackQueryError extends StackError {
-  static readonly code = 'bad_request' as const;
-  override readonly code = StackQueryError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackQueryError';
-  }
-}
-
-/**
- * Fail loud rather than silently widen: a filter the adapter can't honor
- * would otherwise be dropped, returning an unfiltered superset presented
- * as the filtered result. Shared by Stack.query() and
- * APIAdapter.queryRecords(). See docs/spec/data-model.md
- * § Capability-gated filters.
- */
-export function assertQueryCapabilities(
-  filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'filter'>,
-): void {
-  const { content: reach, contentPresent, search } = capabilities.filter;
-  if (filter?.search && !search) {
-    throw new StackQueryError(
-      'Query uses filter.search, but this adapter does not declare the filter.search capability.',
-    );
-  }
-  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
-  if (!filter?.content && !present) return;
-  if (reach === 'none') {
-    throw new StackQueryError(
-      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
-        'but this adapter declares filter.content: "none".',
-    );
-  }
-  if (present && !contentPresent) {
-    throw new StackQueryError(
-      'Query uses filter.contentPresent, but this adapter does not declare the ' +
-        'filter.contentPresent capability.',
-    );
-  }
-  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
-    if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
-      throw new StackQueryError(
-        `Query uses the nested content path "${key}", but this adapter declares ` +
-          `filter.content: "${reach}".`,
-      );
-    }
-  }
-}
-
-/**
- * Whether a single-segment content filter can be pushed down to the
- * adapter. Callers that read a content field pair this with an in-memory
- * predicate over the wider result, so the query stays correct against an
- * adapter that reaches no content at all — the rung comparison lives here
- * rather than at each of them.
- */
-function filtersContent(features: Pick<StackFeatures, 'filter'>): boolean {
-  return features.filter.content !== 'none';
-}
-
-/** The longest path both SQLite engines can execute — see the spec link below. */
-const MAX_CONTENT_PATH_SEGMENTS = 32;
-
-/**
- * Split a content filter key into path segments. Write-time validation
- * keeps stored field names free of the path metacharacters, but a filter
- * arrives from a request body and has made no such promise, so the same
- * rule is enforced here. See docs/spec/data-model.md § Content field names.
- */
-export function parseContentFilterKey(key: string): string[] {
-  const segments = key.split('.');
-  // A SQLite adapter spends two json_each joins per segment against a
-  // 64-table join limit, so a path past the cap is one the engine could
-  // not execute. See docs/spec/data-model.md § Nested content paths.
-  if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
-    throw new StackQueryError(
-      `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
-    );
-  }
-  for (const segment of segments) {
-    if (segment === '') {
-      throw new StackQueryError(
-        `Invalid content filter path "${key}": a path segment cannot be empty.`,
-      );
-    }
-    if (SEGMENT_METACHARACTER_RE.test(segment)) {
-      throw new StackQueryError(
-        `Invalid content filter path "${key}": a segment cannot contain any of ` +
-          `${CONTENT_SEGMENT_METACHARACTERS.join(' ')}.`,
-      );
-    }
-  }
-  return segments;
-}
-
-/** The only sort fields any adapter maps; anything else is a caller error. */
-const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'version']);
-/** The only two sort directions; see assertValidSort. */
-const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
-
-/**
- * Reject a sort whose field or direction is outside the closed set the
- * types promise. `QuerySort` is typed `'asc' | 'desc'`, but a type is not a
- * runtime guard: a server mapping `?direction=` onto a query, or a
- * delegated app calling query(), supplies a raw string. A SQLite record
- * adapter interpolates the direction straight into `ORDER BY`, so an
- * unvalidated value there is a SQL-injection sink reachable from every
- * untrusted caller. Validating in the invariant layer — the same reason
- * emission and _config protection live here — means no adapter can forget
- * it. See docs/spec/data-model.md § Sorting and pagination.
- */
-export function assertValidSort(sort: QuerySort | undefined): void {
-  if (!sort) return;
-  if (sort.field !== undefined && sort.contentField !== undefined) {
-    throw new StackQueryError('A sort names either a native field or a content field, never both.');
-  }
-  if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
-    throw new StackQueryError(
-      `Invalid sort field "${sort.field}": expected one of createdAt, updatedAt, version.`,
-    );
-  }
-  if (sort.contentField !== undefined) {
-    // Parsed by the same rule a filter key is, so a name a filter could
-    // never address is not one a sort can either — then held to one
-    // segment, because a value inside an array or object has no single
-    // position to order its record by (docs/spec/data-model.md
-    // § Sorting by a content field).
-    if (parseContentFilterKey(sort.contentField).length > 1) {
-      throw new StackQueryError(
-        `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
-      );
-    }
-  }
-  if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
-    throw new StackQueryError(
-      `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
-    );
-  }
-}
-
-/**
- * Fail loud rather than silently reorder: an adapter that can't honor the
- * requested sort would otherwise answer in some other order, which a
- * caller paging a bounded window has no way to notice. The companion to
- * assertQueryCapabilities(), split from it because a sort is not a filter
- * — see docs/spec/data-model.md § Capability-gated filters.
- */
-export function assertSortCapability(
-  sort: QuerySort | undefined,
-  capabilities: Pick<StackFeatures, 'sort'>,
-): void {
-  if (!sort) return;
-  if (sort.contentField !== undefined) {
-    if (!capabilities.sort.contentField) {
-      throw new StackQueryError(
-        'Query uses sort.contentField, but this adapter does not declare the sort.contentField ' +
-          'capability.',
-      );
-    }
-    return;
-  }
-  const field = sort.field ?? 'createdAt';
-  if (!capabilities.sort.fields.includes(field)) {
-    throw new StackQueryError(
-      `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
-    );
-  }
-}
-
-/** The identifier spaces a relationship target may name. */
-const TARGET_SCOPES = new Set(['record', 'entity', 'external']);
-
-/**
- * Collect what makes a relationship target malformed. Absence is
- * meaningful on `stackUrl` and an external `id` — this stack, and the
- * whole namespace — so every part that names something must be non-empty:
- * an empty string stores and matches as though it were absent.
- * See docs/spec/data-model.md § Relationship targets.
- */
-function targetErrors(
-  target: RelationshipTarget | RelationshipTargetPattern,
-  path: string,
-  opts: { externalIdOptional?: boolean } = {},
-): ValidationError[] {
-  const fail = (message: string): ValidationError[] => [{ path, message }];
-  if (!target || typeof target !== 'object')
-    return fail('A relationship target must be an object.');
-  if (!TARGET_SCOPES.has(target.scope)) {
-    return fail(
-      `Unknown relationship target scope "${target.scope}": expected "record", "entity" or "external".`,
-    );
-  }
-  if (target.scope === 'record') {
-    if (!target.recordId) return fail('A record target requires a non-empty recordId.');
-    if (target.stackUrl !== undefined && !target.stackUrl) {
-      return fail("A record target's stackUrl must be non-empty; omit it to name this stack.");
-    }
-    return [];
-  }
-  if (target.scope === 'entity') {
-    return target.entityId ? [] : fail('An entity target requires a non-empty entityId.');
-  }
-  if (!target.ns) return fail('An external target requires a non-empty ns.');
-  if (target.id === undefined) {
-    return opts.externalIdOptional ? [] : fail('An external target requires an id.');
-  }
-  return target.id ? [] : fail("An external target's id must be non-empty when present.");
-}
-
-/**
- * Reject a relationship target outside the closed set the types promise.
- * A discriminated union is not a runtime guard — a server mapping a
- * request body onto an association supplies raw JSON — and an
- * unrecognized scope would otherwise be stored under the one arm that
- * names a Record in this stack. See docs/spec/data-model.md
- * § Relationship targets.
- */
-function validateAssociation(association: Association, path = 'association'): ValidationError[] {
-  if (association?.kind !== 'relationship') return [];
-  return targetErrors(association.target, `${path}.target`);
-}
-
-/** validateAssociation() over a create's `associations` array. */
-function validateAssociations(
-  associations: Association[] | undefined,
-  path = 'associations',
-): ValidationError[] {
-  return (associations ?? []).flatMap((a, i) => validateAssociation(a, `${path}[${i}]`));
-}
-
-/**
- * Reject a relationship filter that names neither a label nor a target,
- * or whose target is malformed. `RelatedToFilter` promises one half is
- * always present; without the runtime check a filter decoded from a
- * request could arrive empty and match every record carrying any
- * relationship. See docs/spec/data-model.md § Filter.
- */
-export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void {
-  if (!relatedTo) return;
-  if (relatedTo.label === undefined && relatedTo.target === undefined) {
-    throw new StackQueryError(
-      'filter.relatedTo must name a label, a target, or both — "any relationship at all" is not a filter.',
-    );
-  }
-  if (relatedTo.target === undefined) return;
-  const errors = targetErrors(relatedTo.target, 'filter.relatedTo.target', {
-    externalIdOptional: true,
-  });
-  if (errors.length > 0) throw new StackQueryError(errors[0].message);
-}
-
-/**
- * Thrown when an attachment upload exceeds the adapter's declared
- * `limits.attachmentBytes` ceiling — checked client-side before any bytes
- * are sent; a server still enforces 413 authoritatively regardless. See
- * docs/spec/wire-format.md § Attachments.
- */
-export class StackPayloadTooLargeError extends StackError {
-  static readonly code = 'payload_too_large' as const;
-  override readonly code = StackPayloadTooLargeError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackPayloadTooLargeError';
-  }
-}
-
-/**
- * Thrown when a server abandons an operation for taking too long — in
- * practice a full-text search, the one query whose cost the sanitizers
- * bound the *grammar* of but not the execution of (see
- * docs/spec/data-model.md § Capability-gated filters).
- *
- * Never produced in-process: both SQLite engines run synchronously, so
- * there is nothing to interrupt from inside the call. It exists so a
- * server that bounds query time has a class to serialize, and so the app
- * catching it can tell "too expensive, narrow it and retry" from
- * StackQueryError's "malformed, don't bother retrying" — the distinction
- * that would be lost if a timeout reused `bad_request`.
- */
-export class StackTimeoutError extends StackError {
-  static readonly code = 'timeout' as const;
-  override readonly code = StackTimeoutError.code;
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackTimeoutError';
-  }
-}
-
 /** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
 function assertAttachmentSize(byteLength: number, attachmentBytes: number | null): void {
   if (attachmentBytes !== null && byteLength > attachmentBytes) {
@@ -872,64 +482,6 @@ function assertContentSize(
     throw new StackPayloadTooLargeError(
       `${what} (${byteLength} bytes) exceeds the ${contentBytes}-byte limit.`,
     );
-  }
-}
-
-/**
- * Thrown by defineType() when redefining an existing typeId with a schema
- * change beyond additive evolution. The remedy is a new version, never an
- * in-place redefinition. See docs/spec/data-model.md § Schema drift
- * detection.
- */
-export class StackSchemaDriftError extends StackError {
-  static readonly code = 'schema_drift' as const;
-  override readonly code = StackSchemaDriftError.code;
-  constructor(
-    public readonly typeId: TypeId,
-    public readonly violations: SchemaDriftViolation[],
-  ) {
-    super(
-      `Schema drift detected for type "${typeId}": the stored schema and the new definition ` +
-        `differ beyond additive evolution (new optional fields only). Bump the version instead ` +
-        `of redefining "${typeId}" in place — e.g. defineType(\`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ...) plus registerMigration().\n` +
-        violations.map((v) => `  ${v.path || '(root)'}: ${v.message}`).join('\n'),
-    );
-    this.name = 'StackSchemaDriftError';
-  }
-}
-
-/**
- * Thrown when a Stack or ScopedStack is used after close(). Deliberately
- * outside the StackError taxonomy, alongside IdGenerationError and
- * InvalidDidError: a caller holding a closed client is a local programming
- * error with no wire representation — no server ever responds with it.
- * See docs/spec/adapters.md § Lifecycle.
- */
-export class StackClosedError extends Error {
-  constructor(message = 'This Stack has been closed.') {
-    super(message);
-    this.name = 'StackClosedError';
-  }
-}
-
-/**
- * Thrown when a scoped view is asked to observe a stack whose adapter
- * relays a remote feed. Outside the StackError taxonomy for the same
- * reason StackClosedError is: it reports a topology the caller assembled,
- * not a state a request can be in.
- *
- * A relayed frame is scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that decision — a purge leaves no record
- * to check `canRead` against. Delivering anyway would break the promise
- * that a subscriber never sees what it may not read; delivering only local
- * writes would silently drop every change made elsewhere, which is the
- * failure that looks fine in testing. So it refuses.
- * See docs/spec/events.md § Permission scoping.
- */
-export class StackRelayScopeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'StackRelayScopeError';
   }
 }
 

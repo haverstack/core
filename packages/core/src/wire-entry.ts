@@ -71,11 +71,11 @@ export { parseDate } from './wire-request.js';
 // Thrown by every parser above on malformed input, which a server maps to
 // 400 — already exported from @haverstack/core, and named here so the wire
 // entry point stands alone. See docs/spec/wire-format.md § Error responses.
-export { StackQueryError } from './stack.js';
+export { StackQueryError } from './errors.js';
 
 // Thrown alongside it by createOptionsFromWireRecord() below, which maps to
 // 422 and carries the field path that distinction exists to report.
-export { StackValidationError } from './stack.js';
+export { StackValidationError } from './errors.js';
 
 // No in-repo caller: the create half of the same contract, so a server
 // inherits which half of a record body it may trust rather than deciding
