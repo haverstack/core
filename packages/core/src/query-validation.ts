@@ -10,7 +10,10 @@
  * These live in the invariant layer for the reason validation and
  * `_config` protection do — so no adapter can forget one. `assertQueryCapabilities`
  * and its neighbours are shared verbatim with `adapter-api`, which asks the
- * same questions of a request arriving over the wire.
+ * same questions of a request arriving over the wire. A refusal names the
+ * capability it was refused for on the error itself, so a client reporting
+ * it in its own vocabulary reads that name rather than re-deriving it from
+ * the query — one rule, one answer.
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
@@ -42,20 +45,25 @@ export function assertQueryCapabilities(
   if (filter?.search && !search) {
     throw new StackQueryError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
+      'filter.search',
     );
   }
   const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
   if (!filter?.content && !present) return;
   if (reach === 'none') {
+    // Named as `filter.content` whichever key the query used: the reach
+    // is what is absent, and it is the entry to look at in discovery.
     throw new StackQueryError(
       `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
         'but this adapter declares filter.content: "none".',
+      'filter.content',
     );
   }
   if (present && !contentPresent) {
     throw new StackQueryError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
         'filter.contentPresent capability.',
+      'filter.contentPresent',
     );
   }
   for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
@@ -63,6 +71,7 @@ export function assertQueryCapabilities(
       throw new StackQueryError(
         `Query uses the nested content path "${key}", but this adapter declares ` +
           `filter.content: "${reach}".`,
+        'filter.content',
       );
     }
   }
@@ -181,6 +190,7 @@ export function assertSortCapability(
       throw new StackQueryError(
         'Query uses sort.contentField, but this adapter does not declare the sort.contentField ' +
           'capability.',
+        'sort.contentField',
       );
     }
     return;
@@ -189,6 +199,7 @@ export function assertSortCapability(
   if (!capabilities.sort.fields.includes(field)) {
     throw new StackQueryError(
       `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
+      'sort.fields',
     );
   }
 }

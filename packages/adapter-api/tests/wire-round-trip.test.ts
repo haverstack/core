@@ -1,5 +1,14 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { APIAdapter } from '../src/index.js';
+import {
+  BASE_URL,
+  CHANGE_FEED,
+  DISCOVERY,
+  FULL_CAPABILITIES,
+  jsonResponse,
+  mockFetch,
+  useFetchMock,
+} from './helpers.js';
 import {
   parseQueryParams,
   parseQueryBody,
@@ -22,43 +31,22 @@ import type { SubscribeChangesOptions } from '@haverstack/core/adapter';
  * the parser doesn't (or the reverse) appears.
  */
 
-const BASE_URL = 'https://stack.example.com';
-
-const capabilities = (reachesContent: boolean) => ({
-  filter: {
-    content: reachesContent ? 'path' : 'none',
-    contentPresent: true,
-    search: true,
-  },
-  sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
-  limits: { attachmentBytes: null, contentBytes: null },
-});
-
+/**
+ * The reach picks which request the adapter builds: `'none'` sends GET
+ * /records' search params, anything else POST /records/query's JSON body.
+ */
 const discovery = (reachesContent: boolean) => ({
-  version: '1.0',
-  entityId: 'did:key:zOwner',
-  capabilities: capabilities(reachesContent),
-  changes: { transports: ['sse'], resume: true, records: true },
+  ...DISCOVERY,
+  capabilities: {
+    ...FULL_CAPABILITIES,
+    filter: { ...FULL_CAPABILITIES.filter, content: reachesContent ? 'path' : 'none' },
+  },
+  changes: CHANGE_FEED,
 });
-
-const jsonResponse = (body: unknown): Response =>
-  new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
 
 const EMPTY_PAGE = { records: [], cursor: null };
 
-let mockFetch: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  mockFetch = vi.fn();
-  vi.stubGlobal('fetch', mockFetch);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+useFetchMock();
 
 /**
  * Dispatch a query through the adapter and hand back what core's parser

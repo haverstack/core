@@ -3,45 +3,37 @@
  * it makes of the frames that come back, and what it does when the stream
  * ends. See docs/spec/change-feed.md.
  */
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, vi, afterEach } from 'vitest';
+import { APIAdapterCapabilityError, APIAdapterError, APIAdapterAuthError } from '../src/index.js';
+import type { APIAdapter } from '../src/index.js';
 import {
-  APIAdapter,
-  APIAdapterCapabilityError,
-  APIAdapterError,
-  APIAdapterAuthError,
-} from '../src/index.js';
-import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
+  BASE_URL,
+  CHANGE_FEED,
+  DISCOVERY as DISCOVERY_WITHOUT_FEED,
+  OWNER,
+  TOKEN,
+  jsonResponse,
+  mockFetch,
+  openAdapter as openDiscovered,
+  useFetchMock,
+} from './helpers.js';
 import { StackQueryError, StackTimeoutError } from '@haverstack/core';
 import type { RecordChange } from '@haverstack/core';
 
-const BASE_URL = 'https://stack.example.com';
-const TOKEN = 'test-token-abc';
-const OWNER = 'entity-owner-123';
 const EDITOR = 'did:key:zEditor';
 
-const DISCOVERY = {
-  version: WIRE_PROTOCOL_VERSION,
-  entityId: OWNER,
-  capabilities: {
-    filter: {
-      content: 'path',
-      contentPresent: true,
-      search: true,
-    },
-    sort: {
-      fields: ['createdAt'],
-      contentField: true,
-    },
-    limits: {
-      attachmentBytes: null,
-      contentBytes: null,
-    },
-  },
-  changes: { transports: ['sse'], resume: true, records: true },
-};
+/** A server advertising the feed. Dropping `changes` is how a test spells one that doesn't. */
+const DISCOVERY = { ...DISCOVERY_WITHOUT_FEED, changes: CHANGE_FEED };
 
-const jsonResponse = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+/** Every test here opens against a server with a feed unless it says otherwise. */
+const openAdapter = (discovery: object = DISCOVERY) => openDiscovered(discovery);
+
+useFetchMock();
+// This file drives reconnect backoff on fake timers; the stub itself is
+// installed and torn down by useFetchMock above.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /**
  * A stream a test drives frame by frame, standing in for a connection the
@@ -80,23 +72,6 @@ const CHANGED = {
   version: 7,
   updatedAt: '2026-08-13T12:00:00.000Z',
   actor: { entityId: EDITOR },
-};
-
-let mockFetch: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  mockFetch = vi.fn();
-  vi.stubGlobal('fetch', mockFetch);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
-const openAdapter = async (discovery: object = DISCOVERY): Promise<APIAdapter> => {
-  mockFetch.mockResolvedValueOnce(jsonResponse(discovery));
-  return APIAdapter.open({ url: BASE_URL, token: TOKEN });
 };
 
 /** The RequestInit of the nth fetch, for asserting headers and signals. */

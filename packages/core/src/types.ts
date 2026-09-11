@@ -685,6 +685,19 @@ export type AdapterCapabilities = {
 /** What a Stack can do, as seen by app and plugin code. */
 export type StackFeatures = AdapterCapabilities;
 
+/**
+ * A capability a query can be refused for, as its path into
+ * AdapterCapabilities — the same name the spec and a discovery response
+ * use, so an error says which key to look at. `limits` never appears: a
+ * ceiling is not something a query can lack.
+ */
+export type MissingCapability =
+  | 'filter.content'
+  | 'filter.contentPresent'
+  | 'filter.search'
+  | 'sort.fields'
+  | 'sort.contentField';
+
 // -------------------------------------------------------
 // Adapter interfaces
 // -------------------------------------------------------

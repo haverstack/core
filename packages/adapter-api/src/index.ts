@@ -12,8 +12,9 @@
  * § Authentication.
  *
  * v1 requires connectivity — offline queue is deferred. Opt-in
- * optimistic concurrency (ifVersion → If-Match) is supported: see
- * patchContent()/deleteRecord()/etc.'s expectedVersion option.
+ * optimistic concurrency (ifVersion → If-Match) is supported: see the
+ * expectedVersion option on mutateRecord(), deleteRecord() and every
+ * other mutation that bumps a version.
  */
 
 import { StackError, StackQueryError } from '@haverstack/core';
@@ -38,9 +39,13 @@ import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidRelatedTo,
-  parseContentFilterKey,
+  filtersContent,
 } from '@haverstack/core/adapter';
-import type { AdapterCapabilities, SubscribeChangesOptions } from '@haverstack/core/adapter';
+import type {
+  AdapterCapabilities,
+  MissingCapability,
+  SubscribeChangesOptions,
+} from '@haverstack/core/adapter';
 import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import type {
@@ -76,6 +81,14 @@ import {
 // -------------------------------------------------------
 // Public option types
 // -------------------------------------------------------
+
+/**
+ * Re-exported because APIAdapterCapabilityError carries one: a caller
+ * narrowing on `capability` reads the name from here rather than from a
+ * second package. Core owns the definition, next to the capabilities it
+ * names.
+ */
+export type { MissingCapability } from '@haverstack/core/adapter';
 
 export type APIAdapterOpenOptions = {
   /** Base URL of the stack server e.g. "https://example.com". Trailing slash is stripped. */
@@ -217,12 +230,6 @@ export class APIAdapterReauthError extends APIAdapterAuthError {
 }
 
 /**
- * Thrown by open() when a credential was supplied and the server does not
- * advertise the handshake. Refusing here beats a 404 from the first
- * /auth/challenge: nothing this client can do will authenticate it, and
- * discovery already said so.
- */
-/**
  * Thrown by open() for a plaintext `http://` URL to a non-loopback host
  * without `allowInsecure`. See APIAdapterOpenOptions.allowInsecure.
  */
@@ -236,6 +243,23 @@ export class APIAdapterInsecureUrlError extends APIAdapterError {
     this.name = 'APIAdapterInsecureUrlError';
   }
 }
+
+/**
+ * Thrown by open() when a credential was supplied and the server does not
+ * advertise the handshake. Refusing here beats a 404 from the first
+ * /auth/challenge: nothing this client can do will authenticate it, and
+ * discovery already said so.
+ */
+export class APIAdapterAuthUnsupportedError extends APIAdapterError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'APIAdapterAuthUnsupportedError';
+  }
+}
+
+// -------------------------------------------------------
+// Transport helpers
+// -------------------------------------------------------
 
 /**
  * Whether a URL's host is the local machine, where plaintext has no
@@ -254,12 +278,49 @@ const isLoopbackUrl = (url: string): boolean => {
   return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
 };
 
-export class APIAdapterAuthUnsupportedError extends APIAdapterError {
-  constructor(message: string) {
-    super(message);
-    this.name = 'APIAdapterAuthUnsupportedError';
+/**
+ * fetch(), with a transport failure reported as this adapter's own error.
+ * `baseUrl` names the server in the message even when `url` is a longer
+ * path under it — what failed is the connection, not the endpoint.
+ */
+const fetchOrThrow = async (
+  baseUrl: string,
+  url: string,
+  init?: RequestInit,
+): Promise<Response> => {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    throw new APIAdapterConnectionError(baseUrl, err);
   }
-}
+};
+
+/**
+ * The headers every request carries: the bearer token when there is one —
+ * an unauthenticated adapter sends no empty `Bearer` — plus whatever the
+ * endpoint adds.
+ */
+const authHeaders = (
+  token: string | undefined,
+  extra?: Record<string, string>,
+): Record<string, string> => {
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+};
+
+/**
+ * A response body as JSON, or undefined when there is none to read. For
+ * error paths only: a failed response is under no obligation to carry a
+ * parseable body, and the status still has to be reported when it doesn't.
+ */
+const readJsonBody = async (res: Response): Promise<unknown> => {
+  try {
+    return await res.json();
+  } catch {
+    return undefined;
+  }
+};
 
 // -------------------------------------------------------
 // Domain object parsers (wire JSON → typed domain objects)
@@ -344,89 +405,34 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
 };
 
 // -------------------------------------------------------
-/**
- * A capability a query can be refused for, as its path into
- * AdapterCapabilities — the same name the spec and the discovery response
- * use, so an error says which key to look at. `limits` never appears: a
- * ceiling is not something a query can lack.
- */
-export type MissingCapability =
-  | 'filter.content'
-  | 'filter.contentPresent'
-  | 'filter.search'
-  | 'sort.fields'
-  | 'sort.contentField';
-
-/**
- * Which declared capability a query needs and this server lacks, or
- * undefined when everything it asks for is supported — in which case the
- * StackQueryError was about the query's own shape, not the server's
- * reach.
- */
-const missingQueryCapability = (
-  query: StackQuery,
-  capabilities: AdapterCapabilities,
-): MissingCapability | undefined => {
-  const filter = query.filter;
-  // A query naming no sort claims no order, so it needs no sort
-  // capability — mirroring assertSortCapability. Checking anyway would
-  // blame `sort.fields` for a failure the query's other reach caused,
-  // against any server whose discovery omits the field.
-  const sort = query.sort;
-  if (sort) {
-    if (sort.contentField !== undefined) {
-      if (!capabilities.sort.contentField) return 'sort.contentField';
-    } else if (!capabilities.sort.fields.includes(sort.field ?? 'createdAt')) {
-      return 'sort.fields';
-    }
-  }
-  if (filter?.search && !capabilities.filter.search) return 'filter.search';
-  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
-  if (!filter?.content && !present) return undefined;
-  const reach = capabilities.filter.content;
-  if (reach === 'none') return 'filter.content';
-  if (present && !capabilities.filter.contentPresent) return 'filter.contentPresent';
-  if (reach === 'path') return undefined;
-  // A key this server would refuse only because it is malformed is the
-  // caller's error at any capability level, so it is parsed the same way
-  // assertQueryCapabilities parses it rather than scanned for a dot.
-  return [...Object.keys(filter?.content ?? {}), ...(present ?? [])].some(isNestedPath)
-    ? 'filter.content'
-    : undefined;
-};
-
-const isNestedPath = (key: string): boolean => {
-  try {
-    return parseContentFilterKey(key).length > 1;
-  } catch {
-    return false;
-  }
-};
-
 // Query parameter builder (used when the server reaches no content)
 // -------------------------------------------------------
+
+/**
+ * A filter field naming one value or many travels as repeats of a single
+ * parameter, so the server reads one shape either way.
+ */
+const appendEach = (p: URLSearchParams, name: string, value: string | string[]): void => {
+  for (const v of Array.isArray(value) ? value : [value]) p.append(name, v);
+};
+
+/**
+ * `null` names the root, which has to be spelled rather than omitted: an
+ * absent parameter asks for records at any depth.
+ */
+const setParentId = (p: URLSearchParams, parentId: string | null): void => {
+  p.set('parentId', parentId === null ? 'null' : parentId);
+};
 
 const buildQueryParams = (query: StackQuery): URLSearchParams => {
   const p = new URLSearchParams();
   const f = query.filter ?? {};
 
-  if (f.typeId !== undefined) {
-    const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    for (const id of ids) p.append('typeId', id);
-  }
-  if (f.parentId !== undefined) p.set('parentId', f.parentId === null ? 'null' : f.parentId);
-  if (f.appId !== undefined) {
-    const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
-    for (const id of ids) p.append('appId', id);
-  }
-  if (f.entityId !== undefined) {
-    const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-    for (const id of ids) p.append('entityId', id);
-  }
-  if (f.principalId !== undefined) {
-    const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
-    for (const id of ids) p.append('principalId', id);
-  }
+  if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
+  if (f.parentId !== undefined) setParentId(p, f.parentId);
+  if (f.appId !== undefined) appendEach(p, 'appId', f.appId);
+  if (f.entityId !== undefined) appendEach(p, 'entityId', f.entityId);
+  if (f.principalId !== undefined) appendEach(p, 'principalId', f.principalId);
   if (f.createdAt?.before) p.set('createdBefore', f.createdAt.before.toISOString());
   if (f.createdAt?.after) p.set('createdAfter', f.createdAt.after.toISOString());
   if (f.updatedAt?.before) p.set('updatedBefore', f.updatedAt.before.toISOString());
@@ -502,11 +508,8 @@ const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
   const p = new URLSearchParams();
   const f: ChangeFilter = opts.filter ?? {};
 
-  if (f.typeId !== undefined) {
-    const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
-    for (const id of ids) p.append('typeId', id);
-  }
-  if (f.parentId !== undefined) p.set('parentId', f.parentId === null ? 'null' : f.parentId);
+  if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
+  if (f.parentId !== undefined) setParentId(p, f.parentId);
   if (f.entityId !== undefined) p.set('entityId', f.entityId);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
@@ -637,12 +640,7 @@ const isFatalFeedError = (err: unknown): boolean => {
 
 /** Build the typed error for a rejected handshake response. */
 const handshakeError = async (res: Response, path: string): Promise<Error> => {
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    body = undefined;
-  }
+  const body = await readJsonBody(res);
   if (isWireAuthError(body)) {
     return new APIAdapterHandshakeError(body.error.code, body.error.message);
   }
@@ -665,19 +663,14 @@ const performHandshake = async (
   credential: DidCredential,
   allowRetry = true,
 ): Promise<AuthTokenResponse> => {
-  const fetchOrThrow = async (path: string, body: unknown): Promise<Response> => {
-    try {
-      return await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch (err) {
-      throw new APIAdapterConnectionError(baseUrl, err);
-    }
-  };
+  const post = (path: string, body: unknown): Promise<Response> =>
+    fetchOrThrow(baseUrl, `${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
-  const challengeRes = await fetchOrThrow('/auth/challenge', { did: credential.did });
+  const challengeRes = await post('/auth/challenge', { did: credential.did });
   if (!challengeRes.ok) throw await handshakeError(challengeRes, '/auth/challenge');
   const challenge = (await challengeRes.json()) as AuthChallengeResponse;
 
@@ -685,7 +678,7 @@ const performHandshake = async (
     buildAuthChallengePayload({ origin: baseUrl, did: credential.did, nonce: challenge.nonce }),
   );
 
-  const tokenRes = await fetchOrThrow('/auth/token', {
+  const tokenRes = await post('/auth/token', {
     did: credential.did,
     nonce: challenge.nonce,
     signature: base64urlEncode(signature),
@@ -757,16 +750,9 @@ export class APIAdapter implements StackAdapter {
           'are two ways to obtain the same session.',
       );
     }
-    const headers: Record<string, string> = opts.token
-      ? { Authorization: `Bearer ${opts.token}` }
-      : {};
-
-    let res: Response;
-    try {
-      res = await fetch(`${baseUrl}/.well-known/stack`, { headers });
-    } catch (err) {
-      throw new APIAdapterConnectionError(baseUrl, err);
-    }
+    const res = await fetchOrThrow(baseUrl, `${baseUrl}/.well-known/stack`, {
+      headers: authHeaders(opts.token),
+    });
 
     if (res.status === 401) throw new APIAdapterAuthError();
     if (!res.ok) {
@@ -843,12 +829,7 @@ export class APIAdapter implements StackAdapter {
    * § Error responses.
    */
   private async errorForResponse(res: Response, method: string, path: string): Promise<Error> {
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = undefined;
-    }
+    const body = await readJsonBody(res);
     if (isWireError(body)) return deserializeError(body);
     const message = `HTTP ${res.status}: ${method} ${path}`;
     return errorForStatus(res.status, message) ?? new APIAdapterError(message, res.status);
@@ -878,13 +859,8 @@ export class APIAdapter implements StackAdapter {
    * Without a credential there is nothing to renew and the 401 stands.
    */
   private async send(url: string, build: (token: string | undefined) => RequestInit) {
-    const attempt = async (token: string | undefined): Promise<Response> => {
-      try {
-        return await fetch(url, build(token));
-      } catch (err) {
-        throw new APIAdapterConnectionError(this.baseUrl, err);
-      }
-    };
+    const attempt = (token: string | undefined): Promise<Response> =>
+      fetchOrThrow(this.baseUrl, url, build(token));
 
     const stale = this.token;
     let res = await attempt(stale);
@@ -919,8 +895,7 @@ export class APIAdapter implements StackAdapter {
     { nullOn404 = false, ifMatch }: { nullOn404?: boolean; ifMatch?: number } = {},
   ): Promise<T> {
     const res = await this.send(`${this.baseUrl}${path}`, (token) => {
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const headers = authHeaders(token);
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       // Opt-in optimistic-concurrency precondition (see Stack's ifVersion).
       // A mismatch gets a 412 with a version_conflict wire body, which
@@ -936,11 +911,9 @@ export class APIAdapter implements StackAdapter {
   }
 
   private async requestBinary(path: string): Promise<Uint8Array> {
-    const res = await this.send(`${this.baseUrl}${path}`, (token) => {
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      return { headers };
-    });
+    const res = await this.send(`${this.baseUrl}${path}`, (token) => ({
+      headers: authHeaders(token),
+    }));
 
     if (!res.ok) throw await this.errorForResponse(res, 'GET', path);
     return new Uint8Array(await res.arrayBuffer());
@@ -956,8 +929,7 @@ export class APIAdapter implements StackAdapter {
   ): Promise<WireRecord> {
     const url = `${this.baseUrl}${path}${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`;
     const res = await this.send(url, (token) => {
-      const headers: Record<string, string> = { 'Content-Type': mimeType };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const headers = authHeaders(token, { 'Content-Type': mimeType });
       if (filename)
         headers['Content-Disposition'] =
           `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
@@ -973,8 +945,8 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async createRecord(record: StackRecord): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', '/records', record);
-    return parseRecord(raw);
+    const raw = await this.request<WireRecord | undefined>('POST', '/records', record);
+    return requireRecordBody(raw, 'POST /records');
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
@@ -1005,13 +977,13 @@ export class APIAdapter implements StackAdapter {
     content: Record<string, unknown>,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>(
+    const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/migrate`,
       { toTypeId, content },
       { ifMatch: opts.expectedVersion },
     );
-    return parseRecord(raw);
+    return requireRecordBody(raw, `POST /records/${id}/migrate`);
   }
 
   /**
@@ -1035,10 +1007,13 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>('POST', `/records/${id}/undelete`, undefined, {
-      ifMatch: opts.expectedVersion,
-    });
-    return parseRecord(raw);
+    const raw = await this.request<WireRecord | undefined>(
+      'POST',
+      `/records/${id}/undelete`,
+      undefined,
+      { ifMatch: opts.expectedVersion },
+    );
+    return requireRecordBody(raw, `POST /records/${id}/undelete`);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -1049,14 +1024,14 @@ export class APIAdapter implements StackAdapter {
       assertQueryCapabilities(query.filter, this.capabilities);
       assertSortCapability(query.sort, this.capabilities);
     } catch (err) {
-      if (!(err instanceof StackQueryError)) throw err;
-      // assertQueryCapabilities also rejects a malformed content path,
-      // which is a caller error rather than a missing capability. Name the
-      // capability only when one is actually absent, and let anything else
-      // travel as the StackQueryError it is.
-      const capability = missingQueryCapability(query, this.capabilities);
-      if (!capability) throw err;
-      throw new APIAdapterCapabilityError(capability, err.message);
+      // The refusal names the capability it was refused for. A
+      // StackQueryError carrying none is about the query's own shape — a
+      // malformed content path, which is the caller's error at any
+      // capability level — and travels as the StackQueryError it is.
+      if (err instanceof StackQueryError && err.capability) {
+        throw new APIAdapterCapabilityError(err.capability, err.message);
+      }
+      throw err;
     }
     // A malformed relationship filter is a caller error, not a missing
     // capability, so this one travels as the StackQueryError it is —
@@ -1065,7 +1040,7 @@ export class APIAdapter implements StackAdapter {
     assertValidRelatedTo(query.filter?.relatedTo);
 
     let raw: WireQueryResponse;
-    if (this.capabilities.filter.content !== 'none') {
+    if (filtersContent(this.capabilities)) {
       // POST /records/query supports the full query shape including content field filters
       raw = await this.request<WireQueryResponse>('POST', '/records/query', query);
     } else {
@@ -1116,10 +1091,6 @@ export class APIAdapter implements StackAdapter {
   }
 
   // -------------------------------------------------------
-  // Permissions
-  // -------------------------------------------------------
-
-  // -------------------------------------------------------
   // Versions
   // -------------------------------------------------------
 
@@ -1157,13 +1128,13 @@ export class APIAdapter implements StackAdapter {
     version: number,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>(
+    const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/restore/${version}`,
       undefined,
       { ifMatch: opts.expectedVersion },
     );
-    return parseRecord(raw);
+    return requireRecordBody(raw, `POST /records/${id}/restore/${version}`);
   }
 
   // -------------------------------------------------------
@@ -1380,8 +1351,7 @@ export class APIAdapter implements StackAdapter {
     dispatch: (frame: SseFrame, headSeq: () => string | undefined) => void,
   ): Promise<void> {
     const res = await this.send(url, (token) => {
-      const headers: Record<string, string> = { Accept: 'text/event-stream' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const headers = authHeaders(token, { Accept: 'text/event-stream' });
       const since = cursor();
       if (since !== undefined) headers['Last-Event-ID'] = since;
       return { headers, signal: controller.signal };

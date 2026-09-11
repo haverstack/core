@@ -12,6 +12,7 @@ export type {
   StackBlobAdapter,
   AdapterCapabilities,
   ContentFilterReach,
+  MissingCapability,
   BlobFileInfo,
   ExpectedVersionOptions,
   SubscribeChangesOptions,
@@ -22,6 +23,7 @@ export {
   assertSortCapability,
   assertValidSort,
   assertValidRelatedTo,
+  filtersContent,
   parseContentFilterKey,
 } from './query-validation.js';
 export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';

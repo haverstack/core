@@ -16,7 +16,7 @@
 import { baseIdOf, parseTypeId } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import type { ValidationError } from './validate.js';
-import type { TypeId } from './types.js';
+import type { MissingCapability, TypeId } from './types.js';
 
 /**
  * The wire-protocol discriminator vocabulary, one code per Stack-domain
@@ -141,7 +141,18 @@ export class StackVersionConflictError extends StackError {
 export class StackQueryError extends StackError {
   static readonly code = 'bad_request' as const;
   override readonly code = StackQueryError.code;
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /**
+     * Which declared capability the query asked for and the adapter lacks,
+     * or undefined when the query's own shape is what was wrong — a
+     * malformed content path is a caller error at every capability level.
+     * A client mapping this onto an error of its own reads the name from
+     * here rather than re-deriving it from the query, which is how one
+     * rule becomes two answers that can disagree.
+     */
+    public readonly capability?: MissingCapability,
+  ) {
     super(message);
     this.name = 'StackQueryError';
   }
