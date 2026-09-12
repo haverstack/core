@@ -158,6 +158,23 @@ function assertNoUntravelableFields(hasBaseId: boolean, hasPresentAt: boolean): 
   if (hasPresentAt) throw new StackQueryError(PRESENT_AT_REFUSAL);
 }
 
+/**
+ * The client half of the same refusal, applied before a request is built
+ * rather than after one arrives. `Stack.query()` resolves `filter.baseId`
+ * against registered Types and applies `presentAt` itself, so neither
+ * reaches an adapter through it — this catches the direct adapter call,
+ * where the encoding would otherwise decide the answer: a query body
+ * carries both fields to a server that refuses them, while search params
+ * have nowhere to put them and would drop them into a wider result set.
+ *
+ * Absent and explicitly `undefined` are the same thing here, as they are
+ * to `Stack.query()`. The parsers above test key presence instead, because
+ * over the wire writing the key at all is a client that meant to send it.
+ */
+export function assertQueryTravels(query: StackQuery): void {
+  assertNoUntravelableFields(query.filter?.baseId !== undefined, query.presentAt !== undefined);
+}
+
 // -------------------------------------------------------
 // Relationship filter
 // -------------------------------------------------------

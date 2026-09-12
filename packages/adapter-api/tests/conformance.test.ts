@@ -6,8 +6,16 @@
  * image: that its HTTP handlers accept the documented request and produce
  * the documented response. See that package for the fixture data itself.
  */
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
+import {
+  BASE_URL,
+  DISCOVERY,
+  jsonResponse,
+  mockFetch,
+  openAdapter as openDiscovered,
+  useFetchMock,
+} from './helpers.js';
 import {
   createRecordFixtures,
   queryRecordsFixtures,
@@ -58,40 +66,13 @@ import {
 } from '@haverstack/core/wire';
 import { generateDidKeypair } from '@haverstack/core/did';
 
-const BASE_URL = 'https://stack.example.com';
+useFetchMock();
 
-const DISCOVERY = {
-  version: '1.0',
-  entityId: 'entity-owner-123',
-  timezone: 'UTC',
-  capabilities: {
-    filter: { content: 'path', contentPresent: true, search: true },
-    sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
-    limits: { attachmentBytes: 52428800 },
-  },
-};
-
-const jsonResponse = (body: unknown, status = 200): Response =>
-  new Response(body === undefined ? null : JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-let mockFetch: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  mockFetch = vi.fn();
-  vi.stubGlobal('fetch', mockFetch);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-const openAdapter = async (): Promise<APIAdapter> => {
-  mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
-  return APIAdapter.open({ url: BASE_URL });
-};
+/**
+ * Fixtures are asserted against an unauthenticated client: no fixture's
+ * documented request or response depends on a token being held.
+ */
+const openAdapter = (): Promise<APIAdapter> => openDiscovered(DISCOVERY, { token: undefined });
 
 /** Record id embedded in a fixture path like "/records/rec-1" or ".../rec-1/permissions". */
 const idFromPath = (path: string): string => path.split('/')[2].split('?')[0];

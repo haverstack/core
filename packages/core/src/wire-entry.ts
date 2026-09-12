@@ -62,6 +62,11 @@ export {
   parseUploadFilename,
   parsePositiveInt,
 } from './wire-request.js';
+
+// The build-side half of the fields that never travel: adapter-api refuses
+// them before encoding, so which encoding a server's content reach selects
+// never decides whether a family query widens or is refused.
+export { assertQueryTravels } from './wire-request.js';
 export type { ParsedChangeParams } from './wire-request.js';
 
 // Re-exported by @haverstack/wire-types for the response side: one wire

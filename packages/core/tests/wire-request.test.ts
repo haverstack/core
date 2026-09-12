@@ -7,6 +7,7 @@ import {
   parseUploadFilename,
   parsePositiveInt,
   parseDate,
+  assertQueryTravels,
 } from '../src/wire-entry.js';
 import { StackQueryError } from '../src/errors.js';
 
@@ -221,6 +222,35 @@ describe('fields that never travel', () => {
   test('the refusal names what to send instead', () => {
     expect(() => parseQueryBody({ filter: { baseId: 'x' } })).toThrow(/typeId/);
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(/client-side/);
+  });
+
+  // The build-side half, which a client applies before choosing an
+  // encoding — so a query body that would be refused and search params
+  // that would silently drop the field give one answer, not two.
+  describe('assertQueryTravels', () => {
+    test('refuses the same two fields, with the same messages', () => {
+      expect(() => assertQueryTravels({ filter: { baseId: 'com.example/note' } })).toThrow(
+        /typeId/,
+      );
+      expect(() => assertQueryTravels({ presentAt: 'latest' })).toThrow(/client-side/);
+      expect(() => assertQueryTravels({ presentAt: 'stored' })).toThrow(StackQueryError);
+    });
+
+    // Where it parts company with the parsers above, and deliberately: a
+    // request body is written key by key, but a StackQuery is spread and
+    // destructured, and Stack.query() already reads an undefined baseId as
+    // no baseId. Refusing it here would refuse queries core builds itself.
+    test('reads an explicitly undefined field as absent', () => {
+      expect(() => assertQueryTravels({ filter: { baseId: undefined } })).not.toThrow();
+      expect(() => assertQueryTravels({ presentAt: undefined })).not.toThrow();
+    });
+
+    test('passes a query carrying neither', () => {
+      expect(() => assertQueryTravels({})).not.toThrow();
+      expect(() =>
+        assertQueryTravels({ filter: { typeId: 'com.example/note@1' }, limit: 10 }),
+      ).not.toThrow();
+    });
   });
 });
 

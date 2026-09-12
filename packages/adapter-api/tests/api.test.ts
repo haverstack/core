@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import {
   APIAdapter,
   APIAdapterAuthError,
@@ -12,6 +12,16 @@ import {
   APIAdapterReauthError,
   APIAdapterInsecureUrlError,
 } from '../src/index.js';
+import {
+  BASE_URL,
+  DISCOVERY,
+  TOKEN,
+  jsonResponse,
+  mockFetch,
+  noContent,
+  openAdapter,
+  useFetchMock,
+} from './helpers.js';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
@@ -31,21 +41,7 @@ import {
 // Test fixtures
 // -------------------------------------------------------
 
-const BASE_URL = 'https://stack.example.com';
-const TOKEN = 'test-token-abc';
-
-const DISCOVERY = {
-  version: '1.0',
-  entityId: 'entity-owner-123',
-  timezone: 'America/New_York',
-  capabilities: {
-    filter: { content: 'path', contentPresent: true, search: true },
-    sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
-    // contentBytes omitted: a server declaring one limit and not the other
-    // is the case the null default exists for.
-    limits: { attachmentBytes: 52428800 },
-  } satisfies DiscoveryCapabilities,
-};
+useFetchMock();
 
 /** DISCOVERY with individual capabilities overridden, groups left intact. */
 const discoveryWith = (caps: DiscoveryCapabilities) => ({
@@ -82,35 +78,6 @@ const VERSION_RAW = {
   content: { text: 'original' },
   updatedAt: '2024-01-01T00:00:00.000Z',
   entityId: 'entity-owner-123',
-};
-
-// -------------------------------------------------------
-// Mock helpers
-// -------------------------------------------------------
-
-const jsonResponse = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-const noContent = (): Response => new Response(null, { status: 204 });
-
-let mockFetch: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  mockFetch = vi.fn();
-  vi.stubGlobal('fetch', mockFetch);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-/** Open an adapter — consumes the first fetch call for discovery. */
-const openAdapter = async (discoveryOverride?: object): Promise<APIAdapter> => {
-  mockFetch.mockResolvedValueOnce(jsonResponse(discoveryOverride ?? DISCOVERY));
-  return APIAdapter.open({ url: BASE_URL, token: TOKEN });
 };
 
 // -------------------------------------------------------
@@ -1078,6 +1045,42 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
+  // The two fields with no wire encoding. Stack.query() resolves baseId
+  // and applies presentAt before an adapter sees either, so these cover the
+  // direct adapter call — refused at both reaches, because otherwise the
+  // encoding decides the answer: the query body carries them to a server
+  // that answers 400, while the search params would drop them and widen the
+  // result set. See docs/spec/wire-format.md § Records.
+  test.each([
+    ["at reach 'path', which queries by body", 'path'],
+    ["at reach 'none', which queries by search params", 'none'],
+  ] as const)('refuses filter.baseId without sending %s', async (_label, reach) => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
+    await expect(adapter.queryRecords({ filter: { baseId: 'com.example/note' } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test.each([
+    ["at reach 'path', which queries by body", 'path'],
+    ["at reach 'none', which queries by search params", 'none'],
+  ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
+    await expect(adapter.queryRecords({ presentAt: 'latest' })).rejects.toThrow(StackQueryError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  // Absent and explicitly undefined are the same query, as they are to
+  // Stack.query() — a spread that leaves the key behind must still send.
+  test('an explicitly undefined baseId is not a baseId', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(
+      adapter.queryRecords({ filter: { baseId: undefined }, presentAt: undefined }),
+    ).resolves.toBeDefined();
+  });
+
   test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
@@ -1411,6 +1414,51 @@ describe('restoreVersion', () => {
     const result = await adapter.restoreVersion('rec-abc123', 1);
     expect(result.content).toEqual({ text: 'original' });
     expect(result.createdAt).toBeInstanceOf(Date);
+  });
+});
+
+// -------------------------------------------------------
+// The Record body a mutation owes its caller
+// -------------------------------------------------------
+
+/**
+ * Every mutation that bumps a version answers with the record it produced,
+ * so an empty body is a foreign server that has not implemented the
+ * current wire format. Each one must report that, rather than dereference
+ * the body it did not get.
+ */
+describe('a mutation answering with no Record body', () => {
+  const record: StackRecord = {
+    id: 'rec-abc123',
+    typeId: 'com.example/note@1',
+    createdAt: new Date('2024-06-15T12:00:00.000Z'),
+    updatedAt: new Date('2024-06-15T12:00:00.000Z'),
+    content: { text: 'Hello world' },
+    version: 1,
+  };
+  const tag: Association = { kind: 'tag', label: 'starred' };
+
+  test.each([
+    ['createRecord', (a: APIAdapter) => a.createRecord(record)],
+    ['mutateRecord', (a: APIAdapter) => a.mutateRecord('rec-abc123', { contentPatch: {} })],
+    ['commitMigration', (a: APIAdapter) => a.commitMigration('rec-abc123', 'x/note@2', {})],
+    ['deleteRecord', (a: APIAdapter) => a.deleteRecord('rec-abc123')],
+    ['undeleteRecord', (a: APIAdapter) => a.undeleteRecord('rec-abc123')],
+    ['associate', (a: APIAdapter) => a.associate('rec-abc123', tag)],
+    ['dissociate', (a: APIAdapter) => a.dissociate('rec-abc123', tag)],
+    ['restoreVersion', (a: APIAdapter) => a.restoreVersion('rec-abc123', 1)],
+  ] as const)('%s reports it as a wire-format failure', async (_name, call) => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(call(adapter)).rejects.toThrow(/no Record body/);
+  });
+
+  // The one mutation that legitimately has none: a hard delete bumps no
+  // version, so 204 is the answer rather than a missing one.
+  test('a hard delete answers 204 and returns null', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(noContent());
+    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).resolves.toBeNull();
   });
 });
 
