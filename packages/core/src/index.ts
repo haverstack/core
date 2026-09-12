@@ -91,6 +91,7 @@ export type {
   QuerySort,
   NativeSortField,
   ContentFilterReach,
+  MissingCapability,
   QueryResult,
   DateRange,
   Migration,

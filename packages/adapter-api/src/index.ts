@@ -46,7 +46,11 @@ import type {
   MissingCapability,
   SubscribeChangesOptions,
 } from '@haverstack/core/adapter';
-import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
+import {
+  assertQueryTravels,
+  buildAuthChallengePayload,
+  base64urlEncode,
+} from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import type {
   WireRecord,
@@ -1038,6 +1042,12 @@ export class APIAdapter implements StackAdapter {
     // refused here rather than encoded into query params a server would
     // have to reject.
     assertValidRelatedTo(query.filter?.relatedTo);
+    // Likewise for the two fields with no wire encoding, and before the
+    // branch below rather than inside it: the query body carries them to a
+    // server that answers 400, while the search params have nowhere to put
+    // them, so encoding them here would let the server's content reach
+    // decide whether a family query is refused or silently widened.
+    assertQueryTravels(query);
 
     let raw: WireQueryResponse;
     if (filtersContent(this.capabilities)) {

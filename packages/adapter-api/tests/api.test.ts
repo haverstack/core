@@ -1045,6 +1045,42 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
+  // The two fields with no wire encoding. Stack.query() resolves baseId
+  // and applies presentAt before an adapter sees either, so these cover the
+  // direct adapter call — refused at both reaches, because otherwise the
+  // encoding decides the answer: the query body carries them to a server
+  // that answers 400, while the search params would drop them and widen the
+  // result set. See docs/spec/wire-format.md § Records.
+  test.each([
+    ["at reach 'path', which queries by body", 'path'],
+    ["at reach 'none', which queries by search params", 'none'],
+  ] as const)('refuses filter.baseId without sending %s', async (_label, reach) => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
+    await expect(adapter.queryRecords({ filter: { baseId: 'com.example/note' } })).rejects.toThrow(
+      StackQueryError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test.each([
+    ["at reach 'path', which queries by body", 'path'],
+    ["at reach 'none', which queries by search params", 'none'],
+  ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
+    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
+    await expect(adapter.queryRecords({ presentAt: 'latest' })).rejects.toThrow(StackQueryError);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  // Absent and explicitly undefined are the same query, as they are to
+  // Stack.query() — a spread that leaves the key behind must still send.
+  test('an explicitly undefined baseId is not a baseId', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    await expect(
+      adapter.queryRecords({ filter: { baseId: undefined }, presentAt: undefined }),
+    ).resolves.toBeDefined();
+  });
+
   test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
