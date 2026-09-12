@@ -326,6 +326,35 @@ const readJsonBody = async (res: Response): Promise<unknown> => {
   }
 };
 
+/**
+ * The head of an unparseable body: enough to recognize what answered,
+ * without pasting a whole error page into an exception message.
+ */
+const bodyExcerpt = (text: string, limit = 120): string => {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > limit ? `${collapsed.slice(0, limit)}…` : collapsed;
+};
+
+/**
+ * The body of a successful response, or `undefined` when it carried none
+ * — which only the call site can judge. A non-empty body that will not
+ * parse is the server's fault wherever it lands, so it is reported here.
+ * See docs/spec/wire-format.md § Success responses.
+ */
+const parseJsonBody = async (res: Response, method: string, path: string): Promise<unknown> => {
+  const text = await res.text();
+  if (text.trim() === '') return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new APIAdapterError(
+      `${method} ${path} answered ${res.status} with a body that is not JSON. ` +
+        `The response began: ${bodyExcerpt(text)}`,
+      res.status,
+    );
+  }
+};
+
 // -------------------------------------------------------
 // Domain object parsers (wire JSON → typed domain objects)
 // -------------------------------------------------------
@@ -373,6 +402,32 @@ const requireRecordBody = (raw: WireRecord | undefined, endpoint: string): Stack
     );
   }
   return parseRecord(raw);
+};
+
+const emptyBodyError = (endpoint: string): APIAdapterError =>
+  new APIAdapterError(
+    `${endpoint} answered with no body. A 200 carries the body its endpoint returns; ` +
+      'an absent record, version or type is a 404.',
+  );
+
+/**
+ * The body a read with no "absent" case is owed, reported rather than
+ * dereferenced when it is missing.
+ * See docs/spec/wire-format.md § Success responses.
+ */
+const requireBody = <T>(raw: T | null | undefined, endpoint: string): T => {
+  if (raw == null) throw emptyBodyError(endpoint);
+  return raw;
+};
+
+/**
+ * The same, for a read that can answer "not there": only the `null` this
+ * adapter produced from a `404` travels, never an empty body.
+ * See docs/spec/wire-format.md § Success responses.
+ */
+const requireNullableBody = <T>(raw: T | null | undefined, endpoint: string): T | null => {
+  if (raw === undefined) throw emptyBodyError(endpoint);
+  return raw;
 };
 
 const parseType = (raw: WireType): StackType => {
@@ -911,7 +966,8 @@ export class APIAdapter implements StackAdapter {
     if (res.status === 404 && nullOn404) return null as T;
     if (!res.ok) throw await this.errorForResponse(res, method, path);
     if (res.status === 204) return undefined as T;
-    return res.json() as Promise<T>;
+
+    return (await parseJsonBody(res, method, path)) as T;
   }
 
   private async requestBinary(path: string): Promise<Uint8Array> {
@@ -930,7 +986,7 @@ export class APIAdapter implements StackAdapter {
     mimeType: string,
     filename?: string,
     appId?: string,
-  ): Promise<WireRecord> {
+  ): Promise<WireRecord | undefined> {
     const url = `${this.baseUrl}${path}${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`;
     const res = await this.send(url, (token) => {
       const headers = authHeaders(token, { 'Content-Type': mimeType });
@@ -941,7 +997,7 @@ export class APIAdapter implements StackAdapter {
     });
 
     if (!res.ok) throw await this.errorForResponse(res, 'POST', path);
-    return res.json() as Promise<WireRecord>;
+    return (await parseJsonBody(res, 'POST', path)) as WireRecord | undefined;
   }
 
   // -------------------------------------------------------
@@ -954,10 +1010,14 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
-    const raw = await this.request<WireRecord | null>('GET', `/records/${id}`, undefined, {
-      nullOn404: true,
-    });
-    return raw ? parseRecord(raw) : null;
+    const raw = await this.request<WireRecord | null | undefined>(
+      'GET',
+      `/records/${id}`,
+      undefined,
+      { nullOn404: true },
+    );
+    const body = requireNullableBody(raw, `GET /records/${id}`);
+    return body ? parseRecord(body) : null;
   }
 
   async mutateRecord(
@@ -1049,20 +1109,27 @@ export class APIAdapter implements StackAdapter {
     // decide whether a family query is refused or silently widened.
     assertQueryTravels(query);
 
-    let raw: WireQueryResponse;
+    let raw: WireQueryResponse | undefined;
+    let endpoint: string;
     if (filtersContent(this.capabilities)) {
       // POST /records/query supports the full query shape including content field filters
-      raw = await this.request<WireQueryResponse>('POST', '/records/query', query);
+      endpoint = 'POST /records/query';
+      raw = await this.request<WireQueryResponse | undefined>('POST', '/records/query', query);
     } else {
       // A server reaching no content only exposes GET /records
       const params = buildQueryParams(query);
       const qs = params.toString();
-      raw = await this.request<WireQueryResponse>('GET', qs ? `/records?${qs}` : '/records');
+      endpoint = 'GET /records';
+      raw = await this.request<WireQueryResponse | undefined>(
+        'GET',
+        qs ? `/records?${qs}` : '/records',
+      );
     }
 
+    const body = requireBody(raw, endpoint);
     return {
-      records: raw.records.map(parseRecord),
-      cursor: raw.cursor,
+      records: body.records.map(parseRecord),
+      cursor: body.cursor,
     };
   }
 
@@ -1105,18 +1172,19 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
-    const raw = await this.request<WireVersion[]>('GET', `/records/${id}/versions`);
-    return raw.map(parseVersion);
+    const raw = await this.request<WireVersion[] | undefined>('GET', `/records/${id}/versions`);
+    return requireBody(raw, `GET /records/${id}/versions`).map(parseVersion);
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
-    const raw = await this.request<WireVersion | null>(
+    const raw = await this.request<WireVersion | null | undefined>(
       'GET',
       `/records/${id}/versions/${version}`,
       undefined,
       { nullOn404: true },
     );
-    return raw ? parseVersion(raw) : null;
+    const body = requireNullableBody(raw, `GET /records/${id}/versions/${version}`);
+    return body ? parseVersion(body) : null;
   }
 
   async saveVersion(_id: RecordId, _version: RecordVersion): Promise<void> {
@@ -1156,18 +1224,19 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
-    const raw = await this.request<WireType | null>(
+    const raw = await this.request<WireType | null | undefined>(
       'GET',
       `/types/${encodeURIComponent(id)}`,
       undefined,
       { nullOn404: true },
     );
-    return raw ? parseType(raw) : null;
+    const body = requireNullableBody(raw, `GET /types/${id}`);
+    return body ? parseType(body) : null;
   }
 
   async listTypes(): Promise<StackType[]> {
-    const raw = await this.request<WireType[]>('GET', '/types');
-    return raw.map(parseType);
+    const raw = await this.request<WireType[] | undefined>('GET', '/types');
+    return requireBody(raw, 'GET /types').map(parseType);
   }
 
   // -------------------------------------------------------
@@ -1201,7 +1270,8 @@ export class APIAdapter implements StackAdapter {
     filename?: string,
     appId?: string,
   ): Promise<StackRecord> {
-    return parseRecord(await this.uploadBinary('/attachments', data, mimeType, filename, appId));
+    const raw = await this.uploadBinary('/attachments', data, mimeType, filename, appId);
+    return requireRecordBody(raw, 'POST /attachments');
   }
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
