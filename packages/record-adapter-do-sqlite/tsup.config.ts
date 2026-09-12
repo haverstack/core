@@ -12,6 +12,11 @@ import { defineConfig } from 'tsup';
  * bundle (via wrangler/esbuild in the consuming app), not run standalone
  * under node.
  *
+ * dts.resolve is the type-level half of noExternal: without it the emitted
+ * .d.ts keeps `import ... from '@haverstack/sqlite-shared/record'` for every
+ * shared type that surfaces in this package's public API, naming a package
+ * the consumer will never have installed.
+ *
  * dts.compilerOptions.types is scoped to *this* isolated dts compilation
  * only, not the package's shared tsconfig.json (which drives `tsc
  * --noEmit` over src/** and tests/** together). src/executor.ts uses the
@@ -28,7 +33,13 @@ export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
   target: 'es2022',
-  dts: { compilerOptions: { types: ['@cloudflare/workers-types'] } },
+  dts: {
+    resolve: [/^@haverstack\/sqlite-shared/],
+    compilerOptions: {
+      types: ['@cloudflare/workers-types'],
+      paths: { '@haverstack/sqlite-shared/record': ['../sqlite-shared/src/record.ts'] },
+    },
+  },
   sourcemap: true,
   clean: true,
   splitting: false,

@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
+import { discoveryFixtures } from '@haverstack/conformance-fixtures';
 import { APIAdapter } from '../src/index.js';
 import type { APIAdapterOpenOptions } from '../src/index.js';
 
@@ -27,8 +28,16 @@ export const FULL_CAPABILITIES = {
   limits: { attachmentBytes: 52428800 },
 } satisfies DiscoveryCapabilities;
 
-/** The change feed, which discovery advertises beside `capabilities` rather than in it. */
-export const CHANGE_FEED = { transports: ['sse'], resume: true, records: true };
+/**
+ * The change feed, which discovery advertises beside `capabilities` rather
+ * than in it. Read from the conformance fixture rather than spelled here,
+ * so the feed these tests open against is the one the spec publishes — the
+ * limited feed `change-feed` uses comes from its sibling fixture the same
+ * way.
+ */
+export const CHANGE_FEED = discoveryFixtures.find(
+  (f) => f.name === 'discovery-advertises-a-change-feed',
+)!.responseBody!.changes;
 
 /**
  * Discovery from a fully capable server, and no change feed — a file that

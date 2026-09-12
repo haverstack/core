@@ -3,7 +3,9 @@
  * them — a purge carries nothing, ready leads, a cursor is framable — and
  * a fixture that quietly violated the rule it exists to pin would take
  * every consumer with it. These assert the data against the rules it is
- * written in terms of. See docs/spec/change-feed.md.
+ * written in terms of. The invariants every fixture group shares — unique
+ * names, a description on each — live in fixtures.test.ts.
+ * See docs/spec/change-feed.md.
  */
 import { describe, it, expect } from 'vitest';
 import { isValidSeq } from '@haverstack/wire-types';
@@ -43,20 +45,6 @@ const KIND_OF_OP: Record<string, string> = {
   unlist: 'deleted',
   reparent: 'changed',
 };
-
-describe('change feed fixture names', () => {
-  it('are unique across connections, their mutations and their sequences', () => {
-    const names = [
-      ...changeFeedSequenceFixtures.map((s) => s.name),
-      ...connections.flatMap((c) => [
-        c.name,
-        ...(c.precedingMutations?.map((m) => m.name) ?? []),
-        ...(c.activity?.map((a) => a.mutation.name) ?? []),
-      ]),
-    ];
-    expect(new Set(names).size).toBe(names.length);
-  });
-});
 
 describe('every connection', () => {
   it('leads with ready, before any change', () => {
