@@ -1,5 +1,27 @@
 # @haverstack/core
 
+## 0.31.0
+
+### Minor Changes
+
+- [#279](https://github.com/haverstack/core/pull/279) [`14a63db`](https://github.com/haverstack/core/commit/14a63db7ba51ae20bcd8e27ff7c40da5afb81683) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Exempt the owner acting alone from the reference-creation gate, so the answers a caller-named `parentId` owes are reachable through a `ScopedStack`.
+
+  `canReadReferent()` resolved the destination and refused a missing one before `Stack` ran either of the checks a caller-named `parentId` is owed. Because a record that does not exist is unreadable by everyone, the owner's documented exemption from the gate — keyed on readability — silently stopped applying to absence, and both `validateParentId()`'s `StackQueryError` (wire: 400) and `assertParentExists()`'s `StackConflictError` (wire: 409) collapsed into `StackPermissionError` for every requester going through a scope.
+
+  The owner acting alone now passes the gate before the lookup, handing the question to `Stack`. This grants nothing — there is no record in their own stack the owner may not read — and the anti-oracle property is unchanged for every other requester, for whom missing and unreadable remain one indistinguishable refusal. Delegation does not carry the exemption on either side.
+
+  One consequence follows: the owner may name a `relationship` target that does not exist, exactly as an unscoped `Stack` allows. `restoreVersion()` is unaffected — it already skipped the whole snapshot-gating block for the owner acting alone, so the spec's promise that a snapshot naming a since-hard-deleted container restores anyway was already honored there.
+
+- [#278](https://github.com/haverstack/core/pull/278) [`0052b6b`](https://github.com/haverstack/core/commit/0052b6b14a32e9ada2faa4454999c33d2847c61a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Name the missing capability on the refusal itself, and remove the copy of the rule that re-derived it.
+
+  `StackQueryError` now carries a `capability` field — the path into adapter capabilities the query needed (`'filter.content'`, `'filter.contentPresent'`, `'filter.search'`, `'sort.fields'`, `'sort.contentField'`), or undefined when the query's own shape was what was wrong. `assertQueryCapabilities()` and `assertSortCapability()` set it at each refusal. `APIAdapter.queryRecords()` reads it instead of re-deriving the answer from the query, which it could disagree with: a query that both sorted by an undeclared field and used an undeclared `filter.search` reported the sort as the missing capability while the message named the search.
+
+  `filtersContent()` and the `MissingCapability` type are now exported from `@haverstack/core/adapter`; `adapter-api` re-exports `MissingCapability` under its existing name. `MissingCapability` is also exported from `@haverstack/core`'s main entry, where `StackQueryError` itself ships — app code catching a refusal from `Stack.query()` needs the type to name the field it just read.
+
+  `@haverstack/core/wire` now exports `assertQueryTravels()`, the build-side half of the refusal `parseQueryParams()`/`parseQueryBody()` already apply to the two `Query` fields with no wire encoding. `APIAdapter.queryRecords()` calls it before choosing an encoding, so a direct adapter call carrying `filter.baseId` or `presentAt` is refused the same way at every content reach. Previously only the `POST /records/query` body carried them as far as the server's `400`: the `GET /records` params have nowhere to put them, so the same query came back as an unfiltered result set. (`Stack.query()` resolves `baseId` and applies `presentAt` itself, so queries made through it were never affected.)
+
+  `APIAdapter.createRecord()`, `commitMigration()`, `undeleteRecord()` and `restoreVersion()` now report a server that answers a version-bumping mutation with no Record body, as the other mutations already did, instead of raising a `TypeError` from reading the body that never arrived.
+
 ## 0.30.0
 
 ### Minor Changes

@@ -1,5 +1,22 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.23.0
+
+### Minor Changes
+
+- [#277](https://github.com/haverstack/core/pull/277) [`ac30074`](https://github.com/haverstack/core/commit/ac30074752738ef814cbe34556a9586f6b86d209) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Move the engine-independent half of the SQLite record adapters into `@haverstack/sqlite-shared`
+
+  `SharedSqlRecordAdapter` is a new abstract base implementing all seventeen `StackRecordAdapter` methods as forwards to `SharedSqlRecordLogic`, alongside `SQLITE_RECORD_CAPABILITIES` — the capability declaration every engine running the shared query builder makes. Both adapters now supply only what differs between bindings: the database handle, the schema call, and their own `flush`/`close`. `applyRecordSchema()` and `tryReadStackConfig()` replace the per-adapter pragma sequences and the hand-written `_config` lookup.
+
+  `ownerEntityId` and `timezone` are now `readonly` on both adapter classes, matching how `StackRecordAdapter` has always declared them.
+
+  Declaration output now inlines the shared package's types instead of importing them. `@haverstack/record-adapter-do-sqlite`'s `.d.ts` previously named `@haverstack/sqlite-shared/record`, which is private and never installed, so its types did not resolve for consumers.
+
+### Patch Changes
+
+- Updated dependencies [[`14a63db`](https://github.com/haverstack/core/commit/14a63db7ba51ae20bcd8e27ff7c40da5afb81683), [`0052b6b`](https://github.com/haverstack/core/commit/0052b6b14a32e9ada2faa4454999c33d2847c61a)]:
+  - @haverstack/core@0.31.0
+
 ## 0.22.0
 
 ### Minor Changes
