@@ -604,8 +604,17 @@ export class ScopedStack implements StackClient {
    * Whether this request may reference `recordId` (as a parentId or
    * relationship target). Missing and unreadable both return false —
    * indistinguishable, so this can't probe for a record's existence.
+   *
+   * The owner acting alone passes without the lookup, which costs nothing:
+   * there is no record in their own stack they may not read, so the gate
+   * could only ever refuse them for absence — and absence is `Stack`'s to
+   * answer, with the conflict that names the problem rather than a
+   * refusal standing in for it. The anti-oracle property is unchanged for
+   * every other requester.
+   * See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canReadReferent(recordId: string): Promise<boolean> {
+    if (this.ownerActingAlone) return true;
     const record = await this.stack.get(recordId);
     if (!record) return false;
     return this.canRead(record);
