@@ -17,7 +17,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -156,6 +164,50 @@ for (const name of MUST_NOT_INSTALL) {
   }
   if (present) fail(`${name} is private and must be bundled, but it was installed`);
   else log(`  absent (correct)  ${name}`);
+}
+
+// -- assert no shipped .d.ts names a bundled-only package ------------------
+
+/**
+ * Bundling a private package into the JS is only half the job: a `.d.ts`
+ * that still says `import ... from '@haverstack/sqlite-shared'` points a
+ * consumer's typechecker at a package npm will never install, and nothing
+ * above catches it — the runtime import probes succeed either way.
+ */
+const declarationsUnder = (dir) => {
+  const found = [];
+  const walk = (path) => {
+    for (const entry of readdirSync(path)) {
+      const child = join(path, entry);
+      if (statSync(child).isDirectory()) walk(child);
+      else if (entry.endsWith('.d.ts')) found.push(child);
+    }
+  };
+  walk(dir);
+  return found;
+};
+
+log('\nChecking shipped declarations for bundled-only imports...');
+for (const name of Object.keys(tarballs)) {
+  const dist = join(consumer, 'node_modules', ...name.split('/'), 'dist');
+  let files;
+  try {
+    files = declarationsUnder(dist);
+  } catch {
+    continue;
+  }
+  const leaking = files.filter((file) => {
+    const source = readFileSync(file, 'utf8');
+    return MUST_NOT_INSTALL.some((forbidden) => source.includes(`'${forbidden}`));
+  });
+  if (leaking.length) {
+    fail(
+      `${name} ships declarations importing a bundled-only package: ` +
+        leaking.map((file) => file.slice(dist.length + 1)).join(', '),
+    );
+  } else {
+    log(`  clean  ${name}`);
+  }
 }
 
 // -- import every entry point ----------------------------------------------
