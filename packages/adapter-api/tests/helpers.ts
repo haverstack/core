@@ -60,17 +60,11 @@ export const jsonResponse = (body: unknown, status = 200): Response =>
 /** What a mutation bumping no version answers with: no body to parse. */
 export const noContent = (): Response => new Response(null, { status: 204 });
 
-/**
- * A `200` carrying nothing — the shape the wire format never allows, and
- * the one a foreign server most easily answers by accident.
- */
+/** A `200` carrying nothing — the shape the wire format never allows. */
 export const emptyOk = (): Response =>
   new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } });
 
-/**
- * A `200` carrying something that is not this server's JSON: a proxy's
- * error page or a captive-portal redirect that got past `res.ok`.
- */
+/** A `200` carrying what is not this server's JSON: a proxy's error page. */
 export const nonJsonResponse = (
   body = '<html><body>502 Bad Gateway</body></html>',
   status = 200,

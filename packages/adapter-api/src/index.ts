@@ -327,9 +327,8 @@ const readJsonBody = async (res: Response): Promise<unknown> => {
 };
 
 /**
- * The head of an unparseable body, for the error that reports it. Enough
- * to recognize what answered — an HTML error page, a proxy's plain-text
- * notice — without pasting a whole document into an exception message.
+ * The head of an unparseable body: enough to recognize what answered,
+ * without pasting a whole error page into an exception message.
  */
 const bodyExcerpt = (text: string, limit = 120): string => {
   const collapsed = text.replace(/\s+/g, ' ').trim();
@@ -337,18 +336,10 @@ const bodyExcerpt = (text: string, limit = 120): string => {
 };
 
 /**
- * The body of a successful response, or `undefined` when it carried none.
- *
- * The two ways a success response can fail to carry JSON are different
- * failures and stay distinguishable here. An *empty* body is a shape the
- * caller decides about — legitimate where nothing is owed, a wire-format
- * failure where something is, which requireBody() and requireRecordBody()
- * report at the call sites that are owed one. A *non-empty* body that
- * will not parse is never legitimate: something that is not this server's
- * JSON — a proxy error page, an HTML login redirect — arrived with a 2xx
- * status, and reporting that as the raw SyntaxError it parses to would
- * put a server fault outside the APIAdapterError hierarchy callers catch,
- * naming a parse offset instead of the endpoint that misbehaved.
+ * The body of a successful response, or `undefined` when it carried none
+ * — which only the call site can judge. A non-empty body that will not
+ * parse is the server's fault wherever it lands, so it is reported here.
+ * See docs/spec/wire-format.md § Success responses.
  */
 const parseJsonBody = async (res: Response, method: string, path: string): Promise<unknown> => {
   const text = await res.text();
@@ -420,9 +411,8 @@ const emptyBodyError = (endpoint: string): APIAdapterError =>
   );
 
 /**
- * The body a read is required to answer with, for the reads that have no
- * "absent" case: a missing one is a server answering a shape the wire
- * format does not allow, reported rather than dereferenced.
+ * The body a read with no "absent" case is owed, reported rather than
+ * dereferenced when it is missing.
  * See docs/spec/wire-format.md § Success responses.
  */
 const requireBody = <T>(raw: T | null | undefined, endpoint: string): T => {
@@ -431,11 +421,8 @@ const requireBody = <T>(raw: T | null | undefined, endpoint: string): T => {
 };
 
 /**
- * The same, for a read that can legitimately answer "not there". Only the
- * `null` this adapter itself produced from a `404` travels; an empty body
- * does not become one. Absence already has its own unambiguous encoding,
- * so letting an empty `200` mean it would have a broken server answering
- * an existence check confidently and wrongly.
+ * The same, for a read that can answer "not there": only the `null` this
+ * adapter produced from a `404` travels, never an empty body.
  * See docs/spec/wire-format.md § Success responses.
  */
 const requireNullableBody = <T>(raw: T | null | undefined, endpoint: string): T | null => {

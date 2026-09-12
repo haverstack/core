@@ -1470,9 +1470,8 @@ describe('a mutation answering with no Record body', () => {
 
 /**
  * A `200` owes the body its endpoint returns, and every read reports a
- * missing one the same way a mutation does — as a wire-format failure
- * naming the endpoint, inside the APIAdapterError hierarchy a caller
- * catches. See docs/spec/wire-format.md § Success responses.
+ * missing one the way the mutations do — naming the endpoint, inside the
+ * hierarchy a caller catches. docs/spec/wire-format.md § Success responses.
  */
 describe('a read answering 200 with an empty body', () => {
   test.each([
@@ -1536,10 +1535,9 @@ describe('a read answering 200 with an empty body', () => {
 });
 
 /**
- * A body that will not parse means something that is not this server's
- * JSON arrived with a success status — a proxy error page, an HTML login
- * redirect. That is the server's failure, reported as one rather than as
- * a raw SyntaxError naming a parse offset.
+ * A body that will not parse means something other than this server — a
+ * proxy error page, a login redirect — answered with a success status.
+ * docs/spec/wire-format.md § Success responses.
  */
 describe('a 2xx carrying a body that is not JSON', () => {
   const record: StackRecord = {
