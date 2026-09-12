@@ -61,6 +61,22 @@ export const jsonResponse = (body: unknown, status = 200): Response =>
 export const noContent = (): Response => new Response(null, { status: 204 });
 
 /**
+ * A `200` carrying nothing — the shape the wire format never allows, and
+ * the one a foreign server most easily answers by accident.
+ */
+export const emptyOk = (): Response =>
+  new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+/**
+ * A `200` carrying something that is not this server's JSON: a proxy's
+ * error page or a captive-portal redirect that got past `res.ok`.
+ */
+export const nonJsonResponse = (
+  body = '<html><body>502 Bad Gateway</body></html>',
+  status = 200,
+): Response => new Response(body, { status, headers: { 'Content-Type': 'text/html' } });
+
+/**
  * The stubbed global `fetch` for the test now running. Exported as a live
  * binding, so an importing file sees each test's fresh mock rather than
  * whichever one existed when the module loaded.

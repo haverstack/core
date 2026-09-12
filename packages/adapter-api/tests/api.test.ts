@@ -16,9 +16,11 @@ import {
   BASE_URL,
   DISCOVERY,
   TOKEN,
+  emptyOk,
   jsonResponse,
   mockFetch,
   noContent,
+  nonJsonResponse,
   openAdapter,
   useFetchMock,
 } from './helpers.js';
@@ -1462,6 +1464,120 @@ describe('a mutation answering with no Record body', () => {
   });
 });
 
+// -------------------------------------------------------
+// Success responses that carry no usable body
+// -------------------------------------------------------
+
+/**
+ * A `200` owes the body its endpoint returns, and every read reports a
+ * missing one the same way a mutation does — as a wire-format failure
+ * naming the endpoint, inside the APIAdapterError hierarchy a caller
+ * catches. See docs/spec/wire-format.md § Success responses.
+ */
+describe('a read answering 200 with an empty body', () => {
+  test.each([
+    ['getRecord', (a: APIAdapter) => a.getRecord('rec-abc123'), 'GET /records/rec-abc123'],
+    ['queryRecords', (a: APIAdapter) => a.queryRecords({}), 'POST /records/query'],
+    [
+      'getVersions',
+      (a: APIAdapter) => a.getVersions('rec-abc123'),
+      'GET /records/rec-abc123/versions',
+    ],
+    [
+      'getVersion',
+      (a: APIAdapter) => a.getVersion('rec-abc123', 1),
+      'GET /records/rec-abc123/versions/1',
+    ],
+    [
+      'getType',
+      (a: APIAdapter) => a.getType('com.example/note@1'),
+      'GET /types/com.example/note@1',
+    ],
+    ['listTypes', (a: APIAdapter) => a.listTypes(), 'GET /types'],
+  ] as const)('%s reports it as a wire-format failure', async (_name, call, endpoint) => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(emptyOk());
+    const thrown = await call(adapter).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    // The endpoint is named, so a foreign server's gap is identifiable.
+    expect((thrown as Error).message).toContain(endpoint);
+  });
+
+  // The distinction the nullable reads turn on: absence has its own
+  // encoding, so an empty body is never read as one.
+  test.each([
+    ['getRecord', (a: APIAdapter) => a.getRecord('rec-abc123')],
+    ['getVersion', (a: APIAdapter) => a.getVersion('rec-abc123', 1)],
+    ['getType', (a: APIAdapter) => a.getType('com.example/note@1')],
+  ] as const)('%s does not report it as the resource being absent', async (_name, call) => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(emptyOk());
+    await expect(call(adapter)).rejects.toThrow(APIAdapterError);
+  });
+
+  // A literal JSON `null` is the same empty answer spelled differently,
+  // and the reads with no "absent" case refuse it the same way.
+  test.each([
+    ['queryRecords', (a: APIAdapter) => a.queryRecords({})],
+    ['getVersions', (a: APIAdapter) => a.getVersions('rec-abc123')],
+    ['listTypes', (a: APIAdapter) => a.listTypes()],
+  ] as const)('%s refuses a null body', async (_name, call) => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(null));
+    await expect(call(adapter)).rejects.toThrow(APIAdapterError);
+  });
+
+  // Endpoints that are owed nothing keep answering with nothing.
+  test('an endpoint with no body to return is unaffected', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(emptyOk());
+    await expect(adapter.deleteAttachment('file-xyz')).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * A body that will not parse means something that is not this server's
+ * JSON arrived with a success status — a proxy error page, an HTML login
+ * redirect. That is the server's failure, reported as one rather than as
+ * a raw SyntaxError naming a parse offset.
+ */
+describe('a 2xx carrying a body that is not JSON', () => {
+  const record: StackRecord = {
+    id: 'rec-abc123',
+    typeId: 'com.example/note@1',
+    createdAt: new Date('2024-06-15T12:00:00.000Z'),
+    updatedAt: new Date('2024-06-15T12:00:00.000Z'),
+    content: { text: 'Hello world' },
+    version: 1,
+  };
+
+  test('reports the endpoint, the status and what answered', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(nonJsonResponse());
+    const thrown = await adapter.getRecord('rec-abc123').catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect((thrown as APIAdapterError).statusCode).toBe(200);
+    expect((thrown as Error).message).toContain('GET /records/rec-abc123');
+    expect((thrown as Error).message).toContain('502 Bad Gateway');
+  });
+
+  test('excerpts a long body rather than quoting all of it', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(nonJsonResponse('x'.repeat(5000)));
+    const thrown = await adapter.listTypes().catch((err: unknown) => err);
+    expect((thrown as Error).message.length).toBeLessThan(400);
+  });
+
+  test.each([
+    ['a mutation', (a: APIAdapter) => a.createRecord(record)],
+    ['a query', (a: APIAdapter) => a.queryRecords({})],
+  ] as const)('%s reports it too', async (_name, call) => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(nonJsonResponse());
+    await expect(call(adapter)).rejects.toThrow(APIAdapterError);
+  });
+});
+
 describe('saveVersion', () => {
   test('is a no-op — does not make any HTTP requests', async () => {
     const adapter = await openAdapter();
@@ -1606,6 +1722,26 @@ describe('putAttachmentWithMetadata', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers['Content-Type']).toBe('image/png');
     expect(headers['Content-Disposition']).toBe("attachment; filename*=UTF-8''photo.png");
+  });
+
+  // The upload is a mutation like any other: it creates the _attachment@1
+  // record, so it owes the record it produced.
+  test('reports an empty body as a wire-format failure', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(emptyOk());
+    const thrown = await adapter
+      .putAttachmentWithMetadata(new Uint8Array([1]), 'image/png')
+      .catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect((thrown as Error).message).toContain('POST /attachments');
+  });
+
+  test('reports a body that is not JSON as a wire-format failure', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(nonJsonResponse());
+    await expect(
+      adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'image/png'),
+    ).rejects.toThrow(APIAdapterError);
   });
 
   test('omits Content-Disposition when no filename is given', async () => {
