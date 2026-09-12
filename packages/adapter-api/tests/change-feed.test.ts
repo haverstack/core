@@ -93,7 +93,11 @@ const recordFrameOf = (name: string): ChangeFeedFrame =>
 
 const changeOf = (frame: ChangeFeedFrame): WireRecordChange => frame.data as WireRecordChange;
 
-const READY = sse(connection('change-feed-ready-leads-every-connection').openingFrames[0]!);
+const READY_FRAME = connection('change-feed-ready-leads-every-connection').openingFrames[0]!;
+const READY = sse(READY_FRAME);
+
+/** The head cursor that ready reports, which a reconnect resumes from. */
+const HEAD_SEQ = (READY_FRAME.data as { seq: string }).seq;
 
 /** An explicit id, so a test placing two frames in one stream can order them. */
 const recordFrame = (id: string, change: Record<string, unknown>): string =>
@@ -476,7 +480,7 @@ describe('reconnection', () => {
     await vi.waitFor(() => expect(mockFetch.mock.calls.length).toBe(3));
 
     expect(headersOf(1)['Last-Event-ID']).toBe('STALE1');
-    expect(headersOf(2)['Last-Event-ID']).toBe('AA3f1Q');
+    expect(headersOf(2)['Last-Event-ID']).toBe(HEAD_SEQ);
     stop();
   });
 

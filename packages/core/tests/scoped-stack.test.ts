@@ -916,6 +916,11 @@ describe('ScopedStack — versions', () => {
     // not a caller naming a destination, so an unrelated deletion does not
     // cost the record its rollback. See docs/spec/versioning.md § Restore
     // semantics.
+    //
+    // This holds because restoreVersion() skips its whole snapshot-gating
+    // block for the owner acting alone, not because canReadReferent() now
+    // exempts them — the owner never reaches the gate here at all. That
+    // wrapper is what this pins, and it is not redundant with the exemption.
     test('the owner restores a snapshot whose container has since been hard-deleted', async () => {
       const box = await adapter.createRecord(makeRecord());
       const record = await adapter.createRecord(
