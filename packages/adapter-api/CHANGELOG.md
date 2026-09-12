@@ -1,5 +1,33 @@
 # @haverstack/adapter-api
 
+## 0.30.0
+
+### Minor Changes
+
+- [#282](https://github.com/haverstack/core/pull/282) [`3c76bc3`](https://github.com/haverstack/core/commit/3c76bc3250c6fcea10f8dbafd79fb57c334dd5d1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Report a success response that carries no usable body as an `APIAdapterError`, on every read as well as the mutations.
+
+  `request()` finished with `res.json()`, so a `200` whose body was empty or not JSON threw a raw `SyntaxError` — outside the `APIAdapterError` hierarchy a caller catches to tell a server problem from a bug in its own code, and naming a parse offset rather than the endpoint that misbehaved. `requireRecordBody()` covered only the nine version-bumping mutations, and only once a body had already parsed to `undefined`.
+
+  The body is now read once as text, and the two failures it can hold are separated. A body that is **not JSON** is always the server's fault — a proxy error page or a login redirect that got past `res.ok` — and throws an `APIAdapterError` carrying the status, the endpoint and an excerpt of what arrived. An **empty** body is legitimate only where nothing is owed (a `204`, or an endpoint that returns none), and new `requireBody()` / `requireNullableBody()` companions report it everywhere something is: `getRecord`, `getVersion`, `getType`, `queryRecords`, `getVersions`, `listTypes` and the attachment upload now fail the same way the mutations already did, naming the endpoint.
+
+  A literal JSON `null` is refused the same way on the reads with no "absent" case. The nullable reads are the behaviour change: an empty `200` from `GET /records/:id`, `GET /records/:id/versions/:version` or `GET /types/:id` now throws instead of parsing to `null`. Absence already has its own unambiguous encoding — a `404` — so reading an empty body as "not there" would let a broken server answer an existence check confidently and wrongly. The wire format says outright that a `200` carries a body, so a server has something normative to conform to.
+
+- [#278](https://github.com/haverstack/core/pull/278) [`0052b6b`](https://github.com/haverstack/core/commit/0052b6b14a32e9ada2faa4454999c33d2847c61a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Name the missing capability on the refusal itself, and remove the copy of the rule that re-derived it.
+
+  `StackQueryError` now carries a `capability` field — the path into adapter capabilities the query needed (`'filter.content'`, `'filter.contentPresent'`, `'filter.search'`, `'sort.fields'`, `'sort.contentField'`), or undefined when the query's own shape was what was wrong. `assertQueryCapabilities()` and `assertSortCapability()` set it at each refusal. `APIAdapter.queryRecords()` reads it instead of re-deriving the answer from the query, which it could disagree with: a query that both sorted by an undeclared field and used an undeclared `filter.search` reported the sort as the missing capability while the message named the search.
+
+  `filtersContent()` and the `MissingCapability` type are now exported from `@haverstack/core/adapter`; `adapter-api` re-exports `MissingCapability` under its existing name. `MissingCapability` is also exported from `@haverstack/core`'s main entry, where `StackQueryError` itself ships — app code catching a refusal from `Stack.query()` needs the type to name the field it just read.
+
+  `@haverstack/core/wire` now exports `assertQueryTravels()`, the build-side half of the refusal `parseQueryParams()`/`parseQueryBody()` already apply to the two `Query` fields with no wire encoding. `APIAdapter.queryRecords()` calls it before choosing an encoding, so a direct adapter call carrying `filter.baseId` or `presentAt` is refused the same way at every content reach. Previously only the `POST /records/query` body carried them as far as the server's `400`: the `GET /records` params have nowhere to put them, so the same query came back as an unfiltered result set. (`Stack.query()` resolves `baseId` and applies `presentAt` itself, so queries made through it were never affected.)
+
+  `APIAdapter.createRecord()`, `commitMigration()`, `undeleteRecord()` and `restoreVersion()` now report a server that answers a version-bumping mutation with no Record body, as the other mutations already did, instead of raising a `TypeError` from reading the body that never arrived.
+
+### Patch Changes
+
+- Updated dependencies [[`14a63db`](https://github.com/haverstack/core/commit/14a63db7ba51ae20bcd8e27ff7c40da5afb81683), [`0052b6b`](https://github.com/haverstack/core/commit/0052b6b14a32e9ada2faa4454999c33d2847c61a)]:
+  - @haverstack/wire-types@0.30.0
+  - @haverstack/core@0.31.0
+
 ## 0.29.0
 
 ### Minor Changes
