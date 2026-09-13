@@ -1,5 +1,16 @@
 # @haverstack/blob-adapter-s3
 
+## 0.18.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`8e42a7f`](https://github.com/haverstack/core/commit/8e42a7fc0bf13be2b2697f10efb21a88c95752fc)]:
+  - @haverstack/core@0.32.0
+
 ## 0.17.0
 
 ### Minor Changes
