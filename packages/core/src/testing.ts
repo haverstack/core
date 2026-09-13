@@ -377,8 +377,14 @@ export class MemoryAdapter implements StackAdapter {
     if (!record) throw new Error(`Not found: ${id}`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
+    // re-pointed `attachmentRecordId` lands on the association already
+    // there rather than adding a second reference to the same file.
     const assocs = record.associations ?? [];
-    const updated = this.bump(withAssociations(record, [...assocs, association]), opts);
+    const next = assocs.some((a) => associationEqual(a, association))
+      ? assocs.map((a) => (associationEqual(a, association) ? association : a))
+      : [...assocs, association];
+    const updated = this.bump(withAssociations(record, next), opts);
     this.records.set(id, updated);
     return updated;
   }
@@ -592,8 +598,9 @@ function withParentId(record: StackRecord, parentId: string | null): StackRecord
 }
 
 /**
- * Mirrors Stack's private associationEqual(): identity is (kind, label) plus
- * fileId for attachments / the target for relationships.
+ * Mirrors core's associationEqual(): identity is (kind, label) plus fileId
+ * for attachments / the target for relationships. An attachment's
+ * `attachmentRecordId` annotates the reference and is outside identity.
  */
 function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;

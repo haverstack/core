@@ -4821,6 +4821,273 @@ describe('Stack.getAttachmentRecords', () => {
   });
 });
 
+describe('attachment association — attachmentRecordId', () => {
+  // Two byte-identical uploads: one fileId, two metadata records, so the
+  // association's own pointer is the only thing telling them apart.
+  const twoUploads = async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const first = await stack.putAttachment(data, 'image/png', 'original.png');
+    const second = await stack.putAttachment(data, 'image/png', 'copy.png');
+    return { first, second, fileId: first.content.fileId };
+  };
+
+  test('associate stores the pointer alongside the fileId', async () => {
+    const { second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    });
+
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.associations).toEqual([
+      { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
+    ]);
+  });
+
+  test('re-pointing an existing association updates it in place', async () => {
+    const { first, second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+
+    const updated = await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    });
+
+    expect(updated.associations).toEqual([
+      { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
+    ]);
+    expect(updated.version).toBe(3);
+  });
+
+  test('associate is a no-op when the pointer is unchanged — no version bump', async () => {
+    const { first, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const association: Association = {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    };
+    await stack.associate(record.id, association);
+
+    await stack.associate(record.id, association);
+
+    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+  });
+
+  test('a change set that only re-points an association is a change', async () => {
+    const { first, second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+
+    const updated = await stack.mutate(record.id, {
+      associations: [{ kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id }],
+    });
+
+    expect(updated.version).toBe(3);
+    expect(updated.associations?.[0]).toMatchObject({ attachmentRecordId: second.id });
+  });
+
+  test('dissociate matches on identity, ignoring the pointer', async () => {
+    const { first, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+
+    await stack.dissociate(record.id, { kind: 'attachment', label: 'embed', fileId });
+
+    expect((await adapter.getRecord(record.id))?.associations).toBeUndefined();
+  });
+
+  test('rejects a pointer at a record that does not exist', async () => {
+    const { fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.associate(record.id, {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: 'nonexistent1',
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a pointer at a record outside the _attachment family', async () => {
+    const { fileId } = await twoUploads();
+    const other = await stack.create(NOTE_V1, { text: 'not an attachment' });
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.associate(record.id, {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: other.id,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('rejects a pointer at an _attachment record for other bytes', async () => {
+    const { fileId } = await twoUploads();
+    const elsewhere = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.associate(record.id, {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: elsewhere.id,
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // Nonexistent and wrong-file are one refusal: distinguishing them would
+  // confirm which record ids exist. See the anti-oracle rule in
+  // docs/spec/attachments.md.
+  test('names no difference between a missing record and one for other bytes', async () => {
+    const { fileId } = await twoUploads();
+    const elsewhere = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const reject = async (attachmentRecordId: string) => {
+      try {
+        await stack.associate(record.id, {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId,
+        });
+        throw new Error('expected a rejection');
+      } catch (err) {
+        return (err as StackValidationError).errors;
+      }
+    };
+
+    expect(await reject('nonexistent1')).toEqual(await reject(elsewhere.id));
+  });
+
+  test('validates a pointer supplied at create time', async () => {
+    const { first, fileId } = await twoUploads();
+
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'hello' },
+        {
+          associations: [
+            { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: 'nonexistent1' },
+          ],
+        },
+      ),
+    ).rejects.toThrow(StackValidationError);
+
+    const created = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: first.id },
+        ],
+      },
+    );
+    expect(created.associations?.[0]).toMatchObject({ attachmentRecordId: first.id });
+  });
+
+  test('validates a pointer supplied in a change set', async () => {
+    const { fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+
+    await expect(
+      stack.mutate(record.id, {
+        associations: [
+          { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: 'nonexistent1' },
+        ],
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // The reference is the fileId, pointer or no pointer — what
+  // deleteAttachment() and the GC sweep ask about.
+  test('an association carrying a pointer still counts as a reference', async () => {
+    const { second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    });
+
+    await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
+  });
+
+  // The record's own stored data stays writable: re-sending an association
+  // it already carries is not a fresh claim about the record it names.
+  test('a change set restating an association with a dangling pointer is accepted', async () => {
+    const { second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const association: Association = {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    };
+    await stack.associate(record.id, association);
+    await stack.delete(second.id, { hard: true });
+
+    const updated = await stack.mutate(record.id, {
+      associations: [association],
+      contentPatch: { text: 'edited' },
+    });
+
+    expect(updated.associations).toEqual([association]);
+  });
+
+  // A metadata record can be deleted while the reference to its bytes
+  // stands, so the pointer is best-effort by construction.
+  test('a dangling pointer survives on the record it annotates', async () => {
+    const { second, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    });
+
+    await stack.delete(second.id, { hard: true });
+
+    expect((await adapter.getRecord(record.id))?.associations?.[0]).toMatchObject({
+      attachmentRecordId: second.id,
+    });
+    expect((await stack.getAttachmentRecords(fileId)).map((r) => r.content.filename)).toEqual([
+      'original.png',
+    ]);
+  });
+});
+
 describe('_attachment@1 mimeType conflict on create', () => {
   test('second upload of identical bytes with a matching mimeType succeeds', async () => {
     const data = new Uint8Array([1, 2, 3]);

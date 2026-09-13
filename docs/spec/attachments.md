@@ -63,6 +63,32 @@ The result is sorted in the [first-recorded total order](#the-attachment-record-
 
 The distinction generalizes: a lookup answering a question the caller asks **on their own behalf** belongs on `StackClient` and stays scoped (`getEntityByDid()`); one answering a question **about a decision already made** stays on `Stack`.
 
+### Naming the upload a reference came from
+
+An `attachment` Association carries `{ label, fileId }` — and a `fileId` names **content**, not an upload. Two byte-identical uploads share one `fileId` and have one `_attachment` record each, so two records referencing "the same file" cannot say which upload each of them was given: the association shapes are identical, and `getAttachmentRecords(fileId)[0]` answers both with the earliest record's `filename`, which is the wrong one for all but the first.
+
+An attachment Association may therefore carry an optional second pointer:
+
+```ts
+{ kind: 'attachment', label: 'embed', fileId, attachmentRecordId?: RecordId }
+```
+
+`attachmentRecordId` names the `_attachment` record whose upload established **this** reference. Set it at `associate()` time (or in a change set, or at `create()`) when the reference has an upload of its own; leave it off when the record is simply pointing at content someone already uploaded — the common case of many records sharing one image needs no per-reference name.
+
+**Resolution order**, applied by `resolveReferencedAttachment()` (exported from `@haverstack/core` and `@haverstack/core/wire`) over the records `getAttachmentRecords()` returns:
+
+1. The record `attachmentRecordId` names, if it is still among them.
+2. The requester's own `_attachment` record, matched by `entityId`, [first-recorded](#the-attachment-record-type) if they have several.
+3. The first-recorded record overall.
+
+A `GET /attachments/:fileId` download resolves only steps 2 and 3 — it names a `fileId`, with no reference to carry a pointer — so a client that holds the association resolves step 1 itself and passes the result as `?filename`, which overrides everything ([Wire format § Download](./wire-format.md#download)).
+
+**Every step falls back rather than failing.** The pointer is checked when it is written — the named record must exist, be in the `_attachment` family, and carry the association's own `fileId` — but nothing keeps it true afterwards: the metadata record can be hard-deleted while the reference to its bytes stands, and a `restoreVersion()` puts back whatever the snapshot held. A pointer at a record that is gone resolves exactly as an absent one does. The write-time check is also a single refusal for every way of failing, naming neither the record nor the reason: a check that distinguished "no such record" from "a record for other bytes" would confirm which record ids exist.
+
+**The pointer annotates a reference; it does not name one.** Association identity stays `(kind, label)` plus `fileId` ([Data model § Associations](./data-model.md#associations)), so `dissociate()` matches without it, and an `associate()` naming a different `attachmentRecordId` for an association the record already holds **re-points that association in place** rather than adding a second reference to the same file. Re-pointing is still a write: it bumps the version and reports an `associate` op.
+
+Keeping it outside identity is what leaves the rest of the model alone. [Garbage collection](#garbage-collection), `deleteAttachment()`'s reference check, the `attachmentFileId` filter and attachment access conveyance all ask a `fileId`-level question — "does any record reference this content" — and continue to ask exactly that. For the same reason a [`file-ref` content field](./data-model.md#types) carries no pointer: a field holding a fileId names content, and an app that needs a per-reference name uses an Association.
+
 ## `Stack` vs `ScopedStack` methods
 
 - `Stack.putAttachment(data, mimeType, filename?, appId?)` — owner-level upload. Creates an `_attachment@1` record with no `entityId`. No grant check.

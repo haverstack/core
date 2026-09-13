@@ -41,9 +41,9 @@ export type { AttachmentDownloadContentType } from './attachment-download.js';
 
 // No in-repo caller: resolveAttachmentDownloadContentType() takes
 // storedMimeType as an input rather than selecting the record itself — a
-// server must call this to apply the earliest-createdAt/lowest-id total
-// order and pass the winner in. Contract, not internal. haverstack/server#37
-export { firstRecordedAttachment } from './attachment-download.js';
+// server must call these to pick the record a download describes and pass
+// the winner in. Contract, not internal. haverstack/server#37
+export { firstRecordedAttachment, resolveReferencedAttachment } from './attachment-download.js';
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.

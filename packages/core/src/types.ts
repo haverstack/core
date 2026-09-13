@@ -48,10 +48,17 @@ export type TagAssociation = {
   label: string;
 };
 
+/**
+ * `attachmentRecordId` names the `_attachment` record whose upload
+ * established this reference — annotation, not identity, since `fileId`
+ * alone is what GC, the `attachmentFileId` filter and file access ask
+ * about. See docs/spec/attachments.md § Naming the upload a reference came from.
+ */
 export type AttachmentAssociation = {
   kind: 'attachment';
   label: string;
   fileId: FileId;
+  attachmentRecordId?: RecordId;
 };
 
 /**

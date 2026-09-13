@@ -792,6 +792,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
+   * Upserts on association identity: the primary key decides which row a
+   * write lands on, and `attachment_record_id` — outside it — is whatever
+   * the incoming association says, so re-pointing one costs no second row.
+   *
    * FK enforcement (PRAGMA_FOREIGN_KEYS_ON) means inserting an
    * association against a record that doesn't exist throws — mapped
    * here to StackNotFoundError so associate() on a nonexistent record
@@ -801,10 +805,18 @@ export class SharedSqlRecordLogic {
     for (const assoc of associations) {
       try {
         this.exec.run(
-          `INSERT OR IGNORE INTO associations
-            (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [recordId, assoc.kind, assoc.label, ...associationKeyColumns(assoc)],
+          `INSERT INTO associations
+            (record_id, kind, label, file_id, related_scope, related_id, related_ns,
+             related_stack, attachment_record_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO UPDATE SET attachment_record_id = excluded.attachment_record_id`,
+          [
+            recordId,
+            assoc.kind,
+            assoc.label,
+            ...associationKeyColumns(assoc),
+            assoc.kind === 'attachment' ? (assoc.attachmentRecordId ?? '') : '',
+          ],
         );
       } catch (err) {
         if (isForeignKeyViolation(err)) {

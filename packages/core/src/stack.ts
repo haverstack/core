@@ -121,6 +121,7 @@ import {
 } from './stack-reads.js';
 import {
   associationEqual,
+  associationIdentical,
   assertNonEmptyChangeSet,
   changeSetOps,
   effectiveChanges,
@@ -834,6 +835,8 @@ export class Stack implements StackClient {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
     }
 
+    await this.checkAttachmentAssociationPointers(opts.associations);
+
     await this.checkBindingsOnCreate(typeId, content as Record<string, unknown>);
 
     if (opts.id !== undefined) {
@@ -1061,6 +1064,8 @@ export class Stack implements StackClient {
     ];
     if (errors.length > 0) throw new StackValidationError(errors);
 
+    await this.checkAttachmentAssociationPointers(associations, existing.associations);
+
     let merged: Record<string, unknown> | undefined;
     if (contentPatch) {
       // The patch is what travels, so the patch is what's measured — a
@@ -1142,8 +1147,11 @@ export class Stack implements StackClient {
    * Add an association to a record. Snapshots the record's prior state and
    * bumps version, same as patchContent() — associations are covered by the same
    * versioning rule as content.
-   * If the association already exists (same kind, label, and payload), this
-   * is a no-op. Returns the record as it now stands — unchanged on a no-op.
+   * An association the record already holds, saying the same thing, is a
+   * no-op; one matching an existing association's identity but naming a
+   * different `attachmentRecordId` re-points that association in place,
+   * rather than adding a second reference to the same file.
+   * Returns the record as it now stands — unchanged on a no-op.
    */
   async associate(
     id: string,
@@ -1158,9 +1166,10 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if ((existing.associations ?? []).some((a) => associationEqual(a, association))) {
+    if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
       return existing;
     }
+    await this.checkAttachmentAssociationPointers([association]);
 
     const updated = await this.adapter.associate(
       id,
@@ -1785,6 +1794,49 @@ export class Stack implements StackClient {
         {
           path: 'mimeType',
           message: 'mimeType conflicts with the mimeType already established for this fileId',
+        },
+      ]);
+    }
+  }
+
+  /**
+   * An attachment association's `attachmentRecordId` names an `_attachment`
+   * record for the same `fileId` — checked here so a reference can't be
+   * annotated with an unrelated record's filename.
+   *
+   * Best-effort, like the mimeType check above: the named record can be
+   * deleted afterwards, so every reader of the field falls back rather than
+   * trusting it. `stored` is what the record already holds, asked so a
+   * change set restating an association is never refused for a pointer the
+   * record has carried since before the named record was deleted.
+   * See docs/spec/attachments.md § Naming the upload a reference came from.
+   */
+  private async checkAttachmentAssociationPointers(
+    associations: Association[] | undefined,
+    stored: Association[] = [],
+  ): Promise<void> {
+    for (const association of associations ?? []) {
+      if (association.kind !== 'attachment' || association.attachmentRecordId === undefined) {
+        continue;
+      }
+      if (stored.some((a) => associationIdentical(a, association))) continue;
+      const named = await this.adapter.getRecord(association.attachmentRecordId);
+      const content = named?.content as AttachmentContent | undefined;
+      if (
+        named &&
+        baseIdOf(named.typeId) === SYSTEM_TYPES.ATTACHMENT &&
+        content?.fileId === association.fileId
+      ) {
+        continue;
+      }
+      // One message for every way of failing: a missing record and a record
+      // for other bytes must not be distinguishable, or this becomes an
+      // existence oracle for records the caller cannot read.
+      // See the anti-oracle rule in docs/spec/attachments.md.
+      throw new StackValidationError([
+        {
+          path: 'attachmentRecordId',
+          message: 'attachmentRecordId must name an `_attachment` record for this fileId',
         },
       ]);
     }

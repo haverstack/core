@@ -885,6 +885,39 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
     },
   },
   {
+    name: 'associate-attachment-record-id',
+    description:
+      'An attachment association may name the `_attachment` record whose upload established it, ' +
+      'so a reference to shared bytes can resolve its own filename. The field travels verbatim ' +
+      'in both directions and is outside association identity. See docs/spec/attachments.md ' +
+      '§ Naming the upload a reference came from.',
+    method: 'POST',
+    path: '/records/1hk153x00001/associations',
+    requestBody: {
+      kind: 'attachment',
+      label: 'embed',
+      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+      attachmentRecordId: '1hk153x00009',
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      associations: [
+        {
+          kind: 'attachment',
+          label: 'embed',
+          fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+          attachmentRecordId: '1hk153x00009',
+        },
+      ],
+    },
+  },
+  {
     name: 'associate-relationship-external-target',
     description:
       'A relationship association carries its target as a discriminated union — the scope names ' +
@@ -922,6 +955,29 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
 ];
 
 export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
+  {
+    name: 'dissociate-attachment-by-identity',
+    description:
+      'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
+      'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
+      'See docs/spec/data-model.md § Associations.',
+    method: 'POST',
+    path: '/records/1hk153x00001/associations/delete',
+    requestBody: {
+      kind: 'attachment',
+      label: 'embed',
+      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-03T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 3,
+    },
+  },
   {
     name: 'dissociate-tag',
     description:
