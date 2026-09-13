@@ -32,6 +32,11 @@ export const RECORD_SCHEMA_SQL = `
   -- a foreign namespace. All four are in the primary key, so two targets
   -- differing only by namespace are two associations.
   --
+  -- attachment_record_id stays out of the primary key: it annotates a
+  -- reference rather than naming one, so re-pointing it updates the row an
+  -- associate() lands on instead of writing a second reference to the same
+  -- file. See docs/spec/attachments.md § Naming the upload a reference came from.
+  --
   -- The primary key leads with record_id, so its implicit index already
   -- serves every by-record read and delete; the indexes below exist only
   -- for the filter directions it cannot answer.
@@ -44,6 +49,7 @@ export const RECORD_SCHEMA_SQL = `
     related_id    TEXT NOT NULL DEFAULT '',
     related_ns    TEXT NOT NULL DEFAULT '',
     related_stack TEXT NOT NULL DEFAULT '',
+    attachment_record_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
   ) STRICT;
 

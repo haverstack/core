@@ -1355,6 +1355,78 @@ describe('associations', () => {
     ).rejects.toThrow(StackNotFoundError);
   });
 
+  test('an attachment association round-trips its attachmentRecordId', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const association = {
+      kind: 'attachment' as const,
+      label: 'embed',
+      fileId: 'a'.repeat(64),
+      attachmentRecordId: '1hk153x00001',
+    };
+
+    await adapter.associate(record.id, association);
+
+    expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
+  });
+
+  test('an attachment association with no pointer omits the key', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const association = { kind: 'attachment' as const, label: 'embed', fileId: 'a'.repeat(64) };
+
+    await adapter.associate(record.id, association);
+
+    expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
+  });
+
+  // attachment_record_id sits outside the primary key, so a re-pointed
+  // association lands on the row already there.
+  test('re-pointing an attachment association updates the one row', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const fileId = 'a'.repeat(64);
+    await adapter.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: '1hk153x00001',
+    });
+
+    await adapter.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: '1hk153x00002',
+    });
+
+    expect((await adapter.getRecord(record.id))?.associations).toEqual([
+      { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: '1hk153x00002' },
+    ]);
+  });
+
+  test('re-associating without a pointer clears the column', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const fileId = 'a'.repeat(64);
+    await adapter.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: '1hk153x00001',
+    });
+
+    await adapter.associate(record.id, { kind: 'attachment', label: 'embed', fileId });
+
+    expect((await adapter.getRecord(record.id))?.associations).toEqual([
+      { kind: 'attachment', label: 'embed', fileId },
+    ]);
+  });
+
   test('every target arm round-trips through storage', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();

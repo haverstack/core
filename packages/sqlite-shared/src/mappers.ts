@@ -50,10 +50,15 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
     return { kind: 'tag', label: row.label as string };
   }
   if (row.kind === 'attachment') {
+    const attachmentRecordId = row.attachment_record_id as string;
     return {
       kind: 'attachment',
       label: row.label as string,
       fileId: row.file_id as string,
+      // Stored as '' when absent, like every other optional column here —
+      // the field is omitted rather than served empty, so a round trip
+      // produces the association the caller wrote.
+      ...(attachmentRecordId && { attachmentRecordId }),
     };
   }
   // relationship

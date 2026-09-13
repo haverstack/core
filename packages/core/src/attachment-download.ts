@@ -152,6 +152,40 @@ export function compareRecordedAttachments<T extends { id: string; createdAt: Da
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/**
+ * Which `_attachment` record describes a *reference* to a fileId, as
+ * opposed to the fileId itself: the association's own
+ * `attachmentRecordId`, else the requester's own upload, else the
+ * first-recorded record. Where `filename` comes from on a download when
+ * `?filename` is not given, and the name a consumer shows for an
+ * attachment association. See docs/spec/attachments.md § Naming the upload
+ * a reference came from.
+ *
+ * Every step falls back rather than failing: a pointer at a record that is
+ * gone, or at nothing this caller collected, lands on the same answer a
+ * reference with no pointer at all gets.
+ *
+ * Generic over the record shape, like firstRecordedAttachment(), so a
+ * server can pass its own row type. Records for other fileIds must be
+ * filtered out by the caller.
+ */
+export function resolveReferencedAttachment<
+  T extends { id: string; createdAt: Date; entityId?: string },
+>(
+  records: readonly T[],
+  opts: { attachmentRecordId?: string; requesterEntityId?: string } = {},
+): T | undefined {
+  if (opts.attachmentRecordId) {
+    const named = records.find((record) => record.id === opts.attachmentRecordId);
+    if (named) return named;
+  }
+  if (opts.requesterEntityId) {
+    const own = records.filter((record) => record.entityId === opts.requesterEntityId);
+    if (own.length > 0) return firstRecordedAttachment(own);
+  }
+  return firstRecordedAttachment(records);
+}
+
 export type AttachmentDownloadContentType = {
   /** The Content-Type header value to serve. */
   contentType: string;

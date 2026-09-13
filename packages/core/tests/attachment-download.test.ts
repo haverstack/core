@@ -4,6 +4,7 @@ import {
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
   firstRecordedAttachment,
+  resolveReferencedAttachment,
   FORCED_CONTENT_TYPE,
 } from '../src/attachment-download.js';
 
@@ -233,5 +234,74 @@ describe('firstRecordedAttachment', () => {
 
   test('no records means nothing is established yet', () => {
     expect(firstRecordedAttachment([])).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// resolveReferencedAttachment
+// -------------------------------------------------------
+
+describe('resolveReferencedAttachment', () => {
+  const rec = (id: string, createdAt: string, entityId?: string) => ({
+    id,
+    createdAt: new Date(createdAt),
+    ...(entityId && { entityId }),
+  });
+
+  const uploads = [
+    rec('1hk153x00001', '2024-01-01T00:00:00.000Z', 'did:key:alice'),
+    rec('1hk153x00002', '2024-06-01T00:00:00.000Z', 'did:key:bob'),
+  ];
+
+  test('the named record wins over the requester and the earliest', () => {
+    expect(
+      resolveReferencedAttachment(uploads, {
+        attachmentRecordId: '1hk153x00002',
+        requesterEntityId: 'did:key:alice',
+      })?.id,
+    ).toBe('1hk153x00002');
+  });
+
+  test("the requester's own upload wins when no record is named", () => {
+    expect(resolveReferencedAttachment(uploads, { requesterEntityId: 'did:key:bob' })?.id).toBe(
+      '1hk153x00002',
+    );
+  });
+
+  test('the first-recorded record answers a reference naming neither', () => {
+    expect(resolveReferencedAttachment(uploads)?.id).toBe('1hk153x00001');
+    expect(resolveReferencedAttachment(uploads, { requesterEntityId: 'did:key:carol' })?.id).toBe(
+      '1hk153x00001',
+    );
+  });
+
+  // The pointer is best-effort: the record it names can be deleted, and an
+  // unscoped upload has no entityId to match either.
+  test('a pointer at a record that is gone falls back', () => {
+    expect(
+      resolveReferencedAttachment(uploads, {
+        attachmentRecordId: 'deleted00001',
+        requesterEntityId: 'did:key:bob',
+      })?.id,
+    ).toBe('1hk153x00002');
+    expect(resolveReferencedAttachment(uploads, { attachmentRecordId: 'deleted00001' })?.id).toBe(
+      '1hk153x00001',
+    );
+  });
+
+  test("the requester's earliest upload wins among several of their own", () => {
+    const mine = [
+      rec('1hk153x00003', '2024-09-01T00:00:00.000Z', 'did:key:bob'),
+      ...uploads,
+      rec('1hk153x00004', '2024-03-01T00:00:00.000Z', 'did:key:bob'),
+    ];
+
+    expect(resolveReferencedAttachment(mine, { requesterEntityId: 'did:key:bob' })?.id).toBe(
+      '1hk153x00004',
+    );
+  });
+
+  test('no records means nothing to resolve', () => {
+    expect(resolveReferencedAttachment([], { attachmentRecordId: '1hk153x00001' })).toBeUndefined();
   });
 });

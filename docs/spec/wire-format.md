@@ -448,6 +448,12 @@ Both endpoints accept the same optional `If-Match` precondition described under 
     { "kind": "tag", "label": "starred" },
     { "kind": "attachment", "label": "avatar", "fileId": "abc123" },
     {
+      "kind": "attachment",
+      "label": "embed",
+      "fileId": "abc123",
+      "attachmentRecordId": "1hk153x00001"
+    },
+    {
       "kind": "relationship",
       "label": "reply-to",
       "target": { "scope": "record", "recordId": "xyz789" }
@@ -554,7 +560,9 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 
 `@haverstack/core/wire` exports the canonical implementation of this resolution and policy — `resolveAttachmentDownloadContentType()`, `isSafeAttachmentContentType()`, `inferContentTypeFromFilename()`, and the `NOSNIFF_HEADER_NAME`/`NOSNIFF_HEADER_VALUE` constants — so server implementations share one safe-list rather than each re-deriving it.
 
-The filename in `Content-Disposition` is taken from `?filename` if given, else the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise.
+The filename in `Content-Disposition` is taken from `?filename` if given, else the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise — `resolveReferencedAttachment()`, exported from `@haverstack/core/wire`, applies those last two steps.
+
+**A download names a `fileId`, not a reference to one**, so an association's [`attachmentRecordId`](./attachments.md#naming-the-upload-a-reference-came-from) has no place in this resolution: the request carries no record, and a query parameter naming one would be an existence oracle for record ids the requester cannot read. A client holding the association resolves the name it wants from the same helper and sends it as `?filename`, which is what that parameter is for.
 
 ### Delete
 

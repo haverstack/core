@@ -28,14 +28,32 @@ import type {
 } from './types.js';
 
 /**
- * Matches the SQLite adapter's association primary key (kind, label,
- * file_id, related_scope, related_id, related_ns, related_stack).
+ * Association identity — what dissociate() matches and a second associate()
+ * of the same reference is a repeat of. Matches the SQLite adapter's
+ * association primary key (kind, label, file_id, related_scope, related_id,
+ * related_ns, related_stack), which is why an attachment's
+ * `attachmentRecordId` is absent here: it annotates a reference rather than
+ * naming one. See docs/spec/data-model.md § Associations.
  */
 export function associationEqual(a: Association, b: Association): boolean {
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
   if (a.kind === 'relationship' && b.kind === 'relationship') {
     return targetEqual(a.target, b.target);
+  }
+  return true;
+}
+
+/**
+ * Identity plus every annotation outside it, so a write that only re-points
+ * an attachment association's `attachmentRecordId` still counts as a
+ * change. Identity alone decides which stored association a write lands on;
+ * this decides whether it says anything new.
+ */
+export function associationIdentical(a: Association, b: Association): boolean {
+  if (!associationEqual(a, b)) return false;
+  if (a.kind === 'attachment' && b.kind === 'attachment') {
+    return (a.attachmentRecordId ?? '') === (b.attachmentRecordId ?? '');
   }
   return true;
 }
@@ -110,7 +128,7 @@ export function changeSetOps(
   if (changes.associations) {
     const before = existing.associations ?? [];
     const after = changes.associations;
-    if (after.some((a) => !before.some((b) => associationEqual(a, b)))) ops.push('associate');
+    if (after.some((a) => !before.some((b) => associationIdentical(a, b)))) ops.push('associate');
     if (before.some((b) => !after.some((a) => associationEqual(a, b)))) ops.push('dissociate');
   }
 
