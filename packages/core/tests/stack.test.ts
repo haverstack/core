@@ -4905,6 +4905,46 @@ describe('attachment association — attachmentRecordId', () => {
     expect(updated.associations?.[0]).toMatchObject({ attachmentRecordId: second.id });
   });
 
+  // The association written is the association stored: an omitted pointer
+  // is a reference naming no upload, not a request to keep the one there.
+  test('associating without a pointer clears the one stored', async () => {
+    const { first, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+
+    const updated = await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+    });
+
+    expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
+    expect(updated.version).toBe(3);
+  });
+
+  test('a change set restating an association without its pointer clears it', async () => {
+    const { first, fileId } = await twoUploads();
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+
+    const updated = await stack.mutate(record.id, {
+      associations: [{ kind: 'attachment', label: 'embed', fileId }],
+    });
+
+    expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
+    expect(updated.version).toBe(3);
+  });
+
   test('dissociate matches on identity, ignoring the pointer', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });

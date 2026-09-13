@@ -1408,6 +1408,25 @@ describe('associations', () => {
     ]);
   });
 
+  test('re-associating without a pointer clears the column', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const fileId = 'a'.repeat(64);
+    await adapter.associate(record.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: '1hk153x00001',
+    });
+
+    await adapter.associate(record.id, { kind: 'attachment', label: 'embed', fileId });
+
+    expect((await adapter.getRecord(record.id))?.associations).toEqual([
+      { kind: 'attachment', label: 'embed', fileId },
+    ]);
+  });
+
   test('every target arm round-trips through storage', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();

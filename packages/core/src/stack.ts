@@ -1149,8 +1149,9 @@ export class Stack implements StackClient {
    * versioning rule as content.
    * An association the record already holds, saying the same thing, is a
    * no-op; one matching an existing association's identity but naming a
-   * different `attachmentRecordId` re-points that association in place,
-   * rather than adding a second reference to the same file.
+   * different `attachmentRecordId` — or none, which clears the one stored —
+   * re-points that association in place, rather than adding a second
+   * reference to the same file.
    * Returns the record as it now stands — unchanged on a no-op.
    */
   async associate(
@@ -1815,23 +1816,34 @@ export class Stack implements StackClient {
     associations: Association[] | undefined,
     stored: Association[] = [],
   ): Promise<void> {
-    for (const association of associations ?? []) {
-      if (association.kind !== 'attachment' || association.attachmentRecordId === undefined) {
-        continue;
-      }
-      if (stored.some((a) => associationIdentical(a, association))) continue;
-      const named = await this.adapter.getRecord(association.attachmentRecordId);
-      const content = named?.content as AttachmentContent | undefined;
+    const pointed = (associations ?? []).flatMap((association) =>
+      association.kind === 'attachment' &&
+      association.attachmentRecordId !== undefined &&
+      !stored.some((a) => associationIdentical(a, association))
+        ? [{ fileId: association.fileId, attachmentRecordId: association.attachmentRecordId }]
+        : [],
+    );
+    // One round trip per pointer, taken together: a change set carries a
+    // whole association list, and each pointer is an independent read.
+    const named = await Promise.all(
+      pointed.map(({ attachmentRecordId }) => this.adapter.getRecord(attachmentRecordId)),
+    );
+
+    pointed.forEach(({ fileId }, i) => {
+      const record = named[i];
+      const content = record?.content as AttachmentContent | undefined;
       if (
-        named &&
-        baseIdOf(named.typeId) === SYSTEM_TYPES.ATTACHMENT &&
-        content?.fileId === association.fileId
+        record &&
+        baseIdOf(record.typeId) === SYSTEM_TYPES.ATTACHMENT &&
+        content?.fileId === fileId
       ) {
-        continue;
+        return;
       }
       // One message for every way of failing: a missing record and a record
       // for other bytes must not be distinguishable, or this becomes an
-      // existence oracle for records the caller cannot read.
+      // existence oracle for records the caller cannot read. A write that
+      // succeeds does confirm the record it names, but only to a caller who
+      // already has file access for those bytes.
       // See the anti-oracle rule in docs/spec/attachments.md.
       throw new StackValidationError([
         {
@@ -1839,7 +1851,7 @@ export class Stack implements StackClient {
           message: 'attachmentRecordId must name an `_attachment` record for this fileId',
         },
       ]);
-    }
+    });
   }
 
   /**

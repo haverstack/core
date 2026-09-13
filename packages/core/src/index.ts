@@ -118,9 +118,3 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
-
-// The filename an app shows for an attachment association: which upload's
-// metadata record a reference describes, over the set getAttachmentRecords()
-// returns. Also re-exported from ./wire, where a download route asks the
-// same question about a requester.
-export { resolveReferencedAttachment } from './attachment-download.js';
