@@ -339,6 +339,25 @@ describe('actor names who performed the change', () => {
     expect(seen[1]!.record!.updatedBy).toBe(AUTHOR);
   });
 
+  // An actorless associate()/dissociate() must not fall back to
+  // record.updatedBy: that field reports whoever's last *bumping* write
+  // this is, which can be a stranger to the association change. Absence
+  // means unknown, never "the last editor".
+  test('an actorless associate()/dissociate() names nobody, even after an unrelated bumping edit', async () => {
+    await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
+    const note = await stack.asEntity(AUTHOR).create(NOTE, { text: 'hello' });
+    await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
+
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
+
+    await stack.associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.dissociate(note.id, { kind: 'tag', label: 'x' });
+
+    expect(seen[0]!.actor).toBeUndefined();
+    expect(seen[1]!.actor).toBeUndefined();
+  });
+
   test('a delegated write names the principal beside the subject', async () => {
     await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
     await stack.grant(APP, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);

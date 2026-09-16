@@ -25,6 +25,7 @@ import type {
   Unsubscribe,
 } from './types.js';
 import { StackQueryError } from './errors.js';
+import { bumpsVersion } from './record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.
@@ -278,7 +279,10 @@ export function buildEmission(
     };
   }
 
-  const actor = opts.actor ?? actorOf(record, kind);
+  // A non-bumping write (associate/dissociate) never stamped the record,
+  // so `record.updatedBy` reports whoever's last *bumping* write this is,
+  // not who just changed the association — only opts.actor is trustworthy.
+  const actor = bumpsVersion(list) ? (opts.actor ?? actorOf(record, kind)) : opts.actor;
   return {
     record,
     ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
