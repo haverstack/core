@@ -1383,7 +1383,10 @@ describe('getVersion', () => {
     expect(await adapter.getVersion('rec-abc123', 99)).toBeNull();
   });
 
-  test('parses associations and permissions when present', async () => {
+  // A stray `associations` key can still arrive from an older or foreign
+  // server — RecordVersion has no field for it, so the parser drops it
+  // rather than surfacing it. See docs/spec/versioning.md § Version history.
+  test('parses permissions when present and ignores a stray associations key', async () => {
     const adapter = await openAdapter();
     const withOptionals = {
       ...VERSION_RAW,
@@ -1392,7 +1395,7 @@ describe('getVersion', () => {
     };
     mockFetch.mockResolvedValueOnce(jsonResponse(withOptionals));
     const version = await adapter.getVersion('rec-abc123', 1);
-    expect(version?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(version && 'associations' in version).toBe(false);
     expect(version?.permissions).toEqual([{ access: 'public' }]);
   });
 });

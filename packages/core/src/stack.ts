@@ -124,6 +124,7 @@ import {
   associationIdentical,
   assertNonEmptyChangeSet,
   changeSetOps,
+  bumpsVersion,
   effectiveChanges,
   stampGroupAdmin,
   isGroupRecord,
@@ -340,8 +341,15 @@ export interface StackClient {
     patch: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
-  associate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
-  dissociate(id: string, association: Association, opts?: IfVersionOptions): Promise<StackRecord>;
+  /**
+   * Add an association. Never bumps `version`/`updatedAt` and takes no
+   * `ifVersion` — a set-add composes correctly regardless of write order,
+   * so it needs no OCC precondition. See docs/spec/versioning.md § Version
+   * history.
+   */
+  associate(id: string, association: Association): Promise<StackRecord>;
+  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
+  dissociate(id: string, association: Association): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -426,12 +434,19 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The requester behind a hard delete, which stamps nothing on a record
-   * that no longer exists. Owner-acting-alone is the only way to reach the
-   * verb, so there is never a principal to name beside the subject.
+   * The requester behind a write that stamps nothing on the record itself —
+   * a hard delete, which leaves no record to stamp, and associate()/
+   * dissociate(), which don't bump and so don't touch updatedBy/updatedVia.
+   * Hard delete is owner-acting-alone only, so it never has a principal to
+   * name beside the subject; associate()/dissociate() can run delegated,
+   * so `updatedVia` rides along here when present.
    */
-  private static purgeActor(opts: ActorOptions): ChangeActor | undefined {
-    return opts.updatedBy ? { entityId: opts.updatedBy } : undefined;
+  private static actorFrom(opts: ActorOptions): ChangeActor | undefined {
+    if (!opts.updatedBy) return undefined;
+    return {
+      entityId: opts.updatedBy,
+      ...(opts.updatedVia !== undefined && { principalId: opts.updatedVia }),
+    };
   }
 
   private async getTypeCached(id: TypeId): Promise<StackType | null> {
@@ -1010,13 +1025,27 @@ export class Stack implements StackClient {
     // writes nothing.
     if (ops.length === 0) return existing;
 
+    // A change set touching only `associations` doesn't bump — the same
+    // rule associate()/dissociate() follow unconditionally. Its actor
+    // travels as an explicit opt rather than a record stamp, since a
+    // non-bumping write never touches updatedBy/updatedVia.
+    // See docs/spec/versioning.md § Version history.
+    const bumps = bumpsVersion(ops);
     const previousParentId = existing.parentId ?? null;
-    const updated = await this.adapter.mutateRecord(
-      id,
-      effectiveChanges(changes, ops),
-      this.writeOptions(existing, opts),
-    );
-    this.emitChange(ops, updated, ops.includes('reparent') ? { previousParentId } : {});
+    const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
+      ...(bumps
+        ? this.writeOptions(existing, opts)
+        : {
+            expectedVersion: opts.ifVersion,
+            updatedBy: opts.updatedBy,
+            updatedVia: opts.updatedVia,
+          }),
+      bumpsVersion: bumps,
+    });
+    this.emitChange(ops, updated, {
+      ...(ops.includes('reparent') && { previousParentId }),
+      ...(!bumps && { actor: Stack.actorFrom(opts) }),
+    });
     return updated;
   }
 
@@ -1144,9 +1173,12 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add an association to a record. Snapshots the record's prior state and
-   * bumps version, same as patchContent() — associations are covered by the same
-   * versioning rule as content.
+   * Add an association to a record. Never bumps `version`/`updatedAt` and
+   * never snapshots — a set-add composes correctly regardless of write
+   * order, so it needs neither the OCC `ifVersion` guards content,
+   * `parentId` and `permissions`, nor the rollback history that guards.
+   * See docs/spec/versioning.md § Version history.
+   *
    * An association the record already holds, saying the same thing, is a
    * no-op; one matching an existing association's identity but naming a
    * different `attachmentRecordId` — or none, which clears the one stored —
@@ -1157,7 +1189,7 @@ export class Stack implements StackClient {
   async associate(
     id: string,
     association: Association,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts: ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const errors = validateAssociation(association);
@@ -1166,30 +1198,25 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    this.checkIfVersion(existing, opts.ifVersion);
     if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
       return existing;
     }
     await this.checkAttachmentAssociationPointers([association]);
 
-    const updated = await this.adapter.associate(
-      id,
-      association,
-      this.writeOptions(existing, opts),
-    );
-    this.emitChange('associate', updated);
+    const updated = await this.adapter.associate(id, association);
+    this.emitChange('associate', updated, { actor: Stack.actorFrom(opts) });
     return updated;
   }
 
   /**
-   * Remove an association from a record. Snapshots and bumps version, same
-   * as associate(). Matched by kind, label, and payload. No-op if not found.
-   * Returns the record as it now stands — unchanged on a no-op.
+   * Remove an association from a record. Never bumps `version`/`updatedAt`
+   * — see associate(). Matched by kind, label, and payload. No-op if not
+   * found. Returns the record as it now stands — unchanged on a no-op.
    */
   async dissociate(
     id: string,
     association: Association,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts: ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const errors = validateAssociation(association);
@@ -1198,7 +1225,6 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    this.checkIfVersion(existing, opts.ifVersion);
     if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) {
       return existing;
     }
@@ -1213,12 +1239,8 @@ export class Stack implements StackClient {
       );
     }
 
-    const updated = await this.adapter.dissociate(
-      id,
-      association,
-      this.writeOptions(existing, opts),
-    );
-    this.emitChange('dissociate', updated);
+    const updated = await this.adapter.dissociate(id, association);
+    this.emitChange('dissociate', updated, { actor: Stack.actorFrom(opts) });
     return updated;
   }
 
@@ -1305,7 +1327,7 @@ export class Stack implements StackClient {
         hard: true,
         expectedVersion: opts.ifVersion,
       });
-      if (purged) this.emitChange('hard-delete', purged, { actor: Stack.purgeActor(opts) });
+      if (purged) this.emitChange('hard-delete', purged, { actor: Stack.actorFrom(opts) });
       return;
     }
 
@@ -1484,12 +1506,14 @@ export class Stack implements StackClient {
       await this.assertNoParentCycle(id, targetParentId);
     }
 
-    // A `_group`'s roster is authority, not data: it does not roll back.
+    // Associations never restore, for any Record — a snapshot never
+    // carries them, so there's nothing here for the adapter to roll back.
     // See docs/spec/versioning.md § Restore semantics.
-    const restored = await this.adapter.restoreVersion(id, version, {
-      ...this.writeOptions(existing, opts),
-      ...(isGroupRecord(existing) && { restoreAssociations: false }),
-    });
+    const restored = await this.adapter.restoreVersion(
+      id,
+      version,
+      this.writeOptions(existing, opts),
+    );
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
   }
@@ -1990,7 +2014,7 @@ export class Stack implements StackClient {
       );
       const at = new Date();
       for (const record of deletedRecords) {
-        this.emitChange('hard-delete', record, { actor: Stack.purgeActor(opts), at });
+        this.emitChange('hard-delete', record, { actor: Stack.actorFrom(opts), at });
       }
     } else {
       deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(fileId, opts);
@@ -2471,10 +2495,12 @@ export class Stack implements StackClient {
 
   /**
    * Snapshot of a record's prior state, passed with the mutating adapter
-   * call so snapshot and mutation land in one atomic write. `associations`
-   * and `parentId` are always present (`[]` and `null` where the record has
-   * neither) so restore can distinguish "cleared" and "at the root" from a
-   * snapshot that omits the key entirely ("leave as-is"). See
+   * call so snapshot and mutation land in one atomic write. `parentId` is
+   * always present (`null` where the record has none) so restore can
+   * distinguish "at the root" from a snapshot that omits the key entirely
+   * ("leave as-is"). Never carries `associations` — associate()/
+   * dissociate() don't bump, so no version ever snapshots the association
+   * set, and there is nothing for a restore to roll back to. See
    * docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
@@ -2487,7 +2513,6 @@ export class Stack implements StackClient {
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
       ...(record.parentId !== undefined && { parentId: record.parentId }),
-      associations: record.associations ?? [],
       ...(record.permissions && { permissions: record.permissions }),
     };
   }

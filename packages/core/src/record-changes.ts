@@ -140,6 +140,17 @@ export function changeSetOps(
 }
 
 /**
+ * Whether a change set's ops advance `version`/`updatedAt` at all.
+ * `associate`/`dissociate` don't — a change set touching only
+ * `associations` is a no-bump write, same as calling associate()/
+ * dissociate() directly. Every other op does. See
+ * docs/spec/versioning.md § Version history.
+ */
+export function bumpsVersion(ops: ChangeOp[]): boolean {
+  return ops.some((op) => op !== 'associate' && op !== 'dissociate');
+}
+
+/**
  * The change set narrowed to the aspects that actually moved. An adapter
  * is handed this rather than what the caller wrote, so restating an aspect
  * cannot rewrite it: `unlisted: true` on an already-unlisted record would

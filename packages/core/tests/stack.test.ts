@@ -1544,15 +1544,15 @@ describe('Stack.restoreVersion — parentId', () => {
     expect(back.parentId).toBeUndefined();
   });
 
-  test('restoring leaves content and associations rolled back alongside the move', async () => {
+  test('restoring rolls content and containment back alongside the move, but leaves associations exactly as they stand', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.associate(note.id, { kind: 'tag', label: 'pinned' });
+    await stack.associate(note.id, { kind: 'tag', label: 'pinned' }); // no bump
     await stack.patchContent(note.id, { text: 'edited' });
     await stack.mutate(note.id, { parentId: null });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
-    expect(restored.associations).toBeUndefined();
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'pinned' }]);
     expect(restored.parentId).toBe(box.id);
   });
 
@@ -2399,17 +2399,18 @@ describe('_group — at least one admin', () => {
     });
   });
 
-  // A Group's roster is authority, not data: a restore rolls back the
-  // record's content and containment and leaves the roster exactly where it
-  // stands. See docs/spec/versioning.md § Restore semantics.
+  // A Group's roster is authority, not data — but that is no longer a
+  // _group-specific carve-out: no record's associations are ever restored,
+  // because a snapshot never captures them in the first place. A restore
+  // rolls back content and containment and leaves the current roster (or
+  // any other record's current associations) exactly where they stand.
+  // See docs/spec/versioning.md § Restore semantics.
   describe('restoreVersion does not roll back the roster', () => {
-    test('content rolls back while the roster stays put', async () => {
+    test('content rolls back to what it was, while the current roster stays exactly where it stands', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       const v = group.version;
-      await stack.mutate(group.id, {
-        contentPatch: { name: 'Renamed' },
-        associations: [admin('successor'), member('carol')],
-      });
+      await stack.patchContent(group.id, { name: 'Renamed' }); // bumps, snapshots v
+      await stack.mutate(group.id, { associations: [admin('successor'), member('carol')] }); // no bump
 
       const restored = await stack.restoreVersion(group.id, v);
 
@@ -2417,12 +2418,13 @@ describe('_group — at least one admin', () => {
       expect(restored.associations).toEqual([admin('successor'), member('carol')]);
     });
 
-    test('a snapshot whose admins were deliberately removed does not re-grant them', async () => {
+    test('restoring content after an admin was removed does not re-grant them', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.mutate(group.id, { associations: [admin('owner-123'), admin('departing')] });
-      const v = (await stack.get(group.id))!.version;
+      const v = group.version; // the version a snapshot will land on
+      await stack.mutate(group.id, { associations: [admin('owner-123'), admin('departing')] }); // no bump
+      await stack.patchContent(group.id, { name: 'v2' }); // bumps, snapshots v
 
-      await stack.dissociate(group.id, admin('departing'));
+      await stack.dissociate(group.id, admin('departing')); // no bump
       const restored = await stack.restoreVersion(group.id, v);
 
       expect(restored.associations).toEqual([admin('owner-123')]);
@@ -2433,12 +2435,13 @@ describe('_group — at least one admin', () => {
     // a side effect of a content rollback.
     test('removed members are not restored', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
+      const v = group.version; // the version a snapshot will land on
       await stack.mutate(group.id, {
         associations: [admin('owner-123'), member('alice'), member('bob')],
-      });
-      const v = (await stack.get(group.id))!.version;
+      }); // no bump
+      await stack.patchContent(group.id, { name: 'v2' }); // bumps, snapshots v
 
-      await stack.mutate(group.id, { associations: [admin('owner-123')] });
+      await stack.mutate(group.id, { associations: [admin('owner-123')] }); // no bump
       const restored = await stack.restoreVersion(group.id, v);
 
       expect(restored.associations).toEqual([admin('owner-123')]);
@@ -2448,7 +2451,7 @@ describe('_group — at least one admin', () => {
     // the roster, so it cannot be what empties one.
     test('every version of a group stays restorable', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.mutate(group.id, { associations: [admin('successor')] });
+      await stack.mutate(group.id, { associations: [admin('successor')] }); // no bump
       await stack.patchContent(group.id, { name: 'Renamed' });
 
       const restored = await stack.restoreVersion(group.id, group.version);
@@ -2457,14 +2460,15 @@ describe('_group — at least one admin', () => {
       expect(restored.associations).toEqual([admin('successor')]);
     });
 
-    test('a non-_group record still restores its associations verbatim', async () => {
+    test('a non-_group record behaves exactly the same: its associations are never restored either', async () => {
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.mutate(note.id, { associations: [admin('someone')] });
-      const v = (await stack.get(note.id))!.version;
-      await stack.mutate(note.id, { associations: [member('other')] });
+      const v = note.version; // the version a snapshot will land on
+      await stack.mutate(note.id, { associations: [admin('someone')] }); // no bump
+      await stack.patchContent(note.id, { text: 'v2' }); // bumps, snapshots v
+      await stack.mutate(note.id, { associations: [member('other')] }); // no bump
 
       const restored = await stack.restoreVersion(note.id, v);
-      expect(restored.associations).toEqual([admin('someone')]);
+      expect(restored.associations).toEqual([member('other')]);
     });
   });
 });
@@ -2591,25 +2595,26 @@ describe('versions', () => {
     await expect(stack.restoreVersion(record.id, 99)).rejects.toThrow();
   });
 
-  test('restoreVersion restores associations captured in the snapshot', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'original' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2
-    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2 (assoc: [favourite])
-    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' }); // v4, assoc now []
-    const restored = await stack.restoreVersion(record.id, 2); // v5
-    expect(restored.content).toEqual({ text: 'original' });
-    expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
-  });
-
-  test('restoreVersion removes an association that did not exist at the target version, even though the target had none at all', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1, no associations
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // v2, snapshots v1
+  test('restoreVersion never restores associations, even ones held at the target version', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v1
+    await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
+    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v2
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toBeUndefined();
+  });
+
+  test('restoreVersion leaves the record’s current associations exactly as they stand', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
+    await stack.patchContent(record.id, { text: 'changed' }); // v2
+    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v2
+    const restored = await stack.restoreVersion(record.id, 1); // v3
+    expect(restored.content).toEqual({ text: 'original' });
+    expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
 
     const raw = await adapter.getRecord(record.id);
-    expect(raw?.associations).toBeUndefined();
+    expect(raw?.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
   });
 
   test('restoreVersion never restores permissions, even when the snapshot has them', async () => {
@@ -2622,15 +2627,16 @@ describe('versions', () => {
     expect(restored.permissions).toEqual([]);
   });
 
-  test('version snapshot captures associations and permissions when present', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2, snapshots v1
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3, snapshots v2
-    await stack.patchContent(record.id, { text: 'changed' }); // v4, snapshots v3
+  test('version snapshot captures permissions when present; RecordVersion has no associations field at all', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v1
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v2, snapshots v1
+    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2
     const versions = await stack.getVersions(record.id);
-    const v3snap = versions.find((v) => v.version === 3);
-    expect(v3snap?.associations).toEqual([{ kind: 'tag', label: 'x' }]);
-    expect(v3snap?.permissions).toEqual([{ access: 'public' }]);
+    const v1snap = versions.find((v) => v.version === 1);
+    expect(v1snap && 'associations' in v1snap).toBe(false);
+    const v2snap = versions.find((v) => v.version === 2);
+    expect(v2snap?.permissions).toEqual([{ access: 'public' }]);
   });
 });
 
@@ -2639,31 +2645,31 @@ describe('versions', () => {
 // -------------------------------------------------------
 
 describe('versioning rule — mixed mutations', () => {
-  test('version increments by exactly one per real mutation, across mixed operation types', async () => {
+  test('version increments by exactly one per real mutation, across mixed operation types — associate/dissociate never bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v3
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v4
-    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // v5
-    await stack.delete(record.id); // v6
-    const undeleted = await stack.undelete(record.id); // v7
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v2
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3
+    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v3
+    await stack.delete(record.id); // v4
+    const undeleted = await stack.undelete(record.id); // v5
 
-    expect(undeleted.version).toBe(7);
+    expect(undeleted.version).toBe(5);
     const versionNumbers = (await stack.getVersions(record.id))
       .map((v) => v.version)
       .sort((a, b) => a - b);
-    expect(versionNumbers).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(versionNumbers).toEqual([1, 2, 3, 4]);
   });
 
   test('no-op mutations never bump version or add a snapshot', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v2
+    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v1
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no-op
     await stack.dissociate(record.id, { kind: 'tag', label: 'gone' }); // no-op
     await stack.mutate(record.id, { permissions: [] }); // no-op (already private)
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    expect(await stack.getVersions(record.id)).toHaveLength(1);
+    expect(updated?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 });
 
@@ -2704,24 +2710,20 @@ describe('ifVersion', () => {
     expect(updated.content.text).toBe('from B');
   });
 
-  test('associate()/dissociate()/a reshare enforce ifVersion', async () => {
+  test('a reshare enforces ifVersion; associate()/dissociate() never bump version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     await expect(
-      stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 1 }),
-    ).rejects.toThrow(StackVersionConflictError);
-    await expect(
       stack.mutate(record.id, { permissions: [{ access: 'public' }] }, { ifVersion: 1 }),
     ).rejects.toThrow(StackVersionConflictError);
 
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 2 }); // v3
-    await expect(
-      stack.dissociate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 2 }),
-    ).rejects.toThrow(StackVersionConflictError);
-    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }, { ifVersion: 3 }); // v4
+    const associated = await stack.associate(record.id, { kind: 'tag', label: 'x' });
+    expect(associated.version).toBe(2);
+    const dissociated = await stack.dissociate(record.id, { kind: 'tag', label: 'x' });
+    expect(dissociated.version).toBe(2);
 
-    expect((await stack.get(record.id))?.version).toBe(4);
+    expect((await stack.get(record.id))?.version).toBe(2);
   });
 
   test('delete() (soft) and undelete() enforce ifVersion', async () => {
@@ -2831,7 +2833,7 @@ describe('orphan version row recovery', () => {
     expect(versions[0].version).toBe(1);
   });
 
-  test('an orphan does not block associate()/dissociate()/a reshare/delete()/undelete()/restoreVersion()', async () => {
+  test('an orphan does not block a reshare/delete()/undelete()/restoreVersion() — every verb that still bumps', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
@@ -2842,7 +2844,10 @@ describe('orphan version row recovery', () => {
       updatedAt: new Date(),
     }); // orphan sitting at the record's current version (2)
 
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // v3
+    // associate()/dissociate() never touch the snapshot mechanism at all
+    // now, so they have nothing to heal — a reshare (mutate) is the verb
+    // that exercises the orphan-healing path here.
+    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3
     expect((await stack.get(record.id))?.version).toBe(3);
   });
 
@@ -3663,24 +3668,21 @@ describe('associate / dissociate', () => {
     expect(updated?.associations).toBeUndefined();
   });
 
-  test('associate bumps version and snapshots the prior state', async () => {
+  test('associate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    const versions = await stack.getVersions(record.id);
-    expect(versions).toHaveLength(1);
-    expect(versions[0].version).toBe(1);
-    expect(versions[0].associations ?? []).toEqual([]);
+    const updated = await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(updated.version).toBe(1);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
-  test('associate is a no-op for a duplicate association — no version bump', async () => {
+  test('associate is a no-op for a duplicate association', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    expect(await stack.getVersions(record.id)).toHaveLength(1);
+    expect(updated?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
   test('associate throws StackNotFoundError for a missing record', async () => {
@@ -3689,16 +3691,16 @@ describe('associate / dissociate', () => {
     );
   });
 
-  test('dissociate bumps version and snapshots the prior state', async () => {
+  test('dissociate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
-    const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(3);
-    expect(await stack.getVersions(record.id)).toHaveLength(2);
+    const updated = await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    expect(updated.version).toBe(1);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
-  test('dissociate is a no-op when the association is not present — no version bump', async () => {
+  test('dissociate is a no-op when the association is not present', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.dissociate(record.id, { kind: 'tag', label: 'nonexistent' });
     const updated = await adapter.getRecord(record.id);
@@ -3911,19 +3913,19 @@ describe('Stack.mutate — the `unlisted` key', () => {
 // -------------------------------------------------------
 
 describe('mutators return the record they produced', () => {
-  test('associate returns the record with the association applied', async () => {
+  test('associate returns the record with the association applied, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const updated = await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    expect(updated.version).toBe(2);
+    expect(updated.version).toBe(1);
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
     expect(updated).toEqual(await adapter.getRecord(record.id));
   });
 
-  test('dissociate returns the record with the association gone', async () => {
+  test('dissociate returns the record with the association gone, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
     const updated = await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
-    expect(updated.version).toBe(3);
+    expect(updated.version).toBe(1);
     expect(updated.associations).toBeUndefined();
   });
 
@@ -3960,7 +3962,7 @@ describe('mutators return the record they produced', () => {
     expect(await stack.dissociate(record.id, { kind: 'tag', label: 'absent' })).toEqual(current);
     expect(await stack.mutate(record.id, { permissions: [{ access: 'public' }] })).toEqual(current);
     expect(await stack.mutate(record.id, { unlisted: false })).toEqual(current);
-    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 });
 
@@ -4848,7 +4850,7 @@ describe('attachment association — attachmentRecordId', () => {
     ]);
   });
 
-  test('re-pointing an existing association updates it in place', async () => {
+  test('re-pointing an existing association updates it in place, version unchanged', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, {
@@ -4868,7 +4870,7 @@ describe('attachment association — attachmentRecordId', () => {
     expect(updated.associations).toEqual([
       { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
     ]);
-    expect(updated.version).toBe(3);
+    expect(updated.version).toBe(1);
   });
 
   test('associate is a no-op when the pointer is unchanged — no version bump', async () => {
@@ -4884,10 +4886,10 @@ describe('attachment association — attachmentRecordId', () => {
 
     await stack.associate(record.id, association);
 
-    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
-  test('a change set that only re-points an association is a change', async () => {
+  test('a change set that only re-points an association is a change, but never bumps version', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, {
@@ -4901,13 +4903,13 @@ describe('attachment association — attachmentRecordId', () => {
       associations: [{ kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id }],
     });
 
-    expect(updated.version).toBe(3);
+    expect(updated.version).toBe(1);
     expect(updated.associations?.[0]).toMatchObject({ attachmentRecordId: second.id });
   });
 
   // The association written is the association stored: an omitted pointer
   // is a reference naming no upload, not a request to keep the one there.
-  test('associating without a pointer clears the one stored', async () => {
+  test('associating without a pointer clears the one stored, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, {
@@ -4924,10 +4926,10 @@ describe('attachment association — attachmentRecordId', () => {
     });
 
     expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
-    expect(updated.version).toBe(3);
+    expect(updated.version).toBe(1);
   });
 
-  test('a change set restating an association without its pointer clears it', async () => {
+  test('a change set restating an association without its pointer clears it, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(record.id, {
@@ -4942,7 +4944,7 @@ describe('attachment association — attachmentRecordId', () => {
     });
 
     expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
-    expect(updated.version).toBe(3);
+    expect(updated.version).toBe(1);
   });
 
   test('dissociate matches on identity, ignoring the pointer', async () => {

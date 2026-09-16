@@ -229,9 +229,9 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
-**Every mutation that bumps `version` answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`.
+**Every mutation answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`. This holds for the association endpoints too, even though they never bump `version` — the record they answer with simply carries whatever `version`/`updatedAt` it already had (see [Versioning § Version history](./versioning.md#version-history)).
 
-This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them, so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
+This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them (or, for the association endpoints, off the request's own acting identity, since nothing was persisted to read it back from — see [Events § Attribution](./events.md#attribution)), so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
 
 **A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
 
@@ -304,7 +304,7 @@ If-Match: "5"
 | `contentPatch` | object         | merges at the **top level**: omitted keeps, `null` removes |
 | `parentId`     | string \| null | move into a container, or to the root                      |
 | `permissions`  | array          | replaces all entries; `[]` is private                      |
-| `associations` | array          | replaces the whole set                                     |
+| `associations` | array          | replaces the whole set; alone, never bumps `version`       |
 | `unlisted`     | boolean        | withhold from enumeration, or relist                       |
 
 **Keys are read for presence.** `"unlisted": false` and `"parentId": null` name aspects and are applied; an absent key is untouched. `null` is the root sentinel for `parentId` — the JSON spelling of the `parentId=null` that `GET /records` takes on a query string — and is **not** a removal spelling anywhere else in the envelope: a `null` value for any other key is refused with **422**, since the key that removes things already has one meaning for it.
@@ -315,7 +315,7 @@ If-Match: "5"
 
 **Each key carries its own authorization, and one refused key refuses the whole request** with the status that key would have earned alone — `403` for a reshare a requester may not make, `404` where they cannot read the record at all. Nothing is partially applied. A server built on `ScopedStack` inherits this; one mapping bodies onto `Stack` directly has to reproduce it per key. See [Access control § Composing a change set](./access-control.md#composing-a-change-set).
 
-**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version`, `POST .../migrate`, and the association endpoints below all accept an optional `If-Match` header. One header fences the whole change set, so a multi-aspect edit is a single conditional write rather than a sequence a racing writer can interleave with:
+**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version` and `POST .../migrate` all accept an optional `If-Match` header. One header fences the whole change set, so a multi-aspect edit is a single conditional write rather than a sequence a racing writer can interleave with. **The association endpoints take no `If-Match` at all** — they never bump `version`, so there's nothing for a precondition on it to guard; see [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion).
 
 When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **412** with a `version_conflict` wire error and changes nothing. Omit the header to keep unconditional last-writer-wins behavior. See [Versioning & deletion](./versioning.md#optimistic-concurrency-ifversion) for the corresponding `ifVersion` API.
 
@@ -404,7 +404,7 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id`, the association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). A change set produces one version and therefore one snapshot, however many aspects it moved. `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id` (when its change set names an aspect other than `associations` alone), `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). A change set that bumps produces one version and therefore one snapshot, however many aspects it moved. The association endpoints are the deliberate exception: they never bump `version`, so they never snapshot either — see [Versioning § Version history](./versioning.md#version-history). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
@@ -418,7 +418,7 @@ A snapshot body carries `parentId` exactly as the Record body above does: presen
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals a change set's `parentId` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**That same exhaustive list is what the [change feed](./change-feed.md) reports on**, plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as it loses rollback history here.
+**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus the association endpoints (which report `associate`/`dissociate` without ever bumping `version` or snapshotting), plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
 
 ## Associations
 
@@ -436,9 +436,9 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
-Both endpoints accept the same optional `If-Match` precondition described under [Records](#records), and both answer `200` with the updated Record, per the rule under [Records](#records).
+Neither endpoint accepts `If-Match` — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had: neither endpoint ever bumps `version`, snapshots, or produces a new entry in `GET .../versions` — see [Versioning § Version history](./versioning.md#version-history).
 
-**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. See [Data model § Mutations](./data-model.md#mutations).
+**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. Neither spelling bumps `version` on its own; a `PATCH` only bumps when its change set names a version-bumping aspect alongside `associations`. See [Data model § Mutations](./data-model.md#mutations).
 
 `GET .../associations` response shape is consistent regardless of kind:
 

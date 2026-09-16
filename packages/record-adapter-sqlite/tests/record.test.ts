@@ -479,22 +479,14 @@ describe('expectedVersion', () => {
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
-  test('associate and dissociate enforce expectedVersion', async () => {
+  test('associate and dissociate take no expectedVersion and never bump', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
-    await expect(
-      adapter.associate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 99 }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    await adapter.associate(record.id, { kind: 'tag', label: 'x' });
+    await adapter.dissociate(record.id, { kind: 'tag', label: 'x' });
 
-    await adapter.associate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 1 }); // -> v2
-
-    await expect(
-      adapter.dissociate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 1 }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.dissociate(record.id, { kind: 'tag', label: 'x' }, { expectedVersion: 2 }); // -> v3
-
-    expect((await adapter.getRecord(record.id))?.version).toBe(3);
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
   test('a permissions change set enforces expectedVersion', async () => {
@@ -537,11 +529,11 @@ describe('expectedVersion', () => {
     expect(restored.content).toEqual({ text: 'original' });
   });
 
-  test('expectedVersion on a nonexistent record throws StackNotFoundError', async () => {
+  test('associate on a nonexistent record throws StackNotFoundError', async () => {
     const adapter = await initAdapter();
-    await expect(
-      adapter.associate('nonexistent', { kind: 'tag', label: 'x' }, { expectedVersion: 1 }),
-    ).rejects.toThrow(StackNotFoundError);
+    await expect(adapter.associate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
+      StackNotFoundError,
+    );
   });
 });
 
@@ -1339,13 +1331,13 @@ describe('associations', () => {
     expect(stars?.length).toBe(1);
   });
 
-  test('associate bumps version', async () => {
+  test('associate never bumps version', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
     await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
     const retrieved = await adapter.getRecord(record.id);
-    expect(retrieved?.version).toBe(2);
+    expect(retrieved?.version).toBe(1);
   });
 
   test('associate on a nonexistent record throws StackNotFoundError instead of creating an orphan row', async () => {
@@ -2046,10 +2038,12 @@ describe('restoreVersion', () => {
     await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
   });
 
-  // The adapter obeys the flag and asks nothing about what it means — the
-  // rule deciding whether a restore rolls associations back lives in core.
-  // See StackRecordAdapter.restoreVersion().
-  test('leaves the record’s associations alone when restoreAssociations is false', async () => {
+  // RecordVersion carries no `associations` field at all — associate()/
+  // dissociate() never bump, so no version ever snapshots the association
+  // set, and restoreVersion() never writes to the associations table. See
+  // StackRecordAdapter.restoreVersion() and docs/spec/versioning.md
+  // § Version history.
+  test('restoreVersion never touches associations — the current set survives untouched', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
@@ -2057,51 +2051,17 @@ describe('restoreVersion', () => {
       version: 1,
       typeId: record.typeId,
       content: record.content,
-      associations: [{ kind: 'tag', label: 'from-snapshot' }],
       updatedAt: new Date(),
     });
     await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
 
-    const restored = await adapter.restoreVersion(record.id, 1, { restoreAssociations: false });
+    const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'current' }]);
   });
 
-  test('applies the snapshot’s associations when handed no flag', async () => {
-    const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: record.content,
-      associations: [{ kind: 'tag', label: 'from-snapshot' }],
-      updatedAt: new Date(),
-    });
-    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
-
-    const restored = await adapter.restoreVersion(record.id, 1);
-    expect(restored.associations).toEqual([{ kind: 'tag', label: 'from-snapshot' }]);
-  });
-
-  test('an empty snapshot list clears the associations', async () => {
-    const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: record.content,
-      associations: [],
-      updatedAt: new Date(),
-    });
-    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
-
-    const restored = await adapter.restoreVersion(record.id, 1);
-    expect(restored.associations ?? []).toEqual([]);
-  });
-
   // Restoring content while the roster stays put is the shape a `_group`
-  // restore takes; the adapter reaches it without knowing what a group is.
+  // restore takes; the adapter reaches it without knowing what a group is —
+  // it never touches associations for any record.
   test('rolls content back while leaving associations in place', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ content: { text: 'original' } });
@@ -2110,7 +2070,6 @@ describe('restoreVersion', () => {
       version: 1,
       typeId: record.typeId,
       content: { text: 'original' },
-      associations: [{ kind: 'tag', label: 'from-snapshot' }],
       updatedAt: new Date(),
     });
     await adapter.mutateRecord(record.id, {
@@ -2118,7 +2077,7 @@ describe('restoreVersion', () => {
       associations: [{ kind: 'tag', label: 'current' }],
     });
 
-    const restored = await adapter.restoreVersion(record.id, 1, { restoreAssociations: false });
+    const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'current' }]);
   });
@@ -2323,7 +2282,7 @@ describe('actor attribution', () => {
     await adapter.close();
   });
 
-  test('every mutating verb restamps the actor', async () => {
+  test('every version-bumping verb restamps the actor', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
@@ -2333,15 +2292,8 @@ describe('actor attribution', () => {
       { contentPatch: { text: 'v2' } },
       { updatedBy: OTHER, updatedVia: APP },
     );
-    let read = await adapter.getRecord(r.id);
+    const read = await adapter.getRecord(r.id);
     expect([read?.updatedBy, read?.updatedVia]).toEqual([OTHER, APP]);
-
-    await adapter.associate(r.id, { kind: 'tag', label: 'x' }, { updatedBy: ACTOR });
-    read = await adapter.getRecord(r.id);
-    expect([read?.updatedBy, read?.updatedVia]).toEqual([ACTOR, undefined]);
-
-    await adapter.dissociate(r.id, { kind: 'tag', label: 'x' }, { updatedBy: OTHER });
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
 
     await adapter.mutateRecord(r.id, { permissions: [{ access: 'public' }] }, { updatedBy: ACTOR });
     expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
@@ -2361,6 +2313,22 @@ describe('actor attribution', () => {
       },
     );
     expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+    await adapter.close();
+  });
+
+  // associate()/dissociate() take no ActorOptions at all — they never bump,
+  // so there is no version for an actor to be stamped on. See
+  // docs/spec/versioning.md § Version history.
+  test('associate()/dissociate() never restamp the actor', async () => {
+    const adapter = await initAdapter();
+    await adapter.saveType(NOTE_TYPE);
+    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+
+    await adapter.associate(r.id, { kind: 'tag', label: 'x' });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+
+    await adapter.dissociate(r.id, { kind: 'tag', label: 'x' });
+    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
     await adapter.close();
   });
 

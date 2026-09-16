@@ -62,17 +62,11 @@ describe('attribution — updatedBy tracks the actor', () => {
     expect(record?.updatedBy).toBe(EDITOR);
   });
 
-  test('every mutating verb restamps the actor', async () => {
+  test('every version-bumping verb restamps the actor', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     const view = stack.asEntity(EDITOR);
 
     await view.patchContent(created.id, { text: 'v2' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
-
-    await view.associate(created.id, { kind: 'tag', label: 'x' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
-
-    await view.dissociate(created.id, { kind: 'tag', label: 'x' });
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
 
     await view.delete(created.id);
@@ -80,6 +74,21 @@ describe('attribution — updatedBy tracks the actor', () => {
 
     await view.undelete(created.id);
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+  });
+
+  // associate()/dissociate() never bump `version`, so they never touch
+  // updatedBy either — the record's stamp stays exactly where the last
+  // version-bumping write left it. See docs/spec/versioning.md § Version
+  // history.
+  test('associate()/dissociate() never restamp the record, even under a different actor', async () => {
+    const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
+    const view = stack.asEntity(EDITOR);
+
+    await view.associate(created.id, { kind: 'tag', label: 'x' });
+    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
+
+    await view.dissociate(created.id, { kind: 'tag', label: 'x' });
+    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
   });
 
   // Resharing is owner-or-creator-only and never delegated, so the creator

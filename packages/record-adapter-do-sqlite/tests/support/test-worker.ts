@@ -131,14 +131,14 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.listTypes();
   }
 
-  async associate(recordId: string, association: Association, opts?: MutationOpts) {
+  async associate(recordId: string, association: Association) {
     await this.ready;
-    return this.adapter.associate(recordId, association, opts);
+    return this.adapter.associate(recordId, association);
   }
 
-  async dissociate(recordId: string, association: Association, opts?: MutationOpts) {
+  async dissociate(recordId: string, association: Association) {
     await this.ready;
-    return this.adapter.dissociate(recordId, association, opts);
+    return this.adapter.dissociate(recordId, association);
   }
 }
 

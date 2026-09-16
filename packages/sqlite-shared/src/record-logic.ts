@@ -92,7 +92,6 @@ const VERSION_COLUMNS = [
   'updated_by',
   'updated_via',
   'parent_id',
-  'associations',
   'permissions',
 ] as const;
 
@@ -104,7 +103,6 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
   version.updatedBy ?? null,
   version.updatedVia ?? null,
   version.parentId ?? null,
-  version.associations ? JSON.stringify(version.associations) : null,
   version.permissions ? JSON.stringify(version.permissions) : null,
 ];
 
@@ -306,20 +304,44 @@ export class SharedSqlRecordLogic {
    * replaced when it carries one, and the snapshot written alongside — so
    * one call is one version whatever it moved.
    *
-   * The expectedVersion check is standalone rather than folded into the
-   * UPDATE alone, because a content change needs fts.remove() to run
-   * *before* the records-table content changes. The guard is still in the
-   * UPDATE's WHERE, so a writer that slipped in between the read and the
-   * write is caught there rather than overwriting.
+   * `opts.bumpsVersion: false` is a change set that touches only
+   * `associations` — Stack computes this from which ops the set actually
+   * moves. Such a write skips the records-table UPDATE (and the snapshot)
+   * entirely: nothing on that row changes, so there is nothing to bump and
+   * no version to snapshot. `expectedVersion`, if given, is still
+   * re-checked synchronously inside the transaction — the CAS guard the
+   * bumping path gets from its UPDATE's WHERE clause, restated as a read
+   * because there is no UPDATE here to carry it. See
+   * docs/spec/versioning.md § Version history.
+   *
+   * The expectedVersion check for a bumping write is standalone rather than
+   * folded into the UPDATE alone, because a content change needs
+   * fts.remove() to run *before* the records-table content changes. The
+   * guard is still in the UPDATE's WHERE, so a writer that slipped in
+   * between the read and the write is caught there rather than overwriting.
    */
   async mutateRecord(
     id: string,
     changes: RecordChanges,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: {
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+      bumpsVersion?: boolean;
+    } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
+
+    if (opts.bumpsVersion === false) {
+      this.exec.transaction(() => {
+        this.checkExpectedVersion(this.readRecord(id)!, opts.expectedVersion);
+        if (changes.associations !== undefined) {
+          this.replaceAssociations(id, changes.associations);
+        }
+      });
+      return this.reread(id, 'mutateRecord');
+    }
 
     const merged = changes.contentPatch
       ? applyMergePatch(existing.content, changes.contentPatch)
@@ -440,7 +462,6 @@ export class SharedSqlRecordLogic {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-      restoreAssociations?: boolean;
     } & ActorOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
@@ -450,6 +471,8 @@ export class SharedSqlRecordLogic {
     const target = await this.getVersion(id, version);
     if (!target) throw new Error(`Version not found: ${id}@${version}`);
 
+    // Associations are never restored — a snapshot never carries them, so
+    // there is nothing here to roll the associations table back to.
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.rewriteContent(
@@ -460,11 +483,6 @@ export class SharedSqlRecordLogic {
         ['parent_id = ?'],
         [target.parentId ?? null],
       );
-      // Whether a restore rolls associations back at all is decided where
-      // the record's meaning is known; the snapshot's list is the only one
-      // that ever lands here. See StackRecordAdapter.restoreVersion().
-      const applied = opts.restoreAssociations === false ? undefined : target.associations;
-      if (applied !== undefined) this.replaceAssociations(id, applied);
     });
 
     return this.reread(id, 'restoreVersion');
@@ -739,30 +757,28 @@ export class SharedSqlRecordLogic {
   // Associations
   // -------------------------------------------------------
 
-  async associate(
-    recordId: string,
-    association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ): Promise<StackRecord> {
+  /**
+   * Never bumps `version`/`updatedAt` and never snapshots — a set-add
+   * composes correctly regardless of write order, so it needs neither OCC
+   * nor rollback history. The records row is untouched entirely; only the
+   * associations table changes. See docs/spec/versioning.md § Version
+   * history.
+   */
+  async associate(recordId: string, association: Association): Promise<StackRecord> {
     this.exec.transaction(() => {
-      if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
-      // Bump (and CAS-check) first, before the associations-table write, so
-      // a lost race never partially applies.
-      this.versionedUpdate(recordId, [], [], opts);
+      if (!this.readRecord(recordId))
+        throw new StackNotFoundError(`Record not found: "${recordId}"`);
       this.insertAssociations(recordId, [association]);
     });
 
     return this.reread(recordId, 'associate');
   }
 
-  async dissociate(
-    recordId: string,
-    association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ): Promise<StackRecord> {
+  /** Never bumps `version`/`updatedAt` — see associate(). */
+  async dissociate(recordId: string, association: Association): Promise<StackRecord> {
     this.exec.transaction(() => {
-      if (opts.snapshot) this.snapshotBeforeMutation(recordId, opts.snapshot);
-      this.versionedUpdate(recordId, [], [], opts);
+      if (!this.readRecord(recordId))
+        throw new StackNotFoundError(`Record not found: "${recordId}"`);
       this.exec.run(
         `DELETE FROM associations
        WHERE record_id = ?

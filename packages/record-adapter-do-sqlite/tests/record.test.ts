@@ -212,12 +212,17 @@ describe('expectedVersion / transactional rollback', () => {
    * exec.transaction() is ever entered, so a stale-version patch throws
    * before the first write and proves nothing about atomicity.
    *
-   * associate({ snapshot, expectedVersion }) is the shape that does reach
-   * it: snapshotBeforeMutation() writes a real row into `versions`, and
-   * bumpVersion()'s CAS then fails on the stale expectedVersion and throws
-   * — both inside the same transaction callback. If transactionSync() did
-   * not roll back, that orphan version row would survive a mutation that
-   * reported failure.
+   * deleteRecord({ snapshot, expectedVersion }) is the shape that does
+   * reach it: unlike patchContent/mutateRecord, a soft delete has no
+   * pre-transaction expectedVersion check of its own — it goes straight
+   * into exec.transaction(), where snapshotBeforeMutation() writes a real
+   * row into `versions` and versionedUpdate()'s CAS then fails on the
+   * stale expectedVersion and throws — both inside the same transaction
+   * callback. (associate()/dissociate() can no longer stand in for this:
+   * they never bump and never snapshot, so they touch neither `versions`
+   * nor the CAS path at all — see docs/spec/versioning.md § Version
+   * history.) If transactionSync() did not roll back, that orphan version
+   * row would survive a mutation that reported failure.
    */
   test('a mid-transaction failure rolls back writes already made in the same transaction', async () => {
     const stub = getStub();
@@ -232,10 +237,10 @@ describe('expectedVersion / transactional rollback', () => {
       updatedAt: new Date(),
     };
 
-    // snapshotBeforeMutation writes a versions row, then bumpVersion's CAS
-    // rejects the stale expectedVersion and throws inside the transaction.
+    // snapshotBeforeMutation writes a versions row, then versionedUpdate's
+    // CAS rejects the stale expectedVersion and throws inside the transaction.
     const err = await stub
-      .associate(record.id, { kind: 'tag', label: 'starred' }, { snapshot, expectedVersion: 999 })
+      .deleteRecord(record.id, { snapshot, expectedVersion: 999 })
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('version_conflict');
 
@@ -243,7 +248,7 @@ describe('expectedVersion / transactional rollback', () => {
     expect(await stub.getVersions(record.id)).toEqual([]);
     const after = await stub.getRecord(record.id);
     expect(after?.version).toBe(1);
-    expect(after?.associations).toBeUndefined();
+    expect(after?.deletedAt).toBeUndefined();
   });
 
   test('a rejected patchContent leaves the FTS index consistent with stored content', async () => {
@@ -434,7 +439,7 @@ describe('records — sorting by a content field', () => {
 });
 
 describe('associations', () => {
-  test('associate adds a tag, dissociate removes it, both bump version', async () => {
+  test('associate adds a tag, dissociate removes it, neither bumps version', async () => {
     const stub = getStub();
     const record = makeRecord();
     await stub.createRecord(record);
@@ -443,11 +448,12 @@ describe('associations', () => {
     expect(withTag?.associations?.some((a) => a.kind === 'tag' && a.label === 'starred')).toBe(
       true,
     );
-    expect(withTag?.version).toBe(2);
+    expect(withTag?.version).toBe(1);
 
     await stub.dissociate(record.id, { kind: 'tag', label: 'starred' });
     const withoutTag = await stub.getRecord(record.id);
     expect(withoutTag?.associations).toBeUndefined();
+    expect(withoutTag?.version).toBe(1);
   });
 
   test('associate on a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {

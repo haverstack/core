@@ -121,7 +121,6 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   // Read for presence, not truthiness: the stored 'null' is the root, and
   // only a SQL NULL is a snapshot that claimed no container at all.
   if (row.parent_id != null) v.parentId = row.parent_id as string;
-  if (row.associations != null) v.associations = JSON.parse(row.associations as string);
   if (row.permissions != null) v.permissions = JSON.parse(row.permissions as string);
   return v;
 };

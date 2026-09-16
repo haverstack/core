@@ -483,8 +483,9 @@ describe('ScopedStack mutators return the record they produced', () => {
 
     const unlisted = await scoped.mutate(record.id, { unlisted: true });
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
-    // Four mutations on top of the created record's version 1.
-    expect(unlisted.version).toBe(5);
+    // associate/dissociate never bump; permissions and unlisted are the
+    // only two real bumps on top of the created record's version 1.
+    expect(unlisted.version).toBe(3);
   });
 });
 
@@ -702,54 +703,15 @@ describe('ScopedStack — versions', () => {
     await expect(stack.asEntity(ADMIN).getVersions(group.id)).resolves.toHaveLength(1);
   });
 
-  // Related follow-up: restoreVersion() restores associations/file-ref
-  // fields straight from the snapshot, which for a non-owner write-holder
-  // could re-convey access to a file or record they can no longer reach —
-  // the reference was legitimate when created, but access moved on since.
-  // Re-running the reference-creation checks against the snapshot closes
-  // that: a write-holder may only restore references they could create fresh.
+  // Related follow-up: restoreVersion() restores file-ref content fields
+  // straight from the snapshot, which for a non-owner write-holder could
+  // re-convey access to a file they can no longer reach — the reference
+  // was legitimate when created, but access moved on since. Re-running the
+  // reference-creation checks against the snapshot closes that. No
+  // `associations` case here: a snapshot never carries associations at
+  // all, so a restore never introduces one to gate — see
+  // docs/spec/versioning.md § Restore semantics.
   describe('restoreVersion — reference-reconveyance gating', () => {
-    test('rejects restoring an attachment association to a file the requester can no longer access', async () => {
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        associations: [{ kind: 'attachment', label: 'x', fileId: 'unreachable-file' }],
-      });
-      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
-        StackPermissionError,
-      );
-    });
-
-    test('allows restoring an attachment association to a file the requester can currently access', async () => {
-      await stack.grant(MEMBER, [{ actions: ['create'], typeId: '_attachment@1' }]);
-      const {
-        content: { fileId },
-      } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), 'image/png');
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        associations: [{ kind: 'attachment', label: 'x', fileId }],
-      });
-      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
-      expect(restored.associations).toContainEqual({ kind: 'attachment', label: 'x', fileId });
-    });
-
     test('rejects restoring a file-ref content field the requester can no longer access', async () => {
       const PHOTO_NOTE = 'com.example.test/photo-note-restore@1';
       await stack.defineType(PHOTO_NOTE, 'Photo note', { coverFileId: { kind: 'file-ref' } });
@@ -772,44 +734,10 @@ describe('ScopedStack — versions', () => {
       );
     });
 
-    test('the owner is exempt from the reference-reconveyance gate', async () => {
-      const record = await adapter.createRecord(makeRecord({ version: 2 }));
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        associations: [{ kind: 'attachment', label: 'x', fileId: 'anything-at-all' }],
-      });
-      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
-      expect(restored.associations).toContainEqual({
-        kind: 'attachment',
-        label: 'x',
-        fileId: 'anything-at-all',
-      });
-    });
-
-    // The exemption is the owner's own, not something an owner principal
-    // lends its subject: the gate resolves against the subject, whose
-    // reach is what a restore would widen.
-    test('the exemption does not extend to an owner principal acting for someone else', async () => {
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        associations: [{ kind: 'attachment', label: 'x', fileId: 'unreachable-file' }],
-      });
-      await expect(
-        stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
-      ).rejects.toThrow(StackPermissionError);
-    });
+    // The owner-exemption and delegation-doesn't-inherit-it cases are
+    // pinned once, generally, by the parentId tests below — the whole
+    // gating block is skipped for owner-acting-alone regardless of which
+    // field it would have gated.
 
     test('rejects restoring a parentId naming a container the requester cannot read', async () => {
       const box = await adapter.createRecord(makeRecord());

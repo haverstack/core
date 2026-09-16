@@ -242,7 +242,11 @@ class UnscopedSubscription extends Subscription {
  *
  * The actor is read off the record for every version-bumping op, because
  * `updatedBy`/`updatedVia` were stamped by that same write and so agree
- * with what was persisted by construction. Hard delete stamps nothing and
+ * with what was persisted by construction. `associate`/`dissociate` don't
+ * bump, so they stamp nothing on the record either — their actor travels
+ * as `opts.actor` instead, the same way hard delete's does, since reading
+ * the record would report whoever's *last version-bumping write* this is,
+ * not who just changed the association. Hard delete stamps nothing and
  * leaves nothing to read, so its actor is the requester, passed in. A
  * purge also drops `parentId` and the create-time `appId`: the frame says
  * that a record of some type was destroyed, and nothing further about
@@ -274,7 +278,7 @@ export function buildEmission(
     };
   }
 
-  const actor = actorOf(record, kind);
+  const actor = opts.actor ?? actorOf(record, kind);
   return {
     record,
     ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),

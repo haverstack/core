@@ -4,12 +4,12 @@ Apps observe record changes by subscribing, rather than by polling `query()`. A 
 
 This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Change feed](./change-feed.md).
 
-**A change event is the observable side of the versioning one-rule.** Every mutation that snapshots prior state and bumps `version` emits exactly one event; hard delete, the one exception to that rule, is the one exception here too — it emits, carries no snapshot, and ends the record's stream. See [Versioning § Version history](./versioning.md#version-history).
+**A change event is the observable side of versioning, with one deliberate exception.** Every mutation that snapshots prior state and bumps `version` emits exactly one event; hard delete, the one exception to that versioning rule, is the one exception here too — it emits, carries no snapshot, and ends the record's stream. `associate()`/`dissociate()` are the second exception, on both sides at once: they never bump `version` or snapshot, yet they still emit — a subscriber needs to hear about a tag or roster change even though nothing about it is recoverable through history. See [Versioning § Version history](./versioning.md#version-history).
 
 Two things follow immediately:
 
-- **The event set is closed and already enumerated.** It is the same exhaustive list [Wire format § Versions](./wire-format.md#versions) gives for endpoints that bump `version`, plus create and hard delete. Nothing is a judgement call.
-- **A no-op mutation emits nothing.** Re-adding an association that is already present, setting a deep-equal permission set, deleting an already-deleted record — these bump no version, so they fire no event. A subscriber never sees a phantom change.
+- **The event set is closed and already enumerated.** It is the wider of the two lists [Wire format § Versions](./wire-format.md#versions) gives: every endpoint that bumps `version`, plus the association endpoints (which don't), plus create and hard delete. Nothing is a judgement call.
+- **A no-op mutation emits nothing.** This is not the same claim as "bumps no version, so fires no event" — `associate()`/`dissociate()` never bump and still fire when they change something. The real rule is narrower: re-adding an association that is already present, setting a deep-equal permission set, deleting an already-deleted record produce no `ops` at all, and no `ops` means no event, whether or not the call would have bumped had it done anything. A subscriber never sees a phantom change.
 
 ## What a feed is not
 
@@ -43,11 +43,11 @@ type ChangeOp =
 
 type RecordChange = {
   kind: ChangeKind;
-  ops: ChangeOp[]; // non-empty; one entry per aspect this version changed
+  ops: ChangeOp[]; // non-empty; one entry per aspect this change moved
   recordId: RecordId;
   typeId: TypeId; // as stored at the moment of the change
-  version: number; // the version this change produced
-  updatedAt: Date; // as persisted by this change
+  version: number; // the version this change produced; unchanged from before on associate/dissociate, which never bump
+  updatedAt: Date; // as persisted by this change; unchanged from before on associate/dissociate
   parentId?: RecordId;
   actor?: ChangeActor;
   record?: StackRecord;
@@ -68,7 +68,7 @@ type RecordChange = {
 
 **`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
 
-Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op even though it puts back content, associations and `parentId` together.
+Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op even though it puts back both content and `parentId` together — it never puts back associations at all, on any Record, so there's nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `permissions`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
@@ -96,7 +96,7 @@ The record's own provenance — `entityId`, `appId`, `principalId` as stored —
 
 **`actor` is absent when unknown**, which means a write by an unscoped `Stack` — it has no requester to name. **Absent means unknown; it never means "the author"**, and a consumer must not substitute one for the other.
 
-**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` and `updatedVia` are stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Hard delete is the exception, and the only one.** It destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it.
+**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` and `updatedVia` are stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Hard delete and `associate()`/`dissociate()` are the exceptions.** Hard delete destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it. `associate()`/`dissociate()` don't bump either, so they don't stamp `updatedBy`/`updatedVia` on the record — but unlike hard delete they aren't owner-only, so their actor still has to reflect whoever actually made the call. It travels the same way a purge's does: read off the request rather than off the record, which in this case simply was never touched.
 
 `appId` rides a `created` frame only. It is self-reported at create and never recorded per mutation, so on any later version the record's `appId` is the _creating_ app — record provenance, not this change's actor.
 

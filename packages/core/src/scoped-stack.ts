@@ -1137,23 +1137,15 @@ export class ScopedStack implements StackClient {
     throw await this.denialFor(record, 'Only the stack owner may write a _grant record');
   }
 
-  async associate(
-    id: string,
-    association: Association,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
+  async associate(id: string, association: Association): Promise<StackRecord> {
     const record = await this.requireUpdatable(id);
     await this.requireAssociationAccess(record.typeId, association);
-    return this.stack.associate(id, association, { ...opts, ...this.actor });
+    return this.stack.associate(id, association, this.actor);
   }
 
-  async dissociate(
-    id: string,
-    association: Association,
-    opts: IfVersionOptions = {},
-  ): Promise<StackRecord> {
+  async dissociate(id: string, association: Association): Promise<StackRecord> {
     await this.requireUpdatable(id);
-    return this.stack.dissociate(id, association, { ...opts, ...this.actor });
+    return this.stack.dissociate(id, association, this.actor);
   }
 
   /**
@@ -1244,16 +1236,9 @@ export class ScopedStack implements StackClient {
           throw new StackPermissionError();
         }
         await this.requireFileRefAccess(target.typeId, target.content);
-        // Gated against the associations the restore will actually write.
-        // A `_group`'s don't roll back at all, so such a restore introduces
-        // no association and there is nothing here to gate — the same
-        // reason a `parentId` the restore would not change is not re-gated
-        // above.
-        if (!isGroupRecord(record)) {
-          for (const association of target.associations ?? []) {
-            await this.requireAssociationAccess(target.typeId, association);
-          }
-        }
+        // No association gate: a snapshot never carries `associations`, so
+        // a restore never introduces one — see docs/spec/versioning.md
+        // § Restore semantics.
       }
     }
     return this.stack.restoreVersion(id, version, { ...opts, ...this.actor });

@@ -235,7 +235,12 @@ export type RecordVersion = {
    * See docs/spec/versioning.md § Version history.
    */
   parentId?: RecordId;
-  associations?: Association[];
+  /**
+   * Never present. Associations don't share content's versioning:
+   * associate()/dissociate() don't bump `version`, so there is no version
+   * of a record whose snapshot would describe its association set.
+   * See docs/spec/versioning.md § Version history.
+   */
   permissions?: Permission[];
 };
 
@@ -731,14 +736,16 @@ export type SnapshotOptions = {
 };
 
 /**
- * Whether a restore rolls the Record's associations back at all. Accepted
- * by StackRecordAdapter.restoreVersion() alone — see its own doc. Absent
- * or `true` means "apply the snapshot's", which is every restore but a
- * `_group` Record's; `false` leaves the Record's current associations
- * exactly as they stand and rolls back only the rest.
+ * Whether a mutateRecord() call advances `version`/`updatedAt` at all.
+ * `Stack` computes this from which aspects a change set actually moves — a
+ * change set touching only `associations` doesn't bump, the same rule
+ * StackRecordAdapter.associate()/dissociate() follow unconditionally.
+ * Absent means `true`; every other mutating method bumps every time, so
+ * only mutateRecord() takes this. See docs/spec/versioning.md § Version
+ * history.
  */
-export type RestoreAssociationsOptions = {
-  restoreAssociations?: boolean;
+export type BumpVersionOptions = {
+  bumpsVersion?: boolean;
 };
 
 /**
@@ -766,8 +773,10 @@ export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
 
 /**
  * The precise verb behind a ChangeKind, for consumers that distinguish a
- * reshare from an edit. The list is the mutations that bump `version`,
- * plus create and hard delete.
+ * reshare from an edit. Every entry but `associate`/`dissociate` bumps
+ * `version`; those two don't, and carry the record's version/updatedAt
+ * exactly as they stood before the call. See docs/spec/versioning.md
+ * § Version history.
  */
 export type ChangeOp =
   | 'create'
@@ -833,9 +842,17 @@ export type RecordChange = {
   recordId: RecordId;
   /** As stored at the moment of the change. */
   typeId: TypeId;
-  /** The version this change produced; on `purged`, the version destroyed. */
+  /**
+   * The version this change produced; on `purged`, the version destroyed.
+   * Unchanged from the record's prior version on `associate`/`dissociate`,
+   * which don't bump.
+   */
   version: number;
-  /** As persisted by this change; on `purged`, when the delete ran. */
+  /**
+   * As persisted by this change; on `purged`, when the delete ran.
+   * Unchanged from the record's prior `updatedAt` on `associate`/
+   * `dissociate`, which don't touch it.
+   */
   updatedAt: Date;
   parentId?: RecordId;
   actor?: ChangeActor;
@@ -964,26 +981,32 @@ export interface StackRecordAdapter {
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
    * Apply a change set — any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted` — in one write that also
-   * bumps `version`/`updatedAt` and stores the snapshot. One call is one
-   * version, however many aspects it names: separate per-aspect methods
-   * would make a change set either several versions or an atomicity claim
-   * storage could not honor.
+   * `permissions`, `associations` and `unlisted` — in one write. One call is
+   * one version, however many version-bumping aspects it names: separate
+   * per-aspect methods would make a change set either several versions or
+   * an atomicity claim storage could not honor.
    *
    * The content patch merges at the top level only — each key it names is
    * replaced whole. Never touches `typeId`; a type change goes through
    * commitMigration() instead. `associations` replaces the stored set,
    * where associate()/dissociate() amend it.
    *
+   * `opts.bumpsVersion` says whether this call advances `version`/
+   * `updatedAt` and stores the snapshot — `false` for a change set that
+   * touches only `associations`, matching associate()/dissociate() below,
+   * which never bump. `Stack` computes it; an adapter never has to infer it
+   * from the change set's own keys.
+   *
    * `Stack` owns everything above storage: validation, the acyclicity
    * walk, the per-key gates, and deciding there is anything to write at
    * all — an adapter is never handed a change set that changes nothing.
-   * See docs/spec/data-model.md § Mutations.
+   * See docs/spec/data-model.md § Mutations and docs/spec/versioning.md
+   * § Version history.
    */
   mutateRecord(
     id: RecordId,
     changes: RecordChanges,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & BumpVersionOptions & ActorOptions,
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
@@ -1004,16 +1027,16 @@ export interface StackRecordAdapter {
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations
-  associate(
-    id: RecordId,
-    association: Association,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<StackRecord>;
-  dissociate(
-    id: RecordId,
-    association: Association,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
-  ): Promise<StackRecord>;
+  /**
+   * Add an association. Never bumps `version`/`updatedAt` and never
+   * snapshots — a set-add composes correctly regardless of write order, so
+   * it needs neither the OCC `ifVersion` guards content, `parentId` and
+   * `permissions`, nor the rollback history that guards. See
+   * docs/spec/versioning.md § Version history and § Optimistic concurrency.
+   */
+  associate(id: RecordId, association: Association): Promise<StackRecord>;
+  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
+  dissociate(id: RecordId, association: Association): Promise<StackRecord>;
 
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
@@ -1025,21 +1048,12 @@ export interface StackRecordAdapter {
    */
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
   /**
-   * Restore a record to a previous version's content, `parentId` (absent
-   * on the snapshot means the root, so a restore always settles
-   * containment), and associations, when the snapshot has them. Never
-   * restores permissions. Bumps version internally. Throws
-   * StackNotFoundError if the version doesn't exist.
-   *
-   * `opts.restoreAssociations: false` rolls back everything but the
-   * associations, leaving the record's current list exactly as it stands.
-   * It exists so a rule about *whether* a restore may move a record's
-   * associations can be decided where the record's meaning is known,
-   * rather than by each adapter: `Stack.restoreVersion()` passes it for a
-   * `_group` Record, whose roster is authority rather than data and so
-   * does not roll back. An adapter needs no knowledge of that rule — and
-   * no association list ever travels down here, so nothing the adapter
-   * writes can disagree with what the record already holds.
+   * Restore a record to a previous version's content and `parentId`
+   * (absent on the snapshot means the root, so a restore always settles
+   * containment). Never restores `permissions` or `associations` — a
+   * snapshot never carries the latter at all, so there is nothing an
+   * adapter could restore associations *from*. Bumps version internally.
+   * Throws StackNotFoundError if the version doesn't exist.
    *
    * The acyclicity check on a restore that moves the record belongs to the
    * caller (Stack.restoreVersion()), exactly as it does for a change set's `parentId`.
@@ -1047,7 +1061,7 @@ export interface StackRecordAdapter {
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & RestoreAssociationsOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
   ): Promise<StackRecord>;
 
   /**

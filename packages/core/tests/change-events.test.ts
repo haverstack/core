@@ -110,7 +110,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     });
   });
 
-  test('the version reported is the one the mutation produced', async () => {
+  test('the version reported is the one the mutation produced — unchanged for associate(), which never bumps', async () => {
     const note = await stack.create(NOTE, { text: 'v1' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
@@ -119,7 +119,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
     await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
 
-    expect(seen.map((c) => c.version)).toEqual([2, 3, 4]);
+    expect(seen.map((c) => c.version)).toEqual([2, 2, 3]);
     // Read back rather than inferred: the last event agrees with storage.
     const stored = await stack.get(note.id);
     expect(seen.at(-1)!.version).toBe(stored!.version);
@@ -317,6 +317,26 @@ describe('actor names who performed the change', () => {
     expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
     // The author rides the record, never the envelope.
     expect(seen[0]!.record!.entityId).toBe(AUTHOR);
+  });
+
+  // associate()/dissociate() never bump, so they never restamp
+  // record.updatedBy — the actor for their event has to travel as an
+  // explicit opt instead of being read off the record. See
+  // docs/spec/versioning.md § Version history.
+  test('associate()/dissociate() name the acting identity in the event even though they never restamp the record', async () => {
+    await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
+    const note = await stack.asEntity(AUTHOR).create(NOTE, { text: 'hello' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
+
+    await stack.asEntity(EDITOR).associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.asEntity(EDITOR).dissociate(note.id, { kind: 'tag', label: 'x' });
+
+    expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[1]!.actor).toEqual({ entityId: EDITOR });
+    // The record itself was never restamped — no version-bumping write has
+    // touched updatedBy since creation, so it still reads the author.
+    expect(seen[1]!.record!.updatedBy).toBe(AUTHOR);
   });
 
   test('a delegated write names the principal beside the subject', async () => {
