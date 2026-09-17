@@ -563,6 +563,9 @@ describe('getVersions after migrate/restore fixtures', () => {
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
       expect(result.map((v) => v.version)).toEqual(fixture.responseBody!.map((v) => v.version));
+      // A snapshot never captures an association set, so neither the
+      // fixture nor what the adapter parses out of it may name one.
+      for (const version of result) expect(Object.keys(version)).not.toContain('associations');
     });
   }
 });

@@ -15,6 +15,13 @@
  * optimistic concurrency (ifVersion → If-Match) is supported: see the
  * expectedVersion option on mutateRecord(), deleteRecord() and every
  * other mutation that bumps a version.
+ *
+ * The write options that describe storage rather than the request are
+ * omitted from the methods below rather than dropped inside them, so the
+ * signature says what travels: the server writes its own version snapshot
+ * and its own journal entry from the change it applies, and decides its
+ * own version bump the same way. See docs/spec/versioning.md § Storage per
+ * adapter.
  */
 
 import { StackError, StackQueryError } from '@haverstack/core';

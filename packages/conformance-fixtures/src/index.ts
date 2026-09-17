@@ -1305,6 +1305,39 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
       },
     ],
   },
+  {
+    name: 'get-versions-after-associate-is-unchanged',
+    description:
+      'The association endpoints are the one pair of mutations that write no version. After ' +
+      'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
+      'answers with exactly the list it answered with before — no new entry, and no entry ' +
+      'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
+      'snapshots here hands every later restore a stale association set to put back. ' +
+      'See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 4,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 3,
+        typeId: 'com.example/note@1',
+        content: { title: 'title before restore' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ],
+  },
 ];
 
 // -------------------------------------------------------
@@ -1316,9 +1349,10 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     name: 'restore-version',
     description:
       "POST /records/:id/restore/:version creates a new version from an old snapshot's " +
-      'content, associations and parentId — never permissions. No request body: the ' +
-      'server holds the snapshot already. Version 1 was taken at the root, so the restored ' +
-      'record comes back with parentId absent.',
+      'content and parentId — never its permissions, and never associations, which no ' +
+      'snapshot captures and which a restore leaves exactly where they stand. No request ' +
+      'body: the server holds the snapshot already. Version 1 was taken at the root, so the ' +
+      'restored record comes back with parentId absent.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/1',
     responseStatus: 200,
@@ -2683,12 +2717,13 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-changed-frame-names-the-verb',
     description:
-      'Seven mutation verbs arrive as kind "changed" — update, associate, dissociate, ' +
-      'permissions, migrate, restore and undelete — and `op` is what separates them. A client ' +
-      'branching on kind alone is correct and complete; one that needs to tell a reshare from ' +
-      'an edit reads op. Both fields are carried because the safe default has to be the easy ' +
-      'one: a client wired to three named events would silently miss the other seven verbs. ' +
-      'The actor is the contributor who made this write, while the record keeps its own author.',
+      'Nine mutation verbs arrive as kind "changed" — patch, associate, dissociate, ' +
+      'permissions, migrate, restore, undelete, list and reparent — and `ops` is what ' +
+      'separates them. A client branching on kind alone is correct and complete; one that ' +
+      'needs to tell a reshare from an edit reads ops. Both fields are carried because the ' +
+      'safe default has to be the easy one: a client wired to three named events would ' +
+      'silently miss every other verb. The actor is the contributor who made this write, ' +
+      'while the record keeps its own author.',
     path: '/changes',
     responseStatus: 200,
     openingFrames: [READY],

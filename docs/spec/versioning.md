@@ -164,7 +164,7 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 - JSON: sibling files `{id}.versions.json` and `{id}.journal.json`
 - SQLite: `versions` and `journal` tables
-- API: **the server is the only snapshot writer** — `saveVersion()` is a deliberate no-op over `APIAdapter`, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. See [Wire format § Versions](./wire-format.md#versions) for that list.
+- API: **the server is the only writer of both tiers** — `saveVersion()` is a deliberate no-op over `APIAdapter` and a journal entry has no wire encoding, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped, and one that journals nothing is indistinguishable over the wire from one that does. See [Wire format § Versions](./wire-format.md#versions) for that list and for why the journal has no endpoint to read it back from.
 
 ## Deletion
 

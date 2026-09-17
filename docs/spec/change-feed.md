@@ -48,14 +48,22 @@ data: {"seq":"AA3f1Q"}
 
 id: AA3f1R
 event: record
-data: {"kind":"changed","op":"update","recordId":"1hk153x00001",
+data: {"kind":"changed","ops":["patch","reparent"],"recordId":"1hk153x00001",
        "typeId":"com.example/note@1","version":7,
-       "updatedAt":"2026-08-13T12:00:00.000Z",
+       "updatedAt":"2026-08-13T12:00:00.000Z","parentId":"1hk153x0000f",
        "actor":{"entityId":"did:key:z6Mk..."}}
 
 id: AA3f1S
 event: record
-data: {"kind":"purged","op":"hard-delete","recordId":"1hk153x00002",
+data: {"kind":"changed","ops":["associate"],"recordId":"1hk153x00001",
+       "typeId":"com.example/note@1","version":7,
+       "updatedAt":"2026-08-13T12:00:00.000Z",
+       "associationsAdded":[{"kind":"tag","label":"starred"}],
+       "actor":{"entityId":"did:key:z6Mk..."}}
+
+id: AA3f1T
+event: record
+data: {"kind":"purged","ops":["hard-delete"],"recordId":"1hk153x00002",
        "typeId":"com.example/note@1","version":4,
        "updatedAt":"2026-08-13T12:00:03.000Z",
        "actor":{"entityId":"did:key:z6MkOwner..."}}
@@ -67,7 +75,8 @@ data: {"reason":"cursor_expired"}
 ```
 
 - **`ready` is sent first, always.** It carries the head cursor, and it is what makes subscribe-then-query gap-free: a client that awaits it before querying knows every later change is in one or the other. A server that mints no cursors sends it with no `seq`.
-- **`record`** carries one change. `updatedAt` is an ISO string; `record`, when included, is a `WireRecord`. The envelope describes the change and carries no record provenance — `actor` is who performed it, never who authored the record. See [Change events § Attribution](./events.md#attribution).
+- **`record`** carries one change. `ops` is every aspect the change moved and is never empty — a list, because [one mutation can move several aspects](./data-model.md#mutations); `updatedAt` is an ISO string; `record`, when included, is a `WireRecord`. The envelope describes the change and carries no record provenance — `actor` is who performed it, never who authored the record. See [Change events § Attribution](./events.md#attribution).
+- **`associationsAdded`/`associationsRemoved`** ride the same frame, present exactly when `ops` names `associate`/`dissociate`. An association change never bumps `version` or moves `updatedAt`, so the frame's `version` and `updatedAt` are exactly what they were before the call and these two lists are the frame's only account of what moved. `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. See [Change events § The event shape](./events.md#the-event-shape) for both fields' full contract. A subscriber that missed the frame recovers the delta from [the change journal](./versioning.md#the-change-journal), which this protocol version exposes through no endpoint — see [Wire format § Versions](./wire-format.md#versions) — so over the wire a reconnect reconciles the association **set** by query and not the changes that produced it.
 - **`reset`** means _your cursor cannot be honored; resynchronize by query_. A server with no buffer at all sends it on every connection and is fully conformant. `reason` is informational (`cursor_expired`, `not_supported`, `overflow`) — the client's repair is the same for all three.
 - **`: keepalive` comments** SHOULD be sent on an idle interval, so intermediaries do not reap the connection and a client can detect a dead one.
 
@@ -112,7 +121,7 @@ As with [the auth checklist](./wire-format.md#server-implementation-checklist), 
 - **Close on buffer overflow; never drop a frame silently.**
 - **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
 - **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
-- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create and hard delete.
+- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, hard delete and the two [association endpoints](./wire-format.md#associations) — which report `associate`/`dissociate` while bumping no `version`, so a server that emits off its snapshot path alone silently serves no association events at all.
 
 ## Why SSE, and why not `EventSource`
 
