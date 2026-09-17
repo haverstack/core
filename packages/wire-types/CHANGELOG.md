@@ -1,5 +1,149 @@
 # @haverstack/wire-types
 
+## 0.32.0
+
+### Minor Changes
+
+- [#287](https://github.com/haverstack/core/pull/287) [`b164b5f`](https://github.com/haverstack/core/commit/b164b5f553967ae6190b5bd60ff42ad128724494) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `associate()`/`dissociate()` events report what they moved
+
+  `RecordChange` gains `associationsAdded`/`associationsRemoved`, present
+  whenever `ops` includes `associate`/`dissociate`. Previously a subscriber
+  learned only that _some_ association changed — recovering which one, or
+  what an attachment association's `attachmentRecordId` changed to, meant
+  fetching the whole record.
+
+  Both fields report only what is true **now**, the same convention every
+  other field on `RecordChange` follows:
+  - `associationsAdded` is each association as it now stands, current
+    annotation included — a re-point (a new `attachmentRecordId` on an
+    association the record already held) surfaces here under its new value.
+  - `associationsRemoved` is identity only (`kind`/`label`, plus `fileId` for
+    an attachment) — an attachment's `attachmentRecordId` is never repeated
+    on removal, the same way a `purged` frame never carries the content it
+    destroyed.
+
+  This does not make an association overwrite recoverable after the fact:
+  associations are never snapshotted (see the `associations-outside-versioning`
+  changeset), so a re-point's old `attachmentRecordId` still isn't retained
+  anywhere — these fields only let a subscriber who is listening at the
+  moment of the change observe it, in place of a fetch of the whole record.
+  Retroactive recovery is tracked separately.
+
+- [#287](https://github.com/haverstack/core/pull/287) [`a0163e7`](https://github.com/haverstack/core/commit/a0163e73126e487579502cd36a0e1be9e27ba30d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Associations no longer bump `version`, snapshot, or restore
+
+  **`associate()`/`dissociate()` — and a change set whose only key is
+  `associations` — no longer bump a Record's `version`, touch `updatedAt`, or
+  write a version snapshot.** Content mutation is destructive the instant it
+  lands, which is what version history exists to make recoverable.
+  Associations aren't: the inverse operation is the same shape as the
+  forward one and reconstructs the prior state exactly (an
+  attachment-annotation overwrite is the one minor exception), so they never
+  needed the rollback machinery.
+
+  ```ts
+  const before = await stack.get(record.id);
+  await stack.associate(record.id, { kind: 'tag', label: 'starred' });
+  const after = await stack.get(record.id);
+  after.version === before.version; // true — this used to bump
+  ```
+
+  They still appear on the change feed (`docs/spec/events.md`) as
+  `associate`/`dissociate` ops, so a subscriber still hears about them — the
+  event just carries the record's unchanged `version`/`updatedAt`, and its
+  `actor` now travels as an explicit fact about the call rather than being
+  read off a record field these calls no longer stamp.
+
+  **`associate()`/`dissociate()` drop `ifVersion` entirely — this is a
+  breaking signature change.** A set-add/remove composes correctly
+  regardless of write order, so there was never a race for the precondition
+  to guard, and offering one that could no longer trigger a bump would just
+  be silently useless. `mutate()` follows the same line, read off the keys a
+  change set names: one whose only key is `associations` carries no
+  precondition either, so an `ifVersion` passed alongside it is not checked.
+  A change set that names any other aspect is unaffected — `ifVersion` still
+  fences the whole call, same as ever, including where that aspect restates
+  what the record already holds and the call writes nothing.
+
+  **`restoreVersion()` never restores associations, for any Record type —
+  this generalizes what used to be a `_group`-only carve-out.** A `_group`'s
+  roster already didn't roll back, on the grounds that a roster is authority
+  rather than data; that reasoning turned out to apply to every Record's
+  associations, not just a group's. `RecordVersion` drops the `associations`
+  field entirely — no snapshot has ever captured one since associate()/
+  dissociate() stopped bumping, so there was nothing left for a restore to
+  read one back from. `restoreAssociations` is gone from every
+  `restoreVersion()` options type; it's unconditional now, and needs no more
+  flag than `permissions`, which restore has never touched.
+
+  **Adapter contract:** `StackRecordAdapter.associate()`/`dissociate()` drop
+  their `opts` parameter — no `ifVersion`, snapshot, or actor stamping,
+  since none of it applies to a write that never bumps. `mutateRecord()`
+  gains `opts.bumpsVersion` (computed by `Stack`, not inferred by the
+  adapter) so a change set naming only `associations` can skip the
+  records-table update and snapshot entirely. `restoreVersion()` drops
+  `restoreAssociations` — an adapter no longer receives an association list
+  to restore from in the first place.
+
+  **Wire protocol:** the association endpoints (`POST /records/:id/associations`,
+  `POST /records/:id/associations/delete`) no longer accept `If-Match` — same
+  reasoning as the local `ifVersion` drop. `WireVersion` drops
+  `associations`. A `PATCH /records/:id` change set naming only
+  `associations` no longer bumps `version` either, matching the standalone
+  endpoints, and an `If-Match` sent with such a body is not checked.
+
+- [#291](https://github.com/haverstack/core/pull/291) [`dc6f3b2`](https://github.com/haverstack/core/commit/dc6f3b28e42f4ab6ffd5c14ef9465155c8f1eb14) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Serve the change journal over the wire
+
+  `GET /records/:id/journal` reads a record's change journal, so
+  `getJournal()` answers over `adapter-api` instead of refusing. It was the
+  one required `StackClient` method the adapter fronting a server could never
+  answer, which made "required" mean "required except where it matters" — and
+  it left the argument that took associations out of version history only
+  half true. Associations were dropped from snapshots because the journal
+  keeps what an inverse cannot reconstruct; over the wire that store was
+  unreachable, so an `attachmentRecordId` a re-point discarded was gone for
+  good. `associationsReplaced` is now readable wherever a stack lives.
+
+  `APIAdapterCapabilityError` accordingly drops `'journal'` from its
+  `capability` union, and refuses nothing for this surface any more.
+
+  **The endpoint is mandatory, not advertised in discovery.** A server with
+  no journal has only one spelling available to it — an empty log — and that
+  is the answer it must not give, since a caller reconstructing an
+  association's history cannot tell it from "nothing changed". A feed can be
+  advertised because a client can be told up front it will not get a live
+  connection; a log is a question with a wrong answer.
+
+  **Responses are paged, and the local contract is not.** `{ entries, cursor }`
+  mirrors a query envelope: a server MAY answer a page shorter than the
+  `limit` asked for — this is the one read with no ceiling when `limit` is
+  omitted, so it needs that freedom — and `cursor` is the only end-of-log
+  signal. `APIAdapter.getJournal()` follows it to the end, so "omitting
+  `limit` reads the whole log" holds identically whatever page size a server
+  picks and no caller has to know which adapter it is on.
+
+  **`previousParentId` is the one field on any response where `null` is a
+  value rather than an input spelling.** Absent means the entry is not a
+  reparent; present and `null` means the record moved out of the root.
+  Everywhere else — a record body, a snapshot — both collapse to absent,
+  which here would lose which of the two happened.
+
+  New: `WireJournalEntry`, `WireJournalResponse` and `serializeJournalEntry()`
+  from `@haverstack/wire-types`, `parseJournalParams()` from
+  `@haverstack/core/wire` so a server decodes the window with the grammar the
+  client builds it with, and four `getJournalFixtures` plus a `403` case
+  pinning the mutate-surface gate. `serializeChangeActor()` is now shared by
+  a change frame and a journal entry rather than inlined in one of them.
+
+  The journal stays per-record: `seq` is dense from 1 per record, so this
+  endpoint reads the history of a record you can already name and does not
+  answer "which records changed while I was disconnected". A reconnect still
+  reconciles that by query, as it did before.
+
+### Patch Changes
+
+- Updated dependencies [[`b164b5f`](https://github.com/haverstack/core/commit/b164b5f553967ae6190b5bd60ff42ad128724494), [`a0163e7`](https://github.com/haverstack/core/commit/a0163e73126e487579502cd36a0e1be9e27ba30d), [`dc6f3b2`](https://github.com/haverstack/core/commit/dc6f3b28e42f4ab6ffd5c14ef9465155c8f1eb14), [`b34de0d`](https://github.com/haverstack/core/commit/b34de0d5aceb933aff91b82714c47ad96e9f00b2)]:
+  - @haverstack/core@0.33.0
+
 ## 0.31.0
 
 ### Minor Changes

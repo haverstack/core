@@ -1,5 +1,96 @@
 # @haverstack/conformance-fixtures
 
+## 0.26.0
+
+### Minor Changes
+
+- [#291](https://github.com/haverstack/core/pull/291) [`dc6f3b2`](https://github.com/haverstack/core/commit/dc6f3b28e42f4ab6ffd5c14ef9465155c8f1eb14) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Serve the change journal over the wire
+
+  `GET /records/:id/journal` reads a record's change journal, so
+  `getJournal()` answers over `adapter-api` instead of refusing. It was the
+  one required `StackClient` method the adapter fronting a server could never
+  answer, which made "required" mean "required except where it matters" — and
+  it left the argument that took associations out of version history only
+  half true. Associations were dropped from snapshots because the journal
+  keeps what an inverse cannot reconstruct; over the wire that store was
+  unreachable, so an `attachmentRecordId` a re-point discarded was gone for
+  good. `associationsReplaced` is now readable wherever a stack lives.
+
+  `APIAdapterCapabilityError` accordingly drops `'journal'` from its
+  `capability` union, and refuses nothing for this surface any more.
+
+  **The endpoint is mandatory, not advertised in discovery.** A server with
+  no journal has only one spelling available to it — an empty log — and that
+  is the answer it must not give, since a caller reconstructing an
+  association's history cannot tell it from "nothing changed". A feed can be
+  advertised because a client can be told up front it will not get a live
+  connection; a log is a question with a wrong answer.
+
+  **Responses are paged, and the local contract is not.** `{ entries, cursor }`
+  mirrors a query envelope: a server MAY answer a page shorter than the
+  `limit` asked for — this is the one read with no ceiling when `limit` is
+  omitted, so it needs that freedom — and `cursor` is the only end-of-log
+  signal. `APIAdapter.getJournal()` follows it to the end, so "omitting
+  `limit` reads the whole log" holds identically whatever page size a server
+  picks and no caller has to know which adapter it is on.
+
+  **`previousParentId` is the one field on any response where `null` is a
+  value rather than an input spelling.** Absent means the entry is not a
+  reparent; present and `null` means the record moved out of the root.
+  Everywhere else — a record body, a snapshot — both collapse to absent,
+  which here would lose which of the two happened.
+
+  New: `WireJournalEntry`, `WireJournalResponse` and `serializeJournalEntry()`
+  from `@haverstack/wire-types`, `parseJournalParams()` from
+  `@haverstack/core/wire` so a server decodes the window with the grammar the
+  client builds it with, and four `getJournalFixtures` plus a `403` case
+  pinning the mutate-surface gate. `serializeChangeActor()` is now shared by
+  a change frame and a journal entry rather than inlined in one of them.
+
+  The journal stays per-record: `seq` is dense from 1 per record, so this
+  endpoint reads the history of a record you can already name and does not
+  answer "which records changed while I was disconnected". A reconnect still
+  reconciles that by query, as it did before.
+
+- [#291](https://github.com/haverstack/core/pull/291) [`8e55da7`](https://github.com/haverstack/core/commit/8e55da7dd061e197054d652262efad9b51989eba) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Pin the wire surface for associations outside versioning
+
+  The wire spec and fixtures now state what associations outside version
+  history mean for a server implementation, which is where they are read from:
+  - **A snapshot body carries no `associations`**, and a restore leaves a
+    record's associations where they stand. `WireVersion` has no such field,
+    so a server emitting one writes a key every client drops — and a server
+    that snapshots on the association endpoints hands every later restore a
+    stale set to put back. A new fixture,
+    `get-versions-after-associate-is-unchanged`, pins that
+    `GET /records/:id/versions` answers identically across an `associate()`,
+    and the conformance run asserts no parsed snapshot names an association
+    set.
+  - **The change feed's own document describes the association fields.** Its
+    frame examples spell `ops` as the list it is, one of them carries
+    `associationsAdded`, and the implementation checklist names the two
+    association endpoints — a server emitting off its snapshot path alone
+    serves no association events at all, and the checklist previously pointed
+    only at the list of endpoints that bump `version`.
+  - **An `If-Match` sent to an association endpoint is ignored, not refused.**
+    The endpoints read no precondition, so there was nothing for the
+    spec's "a malformed `If-Match` is 400" rule to protect there, and it
+    said only that the endpoints "take no `If-Match`" — which a server could
+    as easily have implemented as a rejection. They never look at the header,
+    whatever its value. A `PATCH` naming `associations` alone still earns the
+    400 for a malformed one: that route reads the header and finds it
+    unreadable, where the association endpoints never look. The conformance
+    run now asserts the client half — `APIAdapter` sends no `If-Match` on
+    either endpoint.
+
+  `restore-version` and `change-feed-changed-frame-names-the-verb` had
+  descriptions naming a restore's association set and a singular `op`; both
+  now say what the endpoints do.
+
+### Patch Changes
+
+- Updated dependencies [[`b164b5f`](https://github.com/haverstack/core/commit/b164b5f553967ae6190b5bd60ff42ad128724494), [`a0163e7`](https://github.com/haverstack/core/commit/a0163e73126e487579502cd36a0e1be9e27ba30d), [`dc6f3b2`](https://github.com/haverstack/core/commit/dc6f3b28e42f4ab6ffd5c14ef9465155c8f1eb14)]:
+  - @haverstack/wire-types@0.32.0
+
 ## 0.25.0
 
 ### Minor Changes
