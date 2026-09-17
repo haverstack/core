@@ -38,7 +38,17 @@ what makes a re-point undoable rather than merely observable.
 **`stack.getJournal(recordId, { sinceSeq?, limit? })` is gated on the
 mutate surface, exactly as `getVersions()` is.** A log of who changed what,
 gated on current read access, would make a record's past as reachable as
-its present. A plain reader gets `StackPermissionError`.
+its present. A plain reader gets `StackPermissionError`. `sinceSeq` and
+`limit` are each held to a non-negative integer at the surface, before any
+adapter sees them: left unchecked a negative `limit` diverged rather than
+failing, dropping the newest entry on an in-memory log and lifting the
+ceiling entirely on SQLite. Omitting `limit` still reads the whole log —
+no ceiling is imposed, because the caller reconstructing an association's
+full history is exactly who a silent truncation would betray.
+
+`getJournal()` is declared on the `StackClient` interface alongside
+`getVersions()`/`restoreVersion()`. Anyone implementing `StackClient`
+outside this package must add it.
 
 **A hard delete destroys the journal, exactly as it destroys version
 history** — so the journal never records a purge.
@@ -65,6 +75,10 @@ primary key, and the surviving row was invisible to `filter.search` and
 mis-ordered by `sort.contentField` until something wrote it again.
 
 The wire surface is not part of this change. `APIAdapter.getJournal()`
-throws `APIAdapterCapabilityError` locally, before sending a request — the
-same posture `subscribeChanges()` takes against a server advertising no
-change feed.
+throws `APIAdapterCapabilityError` locally, before sending a request,
+taking `subscribeChanges()`'s posture a step further: a subscription is
+refused only against a server advertising no change feed, while a journal
+read is refused against every server, there being no endpoint yet for any
+of them to answer. That is why the method is on `StackClient` regardless —
+a caller deserves a refusal naming the missing capability over a method
+that isn't there.

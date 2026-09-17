@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
+import type { StackClient } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { StackPermissionError } from '../src/errors.js';
+import { StackPermissionError, StackQueryError } from '../src/errors.js';
 import type { RecordJournalEntry } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
@@ -354,5 +355,63 @@ describe('the journal is gated on the mutate surface, like version history', () 
       'create',
       'associate',
     ]);
+  });
+});
+
+// -------------------------------------------------------
+// The query window
+// -------------------------------------------------------
+
+describe('JournalQuery is validated at the surface', () => {
+  // A negative limit used to diverge rather than fail: slice(0, -1) drops
+  // the newest entry, while SQLite reads a negative LIMIT as "no ceiling"
+  // and returns the whole log. Neither answers the call, and the
+  // disagreement only shows up when a stack changes adapters.
+  test.each([
+    ['limit', { limit: -1 }],
+    ['limit', { limit: 1.5 }],
+    ['sinceSeq', { sinceSeq: -1 }],
+    ['sinceSeq', { sinceSeq: 2.5 }],
+  ])('refuses a non-integer or negative %s', async (_key, query) => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await expect(stack.getJournal(note.id, query)).rejects.toThrow(StackQueryError);
+  });
+
+  test('limit 0 is a real window, not an invalid one', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.patchContent(note.id, { text: 'edited' });
+    expect(await stack.getJournal(note.id, { limit: 0 })).toEqual([]);
+    expect(await stack.getJournal(note.id, { limit: 1 })).toHaveLength(1);
+  });
+
+  test('omitting limit reads the whole log — no ceiling is imposed', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    for (let i = 0; i < 30; i++) await stack.patchContent(note.id, { text: `edit ${i}` });
+    expect(await stack.getJournal(note.id)).toHaveLength(31);
+  });
+
+  test('the scoped surface is held to the same rule', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
+    await expect(stack.asEntity(OWNER).getJournal(note.id, { limit: -1 })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+});
+
+// -------------------------------------------------------
+// The app-facing contract
+// -------------------------------------------------------
+
+describe('getJournal is on StackClient', () => {
+  // Stack and ScopedStack both implement it; the interface is what plugin
+  // and extension code is typed against, so an omission there is a TS2339
+  // rather than the adapter's own refusal naming what is missing.
+  test('reachable through a StackClient-typed reference', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    const viaInterface: StackClient = stack;
+    const scopedViaInterface: StackClient = stack.asEntity(OWNER);
+
+    expect((await viaInterface.getJournal(note.id)).map((e) => e.ops.join())).toEqual(['create']);
+    expect(await scopedViaInterface.getJournal(note.id, { limit: 1 })).toHaveLength(1);
   });
 });

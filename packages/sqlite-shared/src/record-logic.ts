@@ -766,8 +766,17 @@ export class SharedSqlRecordLogic {
    */
   private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
     if (!entry) return;
-    const record = this.readRecord(recordId);
-    if (!record) throw new StackNotFoundError(`Record not found: "${recordId}"`);
+    // Three columns, not readRecord(): the stamp needs version/typeId/
+    // parentId and nothing else, and this runs inside every mutating
+    // write — a full row plus its association set, per write, to read
+    // three values. `parent_id` is used raw so the NULL/''/id spelling
+    // reaches the journal exactly as the records table holds it.
+    const row = this.exec.get<{
+      version: number;
+      type_id: string;
+      parent_id: string | null;
+    }>('SELECT version, type_id, parent_id FROM records WHERE id = ?', [recordId]);
+    if (!row) throw new StackNotFoundError(`Record not found: "${recordId}"`);
 
     this.exec.run(
       `INSERT INTO journal
@@ -784,9 +793,9 @@ export class SharedSqlRecordLogic {
         toMs(new Date()),
         entry.kind,
         JSON.stringify(entry.ops),
-        record.version,
-        record.typeId,
-        record.parentId ?? null,
+        row.version,
+        row.type_id,
+        row.parent_id,
         // '' is the root; NULL is an entry that names no origin at all.
         entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
         entry.actor ? JSON.stringify(entry.actor) : null,

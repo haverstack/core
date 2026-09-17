@@ -23,6 +23,7 @@ import type { ValidationError } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   Association,
+  JournalQuery,
   QuerySort,
   RecordFilter,
   RelationshipTarget,
@@ -287,4 +288,30 @@ export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void
     externalIdOptional: true,
   });
   if (errors.length > 0) throw new StackQueryError(errors[0].message);
+}
+
+/**
+ * Hold a journal window to the shape both adapters can honor identically.
+ *
+ * Unvalidated, a negative `limit` diverges rather than failing: a JS
+ * `slice(0, -1)` drops the newest entry, while SQLite reads a negative
+ * LIMIT as "no ceiling" and returns the whole log. Neither is what the
+ * caller asked for, and the disagreement is invisible until a stack
+ * changes adapters. Refuse at the surface so no adapter has to guess.
+ *
+ * No ceiling is imposed: unlike a query, omitting `limit` reads the whole
+ * log by contract, so a clamp would silently truncate exactly the caller
+ * reconstructing an association's full history.
+ */
+export function assertValidJournalQuery(query: JournalQuery | undefined): void {
+  if (!query) return;
+  for (const key of ['sinceSeq', 'limit'] as const) {
+    const value = query[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < 0) {
+      throw new StackQueryError(
+        `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
+      );
+    }
+  }
 }

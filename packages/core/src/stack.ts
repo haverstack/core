@@ -96,6 +96,7 @@ import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidRelatedTo,
+  assertValidJournalQuery,
   assertValidSort,
   filtersContent,
   validateAssociation,
@@ -367,6 +368,21 @@ export interface StackClient {
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
+   * A record's change journal, oldest first. On the mutate surface, on the
+   * same footing as getVersions() — a plain reader is refused.
+   *
+   * **Local adapters only, for now.** There is no wire surface yet, so
+   * over `APIAdapter` this throws `APIAdapterCapabilityError` against any
+   * server, not merely one advertising no journal. It is on this interface
+   * regardless, for the reason the adapter contract requires it rather
+   * than making it optional: an adapter with nothing to read refuses and
+   * names why, so an empty log always means "nothing changed" and never
+   * "this stack does not remember". A caller deserves that refusal over a
+   * method that isn't there. See docs/spec/versioning.md § The change
+   * journal.
+   */
+  getJournal(id: string, query?: JournalQuery): Promise<RecordJournalEntry[]>;
+  /**
    * Commit a per-record migration: change `typeId` and `content` together,
    * validated against `toTypeId`'s schema. The only way a record's typeId
    * changes after creation — see docs/spec/wire-format.md § Migration
@@ -451,12 +467,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The requester behind a write that stamps nothing on the record itself —
-   * a hard delete, which leaves no record to stamp, and associate()/
-   * dissociate(), which don't bump and so don't touch updatedBy/updatedVia.
-   * Hard delete is owner-acting-alone only, so it never has a principal to
-   * name beside the subject; associate()/dissociate() can run delegated,
-   * so `updatedVia` rides along here when present.
+   * The actor for a `create` journal entry, read off the record as just
+   * built. Create is the one journaled write that stamps the requester
+   * onto the row itself, so the record in hand is authoritative — and it
+   * carries `appId`, which ActorOptions has no field for.
    */
   private static createActor(record: StackRecord): ChangeActor | undefined {
     if (!record.updatedBy) return undefined;
@@ -467,6 +481,14 @@ export class Stack implements StackClient {
     };
   }
 
+  /**
+   * The requester behind a write that stamps nothing on the record itself —
+   * a hard delete, which leaves no record to stamp, and associate()/
+   * dissociate(), which don't bump and so don't touch updatedBy/updatedVia.
+   * Hard delete is owner-acting-alone only, so it never has a principal to
+   * name beside the subject; associate()/dissociate() can run delegated,
+   * so `updatedVia` rides along here when present.
+   */
   private static actorFrom(opts: ActorOptions): ChangeActor | undefined {
     if (!opts.updatedBy) return undefined;
     return {
@@ -1529,6 +1551,7 @@ export class Stack implements StackClient {
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();
+    assertValidJournalQuery(query);
     return this.adapter.getJournal(id, query);
   }
 
