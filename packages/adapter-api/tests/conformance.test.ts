@@ -412,6 +412,17 @@ describe('undeleteRecord fixtures', () => {
   }
 });
 
+/**
+ * The association endpoints carry no precondition, so APIAdapter sends no
+ * `If-Match` on one however a caller reached it. A server ignores a header
+ * a foreign client sends anyway rather than refusing it — the half of the
+ * rule only a server-side run can exercise. See
+ * docs/spec/wire-format.md § Associations.
+ */
+const expectNoIfMatch = (init: RequestInit) => {
+  expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
+};
+
 describe('associate fixtures', () => {
   for (const fixture of associateFixtures) {
     test(fixture.name, async () => {
@@ -428,6 +439,7 @@ describe('associate fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.version).toBe(fixture.responseBody!.version);
+      expectNoIfMatch(init);
     });
   }
 });
@@ -448,6 +460,7 @@ describe('dissociate fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.version).toBe(fixture.responseBody!.version);
+      expectNoIfMatch(init);
     });
   }
 });

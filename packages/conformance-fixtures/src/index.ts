@@ -870,8 +870,9 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
     description:
       'POST /records/:id/associations adds an association without bumping version or touching ' +
       'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
-      'it already had. The endpoint accepts no If-Match: there is nothing for a precondition ' +
-      'on version to guard. See docs/spec/wire-format.md § Associations.',
+      'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
+      'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
+      'its value. See docs/spec/wire-format.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations',
     requestBody: { kind: 'tag', label: 'starred' },
@@ -962,8 +963,9 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
     description:
       'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
       'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
-      'Like associate(), this never bumps version or touches updatedAt, and accepts no ' +
-      'If-Match. See docs/spec/data-model.md § Associations.',
+      'Like associate(), this never bumps version or touches updatedAt, and never reads ' +
+      'If-Match — a header sent here is ignored rather than refused. See ' +
+      'docs/spec/data-model.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: {
