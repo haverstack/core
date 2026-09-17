@@ -335,7 +335,9 @@ export class SharedSqlRecordLogic {
 
     if (opts.bumpsVersion === false) {
       this.exec.transaction(() => {
-        this.checkExpectedVersion(this.readRecord(id)!, opts.expectedVersion);
+        const current = this.readRecord(id);
+        if (!current) throw new StackNotFoundError(`Record not found: "${id}"`);
+        this.checkExpectedVersion(current, opts.expectedVersion);
         if (changes.associations !== undefined) {
           this.replaceAssociations(id, changes.associations);
         }

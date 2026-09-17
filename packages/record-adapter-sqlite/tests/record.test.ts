@@ -489,6 +489,39 @@ describe('expectedVersion', () => {
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
+  // mutateRecord's non-bumping path (opts.bumpsVersion: false — what a
+  // caller passes for an associations-only change set) re-checks
+  // expectedVersion against a fresh read inside its own transaction,
+  // since there is no version-bumping UPDATE for the guard to ride in.
+  // That read can come back null if a concurrent hard delete lands
+  // between mutateRecord's own read and this re-check; the adapter must
+  // report that as StackNotFoundError like every other write path here,
+  // not crash on it.
+  test('mutateRecord with bumpsVersion: false reports StackNotFoundError, not a crash, for a concurrently deleted record', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord());
+
+    const logic = (
+      adapter as unknown as {
+        record: { getRecord: (id: string) => Promise<StackRecord | null> };
+      }
+    ).record;
+    const originalGetRecord = logic.getRecord.bind(logic);
+    vi.spyOn(logic, 'getRecord').mockImplementationOnce(async (id: string) => {
+      const found = await originalGetRecord(id);
+      await adapter.deleteRecord(id, { hard: true }); // races mutateRecord's own no-bump re-read
+      return found;
+    });
+
+    await expect(
+      adapter.mutateRecord(
+        record.id,
+        { associations: [{ kind: 'tag', label: 'x' }] },
+        { bumpsVersion: false, expectedVersion: 1 },
+      ),
+    ).rejects.toBeInstanceOf(StackNotFoundError);
+  });
+
   test('a permissions change set enforces expectedVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());

@@ -1014,7 +1014,6 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    this.checkIfVersion(existing, opts.ifVersion);
 
     const merged = await this.validateChangeSet(id, existing, changes);
 
@@ -1031,12 +1030,17 @@ export class Stack implements StackClient {
     // non-bumping write never touches updatedBy/updatedVia.
     // See docs/spec/versioning.md § Version history.
     const bumps = bumpsVersion(ops);
+    // ifVersion guards the OCC race a bumping write can lose. An
+    // associations-only change composes regardless of write order — same
+    // as associate()/dissociate(), which never took ifVersion — so it is
+    // never checked here.
+    if (bumps) this.checkIfVersion(existing, opts.ifVersion);
+
     const previousParentId = existing.parentId ?? null;
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       ...(bumps
         ? this.writeOptions(existing, opts)
         : {
-            expectedVersion: opts.ifVersion,
             updatedBy: opts.updatedBy,
             updatedVia: opts.updatedVia,
           }),

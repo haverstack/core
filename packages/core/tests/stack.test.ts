@@ -2726,6 +2726,19 @@ describe('ifVersion', () => {
     expect((await stack.get(record.id))?.version).toBe(2);
   });
 
+  test('mutate() with an associations-only change set ignores a stale ifVersion, like associate()/dissociate()', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
+
+    const updated = await stack.mutate(
+      record.id,
+      { associations: [{ kind: 'tag', label: 'x' }] },
+      { ifVersion: 1 }, // stale for the record, but this write never bumps
+    );
+    expect(updated.version).toBe(2);
+    expect(updated.associations).toEqual([{ kind: 'tag', label: 'x' }]);
+  });
+
   test('delete() (soft) and undelete() enforce ifVersion', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
