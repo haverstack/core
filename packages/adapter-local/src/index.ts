@@ -213,7 +213,11 @@ export class LocalAdapter implements StackAdapter {
   async mutateRecord(
     id: RecordId,
     changes: RecordChanges,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: {
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+      bumpsVersion?: boolean;
+    } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.mutateRecord(id, changes, opts);
   }
@@ -243,20 +247,12 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
-  async associate(
-    id: RecordId,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.associate(id, association, opts);
+  async associate(id: RecordId, association: Association): Promise<StackRecord> {
+    return this.record.associate(id, association);
   }
 
-  async dissociate(
-    id: RecordId,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(id, association, opts);
+  async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
+    return this.record.dissociate(id, association);
   }
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
@@ -274,9 +270,7 @@ export class LocalAdapter implements StackAdapter {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
-      restoreAssociations?: boolean;
-    } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }

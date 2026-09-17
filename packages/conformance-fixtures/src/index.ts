@@ -868,8 +868,10 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
   {
     name: 'associate-tag',
     description:
-      'POST /records/:id/associations adds an association and bumps version, answering with the ' +
-      'record it produced. See docs/spec/wire-format.md § Records.',
+      'POST /records/:id/associations adds an association without bumping version or touching ' +
+      'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
+      'it already had. The endpoint accepts no If-Match: there is nothing for a precondition ' +
+      'on version to guard. See docs/spec/wire-format.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations',
     requestBody: { kind: 'tag', label: 'starred' },
@@ -878,9 +880,9 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
+      version: 1,
       associations: [{ kind: 'tag', label: 'starred' }],
     },
   },
@@ -904,9 +906,9 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
+      version: 1,
       associations: [
         {
           kind: 'attachment',
@@ -936,9 +938,9 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
+      version: 1,
       associations: [
         {
           kind: 'relationship',
@@ -960,7 +962,8 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
     description:
       'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
       'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
-      'See docs/spec/data-model.md § Associations.',
+      'Like associate(), this never bumps version or touches updatedAt, and accepts no ' +
+      'If-Match. See docs/spec/data-model.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: {
@@ -973,18 +976,19 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 3,
+      version: 1,
     },
   },
   {
     name: 'dissociate-tag',
     description:
-      'POST /records/:id/associations/delete removes an association and bumps version, ' +
-      'answering with the record it produced — here with associations gone entirely. POST, ' +
-      'not DELETE — a DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a ' +
-      'portability landmine for proxies/gateways that drop or reject it.',
+      'POST /records/:id/associations/delete removes an association without bumping version or ' +
+      'touching updatedAt, answering with the record it produced — here with associations gone ' +
+      'entirely and version/updatedAt exactly as they already stood. POST, not DELETE — a ' +
+      'DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a portability ' +
+      'landmine for proxies/gateways that drop or reject it.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: { kind: 'tag', label: 'starred' },
@@ -993,9 +997,9 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 3,
+      version: 1,
     },
   },
 ];
@@ -2720,6 +2724,105 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
               actor: { entityId: FEED_CONTRIBUTOR },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-associate-frame-carries-associationsAdded',
+    description:
+      'An associate() call reports op "associate" on the change feed, but never bumps version ' +
+      "or touches updatedAt — the frame's version/updatedAt are exactly what the record already " +
+      'held. `associationsAdded` is the only record of what the call moved: the association ' +
+      'itself is never snapshotted, so a subscriber not listening for this exact frame has no ' +
+      'other way to learn it. See docs/spec/events.md § The event shape.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-associate-frame-mutation',
+          description: 'A contributor tags the note.',
+          method: 'POST',
+          path: '/records/1hk153x00001/associations',
+          requestBody: { kind: 'tag', label: 'starred' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+            content: { title: 'Hello', body: 'World' },
+            version: 1,
+            entityId: FEED_OWNER,
+            associations: [{ kind: 'tag', label: 'starred' }],
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1S',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              ops: ['associate'],
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 1,
+              updatedAt: '2024-01-01T00:00:00.000Z',
+              actor: { entityId: FEED_CONTRIBUTOR },
+              associationsAdded: [{ kind: 'tag', label: 'starred' }],
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-dissociate-frame-carries-associationsRemoved',
+    description:
+      'A dissociate() call reports op "dissociate" on the change feed, with the same non-bumping ' +
+      'version/updatedAt an associate() frame carries. `associationsRemoved` names the removed ' +
+      'association by identity only — never the annotation it carried — since it is no longer ' +
+      'current. Assumes the note already carries the "starred" tag from a prior associate(). ' +
+      'See docs/spec/events.md § The event shape.',
+    path: '/changes',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-dissociate-frame-mutation',
+          description: 'A contributor untags the note.',
+          method: 'POST',
+          path: '/records/1hk153x00001/associations/delete',
+          requestBody: { kind: 'tag', label: 'starred' },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00001',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+            content: { title: 'Hello', body: 'World' },
+            version: 1,
+            entityId: FEED_OWNER,
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1S',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              ops: ['dissociate'],
+              recordId: '1hk153x00001',
+              typeId: 'com.example/note@1',
+              version: 1,
+              updatedAt: '2024-01-01T00:00:00.000Z',
+              actor: { entityId: FEED_CONTRIBUTOR },
+              associationsRemoved: [{ kind: 'tag', label: 'starred' }],
             },
           },
         ],

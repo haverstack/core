@@ -150,7 +150,11 @@ export class MemoryAdapter implements StackAdapter {
   async mutateRecord(
     id: string,
     changes: RecordChanges,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: {
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+      bumpsVersion?: boolean;
+    } & ActorOptions = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
@@ -178,7 +182,10 @@ export class MemoryAdapter implements StackAdapter {
       changes.unlisted !== undefined ? changes.unlisted : Boolean(existing.unlistedAt);
     if (unlisted) next = { ...next, unlistedAt: existing.unlistedAt ?? new Date() };
 
-    const updated = this.bump(next, opts);
+    // A change set touching only `associations` doesn't bump — see
+    // docs/spec/versioning.md § Version history. `next` already carries
+    // the prior version/updatedAt/updatedBy/updatedVia untouched.
+    const updated = opts.bumpsVersion === false ? next : this.bump(next, opts);
     this.records.set(id, updated);
     return updated;
   }
@@ -368,15 +375,14 @@ export class MemoryAdapter implements StackAdapter {
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
-  async associate(
-    id: string,
-    association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ) {
+  /**
+   * Never bumps `version`/`updatedAt` — a set-add composes correctly
+   * regardless of write order, so it needs neither OCC nor a snapshot.
+   * See docs/spec/versioning.md § Version history.
+   */
+  async associate(id: string, association: Association) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
     // re-pointed `attachmentRecordId` lands on the association already
     // there rather than adding a second reference to the same file.
@@ -384,22 +390,17 @@ export class MemoryAdapter implements StackAdapter {
     const next = assocs.some((a) => associationEqual(a, association))
       ? assocs.map((a) => (associationEqual(a, association) ? association : a))
       : [...assocs, association];
-    const updated = this.bump(withAssociations(record, next), opts);
+    const updated = withAssociations(record, next);
     this.records.set(id, updated);
     return updated;
   }
 
-  async dissociate(
-    id: string,
-    association: Association,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
-  ) {
+  /** Never bumps `version`/`updatedAt` — see associate(). */
+  async dissociate(id: string, association: Association) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
-    const updated = this.bump(withAssociations(record, assocs), opts);
+    const updated = withAssociations(record, assocs);
     this.records.set(id, updated);
     return updated;
   }
@@ -471,7 +472,6 @@ export class MemoryAdapter implements StackAdapter {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-      restoreAssociations?: boolean;
     } & ActorOptions = {},
   ) {
     const record = this.records.get(id);
@@ -483,13 +483,9 @@ export class MemoryAdapter implements StackAdapter {
     const merged = { ...record, typeId: target.typeId, content: target.content };
     // A snapshot always settles containment: absent is the root, so a
     // restore moves the record there rather than leaving it where it sits.
+    // Associations are never restored — a snapshot never carries them.
     const withParent = withParentId(merged, target.parentId ?? null);
-    // Whether a restore rolls associations back at all is decided where the
-    // record's meaning is known; the snapshot's list is the only one that
-    // ever lands here. See StackRecordAdapter.restoreVersion().
-    const applied = opts.restoreAssociations === false ? undefined : target.associations;
-    const withAssoc = applied !== undefined ? withAssociations(withParent, applied) : withParent;
-    const updated = this.bump(withAssoc, opts);
+    const updated = this.bump(withParent, opts);
     this.records.set(id, updated);
     return updated;
   }

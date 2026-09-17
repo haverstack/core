@@ -83,7 +83,11 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   mutateRecord(
     id: string,
     changes: RecordChanges,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: {
+      expectedVersion?: number;
+      snapshot?: RecordVersion;
+      bumpsVersion?: boolean;
+    } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.mutateRecord(id, changes, opts);
   }
@@ -105,9 +109,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   restoreVersion(
     id: string,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & {
-      restoreAssociations?: boolean;
-    } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -168,20 +170,12 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   // Associations
   // -------------------------------------------------------
 
-  associate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.associate(recordId, association, opts);
+  associate(recordId: string, association: Association): Promise<StackRecord> {
+    return this.record.associate(recordId, association);
   }
 
-  dissociate(
-    recordId: string,
-    association: Association,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(recordId, association, opts);
+  dissociate(recordId: string, association: Association): Promise<StackRecord> {
+    return this.record.dissociate(recordId, association);
   }
 
   // -------------------------------------------------------

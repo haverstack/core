@@ -104,6 +104,22 @@ describe('serializeChange', () => {
     expect(w.parentId).toBe('1hk153x00000');
   });
 
+  it('carries associationsAdded for an associate op', () => {
+    const w = serializeChange(
+      change({ ops: ['associate'], associationsAdded: [{ kind: 'tag', label: 'starred' }] }),
+    );
+    expect(w.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect('associationsRemoved' in w).toBe(false);
+  });
+
+  it('carries associationsRemoved for a dissociate op', () => {
+    const w = serializeChange(
+      change({ ops: ['dissociate'], associationsRemoved: [{ kind: 'tag', label: 'starred' }] }),
+    );
+    expect(w.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect('associationsAdded' in w).toBe(false);
+  });
+
   it('carries a server-minted cursor when the frame has one', () => {
     expect(serializeChange(change({ seq: 'AA3f1R' })).seq).toBe('AA3f1R');
   });
@@ -131,6 +147,17 @@ describe('serializeChange on a purge', () => {
   it('drops parentId, which points at what was erased', () => {
     const w = serializeChange(purge({ parentId: '1hk153x00000', record: record() }));
     expect('parentId' in w).toBe(false);
+  });
+
+  it('drops associationsAdded/associationsRemoved, which a purge never carries', () => {
+    const w = serializeChange(
+      purge({
+        associationsAdded: [{ kind: 'tag', label: 'starred' }],
+        associationsRemoved: [{ kind: 'tag', label: 'draft' }],
+      }),
+    );
+    expect('associationsAdded' in w).toBe(false);
+    expect('associationsRemoved' in w).toBe(false);
   });
 
   it('keeps the outline a purge is auditable by', () => {

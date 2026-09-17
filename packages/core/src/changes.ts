@@ -15,6 +15,7 @@
  */
 
 import type {
+  Association,
   ChangeActor,
   ChangeFilter,
   ChangeKind,
@@ -25,6 +26,7 @@ import type {
   Unsubscribe,
 } from './types.js';
 import { StackQueryError } from './errors.js';
+import { bumpsVersion } from './record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.
@@ -242,7 +244,11 @@ class UnscopedSubscription extends Subscription {
  *
  * The actor is read off the record for every version-bumping op, because
  * `updatedBy`/`updatedVia` were stamped by that same write and so agree
- * with what was persisted by construction. Hard delete stamps nothing and
+ * with what was persisted by construction. `associate`/`dissociate` don't
+ * bump, so they stamp nothing on the record either — their actor travels
+ * as `opts.actor` instead, the same way hard delete's does, since reading
+ * the record would report whoever's *last version-bumping write* this is,
+ * not who just changed the association. Hard delete stamps nothing and
  * leaves nothing to read, so its actor is the requester, passed in. A
  * purge also drops `parentId` and the create-time `appId`: the frame says
  * that a record of some type was destroyed, and nothing further about
@@ -251,7 +257,13 @@ class UnscopedSubscription extends Subscription {
 export function buildEmission(
   ops: ChangeOp | ChangeOp[],
   record: StackRecord,
-  opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
+  opts: {
+    actor?: ChangeActor;
+    at?: Date;
+    previousParentId?: string | null;
+    associationsAdded?: Association[];
+    associationsRemoved?: Association[];
+  } = {},
 ): EmittedChange {
   const list = Array.isArray(ops) ? ops : [ops];
   if (list.length === 0) {
@@ -274,7 +286,10 @@ export function buildEmission(
     };
   }
 
-  const actor = actorOf(record, kind);
+  // A non-bumping write (associate/dissociate) never stamped the record,
+  // so `record.updatedBy` reports whoever's last *bumping* write this is,
+  // not who just changed the association — only opts.actor is trustworthy.
+  const actor = bumpsVersion(list) ? (opts.actor ?? actorOf(record, kind)) : opts.actor;
   return {
     record,
     ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
@@ -287,6 +302,8 @@ export function buildEmission(
       updatedAt: record.updatedAt,
       ...(record.parentId !== undefined && { parentId: record.parentId }),
       ...(actor && { actor }),
+      ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
+      ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
     },
   };
 }

@@ -79,6 +79,10 @@ export type WireType = {
  * shape the record it describes takes — `null` is an input spelling
  * (a change set's `parentId`, a `parentId=null` filter) and never appears
  * on a response. See docs/spec/wire-format.md § Versions.
+ *
+ * No `associations` field: associate()/dissociate() don't bump `version`,
+ * so no version ever snapshots the association set. See
+ * docs/spec/versioning.md § Version history.
  */
 export type WireVersion = {
   version: number;
@@ -89,7 +93,6 @@ export type WireVersion = {
   updatedBy?: string;
   updatedVia?: string;
   parentId?: string;
-  associations?: Association[];
   permissions?: Permission[];
 };
 
@@ -140,7 +143,6 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
   if (v.parentId !== undefined) w.parentId = v.parentId;
-  if (v.associations !== undefined) w.associations = v.associations;
   if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;
 }
@@ -573,6 +575,10 @@ export type WireRecordChange = {
   updatedAt: string;
   parentId?: string;
   actor?: WireChangeActor;
+  /** Present when `ops` includes `associate`. See RecordChange.associationsAdded. */
+  associationsAdded?: Association[];
+  /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
+  associationsRemoved?: Association[];
   record?: WireRecord;
   seq?: string;
 };
@@ -616,6 +622,8 @@ export function serializeChange(c: RecordChange): WireRecordChange {
   if (c.seq !== undefined) w.seq = c.seq;
   if (c.kind === 'purged') return w;
   if (c.parentId !== undefined) w.parentId = c.parentId;
+  if (c.associationsAdded !== undefined) w.associationsAdded = c.associationsAdded;
+  if (c.associationsRemoved !== undefined) w.associationsRemoved = c.associationsRemoved;
   if (c.record !== undefined) w.record = serializeRecord(c.record);
   return w;
 }

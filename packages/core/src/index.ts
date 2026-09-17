@@ -68,6 +68,7 @@ export type {
   Unsubscribe,
   ExpectedVersionOptions,
   SnapshotOptions,
+  BumpVersionOptions,
   StackType,
   TypeSchema,
   FieldDef,

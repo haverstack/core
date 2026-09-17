@@ -458,7 +458,6 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
   // root `null` — mirroring the input side, where `null` is how a caller
   // asks for it — means the same thing, so both land as absent here.
   if (raw.parentId != null) v.parentId = raw.parentId;
-  if (raw.associations != null) v.associations = raw.associations;
   if (raw.permissions != null) v.permissions = raw.permissions;
   return v;
 };
@@ -559,6 +558,8 @@ const parseChange = (raw: WireRecordChange): RecordChange => {
   // that does cannot hand a subscriber the copy the verb exists to erase.
   if (raw.kind === 'purged') return change;
   if (raw.parentId != null) change.parentId = raw.parentId;
+  if (raw.associationsAdded != null) change.associationsAdded = raw.associationsAdded;
+  if (raw.associationsRemoved != null) change.associationsRemoved = raw.associationsRemoved;
   if (raw.record != null) change.record = parseRecord(raw.record);
   return change;
 };
@@ -1137,32 +1138,28 @@ export class APIAdapter implements StackAdapter {
   // Associations
   // -------------------------------------------------------
 
-  async associate(
-    id: RecordId,
-    association: Association,
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
+  /**
+   * No `If-Match` — associate()/dissociate() never bump `version`, so
+   * there's nothing an `ifVersion` precondition could guard here. See
+   * docs/spec/versioning.md § Version history.
+   */
+  async associate(id: RecordId, association: Association): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/associations`,
       association,
-      { ifMatch: opts.expectedVersion },
     );
     return requireRecordBody(raw, `POST /records/${id}/associations`);
   }
 
-  async dissociate(
-    id: RecordId,
-    association: Association,
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
+  /** No `If-Match` — see associate(). */
+  async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
     // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
     // §9.3.5) and proxies/gateways are free to drop or reject it.
     const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/associations/delete`,
       association,
-      { ifMatch: opts.expectedVersion },
     );
     return requireRecordBody(raw, `POST /records/${id}/associations/delete`);
   }
@@ -1194,12 +1191,9 @@ export class APIAdapter implements StackAdapter {
   }
 
   /**
-   * `opts.restoreAssociations` is deliberately not sent. The wire protocol
-   * has no field for it, and needs none: the server runs the same `Stack`
-   * logic over its own adapter and reaches the same answer from the same
-   * record — a `_group`'s roster held where it stands, everything else
-   * rolled back. A wire field would only let a client *propose* that
-   * answer. See docs/spec/versioning.md § Restore semantics.
+   * Never restores `associations` — no snapshot carries them, so there is
+   * nothing the server could restore associations *from*. See
+   * docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: RecordId,

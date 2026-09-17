@@ -29,8 +29,8 @@ export function combineAdapters(parts: {
     undeleteRecord: (id, opts) => parts.record.undeleteRecord(id, opts),
     queryRecords: (q) => parts.record.queryRecords(q),
 
-    associate: (id, assoc, opts) => parts.record.associate(id, assoc, opts),
-    dissociate: (id, assoc, opts) => parts.record.dissociate(id, assoc, opts),
+    associate: (id, assoc) => parts.record.associate(id, assoc),
+    dissociate: (id, assoc) => parts.record.dissociate(id, assoc),
 
     getVersions: (id) => parts.record.getVersions(id),
     getVersion: (id, v) => parts.record.getVersion(id, v),

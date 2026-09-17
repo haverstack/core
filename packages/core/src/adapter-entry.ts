@@ -15,6 +15,7 @@ export type {
   MissingCapability,
   BlobFileInfo,
   ExpectedVersionOptions,
+  BumpVersionOptions,
   SubscribeChangesOptions,
 } from './types.js';
 export { combineAdapters } from './combine.js';

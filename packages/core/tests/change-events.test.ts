@@ -110,7 +110,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     });
   });
 
-  test('the version reported is the one the mutation produced', async () => {
+  test('the version reported is the one the mutation produced — unchanged for associate(), which never bumps', async () => {
     const note = await stack.create(NOTE, { text: 'v1' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
@@ -119,7 +119,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
     await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
 
-    expect(seen.map((c) => c.version)).toEqual([2, 3, 4]);
+    expect(seen.map((c) => c.version)).toEqual([2, 2, 3]);
     // Read back rather than inferred: the last event agrees with storage.
     const stored = await stack.get(note.id);
     expect(seen.at(-1)!.version).toBe(stored!.version);
@@ -319,6 +319,45 @@ describe('actor names who performed the change', () => {
     expect(seen[0]!.record!.entityId).toBe(AUTHOR);
   });
 
+  // associate()/dissociate() never bump, so they never restamp
+  // record.updatedBy — the actor for their event has to travel as an
+  // explicit opt instead of being read off the record. See
+  // docs/spec/versioning.md § Version history.
+  test('associate()/dissociate() name the acting identity in the event even though they never restamp the record', async () => {
+    await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
+    const note = await stack.asEntity(AUTHOR).create(NOTE, { text: 'hello' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
+
+    await stack.asEntity(EDITOR).associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.asEntity(EDITOR).dissociate(note.id, { kind: 'tag', label: 'x' });
+
+    expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[1]!.actor).toEqual({ entityId: EDITOR });
+    // The record itself was never restamped — no version-bumping write has
+    // touched updatedBy since creation, so it still reads the author.
+    expect(seen[1]!.record!.updatedBy).toBe(AUTHOR);
+  });
+
+  // An actorless associate()/dissociate() must not fall back to
+  // record.updatedBy: that field reports whoever's last *bumping* write
+  // this is, which can be a stranger to the association change. Absence
+  // means unknown, never "the last editor".
+  test('an actorless associate()/dissociate() names nobody, even after an unrelated bumping edit', async () => {
+    await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
+    const note = await stack.asEntity(AUTHOR).create(NOTE, { text: 'hello' });
+    await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
+
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
+
+    await stack.associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.dissociate(note.id, { kind: 'tag', label: 'x' });
+
+    expect(seen[0]!.actor).toBeUndefined();
+    expect(seen[1]!.actor).toBeUndefined();
+  });
+
   test('a delegated write names the principal beside the subject', async () => {
     await stack.grant(null, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
     await stack.grant(APP, [{ actions: ['create', 'read-any', 'update-any'], typeId: NOTE }]);
@@ -356,6 +395,152 @@ describe('actor names who performed the change', () => {
     expect(seen[0]!.actor).toEqual({ entityId: AUTHOR, appId: 'com.example.app' });
     // The creating app describes the record, not this change.
     expect(seen[1]!.actor).toEqual({ entityId: EDITOR });
+  });
+});
+
+// -------------------------------------------------------
+// associationsAdded / associationsRemoved
+// -------------------------------------------------------
+
+// Associations are never snapshotted (see docs/spec/versioning.md §
+// Version history), so these two fields are the only record, anywhere, of
+// what an associate()/dissociate() call actually moved. Both report only
+// what is true now: `associationsAdded` the association as it now stands,
+// `associationsRemoved` the identity of what's now gone — never a value
+// that used to be there. See docs/spec/events.md § The event shape.
+describe('associationsAdded/associationsRemoved report the current change', () => {
+  const twoUploads = async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    const first = await stack.putAttachment(data, 'image/png', 'original.png');
+    const second = await stack.putAttachment(data, 'image/png', 'copy.png');
+    return { first, second, fileId: first.content.fileId };
+  };
+
+  test('a fresh associate() reports the new association added, nothing removed', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+
+    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(seen[0]!.associationsRemoved).toBeUndefined();
+  });
+
+  test('dissociate() reports the removed association by identity, nothing added', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+
+    expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(seen[0]!.associationsAdded).toBeUndefined();
+  });
+
+  // The whole point of this pair: a re-point is lossy (nothing snapshots
+  // associations any more), so the old attachmentRecordId must not surface
+  // anywhere in the event — not as "removed", not tucked into "added".
+  test('re-pointing an attachment reports only the new pointer; the old one appears nowhere', async () => {
+    const { first, second, fileId } = await twoUploads();
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: second.id,
+    });
+
+    expect(seen[0]!.associationsAdded).toEqual([
+      { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
+    ]);
+    expect(seen[0]!.associationsRemoved).toBeUndefined();
+    expect(JSON.stringify(seen[0])).not.toContain(first.id);
+  });
+
+  test('clearing a stored pointer reports the identity-only association as added', async () => {
+    const { first, fileId } = await twoUploads();
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.associate(note.id, { kind: 'attachment', label: 'embed', fileId });
+
+    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
+  });
+
+  test('dissociating a pointed attachment never repeats attachmentRecordId', async () => {
+    const { first, fileId } = await twoUploads();
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'embed',
+      fileId,
+      attachmentRecordId: first.id,
+    });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.dissociate(note.id, { kind: 'attachment', label: 'embed', fileId });
+
+    expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
+  });
+
+  test('a mutate() change set swapping one tag for another reports both lists', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, { kind: 'tag', label: 'draft' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.mutate(note.id, { associations: [{ kind: 'tag', label: 'published' }] });
+
+    expect(seen[0]!.ops).toEqual(['associate', 'dissociate']);
+    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'published' }]);
+    expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'draft' }]);
+  });
+
+  test('a mutate() change set combining associations with a bumping aspect reports both', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      associations: [{ kind: 'tag', label: 'starred' }],
+    });
+
+    expect(seen[0]!.ops).toEqual(['patch', 'associate']);
+    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(seen[0]!.version).toBe(2);
+  });
+
+  test('neither field is present on ops that carry no association change', async () => {
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { typeId: NOTE } });
+
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.patchContent(note.id, { text: 'edited' });
+
+    for (const change of seen) {
+      expect(change.associationsAdded).toBeUndefined();
+      expect(change.associationsRemoved).toBeUndefined();
+    }
   });
 });
 
