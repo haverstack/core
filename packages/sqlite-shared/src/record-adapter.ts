@@ -16,6 +16,9 @@
  */
 
 import type {
+  JournalOptions,
+  JournalQuery,
+  RecordJournalEntry,
   StackType,
   TypeId,
   FileId,
@@ -72,8 +75,8 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   // Records
   // -------------------------------------------------------
 
-  createRecord(record: StackRecord): Promise<StackRecord> {
-    return this.record.createRecord(record);
+  createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
+    return this.record.createRecord(record, opts);
   }
 
   getRecord(id: string): Promise<StackRecord | null> {
@@ -87,21 +90,23 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
       expectedVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
-    } & ActorOptions,
+    } & ActorOptions &
+      JournalOptions,
   ): Promise<StackRecord> {
     return this.record.mutateRecord(id, changes, opts);
   }
 
   deleteRecord(
     id: string,
-    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+      JournalOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
   undeleteRecord(
     id: string,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
@@ -109,7 +114,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   restoreVersion(
     id: string,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -118,7 +123,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
@@ -151,6 +156,14 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   }
 
   // -------------------------------------------------------
+  // Change journal
+  // -------------------------------------------------------
+
+  getJournal(id: string, query?: JournalQuery): Promise<RecordJournalEntry[]> {
+    return this.record.getJournal(id, query);
+  }
+
+  // -------------------------------------------------------
   // Types
   // -------------------------------------------------------
 
@@ -170,12 +183,20 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   // Associations
   // -------------------------------------------------------
 
-  associate(recordId: string, association: Association): Promise<StackRecord> {
-    return this.record.associate(recordId, association);
+  associate(
+    recordId: string,
+    association: Association,
+    opts?: JournalOptions,
+  ): Promise<StackRecord> {
+    return this.record.associate(recordId, association, opts);
   }
 
-  dissociate(recordId: string, association: Association): Promise<StackRecord> {
-    return this.record.dissociate(recordId, association);
+  dissociate(
+    recordId: string,
+    association: Association,
+    opts?: JournalOptions,
+  ): Promise<StackRecord> {
+    return this.record.dissociate(recordId, association, opts);
   }
 
   // -------------------------------------------------------

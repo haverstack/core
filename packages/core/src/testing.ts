@@ -4,6 +4,10 @@ import type {
   StackType,
   TypeId,
   RecordVersion,
+  RecordJournalEntry,
+  JournalEntryInput,
+  JournalOptions,
+  JournalQuery,
   RecordChanges,
   ActorOptions,
   StackQuery,
@@ -80,6 +84,7 @@ export class MemoryAdapter implements StackAdapter {
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
   readonly versions = new Map<string, RecordVersion[]>();
+  readonly journals = new Map<string, RecordJournalEntry[]>();
   readonly types = new Map<string, StackType>();
   readonly blobs = new Map<string, { data: Uint8Array; modifiedAt: Date }>();
 
@@ -91,12 +96,13 @@ export class MemoryAdapter implements StackAdapter {
     this.timezone = timezone;
   }
 
-  async createRecord(record: StackRecord) {
+  async createRecord(record: StackRecord, opts: JournalOptions = {}) {
     if (this.records.has(record.id)) {
       throw new StackConflictError(`Record already exists: "${record.id}"`);
     }
     this.records.set(record.id, { ...record });
     this.order.push(record.id);
+    this.appendJournal(record.id, opts.journal, record);
     return record;
   }
 
@@ -154,7 +160,8 @@ export class MemoryAdapter implements StackAdapter {
       expectedVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new Error(`Not found: ${id}`);
@@ -187,6 +194,7 @@ export class MemoryAdapter implements StackAdapter {
     // the prior version/updatedAt/updatedBy/updatedVia untouched.
     const updated = opts.bumpsVersion === false ? next : this.bump(next, opts);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
@@ -196,7 +204,8 @@ export class MemoryAdapter implements StackAdapter {
       hard?: boolean;
       expectedVersion?: number;
       snapshot?: RecordVersion;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) {
@@ -211,17 +220,24 @@ export class MemoryAdapter implements StackAdapter {
     if (opts.hard) {
       this.records.delete(id);
       this.order.splice(this.order.indexOf(id), 1);
+      // A purge takes the version history and the journal with it: what a
+      // destroyed record once held is exactly the residue this verb exists
+      // to leave nothing of.
+      this.versions.delete(id);
+      this.journals.delete(id);
       return record;
     }
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const deleted = this.bump({ ...record, deletedAt: new Date() }, opts);
     this.records.set(id, deleted);
+    this.appendJournal(id, opts.journal, deleted);
     return deleted;
   }
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+      JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
@@ -230,6 +246,7 @@ export class MemoryAdapter implements StackAdapter {
     const { deletedAt: _deletedAt, ...rest } = record;
     const updated = this.bump(rest as StackRecord, opts);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
@@ -380,7 +397,7 @@ export class MemoryAdapter implements StackAdapter {
    * regardless of write order, so it needs neither OCC nor a snapshot.
    * See docs/spec/versioning.md § Version history.
    */
-  async associate(id: string, association: Association) {
+  async associate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
@@ -392,16 +409,18 @@ export class MemoryAdapter implements StackAdapter {
       : [...assocs, association];
     const updated = withAssociations(record, next);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
   /** Never bumps `version`/`updatedAt` — see associate(). */
-  async dissociate(id: string, association: Association) {
+  async dissociate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
     const updated = withAssociations(record, assocs);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
@@ -472,7 +491,8 @@ export class MemoryAdapter implements StackAdapter {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
@@ -487,6 +507,7 @@ export class MemoryAdapter implements StackAdapter {
     const withParent = withParentId(merged, target.parentId ?? null);
     const updated = this.bump(withParent, opts);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
@@ -494,7 +515,8 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+      JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new Error(`Not found: ${id}`);
@@ -502,7 +524,38 @@ export class MemoryAdapter implements StackAdapter {
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
     this.records.set(id, updated);
+    this.appendJournal(id, opts.journal, updated);
     return updated;
+  }
+
+  /**
+   * Append one entry, stamping the record-derived half from the row as it
+   * now stands. `seq` is allocated here rather than by the caller, which
+   * is what keeps the journal free of the collision healing a snapshot's
+   * caller-computed version number needs.
+   */
+  private appendJournal(
+    id: string,
+    entry: JournalEntryInput | undefined,
+    record: StackRecord,
+  ): void {
+    if (!entry) return;
+    const log = this.journals.get(id) ?? [];
+    log.push({
+      ...entry,
+      seq: log.length + 1,
+      at: new Date(),
+      version: record.version,
+      typeId: record.typeId,
+      ...(record.parentId !== undefined && { parentId: record.parentId }),
+    });
+    this.journals.set(id, log);
+  }
+
+  async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    const log = this.journals.get(id) ?? [];
+    const after = query.sinceSeq === undefined ? log : log.filter((e) => e.seq > query.sinceSeq!);
+    return query.limit === undefined ? after : after.slice(0, query.limit);
   }
 
   async saveType(type: StackType) {

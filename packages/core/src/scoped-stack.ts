@@ -43,6 +43,8 @@ import type {
   QueryResult,
   RecordChange,
   RecordVersion,
+  RecordJournalEntry,
+  JournalQuery,
   StackAdapter,
   StackFeatures,
   StackQuery,
@@ -1187,6 +1189,19 @@ export class ScopedStack implements StackClient {
     await this.requireUpdatable(id, { mutating: false });
     const versions = await this.stack.getVersions(id);
     return this.ownerActingAlone ? versions : versions.map(stripVersionPermissions);
+  }
+
+  /**
+   * See getVersions() — the same mutate-surface gate, for the same reason.
+   * A journal entry carries no snapshot `permissions` to strip: it names
+   * that a permission set moved, never what it moved to. The change a
+   * record's ACL underwent is auditable by a write-holder; the sharing
+   * graph it produced stays on the record and on its snapshots.
+   * See docs/spec/versioning.md § The change journal.
+   */
+  async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    await this.requireUpdatable(id, { mutating: false });
+    return this.stack.getJournal(id, query);
   }
 
   /** See getVersions() — same mutate-surface gate, same permissions stripping. */

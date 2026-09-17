@@ -36,7 +36,13 @@ import { applyMergePatch } from './merge.js';
 import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
-import { ChangeEmitter, RelayDelivery, buildEmission, assertSinceUsable } from './changes.js';
+import {
+  ChangeEmitter,
+  RelayDelivery,
+  buildEmission,
+  buildJournalEntry,
+  assertSinceUsable,
+} from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -71,6 +77,8 @@ import type {
   RecordChanges,
   SubscribeOptions,
   Unsubscribe,
+  JournalQuery,
+  RecordJournalEntry,
 } from './types.js';
 
 import {
@@ -88,6 +96,7 @@ import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidRelatedTo,
+  assertValidJournalQuery,
   assertValidSort,
   filtersContent,
   validateAssociation,
@@ -359,6 +368,21 @@ export interface StackClient {
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
+   * A record's change journal, oldest first. On the mutate surface, on the
+   * same footing as getVersions() — a plain reader is refused.
+   *
+   * **Local adapters only, for now.** There is no wire surface yet, so
+   * over `APIAdapter` this throws `APIAdapterCapabilityError` against any
+   * server, not merely one advertising no journal. It is on this interface
+   * regardless, for the reason the adapter contract requires it rather
+   * than making it optional: an adapter with nothing to read refuses and
+   * names why, so an empty log always means "nothing changed" and never
+   * "this stack does not remember". A caller deserves that refusal over a
+   * method that isn't there. See docs/spec/versioning.md § The change
+   * journal.
+   */
+  getJournal(id: string, query?: JournalQuery): Promise<RecordJournalEntry[]>;
+  /**
    * Commit a per-record migration: change `typeId` and `content` together,
    * validated against `toTypeId`'s schema. The only way a record's typeId
    * changes after creation — see docs/spec/wire-format.md § Migration
@@ -440,6 +464,21 @@ export class Stack implements StackClient {
     } = {},
   ): void {
     this.changes.emit(buildEmission(op, record, opts));
+  }
+
+  /**
+   * The actor for a `create` journal entry, read off the record as just
+   * built. Create is the one journaled write that stamps the requester
+   * onto the row itself, so the record in hand is authoritative — and it
+   * carries `appId`, which ActorOptions has no field for.
+   */
+  private static createActor(record: StackRecord): ChangeActor | undefined {
+    if (!record.updatedBy) return undefined;
+    return {
+      entityId: record.updatedBy,
+      ...(record.updatedVia !== undefined && { principalId: record.updatedVia }),
+      ...(record.appId !== undefined && { appId: record.appId }),
+    };
   }
 
   /**
@@ -943,7 +982,9 @@ export class Stack implements StackClient {
       ...(opts.unlisted && { unlistedAt: createdAt }),
     };
 
-    const created = await this.adapter.createRecord(record);
+    const created = await this.adapter.createRecord(record, {
+      journal: buildJournalEntry('create', { actor: Stack.createActor(record) }),
+    });
     this.emitChange('create', created);
     return created as StackRecord & { content: T };
   }
@@ -1062,6 +1103,15 @@ export class Stack implements StackClient {
             updatedVia: opts.updatedVia,
           }),
       bumpsVersion: bumps,
+      journal: buildJournalEntry(ops, {
+        actor: Stack.actorFrom(opts),
+        ...(ops.includes('reparent') && { previousParentId }),
+        ...(assocDelta && {
+          associationsAdded: assocDelta.added,
+          associationsRemoved: assocDelta.removed,
+          associationsReplaced: assocDelta.replaced,
+        }),
+      }),
     });
     this.emitChange(ops, updated, {
       ...(ops.includes('reparent') && { previousParentId }),
@@ -1227,9 +1277,18 @@ export class Stack implements StackClient {
     if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
       return existing;
     }
+    const replaced = (existing.associations ?? []).find((a) => associationEqual(a, association));
     await this.checkAttachmentAssociationPointers([association]);
 
-    const updated = await this.adapter.associate(id, association);
+    const updated = await this.adapter.associate(id, association, {
+      journal: buildJournalEntry('associate', {
+        actor: Stack.actorFrom(opts),
+        associationsAdded: [association],
+        // The association this call overwrites in place, if any. Nothing
+        // else retains the attachmentRecordId it carried.
+        ...(replaced && { associationsReplaced: [replaced] }),
+      }),
+    });
     this.emitChange('associate', updated, {
       actor: Stack.actorFrom(opts),
       associationsAdded: [association],
@@ -1273,7 +1332,12 @@ export class Stack implements StackClient {
       );
     }
 
-    const updated = await this.adapter.dissociate(id, association);
+    const updated = await this.adapter.dissociate(id, association, {
+      journal: buildJournalEntry('dissociate', {
+        actor: Stack.actorFrom(opts),
+        associationsRemoved: [stripAssociationAnnotation(matched)],
+      }),
+    });
     this.emitChange('dissociate', updated, {
       actor: Stack.actorFrom(opts),
       associationsRemoved: [stripAssociationAnnotation(matched)],
@@ -1375,7 +1439,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
-    const deleted = await this.adapter.deleteRecord(id, this.writeOptions(existing, opts));
+    const deleted = await this.adapter.deleteRecord(id, {
+      ...this.writeOptions(existing, opts),
+      journal: buildJournalEntry('delete', { actor: Stack.actorFrom(opts) }),
+    });
     if (deleted) this.emitChange('delete', deleted);
   }
 
@@ -1394,7 +1461,10 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    const undeleted = await this.adapter.undeleteRecord(id, this.writeOptions(existing, opts));
+    const undeleted = await this.adapter.undeleteRecord(id, {
+      ...this.writeOptions(existing, opts),
+      journal: buildJournalEntry('undelete', { actor: Stack.actorFrom(opts) }),
+    });
     this.emitChange('undelete', undeleted);
     return undeleted;
   }
@@ -1463,6 +1533,26 @@ export class Stack implements StackClient {
   async getVersions(id: string): Promise<RecordVersion[]> {
     this.assertOpen();
     return this.adapter.getVersions(id);
+  }
+
+  /**
+   * A record's change journal, oldest first — what moved, who moved it,
+   * and the association deltas nothing else retains. The mutation
+   * surface's read, on the same footing as getVersions(): a log of who
+   * changed what, gated on current read access, would make a record's past
+   * exactly as reachable as its present. `ScopedStack` applies that gate;
+   * this layer is unscoped and trusted by definition.
+   *
+   * An adapter with no journal to read refuses rather than answering an
+   * empty log — "nothing changed" and "this stack does not remember" are
+   * not the same answer, and a caller reconstructing an association's
+   * history cannot tell them apart. The refusal is the adapter's own, so
+   * it can name why. See docs/spec/versioning.md § The change journal.
+   */
+  async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    this.assertOpen();
+    assertValidJournalQuery(query);
+    return this.adapter.getJournal(id, query);
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
@@ -1546,11 +1636,13 @@ export class Stack implements StackClient {
     // Associations never restore, for any Record — a snapshot never
     // carries them, so there's nothing here for the adapter to roll back.
     // See docs/spec/versioning.md § Restore semantics.
-    const restored = await this.adapter.restoreVersion(
-      id,
-      version,
-      this.writeOptions(existing, opts),
-    );
+    const restored = await this.adapter.restoreVersion(id, version, {
+      ...this.writeOptions(existing, opts),
+      journal: buildJournalEntry('restore', {
+        actor: Stack.actorFrom(opts),
+        ...(moves && { previousParentId }),
+      }),
+    });
     this.emitChange('restore', restored, moves ? { previousParentId } : {});
     return restored;
   }
@@ -1670,12 +1762,10 @@ export class Stack implements StackClient {
       );
     }
 
-    const migrated = await this.adapter.commitMigration(
-      id,
-      toTypeId,
-      content,
-      this.writeOptions(existing, opts),
-    );
+    const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
+      ...this.writeOptions(existing, opts),
+      journal: buildJournalEntry('migrate', { actor: Stack.actorFrom(opts) }),
+    });
     this.emitChange('migrate', migrated);
     return migrated;
   }

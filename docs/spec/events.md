@@ -21,6 +21,8 @@ Two things follow immediately:
 
 So the pattern is **notify-then-reconcile**: the feed says _when_ to run a `query()`, and the query — already permission-filtered, already paginated — says _what_.
 
+**A feed is also not a history, and widening it into one is not the way to get one.** Replaying a stored feed from the beginning would have to decide readability against an ACL that has moved on since — the retroactive exposure [history access](./versioning.md#history-access) is gated on the mutate surface to prevent — and would go on naming records a hard delete destroyed, which is the [one thing a purged frame is shaped to avoid](#purged-records-carry-nothing). The durable question is answered a tier down, by [the change journal](./versioning.md#the-change-journal), which is gated and erased like the history it sits beside.
+
 ## The event shape
 
 ```ts
@@ -72,9 +74,9 @@ type RecordChange = {
 
 Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op even though it puts back both content and `parentId` together — it never puts back associations at all, on any Record, so there's nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**`associationsAdded`/`associationsRemoved` are the only record, anywhere, of what an `associate()`/`dissociate()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so a subscriber who was not listening for this exact frame has no other way to learn it, ever. Both report only what is true **now**, the same convention every other field on this type follows:
+**`associationsAdded`/`associationsRemoved` are the live report of what an `associate()`/`dissociate()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./versioning.md#the-change-journal), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
 
-- `associationsAdded` is each association as it now stands, current annotation included. A re-point (a new `attachmentRecordId` on an association the record already held) surfaces here under its new value; the old value is not reported anywhere, on this frame or any other — it is simply gone, the moment the call that overwrote it lands.
+- `associationsAdded` is each association as it now stands, current annotation included. A re-point (a new `attachmentRecordId` on an association the record already held) surfaces here under its new value; the value it replaced is not on this frame or any other, because a frame reports what is current — the journal's `associationsReplaced` is what keeps it.
 - `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. An attachment's `attachmentRecordId` is not repeated on removal, the same way a `purged` frame never carries the content it destroyed: the field names what happened, not a payload that is no longer current.
 
 Neither list is ever present on an op other than `associate`/`dissociate`, and a `mutate()` change set that swaps one association for another (`ops: ['associate', 'dissociate']`) carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.

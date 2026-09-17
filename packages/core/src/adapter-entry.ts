@@ -24,6 +24,7 @@ export {
   assertSortCapability,
   assertValidSort,
   assertValidRelatedTo,
+  assertValidJournalQuery,
   filtersContent,
   parseContentFilterKey,
 } from './query-validation.js';

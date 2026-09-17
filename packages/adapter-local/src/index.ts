@@ -16,6 +16,8 @@
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import type {
+  JournalQuery,
+  RecordJournalEntry,
   StackAdapter,
   StackRecord,
   StackType,
@@ -253,6 +255,10 @@ export class LocalAdapter implements StackAdapter {
 
   async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
     return this.record.dissociate(id, association);
+  }
+
+  async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {
+    return this.record.getJournal(id, query);
   }
 
   async getVersions(id: RecordId): Promise<RecordVersion[]> {

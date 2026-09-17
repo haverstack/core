@@ -19,6 +19,8 @@
 
 import { StackError, StackQueryError } from '@haverstack/core';
 import type {
+  JournalQuery,
+  RecordJournalEntry,
   StackAdapter,
   StackRecord,
   StackType,
@@ -159,8 +161,12 @@ export class APIAdapterConnectionError extends APIAdapterError {
  */
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
-    /** `'changes'` names the feed, which discovery advertises beside `capabilities` rather than in it. */
-    public readonly capability: MissingCapability | 'changes',
+    /**
+     * `'changes'` names the feed and `'journal'` the change journal; both
+     * are surfaces discovery advertises beside `capabilities` rather than
+     * in it.
+     */
+    public readonly capability: MissingCapability | 'changes' | 'journal',
     message: string,
   ) {
     super(message);
@@ -1171,6 +1177,25 @@ export class APIAdapter implements StackAdapter {
   async getVersions(id: RecordId): Promise<RecordVersion[]> {
     const raw = await this.request<WireVersion[] | undefined>('GET', `/records/${id}/versions`);
     return requireBody(raw, `GET /records/${id}/versions`).map(parseVersion);
+  }
+
+  /**
+   * Refused locally, before any request: this protocol version has no
+   * journal endpoint for a server to answer, so there is nothing to ask
+   * for. A capability error rather than an empty log, because a caller
+   * reconstructing an association's history cannot tell "nothing changed"
+   * from "this server does not remember". See docs/spec/versioning.md
+   * § The change journal.
+   */
+  async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {
+    void id;
+    void query;
+    throw new APIAdapterCapabilityError(
+      'journal',
+      `Server at "${this.baseUrl}" serves no change journal. Read a record's history from a ` +
+        'stack backed by a local adapter, or subscribe to the change feed to observe changes ' +
+        'as they happen.',
+    );
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {

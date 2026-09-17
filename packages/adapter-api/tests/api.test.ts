@@ -1083,6 +1083,16 @@ describe('queryRecords', () => {
     ).resolves.toBeDefined();
   });
 
+  test('throws APIAdapterCapabilityError for getJournal, without sending a request', async () => {
+    const adapter = await openAdapter();
+    await expect(adapter.getJournal('1hk153x00001')).rejects.toThrow(APIAdapterCapabilityError);
+    // An empty log would be indistinguishable from a record that never
+    // changed, so the refusal has to be loud. See docs/spec/versioning.md
+    // § The change journal.
+    await expect(adapter.getJournal('1hk153x00001')).rejects.toThrow(/serves no change journal/);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call
+  });
+
   test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
