@@ -81,7 +81,7 @@ type RecordJournalEntry = {
 
 There is no `permissions` stripping to do here, unlike on a snapshot. An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots, and a write-holder auditing their own record learns only that its ACL changed and who changed it.
 
-**An adapter that keeps no journal refuses the read rather than answering an empty log.** "Nothing changed" and "this stack does not remember" are not the same answer, and a caller reconstructing an association's history cannot tell them apart. `getJournal()` against such an adapter throws `StackQueryError`.
+**Every adapter implements `getJournal()` — it is not an optional method.** An adapter with no journal to read refuses the call; it does not decline to have it. "Nothing changed" and "this stack does not remember" are not the same answer, and a caller reconstructing an association's history cannot tell them apart, so an empty log has to mean the first unconditionally. A stack reached through `adapter-api` refuses with `APIAdapterCapabilityError`, which is the same posture [`subscribeChanges()` takes](./change-feed.md#advertising-it) against a server advertising no feed: refused locally, before a request, in a vocabulary that names the missing surface.
 
 ### Why this is not more duplication
 

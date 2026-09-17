@@ -56,6 +56,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
       throw new Error('not implemented');
     },
     queryRecords: async () => ({ records: [], cursor: null }),
+    getJournal: async () => [],
     associate: async () => {
       throw new Error('not implemented');
     },
@@ -188,6 +189,49 @@ describe('combineAdapters', () => {
   // always defines the key (even forwarding to a missing method) would
   // make Stack.deleteAttachment()/collectAttachmentGarbage() silently
   // "detect" a capability that was never actually implemented.
+  test('forwards the options every write carries, not just its required arguments', async () => {
+    // A wrapper that forwards a method but drops its options turns an
+    // atomic write into a silently partial one — a journal entry that is
+    // never appended, an actor never stamped.
+    const seen: Record<string, unknown> = {};
+    const adapter = combineAdapters({
+      record: makeRecordAdapter({
+        createRecord: async (r, opts) => {
+          seen.create = opts;
+          return r;
+        },
+        associate: async (_id, _assoc, opts) => {
+          seen.associate = opts;
+          return null as never;
+        },
+        dissociate: async (_id, _assoc, opts) => {
+          seen.dissociate = opts;
+          return null as never;
+        },
+      }),
+      blob: makeBlobAdapter(),
+    });
+
+    const journal = { journal: { ops: ['create' as const], kind: 'created' as const } };
+    await adapter.createRecord(
+      {
+        id: 'r1',
+        typeId: 'note@1' as TypeId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        content: {},
+        version: 1,
+      },
+      journal,
+    );
+    await adapter.associate('r1', { kind: 'tag', label: 'x' }, journal);
+    await adapter.dissociate('r1', { kind: 'tag', label: 'x' }, journal);
+
+    expect(seen.create).toBe(journal);
+    expect(seen.associate).toBe(journal);
+    expect(seen.dissociate).toBe(journal);
+  });
+
   describe('optional capability forwarding', () => {
     test('deleteUnreferencedAttachmentRecords is present when the record adapter implements it', async () => {
       let calledWith: [FileId, TypeId[]] | undefined;

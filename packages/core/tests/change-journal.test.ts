@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { StackPermissionError, StackQueryError } from '../src/errors.js';
+import { StackPermissionError } from '../src/errors.js';
 import type { RecordJournalEntry } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
@@ -315,15 +315,12 @@ describe('the read surface', () => {
     expect((await stack.getJournal(note.id, { limit: 2 })).map((e) => e.seq)).toEqual([1, 2]);
   });
 
-  test('an adapter with no journal refuses rather than reporting an empty one', async () => {
-    const bare = new MemoryAdapter({ ownerEntityId: OWNER });
-    // A method on the prototype, so shadowed rather than deleted.
-    Object.defineProperty(bare, 'getJournal', { value: undefined });
-    const plain = await Stack.create(bare);
-    await plain.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
-    const note = await plain.create(NOTE, { text: 'hello' });
-
-    await expect(plain.getJournal(note.id)).rejects.toThrow(StackQueryError);
+  test('a record that never changed reads as an empty log, not a refusal', async () => {
+    // The distinction the required adapter method exists to keep: every
+    // adapter answers this, so an empty answer always means "nothing
+    // changed" rather than "this stack does not remember". An adapter with
+    // no journal to read refuses instead, in its own vocabulary.
+    expect(await stack.getJournal('1hk153x00001')).toEqual([]);
   });
 });
 

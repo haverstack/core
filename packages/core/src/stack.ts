@@ -1521,20 +1521,14 @@ export class Stack implements StackClient {
    * exactly as reachable as its present. `ScopedStack` applies that gate;
    * this layer is unscoped and trusted by definition.
    *
-   * Throws StackQueryError against an adapter that keeps no journal,
-   * rather than answering an empty log — "nothing changed" and "this
-   * stack does not remember" are not the same answer, and a caller
-   * reconstructing an association's history cannot tell them apart.
-   * See docs/spec/versioning.md § The change journal.
+   * An adapter with no journal to read refuses rather than answering an
+   * empty log — "nothing changed" and "this stack does not remember" are
+   * not the same answer, and a caller reconstructing an association's
+   * history cannot tell them apart. The refusal is the adapter's own, so
+   * it can name why. See docs/spec/versioning.md § The change journal.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();
-    if (!this.adapter.getJournal) {
-      throw new StackQueryError(
-        "This stack's adapter keeps no change journal, so a record's change history cannot " +
-          'be read from it. Local adapters all keep one; a server advertises whether it does.',
-      );
-    }
     return this.adapter.getJournal(id, query);
   }
 

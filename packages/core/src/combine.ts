@@ -22,19 +22,20 @@ export function combineAdapters(parts: {
       return parts.record.timezone;
     },
 
-    createRecord: (r) => parts.record.createRecord(r),
+    createRecord: (r, opts) => parts.record.createRecord(r, opts),
     getRecord: (id) => parts.record.getRecord(id),
     mutateRecord: (id, changes, opts) => parts.record.mutateRecord(id, changes, opts),
     deleteRecord: (id, opts) => parts.record.deleteRecord(id, opts),
     undeleteRecord: (id, opts) => parts.record.undeleteRecord(id, opts),
     queryRecords: (q) => parts.record.queryRecords(q),
 
-    associate: (id, assoc) => parts.record.associate(id, assoc),
-    dissociate: (id, assoc) => parts.record.dissociate(id, assoc),
+    associate: (id, assoc, opts) => parts.record.associate(id, assoc, opts),
+    dissociate: (id, assoc, opts) => parts.record.dissociate(id, assoc, opts),
 
     getVersions: (id) => parts.record.getVersions(id),
     getVersion: (id, v) => parts.record.getVersion(id, v),
     saveVersion: (id, v) => parts.record.saveVersion(id, v),
+    getJournal: (id, query) => parts.record.getJournal(id, query),
     restoreVersion: (id, v, opts) => parts.record.restoreVersion(id, v, opts),
     commitMigration: (id, toTypeId, content, opts) =>
       parts.record.commitMigration(id, toTypeId, content, opts),

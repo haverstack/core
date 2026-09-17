@@ -1144,13 +1144,15 @@ export interface StackRecordAdapter {
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
 
   /**
-   * Read a record's change journal, oldest first. Optional only because a
-   * foreign server may not offer one; every local adapter implements it,
-   * on the same footing as getVersions() — a recovery mechanism an app
-   * cannot rely on is most of the way to no mechanism at all. See
-   * docs/spec/versioning.md § The change journal.
+   * Read a record's change journal, oldest first — required, on the same
+   * footing as getVersions(). A recovery mechanism an app cannot rely on
+   * is most of the way to no mechanism at all, so an adapter with no
+   * journal to read refuses the call rather than declining to have the
+   * method: a foreign server that offers none says so through its own
+   * capability error, which can name why. See docs/spec/versioning.md
+   * § The change journal.
    */
-  getJournal?(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
+  getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
    * Restore a record to a previous version's content and `parentId`
    * (absent on the snapshot means the root, so a restore always settles

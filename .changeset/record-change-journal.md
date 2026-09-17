@@ -2,6 +2,8 @@
 '@haverstack/core': minor
 '@haverstack/record-adapter-sqlite': minor
 '@haverstack/record-adapter-do-sqlite': minor
+'@haverstack/adapter-api': minor
+'@haverstack/adapter-local': minor
 ---
 
 A durable change journal, beside version history
@@ -48,10 +50,12 @@ the same write as the mutation, stamping `seq`, `at`, `version`, `typeId`
 and `parentId` from the row they just wrote — `Stack` supplies only the
 half a record cannot report afterwards. `seq` is allocated by the adapter
 from the log's own maximum, so unlike a snapshot's caller-computed version
-number there is no collision to heal. `getJournal()` is optional on the
-interface (a foreign server may not offer one) and implemented by every
-local adapter; `Stack.getJournal()` throws `StackQueryError` rather than
-reporting an empty log against an adapter that keeps none.
+number there is no collision to heal. `getJournal()` is **required** on
+the interface, not optional: an adapter with no journal to read refuses
+the call rather than declining to have the method, so an empty log always
+means "nothing changed" and never "this stack does not remember".
 
-The wire surface is not part of this change: `APIAdapter` declares no
-journal, so a stack backed by a server refuses the read.
+The wire surface is not part of this change. `APIAdapter.getJournal()`
+throws `APIAdapterCapabilityError` locally, before sending a request — the
+same posture `subscribeChanges()` takes against a server advertising no
+change feed.

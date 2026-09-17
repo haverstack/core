@@ -52,7 +52,7 @@ describe('appendJournal', () => {
     const record = makeRecord({ parentId: undefined });
     await adapter.createRecord(record, { journal: entry() });
 
-    const [logged] = await adapter.getJournal!(record.id);
+    const [logged] = await adapter.getJournal(record.id);
     expect(logged).toMatchObject({
       seq: 1,
       ops: ['create'],
@@ -81,8 +81,8 @@ describe('appendJournal', () => {
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
 
-    expect((await adapter.getJournal!(a.id)).map((e) => e.seq)).toEqual([1, 2]);
-    expect((await adapter.getJournal!(b.id)).map((e) => e.seq)).toEqual([1, 2]);
+    expect((await adapter.getJournal(a.id)).map((e) => e.seq)).toEqual([1, 2]);
+    expect((await adapter.getJournal(b.id)).map((e) => e.seq)).toEqual([1, 2]);
   });
 
   test('a write passing no journal entry appends nothing', async () => {
@@ -91,7 +91,7 @@ describe('appendJournal', () => {
     await adapter.createRecord(record);
     await adapter.associate(record.id, { kind: 'tag', label: 'x' });
 
-    expect(await adapter.getJournal!(record.id)).toEqual([]);
+    expect(await adapter.getJournal(record.id)).toEqual([]);
   });
 
   test('previousParentId tells "no origin" apart from "moved off the root"', async () => {
@@ -112,7 +112,7 @@ describe('appendJournal', () => {
       { journal: entry({ ops: ['patch'], kind: 'changed' }) },
     );
 
-    const log = await adapter.getJournal!(record.id);
+    const log = await adapter.getJournal(record.id);
     expect(log[1]!.previousParentId).toBeNull();
     expect(log[1]!.parentId).toBe(container.id);
     expect('previousParentId' in log[2]!).toBe(false);
@@ -141,7 +141,7 @@ describe('appendJournal', () => {
       },
     );
 
-    const [logged] = await adapter.getJournal!(record.id);
+    const [logged] = await adapter.getJournal(record.id);
     expect(logged!.associationsAdded).toEqual([
       { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-new' },
     ]);
@@ -173,7 +173,7 @@ describe('a journal entry lands in the same write as its mutation', () => {
       ),
     ).rejects.toThrow();
 
-    expect((await adapter.getJournal!(record.id)).map((e) => e.seq)).toEqual([1]);
+    expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1]);
   });
 });
 
@@ -242,7 +242,7 @@ describe('the log outlives the process that wrote it', () => {
     await adapter.close();
 
     const reopened = await NativeSQLiteRecordAdapter.open({ path: dbPath });
-    const log = await reopened.getJournal!(record.id);
+    const log = await reopened.getJournal(record.id);
     expect(log.map((e) => e.ops.join())).toEqual(['create', 'associate']);
     expect(log[1]!.associationsAdded).toEqual([{ kind: 'tag', label: 'draft' }]);
     await reopened.close();
@@ -266,18 +266,18 @@ describe('getJournal', () => {
       );
     }
 
-    expect((await adapter.getJournal!(record.id)).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
-    expect((await adapter.getJournal!(record.id, { sinceSeq: 2 })).map((e) => e.seq)).toEqual([
+    expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    expect((await adapter.getJournal(record.id, { sinceSeq: 2 })).map((e) => e.seq)).toEqual([
       3, 4,
     ]);
-    expect((await adapter.getJournal!(record.id, { limit: 2 })).map((e) => e.seq)).toEqual([1, 2]);
+    expect((await adapter.getJournal(record.id, { limit: 2 })).map((e) => e.seq)).toEqual([1, 2]);
     expect(
-      (await adapter.getJournal!(record.id, { sinceSeq: 1, limit: 2 })).map((e) => e.seq),
+      (await adapter.getJournal(record.id, { sinceSeq: 1, limit: 2 })).map((e) => e.seq),
     ).toEqual([2, 3]);
   });
 
   test('a record with no journal reads as an empty log', async () => {
     const adapter = await initAdapter();
-    expect(await adapter.getJournal!('rec-missing')).toEqual([]);
+    expect(await adapter.getJournal('rec-missing')).toEqual([]);
   });
 });
