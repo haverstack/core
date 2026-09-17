@@ -278,6 +278,24 @@ describe('frames', () => {
     stop();
   });
 
+  test('parses associationsAdded/associationsRemoved off an associate/dissociate frame', async () => {
+    const { stream, seen, stop } = await subscribe();
+
+    stream.write(
+      recordFrame('AA3f1S', {
+        ...CHANGED,
+        ops: ['associate', 'dissociate'],
+        associationsAdded: [{ kind: 'tag', label: 'published' }],
+        associationsRemoved: [{ kind: 'tag', label: 'draft' }],
+      }),
+    );
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+
+    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'published' }]);
+    expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'draft' }]);
+    stop();
+  });
+
   test('parses the record body when the frame carries one', async () => {
     const { stream, seen, stop } = await subscribe({ includeRecords: true });
 
@@ -307,6 +325,8 @@ describe('frames', () => {
           ...PURGED,
           parentId: '1hk153x00000',
           record: { id: PURGED.recordId, content: { secret: 'erased' } },
+          associationsAdded: [{ kind: 'tag', label: 'starred' }],
+          associationsRemoved: [{ kind: 'tag', label: 'draft' }],
         },
       }),
     );
@@ -314,6 +334,8 @@ describe('frames', () => {
 
     expect(seen[0]).not.toHaveProperty('record');
     expect(seen[0]).not.toHaveProperty('parentId');
+    expect(seen[0]).not.toHaveProperty('associationsAdded');
+    expect(seen[0]).not.toHaveProperty('associationsRemoved');
     expect(seen[0]!.actor).toEqual(PURGED.actor);
     stop();
   });

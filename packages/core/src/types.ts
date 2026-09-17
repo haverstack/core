@@ -857,6 +857,23 @@ export type RecordChange = {
   parentId?: RecordId;
   actor?: ChangeActor;
   /**
+   * Associations now present that weren't before — current annotation
+   * included, so a re-point appears here under its new `attachmentRecordId`
+   * — present whenever `ops` includes `associate`, absent otherwise. Same
+   * "as of this change" convention as every other field on this type;
+   * never what an association held before this write. See
+   * docs/spec/events.md § The event shape.
+   */
+  associationsAdded?: Association[];
+  /**
+   * Associations no longer present, identity only — kind and label, plus
+   * `fileId` for an attachment — present whenever `ops` includes
+   * `dissociate`. Reports what's now absent, not what it used to carry: an
+   * attachment's `attachmentRecordId` is never repeated here, the same way
+   * a `purged` frame never carries the content it destroyed.
+   */
+  associationsRemoved?: Association[];
+  /**
    * The record as of this change — present only when asked for and
    * available, never required for correctness, and never on `purged`.
    * Shared with every other subscriber on this emission, so a handler that

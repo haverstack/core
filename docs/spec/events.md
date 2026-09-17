@@ -50,6 +50,8 @@ type RecordChange = {
   updatedAt: Date; // as persisted by this change; unchanged from before on associate/dissociate
   parentId?: RecordId;
   actor?: ChangeActor;
+  associationsAdded?: Association[]; // present when `ops` includes `associate`
+  associationsRemoved?: Association[]; // present when `ops` includes `dissociate`
   record?: StackRecord;
   seq?: string; // resume cursor, on a resumable feed only
 };
@@ -69,6 +71,13 @@ type RecordChange = {
 **`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
 
 Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op even though it puts back both content and `parentId` together — it never puts back associations at all, on any Record, so there's nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
+
+**`associationsAdded`/`associationsRemoved` are the only record, anywhere, of what an `associate()`/`dissociate()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so a subscriber who was not listening for this exact frame has no other way to learn it, ever. Both report only what is true **now**, the same convention every other field on this type follows:
+
+- `associationsAdded` is each association as it now stands, current annotation included. A re-point (a new `attachmentRecordId` on an association the record already held) surfaces here under its new value; the old value is not reported anywhere, on this frame or any other — it is simply gone, the moment the call that overwrote it lands.
+- `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. An attachment's `attachmentRecordId` is not repeated on removal, the same way a `purged` frame never carries the content it destroyed: the field names what happened, not a payload that is no longer current.
+
+Neither list is ever present on an op other than `associate`/`dissociate`, and a `mutate()` change set that swaps one association for another (`ops: ['associate', 'dissociate']`) carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
 
 **`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `permissions`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 

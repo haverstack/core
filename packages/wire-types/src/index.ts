@@ -575,6 +575,10 @@ export type WireRecordChange = {
   updatedAt: string;
   parentId?: string;
   actor?: WireChangeActor;
+  /** Present when `ops` includes `associate`. See RecordChange.associationsAdded. */
+  associationsAdded?: Association[];
+  /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
+  associationsRemoved?: Association[];
   record?: WireRecord;
   seq?: string;
 };
@@ -618,6 +622,8 @@ export function serializeChange(c: RecordChange): WireRecordChange {
   if (c.seq !== undefined) w.seq = c.seq;
   if (c.kind === 'purged') return w;
   if (c.parentId !== undefined) w.parentId = c.parentId;
+  if (c.associationsAdded !== undefined) w.associationsAdded = c.associationsAdded;
+  if (c.associationsRemoved !== undefined) w.associationsRemoved = c.associationsRemoved;
   if (c.record !== undefined) w.record = serializeRecord(c.record);
   return w;
 }

@@ -120,6 +120,7 @@ import {
   MAX_QUERY_LIMIT,
 } from './stack-reads.js';
 import {
+  associationDelta,
   associationEqual,
   associationIdentical,
   assertNonEmptyChangeSet,
@@ -127,6 +128,7 @@ import {
   bumpsVersion,
   effectiveChanges,
   stampGroupAdmin,
+  stripAssociationAnnotation,
   isGroupRecord,
 } from './record-changes.js';
 import { ScopedStack } from './scoped-stack.js';
@@ -428,7 +430,13 @@ export class Stack implements StackClient {
   private emitChange(
     op: ChangeOp | ChangeOp[],
     record: StackRecord,
-    opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
+    opts: {
+      actor?: ChangeActor;
+      at?: Date;
+      previousParentId?: string | null;
+      associationsAdded?: Association[];
+      associationsRemoved?: Association[];
+    } = {},
   ): void {
     this.changes.emit(buildEmission(op, record, opts));
   }
@@ -1036,6 +1044,13 @@ export class Stack implements StackClient {
     // never checked here.
     if (bumps) this.checkIfVersion(existing, opts.ifVersion);
 
+    // Computed against the same before/after changeSetOps compared, so
+    // whether associate/dissociate appear in `ops` and what these list can
+    // never disagree. See docs/spec/events.md § The event shape.
+    const assocDelta = changes.associations
+      ? associationDelta(existing.associations ?? [], changes.associations)
+      : undefined;
+
     const previousParentId = existing.parentId ?? null;
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       ...(bumps
@@ -1049,6 +1064,8 @@ export class Stack implements StackClient {
     this.emitChange(ops, updated, {
       ...(ops.includes('reparent') && { previousParentId }),
       ...(!bumps && { actor: Stack.actorFrom(opts) }),
+      ...(assocDelta?.added.length && { associationsAdded: assocDelta.added }),
+      ...(assocDelta?.removed.length && { associationsRemoved: assocDelta.removed }),
     });
     return updated;
   }
@@ -1187,7 +1204,10 @@ export class Stack implements StackClient {
    * no-op; one matching an existing association's identity but naming a
    * different `attachmentRecordId` — or none, which clears the one stored —
    * re-points that association in place, rather than adding a second
-   * reference to the same file.
+   * reference to the same file. The emitted event's `associationsAdded`
+   * carries the association as it now stands either way — a re-point's
+   * old `attachmentRecordId` is not reported anywhere; nothing keeps it
+   * once this call lands. See docs/spec/events.md § The event shape.
    * Returns the record as it now stands — unchanged on a no-op.
    */
   async associate(
@@ -1208,14 +1228,21 @@ export class Stack implements StackClient {
     await this.checkAttachmentAssociationPointers([association]);
 
     const updated = await this.adapter.associate(id, association);
-    this.emitChange('associate', updated, { actor: Stack.actorFrom(opts) });
+    this.emitChange('associate', updated, {
+      actor: Stack.actorFrom(opts),
+      associationsAdded: [association],
+    });
     return updated;
   }
 
   /**
    * Remove an association from a record. Never bumps `version`/`updatedAt`
    * — see associate(). Matched by kind, label, and payload. No-op if not
-   * found. Returns the record as it now stands — unchanged on a no-op.
+   * found. The emitted event's `associationsRemoved` names the association
+   * by identity only — an attachment's `attachmentRecordId` is not
+   * repeated there, since it no longer describes anything current. See
+   * docs/spec/events.md § The event shape. Returns the record as it now
+   * stands — unchanged on a no-op.
    */
   async dissociate(
     id: string,
@@ -1229,7 +1256,8 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    if (!(existing.associations ?? []).some((a) => associationEqual(a, association))) {
+    const matched = (existing.associations ?? []).find((a) => associationEqual(a, association));
+    if (!matched) {
       return existing;
     }
     // Removing anything else cannot take the roster to zero, so only an
@@ -1244,7 +1272,10 @@ export class Stack implements StackClient {
     }
 
     const updated = await this.adapter.dissociate(id, association);
-    this.emitChange('dissociate', updated, { actor: Stack.actorFrom(opts) });
+    this.emitChange('dissociate', updated, {
+      actor: Stack.actorFrom(opts),
+      associationsRemoved: [stripAssociationAnnotation(matched)],
+    });
     return updated;
   }
 

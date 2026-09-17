@@ -15,6 +15,7 @@
  */
 
 import type {
+  Association,
   ChangeActor,
   ChangeFilter,
   ChangeKind,
@@ -256,7 +257,13 @@ class UnscopedSubscription extends Subscription {
 export function buildEmission(
   ops: ChangeOp | ChangeOp[],
   record: StackRecord,
-  opts: { actor?: ChangeActor; at?: Date; previousParentId?: string | null } = {},
+  opts: {
+    actor?: ChangeActor;
+    at?: Date;
+    previousParentId?: string | null;
+    associationsAdded?: Association[];
+    associationsRemoved?: Association[];
+  } = {},
 ): EmittedChange {
   const list = Array.isArray(ops) ? ops : [ops];
   if (list.length === 0) {
@@ -295,6 +302,8 @@ export function buildEmission(
       updatedAt: record.updatedAt,
       ...(record.parentId !== undefined && { parentId: record.parentId }),
       ...(actor && { actor }),
+      ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
+      ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
     },
   };
 }

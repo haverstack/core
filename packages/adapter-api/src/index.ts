@@ -558,6 +558,8 @@ const parseChange = (raw: WireRecordChange): RecordChange => {
   // that does cannot hand a subscriber the copy the verb exists to erase.
   if (raw.kind === 'purged') return change;
   if (raw.parentId != null) change.parentId = raw.parentId;
+  if (raw.associationsAdded != null) change.associationsAdded = raw.associationsAdded;
+  if (raw.associationsRemoved != null) change.associationsRemoved = raw.associationsRemoved;
   if (raw.record != null) change.record = parseRecord(raw.record);
   return change;
 };

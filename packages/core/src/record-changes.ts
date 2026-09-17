@@ -58,6 +58,40 @@ export function associationIdentical(a: Association, b: Association): boolean {
   return true;
 }
 
+/**
+ * An association's identity, stripped of every annotation outside it — an
+ * attachment's `attachmentRecordId` dropped, everything else unchanged.
+ * What a change event reports for an association that's gone: the same
+ * thing a `purged` frame does for a destroyed record's content, naming
+ * what happened without repeating a payload that's no longer current.
+ * See docs/spec/events.md § The event shape.
+ */
+export function stripAssociationAnnotation(association: Association): Association {
+  if (association.kind !== 'attachment') return association;
+  const { attachmentRecordId: _attachmentRecordId, ...identity } = association;
+  return identity as Association;
+}
+
+/**
+ * What a `changes.associations` list moves against a record's current
+ * associations — the same comparison `changeSetOps` decides `associate`/
+ * `dissociate` from, so a change event's added/removed lists can never
+ * disagree with whether those ops fired. `added` is each entry as it now
+ * stands (current annotation included, a re-point included under its new
+ * value); `removed` is identity only, per stripAssociationAnnotation().
+ */
+export function associationDelta(
+  before: Association[],
+  after: Association[],
+): { added: Association[]; removed: Association[] } {
+  return {
+    added: after.filter((a) => !before.some((b) => associationIdentical(a, b))),
+    removed: before
+      .filter((b) => !after.some((a) => associationEqual(a, b)))
+      .map(stripAssociationAnnotation),
+  };
+}
+
 /** Structural equality per target arm — what dissociate() matches on. */
 export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
   if (a.scope !== b.scope) return false;
@@ -126,10 +160,9 @@ export function changeSetOps(
   }
 
   if (changes.associations) {
-    const before = existing.associations ?? [];
-    const after = changes.associations;
-    if (after.some((a) => !before.some((b) => associationIdentical(a, b)))) ops.push('associate');
-    if (before.some((b) => !after.some((a) => associationEqual(a, b)))) ops.push('dissociate');
+    const { added, removed } = associationDelta(existing.associations ?? [], changes.associations);
+    if (added.length) ops.push('associate');
+    if (removed.length) ops.push('dissociate');
   }
 
   if (changes.unlisted !== undefined && Boolean(existing.unlistedAt) !== changes.unlisted) {
