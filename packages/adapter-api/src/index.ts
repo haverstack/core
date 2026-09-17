@@ -15,6 +15,13 @@
  * optimistic concurrency (ifVersion → If-Match) is supported: see the
  * expectedVersion option on mutateRecord(), deleteRecord() and every
  * other mutation that bumps a version.
+ *
+ * The write options that describe storage rather than the request are
+ * omitted from the methods below rather than dropped inside them, so the
+ * signature says what travels: the server writes its own version snapshot
+ * and its own journal entry from the change it applies, and decides its
+ * own version bump the same way. See docs/spec/versioning.md § Storage per
+ * adapter.
  */
 
 import { StackError, StackQueryError } from '@haverstack/core';
@@ -60,6 +67,8 @@ import type {
   WireType,
   WireVersion,
   WireRecordChange,
+  WireJournalEntry,
+  WireJournalResponse,
   DiscoveryChanges,
   DiscoveryResponse,
   AuthChallengeResponse,
@@ -162,11 +171,10 @@ export class APIAdapterConnectionError extends APIAdapterError {
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
     /**
-     * `'changes'` names the feed and `'journal'` the change journal; both
-     * are surfaces discovery advertises beside `capabilities` rather than
-     * in it.
+     * `'changes'` names the feed, which discovery advertises beside
+     * `capabilities` rather than in it.
      */
-    public readonly capability: MissingCapability | 'changes' | 'journal',
+    public readonly capability: MissingCapability | 'changes',
     message: string,
   ) {
     super(message);
@@ -466,6 +474,36 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
   if (raw.parentId != null) v.parentId = raw.parentId;
   if (raw.permissions != null) v.permissions = raw.permissions;
   return v;
+};
+
+/**
+ * `previousParentId` is the one field read for presence rather than for
+ * null: absent means this entry is not a reparent, while `null` means the
+ * record moved out of the root. Every other nullable field on a response
+ * collapses both to absent, which here would lose which one happened.
+ */
+const parseJournalEntry = (raw: WireJournalEntry): RecordJournalEntry => {
+  const e: RecordJournalEntry = {
+    seq: raw.seq,
+    at: new Date(raw.at),
+    kind: raw.kind,
+    ops: [...raw.ops],
+    version: raw.version,
+    typeId: raw.typeId,
+  };
+  if (raw.parentId != null) e.parentId = raw.parentId;
+  if (raw.actor != null) {
+    e.actor = {
+      entityId: raw.actor.entityId,
+      ...(raw.actor.principalId != null && { principalId: raw.actor.principalId }),
+      ...(raw.actor.appId != null && { appId: raw.actor.appId }),
+    };
+  }
+  if (raw.previousParentId !== undefined) e.previousParentId = raw.previousParentId;
+  if (raw.associationsAdded != null) e.associationsAdded = raw.associationsAdded;
+  if (raw.associationsRemoved != null) e.associationsRemoved = raw.associationsRemoved;
+  if (raw.associationsReplaced != null) e.associationsReplaced = raw.associationsReplaced;
+  return e;
 };
 
 // -------------------------------------------------------
@@ -1180,22 +1218,48 @@ export class APIAdapter implements StackAdapter {
   }
 
   /**
-   * Refused locally, before any request: this protocol version has no
-   * journal endpoint for a server to answer, so there is nothing to ask
-   * for. A capability error rather than an empty log, because a caller
-   * reconstructing an association's history cannot tell "nothing changed"
-   * from "this server does not remember". See docs/spec/versioning.md
-   * § The change journal.
+   * Reads the window the caller asked for, across as many requests as the
+   * server's own page cap takes. A server may answer a page shorter than
+   * the `limit` asked for — the endpoint is the one read with no ceiling
+   * when `limit` is omitted, so it needs that freedom — and a caller
+   * reconstructing an association's full history would silently get a
+   * prefix if this returned the first page. `cursor` is the only
+   * end-of-log signal, exactly as it is on a query.
+   *
+   * See docs/spec/wire-format.md § Journal.
    */
-  async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {
-    void id;
-    void query;
-    throw new APIAdapterCapabilityError(
-      'journal',
-      `Server at "${this.baseUrl}" serves no change journal. Read a record's history from a ` +
-        'stack backed by a local adapter, or subscribe to the change feed to observe changes ' +
-        'as they happen.',
-    );
+  async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    const entries: RecordJournalEntry[] = [];
+    let sinceSeq = query.sinceSeq;
+    for (;;) {
+      // Asks only for what is still outstanding, so a server honoring the
+      // limit exactly answers a bounded read in one request.
+      const remaining = query.limit === undefined ? undefined : query.limit - entries.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      const params = new URLSearchParams();
+      if (sinceSeq !== undefined) params.set('sinceSeq', String(sinceSeq));
+      if (remaining !== undefined) params.set('limit', String(remaining));
+      const qs = params.toString();
+      const path = `/records/${id}/journal${qs ? `?${qs}` : ''}`;
+      const raw = await this.request<WireJournalResponse | undefined>('GET', path);
+      const body = requireBody(raw, `GET ${path}`);
+      // Appended one at a time rather than spread: a spread is an argument
+      // list, and this is the one read a server may answer without a ceiling.
+      for (const e of body.entries) entries.push(parseJournalEntry(e));
+      if (body.entries.length === 0) break;
+      // Only a cursor past the window just asked for can land the next
+      // request somewhere new. A server that omits one, repeats one, or
+      // mints one unconditionally ends the read here rather than spinning
+      // on it. See docs/spec/wire-format.md § Journal.
+      if (typeof body.cursor !== 'number' || (sinceSeq !== undefined && body.cursor <= sinceSeq)) {
+        break;
+      }
+      sinceSeq = body.cursor;
+    }
+    // `limit` is this method's own ceiling, not a request the server is
+    // trusted to have honored: a page longer than the one asked for would
+    // otherwise hand the caller more than the contract allows.
+    return query.limit === undefined ? entries : entries.slice(0, query.limit);
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {

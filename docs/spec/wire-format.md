@@ -315,11 +315,11 @@ If-Match: "5"
 
 **Each key carries its own authorization, and one refused key refuses the whole request** with the status that key would have earned alone — `403` for a reshare a requester may not make, `404` where they cannot read the record at all. Nothing is partially applied. A server built on `ScopedStack` inherits this; one mapping bodies onto `Stack` directly has to reproduce it per key. See [Access control § Composing a change set](./access-control.md#composing-a-change-set).
 
-**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version` and `POST .../migrate` all accept an optional `If-Match` header. One header fences the whole change set, so a multi-aspect edit is a single conditional write rather than a sequence a racing writer can interleave with. **The association endpoints take no `If-Match` at all** — they never bump `version`, so there's nothing for a precondition on it to guard; see [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion).
+**Optimistic concurrency:** `PATCH`, `DELETE`, `POST .../undelete`, `POST .../restore/:version` and `POST .../migrate` all accept an optional `If-Match` header. One header fences the whole change set, so a multi-aspect edit is a single conditional write rather than a sequence a racing writer can interleave with. **The association endpoints never read `If-Match`** — they never bump `version`, so there's nothing for a precondition on it to guard; see [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion). A header sent to one is **ignored, not refused**, whatever its value: the request is unconditional either way, so the malformed-header refusal below has nothing to protect here and a `400` would only tell a caller its header was misspelled on a route where a correct one would have done nothing either.
 
-When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **412** with a `version_conflict` wire error and changes nothing. A `PATCH` whose change set names `associations` alone is the one body that carries no precondition — nothing about it bumps, so an `If-Match` sent with it is not checked, matching what the association endpoints accept. Omit the header to keep unconditional last-writer-wins behavior. See [Versioning & deletion](./versioning.md#optimistic-concurrency-ifversion) for the corresponding `ifVersion` API.
+When present, the server applies the mutation only if the record's current version equals the header's value; otherwise it returns **412** with a `version_conflict` wire error and changes nothing. A `PATCH` whose change set names `associations` alone is the one body that carries no precondition — nothing about it bumps, so an `If-Match` sent with it is not checked against anything, matching how the association endpoints treat one. Omit the header to keep unconditional last-writer-wins behavior. See [Versioning & deletion](./versioning.md#optimistic-concurrency-ifversion) for the corresponding `ifVersion` API.
 
-**A malformed `If-Match` is `400`, never a fallthrough to unconditional.** The value is a version number, optionally quoted; anything else — a non-numeric entity tag, a weak comparator (`W/"5"`), `*` — is rejected. Reading one as an absent header would turn the fence into exactly the last-writer-wins mutation the caller sent it to prevent, and it would do so silently, which is worse than the `412` a correct-but-stale header earns. `parseIfMatch()` in `@haverstack/core/wire` applies this.
+**A malformed `If-Match` is `400`, never a fallthrough to unconditional**, on every endpoint that reads the header. The value is a version number, optionally quoted; anything else — a non-numeric entity tag, a weak comparator (`W/"5"`), `*` — is rejected. Reading one as an absent header would turn the fence into exactly the last-writer-wins mutation the caller sent it to prevent, and it would do so silently, which is worse than the `412` a correct-but-stale header earns. `parseIfMatch()` in `@haverstack/core/wire` applies this. The rule is about the header's shape rather than the body it arrived with, so a `PATCH` naming `associations` alone still earns the `400` — that route reads the header and finds it unreadable, where the association endpoints never look.
 
 `POST /records` accepts a full record body, including an optional client-supplied `id` — see [Record IDs](./data-model.md#record-ids) for the validation and duplicate-conflict rules the server applies.
 
@@ -416,9 +416,55 @@ Both `GET` endpoints require the requester to hold the same mutate-surface autho
 
 A snapshot body carries `parentId` exactly as the Record body above does: present names the container the record sat in, **absent is the root**. `null` is an input spelling — what a change set's `parentId` and `?parentId=null` accept — and never appears on a response. A restore therefore always settles containment: a snapshot with no `parentId` puts the record at the root rather than leaving it where it sits, so a server that omits the field from snapshots it writes is claiming every record was at the root. A client reading a `null` here treats it as the root, so a server that mirrors the input spelling is understood rather than misread.
 
+**A snapshot body carries no `associations`.** No version has ever captured one — the association endpoints and an `associations`-only change set don't bump `version`, so there is no moment at which a snapshot is taken of them — and a restore correspondingly leaves a record's associations exactly where they stand, whatever the snapshot it puts back. `WireVersion` has no such field, so a server that emits one is writing a key every client drops. See [Versioning § Version history](./versioning.md#version-history).
+
+The second durable tier a mutation writes is [the change journal](#journal), below — the record of what each change moved, which is where an association's prior state is recovered from, since no snapshot holds one.
+
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals a change set's `parentId` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus the association endpoints (which report `associate`/`dissociate` without ever bumping `version` or snapshotting), plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+
+## Journal
+
+**The second durable tier, beside version history.** A snapshot answers _what could be put back_; a [journal](./versioning.md#the-change-journal) entry answers _what happened_ — which aspects a change moved, who moved them, and the association deltas nothing else retains. It is the only place an association's prior state survives, since no version captures one.
+
+```
+GET /records/:id/journal             — the log, oldest first
+GET /records/:id/journal?sinceSeq=4  — entries after seq 4, exclusive
+GET /records/:id/journal?limit=50    — at most 50 entries
+```
+
+```json
+{
+  "entries": [
+    {
+      "seq": 2,
+      "at": "2026-08-13T12:00:00.000Z",
+      "kind": "changed",
+      "ops": ["associate"],
+      "version": 1,
+      "typeId": "com.example/note@1",
+      "actor": { "entityId": "did:key:z6Mk..." },
+      "associationsAdded": [{ "kind": "tag", "label": "starred" }]
+    }
+  ],
+  "cursor": null
+}
+```
+
+**This endpoint is not optional.** Every adapter implements `getJournal()`, so a server that answers `404` here leaves the one adapter that fronts a server unable to honor a method the client interface requires. An empty log means _nothing changed_, unconditionally — a server with no journal to offer must not spell "I do not remember" the same way, and the only spelling available to it would be exactly that.
+
+**`seq` is a dense integer from 1, per record, and is the entry's only ordering.** `at` is wall clock and `version` stands still across an association change, so neither orders the log alone. It is **not** the [change feed's `seq`](./change-feed.md#frames), which is an opaque server-minted cursor over the whole stack; the two share a name because both order a stream, and no value may be carried from one to the other.
+
+**`cursor` is the only end-of-log signal**, exactly as it is on [a query](#response-envelope). A server MAY answer a page shorter than the `limit` asked for — this is the one read with no ceiling when `limit` is omitted, so it needs that freedom — which is why a short page must not be read as an exhausted log. `cursor` carries the `seq` to send back as `sinceSeq`, and is `null` once nothing follows. `APIAdapter.getJournal()` follows it to the end, so the library contract that omitting `limit` reads the whole log survives whatever page size a server picks.
+
+**`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Every other nullable field collapses both to absent — a record body and a snapshot spell the root that way — and doing so here would lose which of the two happened. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
+
+**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`. A log of who changed what, gated on current read access, would make a record's past as reachable as its present. Unlike a snapshot there is nothing to strip: an entry names _that_ a permission set moved, never what it moved to.
+
+**A hard delete destroys the journal**, exactly as it destroys version history, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./access-control.md#errors-and-information-exposure) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
+
+`@haverstack/core/wire` exports `parseJournalParams()`, so a server decodes `sinceSeq` and `limit` with the same grammar `APIAdapter` builds them with. Neither has a default: omitting `limit` reads the whole log by contract, so supplying a page size on the server's behalf would truncate exactly the caller that omitted it — a server bounds a page with `cursor` instead, which says so.
 
 ## Associations
 
@@ -436,7 +482,7 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
-Neither endpoint accepts `If-Match` — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had: neither endpoint ever bumps `version`, snapshots, or produces a new entry in `GET .../versions` — see [Versioning § Version history](./versioning.md#version-history).
+Neither endpoint reads `If-Match`, and one sent to either is ignored rather than refused — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had: neither endpoint ever bumps `version`, snapshots, or produces a new entry in `GET .../versions` — see [Versioning § Version history](./versioning.md#version-history).
 
 **These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. Neither spelling bumps `version` on its own; a `PATCH` only bumps when its change set names a version-bumping aspect alongside `associations`. See [Data model § Mutations](./data-model.md#mutations).
 

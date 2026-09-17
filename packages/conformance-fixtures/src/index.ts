@@ -28,6 +28,7 @@ import type {
   WireQueryResponse,
   WireError,
   WireVersion,
+  WireJournalResponse,
   WireRecordChange,
   WireReadyFrame,
   WireResetFrame,
@@ -870,8 +871,9 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
     description:
       'POST /records/:id/associations adds an association without bumping version or touching ' +
       'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
-      'it already had. The endpoint accepts no If-Match: there is nothing for a precondition ' +
-      'on version to guard. See docs/spec/wire-format.md § Associations.',
+      'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
+      'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
+      'its value. See docs/spec/wire-format.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations',
     requestBody: { kind: 'tag', label: 'starred' },
@@ -962,8 +964,9 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
     description:
       'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
       'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
-      'Like associate(), this never bumps version or touches updatedAt, and accepts no ' +
-      'If-Match. See docs/spec/data-model.md § Associations.',
+      'Like associate(), this never bumps version or touches updatedAt, and never reads ' +
+      'If-Match — a header sent here is ignored rather than refused. See ' +
+      'docs/spec/data-model.md § Associations.',
     method: 'POST',
     path: '/records/1hk153x00001/associations/delete',
     requestBody: {
@@ -1305,6 +1308,39 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
       },
     ],
   },
+  {
+    name: 'get-versions-after-associate-is-unchanged',
+    description:
+      'The association endpoints are the one pair of mutations that write no version. After ' +
+      'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
+      'answers with exactly the list it answered with before — no new entry, and no entry ' +
+      'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
+      'snapshots here hands every later restore a stale association set to put back. ' +
+      'See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions',
+    responseStatus: 200,
+    responseBody: [
+      {
+        version: 4,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 3,
+        typeId: 'com.example/note@1',
+        content: { title: 'title before restore' },
+        updatedAt: '2024-01-04T00:00:00.000Z',
+      },
+      {
+        version: 1,
+        typeId: 'com.example/note@1',
+        content: { title: 'original title' },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ],
+  },
 ];
 
 // -------------------------------------------------------
@@ -1316,9 +1352,10 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     name: 'restore-version',
     description:
       "POST /records/:id/restore/:version creates a new version from an old snapshot's " +
-      'content, associations and parentId — never permissions. No request body: the ' +
-      'server holds the snapshot already. Version 1 was taken at the root, so the restored ' +
-      'record comes back with parentId absent.',
+      'content and parentId — never its permissions, and never associations, which no ' +
+      'snapshot captures and which a restore leaves exactly where they stand. No request ' +
+      'body: the server holds the snapshot already. Version 1 was taken at the root, so the ' +
+      'restored record comes back with parentId absent.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/1',
     responseStatus: 200,
@@ -1350,6 +1387,151 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
       content: { title: 'title before restore' },
       version: 4,
       parentId: '1hk153x0000f',
+    },
+  },
+];
+
+// -------------------------------------------------------
+// Change journal
+// -------------------------------------------------------
+//
+// The second durable tier beside version history, and the only place an
+// association's prior state survives (docs/spec/wire-format.md § Journal).
+// A server answers these for a requester holding the mutate surface; the
+// 403 case is error-permission-denied-journal-read-only.
+
+export const getJournalFixtures: ConformanceFixture<undefined, WireJournalResponse>[] = [
+  {
+    name: 'get-journal-reads-the-whole-log-oldest-first',
+    description:
+      'GET /records/:id/journal with no params reads the whole log, oldest first, and answers ' +
+      'cursor null because nothing follows. `seq` is dense from 1 per record and is the only ' +
+      'ordering: `at` is wall clock, and `version` stands still across the associate() at ' +
+      'seq 2, which is exactly why neither orders the log alone. ' +
+      'See docs/spec/wire-format.md § Journal.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 1,
+          at: '2024-01-01T00:00:00.000Z',
+          kind: 'created',
+          ops: ['create'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-owner-123' },
+        },
+        {
+          seq: 2,
+          at: '2024-01-02T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['associate'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-contributor-789' },
+          associationsAdded: [{ kind: 'tag', label: 'starred' }],
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-journal-page-reports-a-cursor-to-resume-from',
+    description:
+      'A server may answer a page shorter than the limit asked for — this endpoint is the one ' +
+      'read with no ceiling when limit is omitted, so it needs that freedom. cursor is ' +
+      'therefore the only end-of-log signal: a short page does not mean an exhausted log. Its ' +
+      'value is the seq to send back as sinceSeq. A client reconstructing a full history ' +
+      'follows it rather than taking the first page for the answer.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=0&limit=2',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 1,
+          at: '2024-01-01T00:00:00.000Z',
+          kind: 'created',
+          ops: ['create'],
+          version: 1,
+          typeId: 'com.example/note@1',
+        },
+      ],
+      cursor: 1,
+    },
+  },
+  {
+    name: 'get-journal-entry-keeps-what-an-associate-overwrote',
+    description:
+      'associationsReplaced is the field with no counterpart on the change feed, and the whole ' +
+      "reason this tier exists. Re-pointing an attachment association's attachmentRecordId " +
+      'overwrites the old value in place; the feed reports only what is true now, so the entry ' +
+      'is the only record of what it replaced. associationsAdded carries the new value and ' +
+      'associationsReplaced the old one, both on the one entry. ' +
+      'See docs/spec/attachments.md § Naming the upload a reference came from.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=2',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 3,
+          at: '2024-01-03T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['associate'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-owner-123' },
+          associationsAdded: [
+            {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x0000b',
+            },
+          ],
+          associationsReplaced: [
+            {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x00009',
+            },
+          ],
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-journal-reparent-entry-spells-the-root-as-null',
+    description:
+      'previousParentId is the one field on any response where null is a value rather than an ' +
+      'input spelling. Absent means the entry is not a reparent; present and null means the ' +
+      'record moved out of the root. Collapsing the two — as a record body and a snapshot ' +
+      'both do, where absent is the root — would lose which one happened. parentId, which ' +
+      'says where the record landed, follows the ordinary rule and is absent for the root. ' +
+      'See docs/spec/wire-format.md § Journal.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=3',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 4,
+          at: '2024-01-04T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['reparent'],
+          version: 2,
+          typeId: 'com.example/note@1',
+          parentId: '1hk153x0000f',
+          previousParentId: null,
+          actor: { entityId: 'entity-owner-123' },
+        },
+      ],
+      cursor: null,
     },
   },
 ];
@@ -1416,6 +1598,20 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'GET /records/:id/versions/:version.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-permission-denied-journal-read-only',
+    description:
+      'GET /records/:id/journal from a requester who can read the record but cannot write it ' +
+      'returns 403 / code "permission" — the same mutate-surface gate the version endpoints ' +
+      'apply, for the same reason. A log of who changed what, gated on current read access, ' +
+      "would make a record's past as reachable as its present: gaining read access today is " +
+      'not an entitlement to the trail of every tag it has ever carried. ' +
+      'See docs/spec/versioning.md § Reading it.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal',
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -2683,12 +2879,13 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-changed-frame-names-the-verb',
     description:
-      'Seven mutation verbs arrive as kind "changed" — update, associate, dissociate, ' +
-      'permissions, migrate, restore and undelete — and `op` is what separates them. A client ' +
-      'branching on kind alone is correct and complete; one that needs to tell a reshare from ' +
-      'an edit reads op. Both fields are carried because the safe default has to be the easy ' +
-      'one: a client wired to three named events would silently miss the other seven verbs. ' +
-      'The actor is the contributor who made this write, while the record keeps its own author.',
+      'Nine mutation verbs arrive as kind "changed" — patch, associate, dissociate, ' +
+      'permissions, migrate, restore, undelete, list and reparent — and `ops` is what ' +
+      'separates them. A client branching on kind alone is correct and complete; one that ' +
+      'needs to tell a reshare from an edit reads ops. Both fields are carried because the ' +
+      'safe default has to be the easy one: a client wired to three named events would ' +
+      'silently miss every other verb. The actor is the contributor who made this write, ' +
+      'while the record keeps its own author.',
     path: '/changes',
     responseStatus: 200,
     openingFrames: [READY],
@@ -3534,6 +3731,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,
   ...restoreVersionFixtures,
+  ...getJournalFixtures,
   ...commitMigrationFixtures,
   ...errorResponseFixtures,
 ];

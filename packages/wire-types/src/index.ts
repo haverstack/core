@@ -10,8 +10,10 @@ import type {
   SchemaDriftViolation,
   StackErrorCode,
   ChangeKind,
+  ChangeActor,
   ChangeOp,
   RecordChange,
+  RecordJournalEntry,
 } from '@haverstack/core';
 import type { AdapterCapabilities, ContentFilterReach } from '@haverstack/core/adapter';
 import {
@@ -144,6 +146,78 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
   if (v.parentId !== undefined) w.parentId = v.parentId;
   if (v.permissions !== undefined) w.permissions = v.permissions;
+  return w;
+}
+
+// -------------------------------------------------------
+// Change journal
+// -------------------------------------------------------
+
+/**
+ * One journal entry as `GET /records/:id/journal` carries it. Every field
+ * a `RecordJournalEntry` holds, since the whole entry is what makes a
+ * change recoverable — an envelope with a verb, an actor and a delta, and
+ * no `content`, which lives on a snapshot.
+ *
+ * `seq` is a dense integer from 1, per record. It is not the change feed's
+ * `seq`, which is an opaque server-minted cursor over the whole stack:
+ * they share a name because both order a stream, and nothing may be
+ * carried from one to the other. See docs/spec/wire-format.md § Journal.
+ */
+export type WireJournalEntry = {
+  seq: number;
+  at: string;
+  kind: ChangeKind;
+  ops: ChangeOp[];
+  version: number;
+  typeId: string;
+  parentId?: string;
+  actor?: WireChangeActor;
+  /**
+   * The container the move took the record out of — and the one field on
+   * any response where `null` is a value rather than an input spelling.
+   * Absent means this entry is not a reparent; present and `null` means it
+   * moved out of the root. Collapsing the two would lose which one
+   * happened, so the root sentinel travels here as it does on a request.
+   */
+  previousParentId?: string | null;
+  associationsAdded?: Association[];
+  associationsRemoved?: Association[];
+  /** The value an `associate()` overwrote in place. Has no counterpart on the change feed. */
+  associationsReplaced?: Association[];
+};
+
+/**
+ * The response envelope of `GET /records/:id/journal`.
+ *
+ * `cursor` is the only end-of-log signal, as it is on a query: a server
+ * may cap a page below the `limit` asked for, so a short page does not
+ * mean an exhausted log. It carries the `seq` to send as the next
+ * `sinceSeq`, and is null once nothing follows.
+ */
+export type WireJournalResponse = {
+  entries: WireJournalEntry[];
+  cursor: number | null;
+};
+
+export function serializeJournalEntry(e: RecordJournalEntry): WireJournalEntry {
+  const w: WireJournalEntry = {
+    seq: e.seq,
+    at: e.at.toISOString(),
+    kind: e.kind,
+    // Copied for the same reason serializeChange() copies: the array
+    // belongs to the entry the adapter read, not to this response.
+    ops: [...e.ops],
+    version: e.version,
+    typeId: e.typeId,
+  };
+  if (e.parentId !== undefined) w.parentId = e.parentId;
+  if (e.actor !== undefined) w.actor = serializeChangeActor(e.actor);
+  // Presence, not truthiness: `null` is the root and has to survive.
+  if (e.previousParentId !== undefined) w.previousParentId = e.previousParentId;
+  if (e.associationsAdded !== undefined) w.associationsAdded = e.associationsAdded;
+  if (e.associationsRemoved !== undefined) w.associationsRemoved = e.associationsRemoved;
+  if (e.associationsReplaced !== undefined) w.associationsReplaced = e.associationsReplaced;
   return w;
 }
 
@@ -590,6 +664,14 @@ export type WireChangeActor = {
   appId?: string;
 };
 
+/** Shared by a change frame and a journal entry — one actor encoding, not two. */
+export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
+  const w: WireChangeActor = { entityId: actor.entityId };
+  if (actor.principalId !== undefined) w.principalId = actor.principalId;
+  if (actor.appId !== undefined) w.appId = actor.appId;
+  return w;
+}
+
 /**
  * A change as a server frames it. A purge carries neither the record nor
  * its parent, whatever the subscriber asked for: hard delete is the
@@ -613,12 +695,7 @@ export function serializeChange(c: RecordChange): WireRecordChange {
     version: c.version,
     updatedAt: c.updatedAt.toISOString(),
   };
-  if (c.actor !== undefined) {
-    const actor: WireChangeActor = { entityId: c.actor.entityId };
-    if (c.actor.principalId !== undefined) actor.principalId = c.actor.principalId;
-    if (c.actor.appId !== undefined) actor.appId = c.actor.appId;
-    w.actor = actor;
-  }
+  if (c.actor !== undefined) w.actor = serializeChangeActor(c.actor);
   if (c.seq !== undefined) w.seq = c.seq;
   if (c.kind === 'purged') return w;
   if (c.parentId !== undefined) w.parentId = c.parentId;

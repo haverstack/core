@@ -74,11 +74,8 @@ a create that reported failure had half-succeeded, its retry failed on the
 primary key, and the surviving row was invisible to `filter.search` and
 mis-ordered by `sort.contentField` until something wrote it again.
 
-The wire surface is not part of this change. `APIAdapter.getJournal()`
-throws `APIAdapterCapabilityError` locally, before sending a request,
-taking `subscribeChanges()`'s posture a step further: a subscription is
-refused only against a server advertising no change feed, while a journal
-read is refused against every server, there being no endpoint yet for any
-of them to answer. That is why the method is on `StackClient` regardless —
-a caller deserves a refusal naming the missing capability over a method
-that isn't there.
+The wire surface lands in this same release: `GET /records/:id/journal`
+carries the read, so `APIAdapter.getJournal()` answers it like any other
+adapter and refuses nothing. That is what lets the method sit on
+`StackClient` as a requirement rather than a capability — there is no
+adapter left that cannot answer it.

@@ -3,6 +3,7 @@ import {
   parseQueryParams,
   parseQueryBody,
   parseChangeParams,
+  parseJournalParams,
   parseIfMatch,
   parseUploadFilename,
   parsePositiveInt,
@@ -357,6 +358,36 @@ describe('parsePositiveInt', () => {
     expect(parsePositiveInt('0', 'version')).toBe(0);
     for (const bad of ['-1', '1.5', '1abc', '', ' 1', '1e3']) {
       expect(() => parsePositiveInt(bad, 'version')).toThrow(StackQueryError);
+    }
+  });
+});
+
+describe('parseJournalParams', () => {
+  const journal = (qs: string) => new URL(`https://s.example${qs}`);
+
+  test('reads an empty query as the whole log, imposing no default page size', () => {
+    expect(parseJournalParams(journal('/records/r1/journal'))).toEqual({});
+  });
+
+  test('round-trips a window', () => {
+    expect(parseJournalParams(journal('/records/r1/journal?sinceSeq=4&limit=10'))).toEqual({
+      sinceSeq: 4,
+      limit: 10,
+    });
+  });
+
+  test('accepts zero for either, which assertValidJournalQuery also allows', () => {
+    expect(parseJournalParams(journal('/records/r1/journal?sinceSeq=0&limit=0'))).toEqual({
+      sinceSeq: 0,
+      limit: 0,
+    });
+  });
+
+  test('refuses a value that is not a bare non-negative integer', () => {
+    for (const qs of ['?limit=-1', '?limit=1.5', '?limit=ten', '?sinceSeq=-1', '?sinceSeq=1e3']) {
+      expect(() => parseJournalParams(journal(`/records/r1/journal${qs}`))).toThrow(
+        StackQueryError,
+      );
     }
   });
 });
