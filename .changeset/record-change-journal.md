@@ -55,6 +55,15 @@ the interface, not optional: an adapter with no journal to read refuses
 the call rather than declining to have the method, so an empty log always
 means "nothing changed" and never "this stack does not remember".
 
+**Also fixes `createRecord` applying non-atomically** in the SQLite
+adapters. It writes five statements — the record row, associations, the
+full-text index, the content index and now a journal entry — and was the
+only mutating method in the shared logic not wrapped in a transaction. A
+failure partway left a records row behind while raising to the caller, so
+a create that reported failure had half-succeeded, its retry failed on the
+primary key, and the surviving row was invisible to `filter.search` and
+mis-ordered by `sort.contentField` until something wrote it again.
+
 The wire surface is not part of this change. `APIAdapter.getJournal()`
 throws `APIAdapterCapabilityError` locally, before sending a request — the
 same posture `subscribeChanges()` takes against a server advertising no

@@ -235,47 +235,57 @@ export class SharedSqlRecordLogic {
    * A duplicate id hits the `records` PK — mapped to StackConflictError
    * instead of surfacing the raw engine exception, mirroring saveVersion's
    * collision mapping below.
+   *
+   * One transaction, because a record and the four tables that describe it
+   * are one fact. A half-applied create is worse than a failed one: the
+   * call raises, so the caller believes nothing landed, while the records
+   * row survives to fail their retry on the PK — and the row it leaves is
+   * invisible to `filter.search` and mis-ordered by `sort.contentField`
+   * until something writes it again.
    */
   async createRecord(record: StackRecord, opts: JournalOptions = {}): Promise<StackRecord> {
-    try {
-      this.exec.run(
-        `INSERT INTO records
+    this.exec.transaction(() => {
+      try {
+        this.exec.run(
+          `INSERT INTO records
           (id, type_id, created_at, updated_at, content, version,
            parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
            deleted_at, unlisted_at, permissions)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          record.id,
-          record.typeId,
-          toMs(record.createdAt),
-          toMs(record.updatedAt),
-          JSON.stringify(record.content),
-          record.version,
-          record.parentId ?? null,
-          record.entityId ?? null,
-          record.appId ?? null,
-          record.principalId ?? null,
-          record.updatedBy ?? null,
-          record.updatedVia ?? null,
-          record.deletedAt ? toMs(record.deletedAt) : null,
-          record.unlistedAt ? toMs(record.unlistedAt) : null,
-          record.permissions ? JSON.stringify(record.permissions) : null,
-        ],
-      );
-    } catch (err) {
-      if (isUniqueConstraintViolation(err)) {
-        throw new StackConflictError(`Record already exists: "${record.id}"`);
+          [
+            record.id,
+            record.typeId,
+            toMs(record.createdAt),
+            toMs(record.updatedAt),
+            JSON.stringify(record.content),
+            record.version,
+            record.parentId ?? null,
+            record.entityId ?? null,
+            record.appId ?? null,
+            record.principalId ?? null,
+            record.updatedBy ?? null,
+            record.updatedVia ?? null,
+            record.deletedAt ? toMs(record.deletedAt) : null,
+            record.unlistedAt ? toMs(record.unlistedAt) : null,
+            record.permissions ? JSON.stringify(record.permissions) : null,
+          ],
+        );
+      } catch (err) {
+        if (isUniqueConstraintViolation(err)) {
+          throw new StackConflictError(`Record already exists: "${record.id}"`);
+        }
+        throw err;
       }
-      throw err;
-    }
 
-    if (record.associations?.length) {
-      this.insertAssociations(record.id, record.associations);
-    }
+      if (record.associations?.length) {
+        this.insertAssociations(record.id, record.associations);
+      }
 
-    fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
-    this.syncContentIndex(record.id, record.typeId, record.content);
-    this.appendJournal(record.id, opts.journal);
+      fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
+      this.syncContentIndex(record.id, record.typeId, record.content);
+      this.appendJournal(record.id, opts.journal);
+    });
+
     return record;
   }
 
