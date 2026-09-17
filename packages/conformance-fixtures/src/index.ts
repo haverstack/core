@@ -28,6 +28,7 @@ import type {
   WireQueryResponse,
   WireError,
   WireVersion,
+  WireJournalResponse,
   WireRecordChange,
   WireReadyFrame,
   WireResetFrame,
@@ -1391,6 +1392,151 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
 ];
 
 // -------------------------------------------------------
+// Change journal
+// -------------------------------------------------------
+//
+// The second durable tier beside version history, and the only place an
+// association's prior state survives (docs/spec/wire-format.md § Journal).
+// A server answers these for a requester holding the mutate surface; the
+// 403 case is error-permission-denied-journal-read-only.
+
+export const getJournalFixtures: ConformanceFixture<undefined, WireJournalResponse>[] = [
+  {
+    name: 'get-journal-reads-the-whole-log-oldest-first',
+    description:
+      'GET /records/:id/journal with no params reads the whole log, oldest first, and answers ' +
+      'cursor null because nothing follows. `seq` is dense from 1 per record and is the only ' +
+      'ordering: `at` is wall clock, and `version` stands still across the associate() at ' +
+      'seq 2, which is exactly why neither orders the log alone. ' +
+      'See docs/spec/wire-format.md § Journal.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 1,
+          at: '2024-01-01T00:00:00.000Z',
+          kind: 'created',
+          ops: ['create'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-owner-123' },
+        },
+        {
+          seq: 2,
+          at: '2024-01-02T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['associate'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-contributor-789' },
+          associationsAdded: [{ kind: 'tag', label: 'starred' }],
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-journal-page-reports-a-cursor-to-resume-from',
+    description:
+      'A server may answer a page shorter than the limit asked for — this endpoint is the one ' +
+      'read with no ceiling when limit is omitted, so it needs that freedom. cursor is ' +
+      'therefore the only end-of-log signal: a short page does not mean an exhausted log. Its ' +
+      'value is the seq to send back as sinceSeq. A client reconstructing a full history ' +
+      'follows it rather than taking the first page for the answer.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=0&limit=2',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 1,
+          at: '2024-01-01T00:00:00.000Z',
+          kind: 'created',
+          ops: ['create'],
+          version: 1,
+          typeId: 'com.example/note@1',
+        },
+      ],
+      cursor: 1,
+    },
+  },
+  {
+    name: 'get-journal-entry-keeps-what-an-associate-overwrote',
+    description:
+      'associationsReplaced is the field with no counterpart on the change feed, and the whole ' +
+      "reason this tier exists. Re-pointing an attachment association's attachmentRecordId " +
+      'overwrites the old value in place; the feed reports only what is true now, so the entry ' +
+      'is the only record of what it replaced. associationsAdded carries the new value and ' +
+      'associationsReplaced the old one, both on the one entry. ' +
+      'See docs/spec/attachments.md § Naming the upload a reference came from.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=2',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 3,
+          at: '2024-01-03T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['associate'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-owner-123' },
+          associationsAdded: [
+            {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x0000b',
+            },
+          ],
+          associationsReplaced: [
+            {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x00009',
+            },
+          ],
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-journal-reparent-entry-spells-the-root-as-null',
+    description:
+      'previousParentId is the one field on any response where null is a value rather than an ' +
+      'input spelling. Absent means the entry is not a reparent; present and null means the ' +
+      'record moved out of the root. Collapsing the two — as a record body and a snapshot ' +
+      'both do, where absent is the root — would lose which one happened. parentId, which ' +
+      'says where the record landed, follows the ordinary rule and is absent for the root. ' +
+      'See docs/spec/wire-format.md § Journal.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=3',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 4,
+          at: '2024-01-04T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['reparent'],
+          version: 2,
+          typeId: 'com.example/note@1',
+          parentId: '1hk153x0000f',
+          previousParentId: null,
+          actor: { entityId: 'entity-owner-123' },
+        },
+      ],
+      cursor: null,
+    },
+  },
+];
+
+// -------------------------------------------------------
 // Migration commit
 // -------------------------------------------------------
 
@@ -1452,6 +1598,20 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'GET /records/:id/versions/:version.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-permission-denied-journal-read-only',
+    description:
+      'GET /records/:id/journal from a requester who can read the record but cannot write it ' +
+      'returns 403 / code "permission" — the same mutate-surface gate the version endpoints ' +
+      'apply, for the same reason. A log of who changed what, gated on current read access, ' +
+      "would make a record's past as reachable as its present: gaining read access today is " +
+      'not an entitlement to the trail of every tag it has ever carried. ' +
+      'See docs/spec/versioning.md § Reading it.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal',
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -3571,6 +3731,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...getVersionFixtures,
   ...getVersionsAfterMutateFixtures,
   ...restoreVersionFixtures,
+  ...getJournalFixtures,
   ...commitMigrationFixtures,
   ...errorResponseFixtures,
 ];

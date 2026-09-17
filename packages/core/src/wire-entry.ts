@@ -50,14 +50,16 @@ export { firstRecordedAttachment, resolveReferencedAttachment } from './attachme
 export type { StackTokenStore, TokenInfo } from './types.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
-// builds, so a server decodes GET /records, POST /records/query and
-// GET /changes with these rather than transcribing the parameter table.
+// builds, so a server decodes GET /records, POST /records/query,
+// GET /changes and GET /records/:id/journal with these rather than
+// transcribing the parameter table.
 // Contract, not internal — and the round trip against the builders is
 // pinned by a test, which is what having both halves here buys.
 export {
   parseQueryParams,
   parseQueryBody,
   parseChangeParams,
+  parseJournalParams,
   parseIfMatch,
   parseUploadFilename,
   parsePositiveInt,

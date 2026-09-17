@@ -1083,16 +1083,6 @@ describe('queryRecords', () => {
     ).resolves.toBeDefined();
   });
 
-  test('throws APIAdapterCapabilityError for getJournal, without sending a request', async () => {
-    const adapter = await openAdapter();
-    await expect(adapter.getJournal('1hk153x00001')).rejects.toThrow(APIAdapterCapabilityError);
-    // An empty log would be indistinguishable from a record that never
-    // changed, so the refusal has to be loud. See docs/spec/versioning.md
-    // § The change journal.
-    await expect(adapter.getJournal('1hk153x00001')).rejects.toThrow(/serves no change journal/);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call
-  });
-
   test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
@@ -1601,6 +1591,95 @@ describe('saveVersion', () => {
     };
     await expect(adapter.saveVersion('rec-abc123', v)).resolves.toBeUndefined();
     expect(mockFetch.mock.calls.length).toBe(callsBefore);
+  });
+});
+
+describe('getJournal', () => {
+  const entry = (seq: number, extra: Record<string, unknown> = {}) => ({
+    seq,
+    at: '2024-01-0' + seq + 'T00:00:00.000Z',
+    kind: 'changed',
+    ops: ['associate'],
+    version: 1,
+    typeId: 'com.example/note@1',
+    ...extra,
+  });
+
+  test('reads a page and decodes `at` as a Date', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        entries: [entry(1, { associationsAdded: [{ kind: 'tag', label: 'starred' }] })],
+        cursor: null,
+      }),
+    );
+
+    const log = await adapter.getJournal('1hk153x00001');
+
+    const [url] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}/records/1hk153x00001/journal`);
+    expect(log).toHaveLength(1);
+    expect(log[0].at).toBeInstanceOf(Date);
+    expect(log[0].associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+  });
+
+  test('follows the cursor until the log is exhausted', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(1), entry(2)], cursor: 2 }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(3)], cursor: null }));
+
+    const log = await adapter.getJournal('1hk153x00001');
+
+    expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
+    const [second] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?sinceSeq=2`);
+  });
+
+  test('asks only for what a bounded read still needs, and stops at the limit', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(1)], cursor: 1 }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(2)], cursor: 2 }));
+
+    const log = await adapter.getJournal('1hk153x00001', { limit: 2, sinceSeq: 0 });
+
+    expect(log.map((e) => e.seq)).toEqual([1, 2]);
+    expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(2);
+    const [second] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?sinceSeq=1&limit=1`);
+  });
+
+  test('holds a bounded read to its limit even if a page overshoots it', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ entries: [entry(1), entry(2), entry(3)], cursor: null }),
+    );
+
+    const log = await adapter.getJournal('1hk153x00001', { limit: 2 });
+
+    expect(log.map((e) => e.seq)).toEqual([1, 2]);
+  });
+
+  test('stops on an empty page rather than spinning on a cursor that never advances', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValue(jsonResponse({ entries: [], cursor: 9 }));
+
+    await expect(adapter.getJournal('1hk153x00001')).resolves.toEqual([]);
+    expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(1);
+  });
+
+  test('keeps a null previousParentId, which is the root rather than an absent field', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        entries: [entry(1, { ops: ['reparent'], previousParentId: null, parentId: 'rec-parent' })],
+        cursor: null,
+      }),
+    );
+
+    const [moved] = await adapter.getJournal('1hk153x00001');
+
+    expect(moved.previousParentId).toBeNull();
+    expect(moved.parentId).toBe('rec-parent');
   });
 });
 

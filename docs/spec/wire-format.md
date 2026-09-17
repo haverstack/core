@@ -418,11 +418,53 @@ A snapshot body carries `parentId` exactly as the Record body above does: presen
 
 **A snapshot body carries no `associations`.** No version has ever captured one — the association endpoints and an `associations`-only change set don't bump `version`, so there is no moment at which a snapshot is taken of them — and a restore correspondingly leaves a record's associations exactly where they stand, whatever the snapshot it puts back. `WireVersion` has no such field, so a server that emits one is writing a key every client drops. See [Versioning § Version history](./versioning.md#version-history).
 
-**The [change journal](./versioning.md#the-change-journal) has no endpoint in this protocol version.** It is the durable record of what each change moved — the association deltas nothing else retains — and a server holding one has nowhere to serve it from here. `getJournal()` over `APIAdapter` therefore refuses locally with `APIAdapterCapabilityError`, before any request, against every server rather than only one advertising nothing: an empty log has to mean "nothing changed" unconditionally, so "this server does not remember" must not be able to spell itself the same way. A client needing an association's history reads it from a stack backed by a local adapter, or watches the [change feed](./change-feed.md) as it happens.
+The second durable tier a mutation writes is [the change journal](#journal), below — the record of what each change moved, which is where an association's prior state is recovered from, since no snapshot holds one.
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals a change set's `parentId` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus the association endpoints (which report `associate`/`dissociate` without ever bumping `version` or snapshotting), plus create and hard delete. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+
+## Journal
+
+**The second durable tier, beside version history.** A snapshot answers _what could be put back_; a [journal](./versioning.md#the-change-journal) entry answers _what happened_ — which aspects a change moved, who moved them, and the association deltas nothing else retains. It is the only place an association's prior state survives, since no version captures one.
+
+```
+GET /records/:id/journal             — the log, oldest first
+GET /records/:id/journal?sinceSeq=4  — entries after seq 4, exclusive
+GET /records/:id/journal?limit=50    — at most 50 entries
+```
+
+```json
+{
+  "entries": [
+    {
+      "seq": 2,
+      "at": "2026-08-13T12:00:00.000Z",
+      "kind": "changed",
+      "ops": ["associate"],
+      "version": 1,
+      "typeId": "com.example/note@1",
+      "actor": { "entityId": "did:key:z6Mk..." },
+      "associationsAdded": [{ "kind": "tag", "label": "starred" }]
+    }
+  ],
+  "cursor": null
+}
+```
+
+**This endpoint is not optional.** Every adapter implements `getJournal()`, so a server that answers `404` here leaves the one adapter that fronts a server unable to honor a method the client interface requires. An empty log means _nothing changed_, unconditionally — a server with no journal to offer must not spell "I do not remember" the same way, and the only spelling available to it would be exactly that.
+
+**`seq` is a dense integer from 1, per record, and is the entry's only ordering.** `at` is wall clock and `version` stands still across an association change, so neither orders the log alone. It is **not** the [change feed's `seq`](./change-feed.md#frames), which is an opaque server-minted cursor over the whole stack; the two share a name because both order a stream, and no value may be carried from one to the other.
+
+**`cursor` is the only end-of-log signal**, exactly as it is on [a query](#response-envelope). A server MAY answer a page shorter than the `limit` asked for — this is the one read with no ceiling when `limit` is omitted, so it needs that freedom — which is why a short page must not be read as an exhausted log. `cursor` carries the `seq` to send back as `sinceSeq`, and is `null` once nothing follows. `APIAdapter.getJournal()` follows it to the end, so the library contract that omitting `limit` reads the whole log survives whatever page size a server picks.
+
+**`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Every other nullable field collapses both to absent — a record body and a snapshot spell the root that way — and doing so here would lose which of the two happened. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
+
+**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`. A log of who changed what, gated on current read access, would make a record's past as reachable as its present. Unlike a snapshot there is nothing to strip: an entry names _that_ a permission set moved, never what it moved to.
+
+**A hard delete destroys the journal**, exactly as it destroys version history, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./access-control.md#errors-and-information-exposure) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
+
+`@haverstack/core/wire` exports `parseJournalParams()`, so a server decodes `sinceSeq` and `limit` with the same grammar `APIAdapter` builds them with. Neither has a default: omitting `limit` reads the whole log by contract, so supplying a page size on the server's behalf would truncate exactly the caller that omitted it — a server bounds a page with `cursor` instead, which says so.
 
 ## Associations
 

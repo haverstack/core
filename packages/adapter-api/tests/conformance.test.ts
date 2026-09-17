@@ -31,6 +31,7 @@ import {
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
   restoreVersionFixtures,
+  getJournalFixtures,
   commitMigrationFixtures,
   discoveryFixtures,
   errorResponseFixtures,
@@ -601,6 +602,45 @@ describe('restoreVersion fixtures', () => {
   }
 });
 
+describe('getJournal fixtures', () => {
+  for (const fixture of getJournalFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      // A fixture whose page reports a cursor documents one page of a
+      // longer log, so the adapter asks again; the second page is the
+      // end, which is what lets the documented page be asserted alone.
+      if (fixture.responseBody!.cursor !== null) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [], cursor: null }));
+      }
+
+      const query = new URL(`${BASE_URL}${fixture.path}`).searchParams;
+      const sinceSeq = query.get('sinceSeq');
+      const limit = query.get('limit');
+      const log = await adapter.getJournal(idFromPath(fixture.path), {
+        ...(sinceSeq !== null && { sinceSeq: Number(sinceSeq) }),
+        ...(limit !== null && { limit: Number(limit) }),
+      });
+
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      const documented = fixture.responseBody!.entries;
+      expect(log.slice(0, documented.length).map((e) => e.seq)).toEqual(
+        documented.map((e) => e.seq),
+      );
+      // `at` is the entry's own append time, decoded like every other wire date.
+      expect(log[0]?.at.toISOString()).toBe(documented[0].at);
+      for (const [i, entry] of documented.entries()) {
+        // Presence, not value: `null` is the root here and must survive.
+        expect('previousParentId' in log[i]).toBe('previousParentId' in entry);
+        expect(log[i].previousParentId).toBe(entry.previousParentId);
+        expect(log[i].associationsReplaced).toEqual(entry.associationsReplaced);
+      }
+    });
+  }
+});
+
 describe('commitMigration fixtures', () => {
   for (const fixture of commitMigrationFixtures) {
     test(fixture.name, async () => {
@@ -680,6 +720,9 @@ describe('error response fixtures', () => {
         }
         if (fixture.method === 'GET' && fixture.path.endsWith('/versions')) {
           return adapter.getVersions(idFromPath(fixture.path));
+        }
+        if (fixture.method === 'GET' && fixture.path.endsWith('/journal')) {
+          return adapter.getJournal(idFromPath(fixture.path));
         }
         if (fixture.method === 'DELETE') {
           return adapter.deleteRecord(idFromPath(fixture.path));

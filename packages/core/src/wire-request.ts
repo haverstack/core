@@ -30,6 +30,7 @@ import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   ChangeFilter,
   ChangeKind,
+  JournalQuery,
   NativeSortField,
   QuerySort,
   RecordFilter,
@@ -489,6 +490,24 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
     includeRecords: include === 'record',
     includeUnlisted: url.searchParams.get('includeUnlisted') === 'true',
   };
+}
+
+/**
+ * Parse `GET /records/:id/journal`'s query params into the `JournalQuery`
+ * `getJournal()` takes. Absent params stay absent rather than defaulting:
+ * omitting `limit` reads the whole log by contract, so supplying a page
+ * size here would truncate exactly the caller that omitted it.
+ *
+ * `sinceSeq` is a journal `seq` — a dense per-record integer, never the
+ * change feed's opaque cursor. See docs/spec/wire-format.md § Journal.
+ */
+export function parseJournalParams(url: URL): JournalQuery {
+  const query: JournalQuery = {};
+  const sinceSeq = url.searchParams.get('sinceSeq');
+  if (sinceSeq !== null) query.sinceSeq = parsePositiveInt(sinceSeq, 'sinceSeq');
+  const limit = url.searchParams.get('limit');
+  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  return query;
 }
 
 // -------------------------------------------------------
