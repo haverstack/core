@@ -17,6 +17,7 @@
 import type {
   Association,
   ChangeActor,
+  JournalEntryInput,
   ChangeFilter,
   ChangeKind,
   ChangeOp,
@@ -305,6 +306,39 @@ export function buildEmission(
       ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
       ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
     },
+  };
+}
+
+/**
+ * The durable half of a change, built before the write that it describes
+ * — where an emission is built after one. The two carry the same facts
+ * about what moved and who moved it; they differ in what they can read
+ * off the record, which at this point has not been written yet. So the
+ * adapter stamps the record-derived fields and this names the rest.
+ * See docs/spec/versioning.md § The change journal.
+ */
+export function buildJournalEntry(
+  ops: ChangeOp | ChangeOp[],
+  opts: {
+    actor?: ChangeActor;
+    previousParentId?: string | null;
+    associationsAdded?: Association[];
+    associationsRemoved?: Association[];
+    associationsReplaced?: Association[];
+  } = {},
+): JournalEntryInput {
+  const list = Array.isArray(ops) ? ops : [ops];
+  if (list.length === 0) {
+    throw new Error('buildJournalEntry: a change reports at least one op');
+  }
+  return {
+    ops: list,
+    kind: resolveKind(list),
+    ...(opts.actor && { actor: opts.actor }),
+    ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
+    ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
+    ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
+    ...(opts.associationsReplaced?.length && { associationsReplaced: opts.associationsReplaced }),
   };
 }
 

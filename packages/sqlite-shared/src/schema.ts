@@ -73,6 +73,37 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, version)
   ) STRICT;
 
+  -- The durable half of a change event: which aspects moved, who moved
+  -- them, and the association deltas nothing else retains. Envelope-level
+  -- by design — content lives on a versions row, and copying it here
+  -- would make the journal the larger of the two stores.
+  --
+  -- seq is dense from 1 per record and is the only ordering: at is wall
+  -- clock, and version stands still across an association change, so
+  -- neither orders the log alone. It is allocated inside the appending
+  -- write, which is why this table needs none of the collision healing
+  -- versions does. See docs/spec/versioning.md § The change journal.
+  CREATE TABLE IF NOT EXISTS journal (
+    record_id   TEXT NOT NULL REFERENCES records(id),
+    seq         INTEGER NOT NULL,
+    at          INTEGER NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'deleted', 'purged')),
+    ops         TEXT NOT NULL CHECK (json_valid(ops)),
+    version     INTEGER NOT NULL,
+    type_id     TEXT NOT NULL,
+    parent_id   TEXT,
+    -- NULL means the entry names no origin (the record did not move);
+    -- '' means it moved off the root. parent_id above needs no such
+    -- spelling: it is state, where this is a key that may be absent --
+    -- the same input/state split parentId follows everywhere.
+    previous_parent_id TEXT,
+    actor       TEXT CHECK (actor IS NULL OR json_valid(actor)),
+    associations_added    TEXT CHECK (associations_added IS NULL OR json_valid(associations_added)),
+    associations_removed  TEXT CHECK (associations_removed IS NULL OR json_valid(associations_removed)),
+    associations_replaced TEXT CHECK (associations_replaced IS NULL OR json_valid(associations_replaced)),
+    PRIMARY KEY (record_id, seq)
+  ) STRICT;
+
   CREATE TABLE IF NOT EXISTS types (
     id            TEXT PRIMARY KEY,
     base_id       TEXT NOT NULL,

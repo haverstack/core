@@ -5,6 +5,7 @@
  */
 
 import type {
+  RecordJournalEntry,
   StackRecord,
   StackType,
   RecordVersion,
@@ -123,4 +124,35 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   if (row.parent_id != null) v.parentId = row.parent_id as string;
   if (row.permissions != null) v.permissions = JSON.parse(row.permissions as string);
   return v;
+};
+
+/**
+ * One journal row. `previous_parent_id` carries the three-way spelling the
+ * column comment states: SQL NULL is an entry naming no origin, '' is the
+ * root, anything else is a container id.
+ */
+export const rowToJournalEntry = (row: Record<string, unknown>): RecordJournalEntry => {
+  const e: RecordJournalEntry = {
+    seq: row.seq as number,
+    at: fromMs(row.at as number),
+    kind: row.kind as RecordJournalEntry['kind'],
+    ops: JSON.parse(row.ops as string),
+    version: row.version as number,
+    typeId: row.type_id as string,
+  };
+  if (row.parent_id != null) e.parentId = row.parent_id as string;
+  if (row.previous_parent_id != null) {
+    e.previousParentId = row.previous_parent_id === '' ? null : (row.previous_parent_id as string);
+  }
+  if (row.actor != null) e.actor = JSON.parse(row.actor as string);
+  if (row.associations_added != null) {
+    e.associationsAdded = JSON.parse(row.associations_added as string);
+  }
+  if (row.associations_removed != null) {
+    e.associationsRemoved = JSON.parse(row.associations_removed as string);
+  }
+  if (row.associations_replaced != null) {
+    e.associationsReplaced = JSON.parse(row.associations_replaced as string);
+  }
+  return e;
 };

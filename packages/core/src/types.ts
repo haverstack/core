@@ -759,6 +759,77 @@ export type ActorOptions = {
   updatedVia?: EntityId;
 };
 
+/**
+ * The part of a change that the record cannot report once the write has
+ * landed: which aspects moved, who moved them, and what an association
+ * mutation added, removed or overwrote. Everything else a journal entry
+ * carries — `seq`, `at`, `version`, `typeId`, `parentId` — the adapter
+ * stamps from the row it just wrote, so the two can never drift.
+ *
+ * That split is the whole argument for the tier: content's prior state is
+ * recoverable from a snapshot, and an association's is recoverable from
+ * nothing at all. See docs/spec/versioning.md § The change journal.
+ */
+export type JournalEntryInput = {
+  ops: ChangeOp[];
+  kind: ChangeKind;
+  actor?: ChangeActor;
+  /** The container a move took the record out of, `null` for the root. */
+  previousParentId?: RecordId | null;
+  associationsAdded?: Association[];
+  /** Identity only, as on the feed — never the annotation a removal carried. */
+  associationsRemoved?: Association[];
+  /**
+   * An association as it stood before an `associate()` overwrote it in
+   * place. The only durable record of an `attachmentRecordId` a re-point
+   * discarded. See docs/spec/attachments.md § Naming the upload a
+   * reference came from.
+   */
+  associationsReplaced?: Association[];
+};
+
+/**
+ * One durable entry in a record's change journal. `seq` is dense from 1
+ * per record and is the entry's only ordering: `at` is wall-clock and
+ * `version` stands still across an association change, so neither orders
+ * the log on its own.
+ *
+ * Envelope-level by design — `content` lives on a RecordVersion, and
+ * duplicating it here would make the journal the larger of the two stores
+ * for no recovery anyone asked for.
+ */
+export type RecordJournalEntry = JournalEntryInput & {
+  seq: number;
+  /** When the entry was appended — not the record's `updatedAt`, which an association change leaves alone. */
+  at: Date;
+  /** The version this change produced; unchanged from before on associate/dissociate. */
+  version: number;
+  typeId: TypeId;
+  /** Where the record sat after the change, absent for the root. */
+  parentId?: RecordId;
+};
+
+/**
+ * Accepted by every mutating StackRecordAdapter method, and by
+ * associate()/dissociate(), which take no other options. The adapter
+ * appends the entry inside the SAME write as the mutation, so a crash
+ * between the two cannot leave a change unjournaled.
+ *
+ * Unlike SnapshotOptions there is no collision to heal: `seq` is
+ * allocated by the adapter inside that write rather than computed by
+ * `Stack` from a value it read earlier.
+ */
+export type JournalOptions = {
+  journal?: JournalEntryInput;
+};
+
+/** Window into a record's journal. Omitting both reads the whole log, oldest first. */
+export type JournalQuery = {
+  /** Entries after this seq, exclusive. */
+  sinceSeq?: number;
+  limit?: number;
+};
+
 // -------------------------------------------------------
 // Change events
 // -------------------------------------------------------
@@ -994,7 +1065,7 @@ export interface StackRecordAdapter {
    * constraint or equivalent); Stack itself doesn't pre-check, so a raw
    * adapter that skips this enforces nothing.
    */
-  createRecord(record: StackRecord): Promise<StackRecord>;
+  createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
    * Apply a change set — any combination of content patch, `parentId`,
@@ -1023,7 +1094,11 @@ export interface StackRecordAdapter {
   mutateRecord(
     id: RecordId,
     changes: RecordChanges,
-    opts?: ExpectedVersionOptions & SnapshotOptions & BumpVersionOptions & ActorOptions,
+    opts?: ExpectedVersionOptions &
+      SnapshotOptions &
+      BumpVersionOptions &
+      ActorOptions &
+      JournalOptions,
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
@@ -1034,12 +1109,15 @@ export interface StackRecordAdapter {
    */
   deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean } & ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: { hard?: boolean } & ExpectedVersionOptions &
+      SnapshotOptions &
+      ActorOptions &
+      JournalOptions,
   ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(
     id: RecordId,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
@@ -1051,9 +1129,9 @@ export interface StackRecordAdapter {
    * `permissions`, nor the rollback history that guards. See
    * docs/spec/versioning.md § Version history and § Optimistic concurrency.
    */
-  associate(id: RecordId, association: Association): Promise<StackRecord>;
+  associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: RecordId, association: Association): Promise<StackRecord>;
+  dissociate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
 
   // Versions
   getVersions(id: RecordId): Promise<RecordVersion[]>;
@@ -1064,6 +1142,15 @@ export interface StackRecordAdapter {
    * snapshot and the mutation land in one write — see SnapshotOptions.
    */
   saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
+
+  /**
+   * Read a record's change journal, oldest first. Optional only because a
+   * foreign server may not offer one; every local adapter implements it,
+   * on the same footing as getVersions() — a recovery mechanism an app
+   * cannot rely on is most of the way to no mechanism at all. See
+   * docs/spec/versioning.md § The change journal.
+   */
+  getJournal?(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
    * Restore a record to a previous version's content and `parentId`
    * (absent on the snapshot means the root, so a restore always settles
@@ -1078,7 +1165,7 @@ export interface StackRecordAdapter {
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
 
   /**
@@ -1091,7 +1178,7 @@ export interface StackRecordAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions,
+    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
 
   // Types

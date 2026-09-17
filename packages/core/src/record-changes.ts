@@ -83,12 +83,17 @@ export function stripAssociationAnnotation(association: Association): Associatio
 export function associationDelta(
   before: Association[],
   after: Association[],
-): { added: Association[]; removed: Association[] } {
+): { added: Association[]; removed: Association[]; replaced: Association[] } {
+  const added = after.filter((a) => !before.some((b) => associationIdentical(a, b)));
   return {
-    added: after.filter((a) => !before.some((b) => associationIdentical(a, b))),
+    added,
     removed: before
       .filter((b) => !after.some((a) => associationEqual(a, b)))
       .map(stripAssociationAnnotation),
+    // An addition matching something already there by identity overwrote
+    // it rather than joining it. `removed` cannot report these: the
+    // association is still on the record, only its annotation changed.
+    replaced: added.flatMap((a) => before.filter((b) => associationEqual(a, b))),
   };
 }
 

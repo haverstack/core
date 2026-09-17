@@ -6,7 +6,7 @@ Version history is managed by the library as a side channel — apps do not mana
 
 **Two tiers.** Every mutation of a Record that touches content, containment, permissions or listing — a [change set](./data-model.md#mutations) naming `contentPatch`, `parentId`, `permissions` and/or `unlisted` in any combination, a soft delete, an undelete — snapshots the Record's prior full state and bumps `version` exactly once. **One call is one version**, however many of those aspects it moved: a change set that edits content and moves the Record produces a single snapshot of how it stood before either. A mutation that changes nothing (restating a deep-equal permission set, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Hard delete is the one exception among these — it destroys the Record and its version history outright, so there's nothing to snapshot.
 
-`associate()`/`dissociate()` — and a change set whose only key is `associations` — are the second tier, and never bump `version`, touch `updatedAt`, or snapshot. Associations are invertible: the inverse operation is the same shape as the forward one and reconstructs the prior state exactly (an attachment-annotation overwrite is the one minor exception — re-pointing or clearing an `attachmentRecordId` discards the old value for good, with no snapshot to read it back from), unlike content mutation, which is destructive the instant it lands. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and associations don't need it. That overwrite is observable only in real time, on the change feed's `associationsAdded`/`associationsRemoved` (see [Events § The event shape](./events.md#the-event-shape)) — a subscriber watching at the moment of the overwrite sees the new value arrive, but nothing anywhere retains the old one once it lands. A change set that names `associations` alongside a version-bumping aspect still produces exactly one version covering everything it moved; `associations` just isn't among the aspects that decide whether the call bumps at all. That same invertibility is why a restore leaves associations where they stand and why `associate()`/`dissociate()` take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
+`associate()`/`dissociate()` — and a change set whose only key is `associations` — are the second tier, and never bump `version`, touch `updatedAt`, or snapshot. Associations are invertible: the inverse operation is the same shape as the forward one and reconstructs the prior state exactly (an attachment-annotation overwrite is the one minor exception — re-pointing or clearing an `attachmentRecordId` discards the old value for good, with no snapshot to read it back from), unlike content mutation, which is destructive the instant it lands. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and associations don't need it. That overwrite is reported in real time on the change feed's `associationsAdded` (see [Events § The event shape](./events.md#the-event-shape)), which carries the new value only; the value it replaced is kept by [the change journal](#the-change-journal), which is where an association's prior state is recovered from generally. A change set that names `associations` alongside a version-bumping aspect still produces exactly one version covering everything it moved; `associations` just isn't among the aspects that decide whether the call bumps at all. That same invertibility is why a restore leaves associations where they stand and why `associate()`/`dissociate()` take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
 
 **Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a hard delete leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
 
@@ -39,6 +39,66 @@ type RecordVersion = {
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content`, `typeId` and `parentId` (always: absent on the snapshot is the root), but **never restores `permissions` or `associations`**. `permissions` is owner/creator territory (see [Access control](./access-control.md#the-write-bit-a-recoverability-trust-model)), and silently reverting an ACL as a side effect of a content rollback would be a surprise nobody wants — it's captured in the snapshot for audit and deliberate owner action, not automatic restore. `associations` isn't in the snapshot at all to restore from — see [Restore semantics](#restore-semantics). The snapshot deliberately does not capture `appId`, so restore never reverts an app reattribution — that field keeps its current value.
 
 **Why `parentId` rolls back and `permissions` does not.** A change set can move both in one version, which makes the asymmetry easier to meet: rolling that version back puts the Record's container back and leaves its access where it now stands. The two are not the same kind of field wearing different policies. Permissions decide who may reach the Record, so reverting them silently would widen or narrow access as a side effect of a verb the caller asked for its content; `parentId` decides which listings enumerate it and nothing else — [containment is not an access-control edge](./data-model.md#reparenting) — so putting it back changes what the Record's own history already describes and no one else's reach. `appId` is not policy either way: it names the software that authored the Record, a create-time fact that no later write moves, so there is nothing for a rollback to revert it to.
+
+## The change journal
+
+**A second durable tier, beside version history: what each change moved, who moved it, and the association deltas nothing else retains.** A snapshot answers _what could be put back_; a journal entry answers _what happened_. Content needs only the first, because its prior state is in the snapshot. Associations need the second, because theirs is nowhere.
+
+That gap is the reason this tier exists. [Associations are invertible](#version-history) — the inverse of an `associate()` is a `dissociate()` of the same shape — but invertibility is not recoverability: an inverse exists, and deriving _which_ inverse takes the prior state. A subscriber watching the [change feed](./events.md) at the moment of the write sees the delta go past; the journal is where anyone who was not listening reads it afterwards. A feed is a notification, not a store — widening it into one is [the wrong answer](./events.md#what-a-feed-is-not) to this question, because a replayable feed would have to re-decide readability long after the record it describes has moved on, and would keep naming records a hard delete destroyed.
+
+```ts
+type RecordJournalEntry = {
+  seq: number; // dense from 1, per record — the entry's only ordering
+  at: Date; // when the entry was appended
+  kind: ChangeKind;
+  ops: ChangeOp[];
+  version: number; // the version this change produced; unchanged on associate/dissociate
+  typeId: TypeId;
+  parentId?: RecordId; // where the record sat after the change; absent = the root
+  previousParentId?: RecordId | null; // present on a move; `null` = off the root
+  actor?: ChangeActor;
+  associationsAdded?: Association[];
+  associationsRemoved?: Association[]; // identity only, as on the feed
+  associationsReplaced?: Association[]; // the association an associate() overwrote in place
+};
+```
+
+**The entry set is the event set.** Every write that [emits](./events.md) appends exactly one entry, and no other write appends one — so a no-op appends nothing, for the same reason it emits nothing, and a change set naming three aspects is one entry naming three `ops`. The journal and the feed report the same change; they differ in how long the answer is available.
+
+**`associationsReplaced` is the one field with no counterpart on the feed.** Re-pointing an `attachmentRecordId` overwrites the old value, and the feed reports only what is [true now](./events.md#the-event-shape). The journal keeps what it replaced, which is what makes a re-point undoable rather than merely observable.
+
+**`seq` is dense from 1 per record, and is the entry's only ordering.** `at` is wall clock, and `version` stands still across an association change, so neither orders the log alone. It is allocated by the adapter inside the appending write, from the log's own maximum — never computed by `Stack` from a value it read earlier. That is why the journal needs none of the collision healing [a snapshot needs](#snapshot-atomicity): no writer ever holds a `seq` it expects to still be free.
+
+**An entry lands in the same atomic write as the mutation it describes.** Adapters accept it as an option on every mutating method — `associate()`/`dissociate()` included, which take no other — and append it inside their own transaction, after the write, reading `version`, `typeId` and `parentId` off the row it produced. `Stack` supplies only the half the record cannot report afterwards. A crash cannot leave a change unjournaled, and a failed mutation leaves no entry.
+
+**A hard delete destroys the journal, exactly as it destroys version history.** A log naming what a purged record held — its tags, its containers, who touched it — is precisely the residue [the erasure primitive](#deletion) exists to leave nothing of. So the journal never records a purge: the entry and the record go together. Soft delete keeps it, because a tombstone is recoverable and its journal is part of what recovers it.
+
+### Reading it
+
+- `stack.getJournal(recordId, { sinceSeq?, limit? })` — the log, oldest first.
+
+**Gated on the mutate surface, exactly as [history is](#history-access), and for the same reason.** A log of who changed what, gated on current read access, would make a record's past exactly as reachable as its present — the retroactivity that rule exists to prevent. An association label is content enough to matter: gaining read access today is not an entitlement to the trail of every tag the record has ever carried. A write-holder, the owner, or a creator passes; a plain reader gets `StackPermissionError`, the same answer `getVersions()` gives.
+
+There is no `permissions` stripping to do here, unlike on a snapshot. An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots, and a write-holder auditing their own record learns only that its ACL changed and who changed it.
+
+**An adapter that keeps no journal refuses the read rather than answering an empty log.** "Nothing changed" and "this stack does not remember" are not the same answer, and a caller reconstructing an association's history cannot tell them apart. `getJournal()` against such an adapter throws `StackQueryError`.
+
+### Why this is not more duplication
+
+The stack materializes a record's data in four places, and they divide cleanly in two:
+
+| Store           | Rebuildable from `records`? | What it is        |
+| --------------- | :-------------------------: | ----------------- |
+| `content_index` |             Yes             | An index          |
+| `records_fts`   |             Yes             | An index          |
+| `versions`      |             No              | A source of truth |
+| `journal`       |             No              | A source of truth |
+
+An index can be dropped and regenerated; it costs disk and write amplification and nothing else, and it is never what a recovery path reads. A source of truth cannot be regenerated, so it owes the full treatment: an erasure path that reaches it, a permission gate of its own, and a retention story.
+
+The journal is the cheapest of the four to carry, because it is **envelope-level**: `content` lives on a snapshot, and copying it here would make the journal the larger of the two stores for a recovery nobody asked for. A record's snapshot holds a full copy of its content per version, which is where a stack's history bytes actually are; an entry holds a verb, an actor and a delta.
+
+Both untracked stores grow with write volume and neither prunes itself. That is a policy question this spec does not answer for `versions`, and does not answer here either.
 
 ## Snapshot atomicity
 
@@ -100,8 +160,8 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 ## Storage per adapter
 
-- JSON: sibling file `{id}.versions.json`
-- SQLite: `versions` table
+- JSON: sibling files `{id}.versions.json` and `{id}.journal.json`
+- SQLite: `versions` and `journal` tables
 - API: **the server is the only snapshot writer** — `saveVersion()` is a deliberate no-op over `APIAdapter`, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. See [Wire format § Versions](./wire-format.md#versions) for that list.
 
 ## Deletion

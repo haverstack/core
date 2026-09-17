@@ -16,6 +16,10 @@ import {
   applyMergePatch,
 } from '@haverstack/core';
 import type {
+  RecordJournalEntry,
+  JournalEntryInput,
+  JournalOptions,
+  JournalQuery,
   StackRecord,
   StackType,
   TypeId,
@@ -37,6 +41,7 @@ import {
   rowToAssociation,
   rowToType,
   rowToVersion,
+  rowToJournalEntry,
   toMs,
   associationKeyColumns,
 } from './mappers.js';
@@ -231,7 +236,7 @@ export class SharedSqlRecordLogic {
    * instead of surfacing the raw engine exception, mirroring saveVersion's
    * collision mapping below.
    */
-  async createRecord(record: StackRecord): Promise<StackRecord> {
+  async createRecord(record: StackRecord, opts: JournalOptions = {}): Promise<StackRecord> {
     try {
       this.exec.run(
         `INSERT INTO records
@@ -270,6 +275,7 @@ export class SharedSqlRecordLogic {
 
     fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
     this.syncContentIndex(record.id, record.typeId, record.content);
+    this.appendJournal(record.id, opts.journal);
     return record;
   }
 
@@ -327,7 +333,8 @@ export class SharedSqlRecordLogic {
       expectedVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -341,6 +348,7 @@ export class SharedSqlRecordLogic {
         if (changes.associations !== undefined) {
           this.replaceAssociations(id, changes.associations);
         }
+        this.appendJournal(id, opts.journal);
       });
       return this.reread(id, 'mutateRecord');
     }
@@ -390,6 +398,7 @@ export class SharedSqlRecordLogic {
         fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
         this.syncContentIndex(id, existing.typeId, merged);
       }
+      this.appendJournal(id, opts.journal);
     });
 
     return this.reread(id, 'mutateRecord');
@@ -401,7 +410,8 @@ export class SharedSqlRecordLogic {
       hard?: boolean;
       expectedVersion?: number;
       snapshot?: RecordVersion;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ): Promise<StackRecord | null> {
     if (opts.hard) {
       return this.exec.transaction(() => this.hardDeleteRecord(id, opts.expectedVersion));
@@ -414,6 +424,7 @@ export class SharedSqlRecordLogic {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.versionedUpdate(id, ['deleted_at = ?'], [now], opts, now);
+      this.appendJournal(id, opts.journal);
     });
 
     return this.reread(id, 'deleteRecord');
@@ -441,6 +452,10 @@ export class SharedSqlRecordLogic {
     fts5Strategy.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
+    // A purge takes the journal with it, for the reason it takes the
+    // version history: a log naming what a destroyed record once held is
+    // exactly the residue this verb exists to leave nothing of.
+    this.exec.run('DELETE FROM journal WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM content_index WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
     return purged;
@@ -448,11 +463,13 @@ export class SharedSqlRecordLogic {
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+      JournalOptions = {},
   ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.versionedUpdate(id, ['deleted_at = NULL'], [], opts);
+      this.appendJournal(id, opts.journal);
     });
 
     return this.reread(id, 'undelete');
@@ -464,7 +481,8 @@ export class SharedSqlRecordLogic {
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
-    } & ActorOptions = {},
+    } & ActorOptions &
+      JournalOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new Error(`Record not found: "${id}"`);
@@ -485,6 +503,7 @@ export class SharedSqlRecordLogic {
         ['parent_id = ?'],
         [target.parentId ?? null],
       );
+      this.appendJournal(id, opts.journal);
     });
 
     return this.reread(id, 'restoreVersion');
@@ -494,7 +513,8 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions = {},
+    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+      JournalOptions = {},
   ): Promise<StackRecord> {
     // Checked against a read record first, rather than left to the
     // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before
@@ -509,6 +529,7 @@ export class SharedSqlRecordLogic {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.rewriteContent(id, toTypeId, content, opts);
+      this.appendJournal(id, opts.journal);
     });
 
     return this.reread(id, 'commitMigration');
@@ -720,6 +741,69 @@ export class SharedSqlRecordLogic {
   }
 
   // -------------------------------------------------------
+  // Change journal
+  // -------------------------------------------------------
+
+  /**
+   * Append one entry, stamping the record-derived half off the row as it
+   * now stands — so every caller must already sit inside the same
+   * transaction as the write it describes, after that write has landed.
+   *
+   * `seq` is allocated here, from the log's own max, rather than computed
+   * by the caller. That is what spares this table the collision healing
+   * versions needs: nothing outside this statement ever holds a seq it
+   * expects to be free. See docs/spec/versioning.md § The change journal.
+   */
+  private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
+    if (!entry) return;
+    const record = this.readRecord(recordId);
+    if (!record) throw new StackNotFoundError(`Record not found: "${recordId}"`);
+
+    this.exec.run(
+      `INSERT INTO journal
+        (record_id, seq, at, kind, ops, version, type_id, parent_id,
+         previous_parent_id, actor, associations_added, associations_removed,
+         associations_replaced)
+       VALUES (
+         ?,
+         (SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?),
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        recordId,
+        recordId,
+        toMs(new Date()),
+        entry.kind,
+        JSON.stringify(entry.ops),
+        record.version,
+        record.typeId,
+        record.parentId ?? null,
+        // '' is the root; NULL is an entry that names no origin at all.
+        entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
+        entry.actor ? JSON.stringify(entry.actor) : null,
+        entry.associationsAdded?.length ? JSON.stringify(entry.associationsAdded) : null,
+        entry.associationsRemoved?.length ? JSON.stringify(entry.associationsRemoved) : null,
+        entry.associationsReplaced?.length ? JSON.stringify(entry.associationsReplaced) : null,
+      ],
+    );
+  }
+
+  async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    const conditions = ['record_id = ?'];
+    const values: unknown[] = [id];
+    if (query.sinceSeq !== undefined) {
+      conditions.push('seq > ?');
+      values.push(query.sinceSeq);
+    }
+    const rows = this.exec.all<Record<string, unknown>>(
+      `SELECT * FROM journal WHERE ${conditions.join(' AND ')} ORDER BY seq ASC${
+        query.limit !== undefined ? ' LIMIT ?' : ''
+      }`,
+      query.limit !== undefined ? [...values, query.limit] : values,
+    );
+    return rows.map(rowToJournalEntry);
+  }
+
+  // -------------------------------------------------------
   // Types
   // -------------------------------------------------------
 
@@ -766,18 +850,27 @@ export class SharedSqlRecordLogic {
    * associations table changes. See docs/spec/versioning.md § Version
    * history.
    */
-  async associate(recordId: string, association: Association): Promise<StackRecord> {
+  async associate(
+    recordId: string,
+    association: Association,
+    opts: JournalOptions = {},
+  ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (!this.readRecord(recordId))
         throw new StackNotFoundError(`Record not found: "${recordId}"`);
       this.insertAssociations(recordId, [association]);
+      this.appendJournal(recordId, opts.journal);
     });
 
     return this.reread(recordId, 'associate');
   }
 
   /** Never bumps `version`/`updatedAt` — see associate(). */
-  async dissociate(recordId: string, association: Association): Promise<StackRecord> {
+  async dissociate(
+    recordId: string,
+    association: Association,
+    opts: JournalOptions = {},
+  ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (!this.readRecord(recordId))
         throw new StackNotFoundError(`Record not found: "${recordId}"`);
@@ -793,6 +886,7 @@ export class SharedSqlRecordLogic {
          AND related_stack = ?`,
         [recordId, association.kind, association.label, ...associationKeyColumns(association)],
       );
+      this.appendJournal(recordId, opts.journal);
     });
 
     return this.reread(recordId, 'dissociate');
