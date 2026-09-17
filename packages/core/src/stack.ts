@@ -1563,9 +1563,9 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
-   * stored typeId (not the record's current type), restores associations
-   * and `parentId` (absent on the snapshot is the root, so a restore
-   * always settles containment), and never restores permissions. See
+   * stored typeId (not the record's current type), restores `parentId`
+   * (absent on the snapshot is the root, so a restore always settles
+   * containment), and restores neither associations nor permissions. See
    * docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(

@@ -1667,6 +1667,27 @@ describe('getJournal', () => {
     expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(1);
   });
 
+  test('stops on a page carrying no cursor at all', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValue(jsonResponse({ entries: [entry(1)] }));
+
+    const log = await adapter.getJournal('1hk153x00001');
+
+    expect(log.map((e) => e.seq)).toEqual([1]);
+    expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(1);
+  });
+
+  test('stops on a cursor that does not pass the window already asked for', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(1), entry(2)], cursor: 2 }));
+    mockFetch.mockResolvedValue(jsonResponse({ entries: [entry(3)], cursor: 2 }));
+
+    const log = await adapter.getJournal('1hk153x00001');
+
+    expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(2);
+  });
+
   test('keeps a null previousParentId, which is the root rather than an absent field', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(

@@ -1243,11 +1243,17 @@ export class APIAdapter implements StackAdapter {
       const path = `/records/${id}/journal${qs ? `?${qs}` : ''}`;
       const raw = await this.request<WireJournalResponse | undefined>('GET', path);
       const body = requireBody(raw, `GET ${path}`);
-      entries.push(...body.entries.map(parseJournalEntry));
-      if (body.cursor === null) break;
-      // A non-null cursor with nothing to show it advanced would spin
-      // forever against a server that mints one unconditionally.
+      // Appended one at a time rather than spread: a spread is an argument
+      // list, and this is the one read a server may answer without a ceiling.
+      for (const e of body.entries) entries.push(parseJournalEntry(e));
       if (body.entries.length === 0) break;
+      // Only a cursor past the window just asked for can land the next
+      // request somewhere new. A server that omits one, repeats one, or
+      // mints one unconditionally ends the read here rather than spinning
+      // on it. See docs/spec/wire-format.md § Journal.
+      if (typeof body.cursor !== 'number' || (sinceSeq !== undefined && body.cursor <= sinceSeq)) {
+        break;
+      }
       sinceSeq = body.cursor;
     }
     // `limit` is this method's own ceiling, not a request the server is
