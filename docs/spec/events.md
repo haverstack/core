@@ -4,12 +4,12 @@ Apps observe record changes by subscribing, rather than by polling `query()`. A 
 
 This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Change feed](./change-feed.md).
 
-**A change event is the observable side of versioning, with one deliberate exception.** Every mutation that snapshots prior state and bumps `version` emits exactly one event; hard delete, the one exception to that versioning rule, is the one exception here too — it emits, carries no snapshot, and ends the record's stream. `associate()`/`dissociate()` are the second exception, on both sides at once: they never bump `version` or snapshot, yet they still emit — a subscriber needs to hear about a tag or roster change even though nothing about it is recoverable through history. See [Versioning § Version history](./versioning.md#version-history).
+**A change event announces that something changed; a version records what a rollback could put back.** The two usually coincide — every mutation that bumps `version` and snapshots prior state emits exactly one event. Where they part, it is because the feed asks the broader question. Hard delete emits and ends the record's stream while snapshotting nothing: there is no prior state to keep once the record is destroyed, but a subscriber still has to learn it is gone. `associate()`/`dissociate()` emit without bumping `version` or snapshotting: associations are invertible, so they need no rollback history (see [Versioning § Version history](./versioning.md#version-history)), but a subscriber watching a tag or a roster still has to hear that it moved.
 
 Two things follow immediately:
 
-- **The event set is closed and already enumerated.** It is the wider of the two lists [Wire format § Versions](./wire-format.md#versions) gives: every endpoint that bumps `version`, plus the association endpoints (which don't), plus create and hard delete. Nothing is a judgement call.
-- **A no-op mutation emits nothing.** This is not the same claim as "bumps no version, so fires no event" — `associate()`/`dissociate()` never bump and still fire when they change something. The real rule is narrower: re-adding an association that is already present, setting a deep-equal permission set, deleting an already-deleted record produce no `ops` at all, and no `ops` means no event, whether or not the call would have bumped had it done anything. A subscriber never sees a phantom change.
+- **The event set is closed.** These writes emit and no others: create, hard delete, the association endpoints, and every endpoint that bumps `version` — the same set [Wire format § Versions](./wire-format.md#versions) spells out endpoint by endpoint. A server has nothing to decide for itself about which verbs are reportable.
+- **A no-op mutation emits nothing.** What decides is `ops`, not `version`. Re-adding an association the record already holds, setting a deep-equal permission set, or deleting an already-deleted record produces no `ops` at all, and no `ops` means no event. A subscriber never sees a phantom change.
 
 ## What a feed is not
 

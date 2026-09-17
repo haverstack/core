@@ -126,6 +126,7 @@ import {
   assertNonEmptyChangeSet,
   changeSetOps,
   bumpsVersion,
+  takesIfVersion,
   effectiveChanges,
   stampGroupAdmin,
   stripAssociationAnnotation,
@@ -1023,6 +1024,12 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
 
+    // Checked before validation, so a caller that lost the race learns its
+    // version is stale rather than that its patch is bad, and before the
+    // no-op short-circuit below, so a precondition is never satisfied by a
+    // write that turned out to move nothing.
+    if (takesIfVersion(changes)) this.checkIfVersion(existing, opts.ifVersion);
+
     const merged = await this.validateChangeSet(id, existing, changes);
 
     const ops = changeSetOps(existing, changes, merged);
@@ -1038,11 +1045,6 @@ export class Stack implements StackClient {
     // non-bumping write never touches updatedBy/updatedVia.
     // See docs/spec/versioning.md § Version history.
     const bumps = bumpsVersion(ops);
-    // ifVersion guards the OCC race a bumping write can lose. An
-    // associations-only change composes regardless of write order — same
-    // as associate()/dissociate(), which never took ifVersion — so it is
-    // never checked here.
-    if (bumps) this.checkIfVersion(existing, opts.ifVersion);
 
     // Computed against the same before/after changeSetOps compared, so
     // whether associate/dissociate appear in `ops` and what these list can

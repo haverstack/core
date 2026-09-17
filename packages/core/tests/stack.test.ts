@@ -2739,6 +2739,29 @@ describe('ifVersion', () => {
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'x' }]);
   });
 
+  test('a stale ifVersion is refused even where the change set turns out to write nothing', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
+    await stack.patchContent(record.id, { text: 'v2' }); // v2
+
+    // Restating the content the record already holds moves nothing, but the
+    // caller still staked a claim about the version it was working from.
+    await expect(
+      stack.mutate(record.id, { contentPatch: { text: 'v2' } }, { ifVersion: 1 }),
+    ).rejects.toThrow(StackVersionConflictError);
+
+    // A set naming `associations` alongside it is still guarded, even where
+    // the associations are the only aspect that moves.
+    await expect(
+      stack.mutate(
+        record.id,
+        { contentPatch: { text: 'v2' }, associations: [{ kind: 'tag', label: 'x' }] },
+        { ifVersion: 1 },
+      ),
+    ).rejects.toThrow(StackVersionConflictError);
+
+    expect((await stack.get(record.id))?.associations ?? []).toEqual([]);
+  });
+
   test('delete() (soft) and undelete() enforce ifVersion', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2

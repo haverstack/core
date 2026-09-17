@@ -35,9 +35,12 @@ read off a record field these calls no longer stamp.
 breaking signature change.** A set-add/remove composes correctly
 regardless of write order, so there was never a race for the precondition
 to guard, and offering one that could no longer trigger a bump would just
-be silently useless. A change set that mixes `associations` with a
-version-bumping aspect is unaffected: `mutate()`'s `ifVersion` still fences
-the whole call, same as ever.
+be silently useless. `mutate()` follows the same line, read off the keys a
+change set names: one whose only key is `associations` carries no
+precondition either, so an `ifVersion` passed alongside it is not checked.
+A change set that names any other aspect is unaffected — `ifVersion` still
+fences the whole call, same as ever, including where that aspect restates
+what the record already holds and the call writes nothing.
 
 **`restoreVersion()` never restores associations, for any Record type —
 this generalizes what used to be a `_group`-only carve-out.** A `_group`'s
@@ -64,4 +67,4 @@ to restore from in the first place.
 reasoning as the local `ifVersion` drop. `WireVersion` drops
 `associations`. A `PATCH /records/:id` change set naming only
 `associations` no longer bumps `version` either, matching the standalone
-endpoints.
+endpoints, and an `If-Match` sent with such a body is not checked.

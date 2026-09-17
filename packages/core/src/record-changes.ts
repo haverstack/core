@@ -184,6 +184,21 @@ export function bumpsVersion(ops: ChangeOp[]): boolean {
 }
 
 /**
+ * Whether `ifVersion` applies to a change set. A set whose only key is
+ * `associations` carries no precondition — it composes regardless of write
+ * order, the same reason associate()/dissociate() take none. Any other
+ * aspect named restores the guard over the whole call.
+ *
+ * Read off the keys the caller wrote rather than the ops the set turns out
+ * to move, so a stale caller is told its version is stale whatever its
+ * patch says — including when the patch restates what the record already
+ * holds. See docs/spec/versioning.md § Optimistic concurrency.
+ */
+export function takesIfVersion(changes: RecordChanges): boolean {
+  return RECORD_CHANGE_KEYS.some((key) => key !== 'associations' && changes[key] !== undefined);
+}
+
+/**
  * The change set narrowed to the aspects that actually moved. An adapter
  * is handed this rather than what the caller wrote, so restating an aspect
  * cannot rewrite it: `unlisted: true` on an already-unlisted record would
