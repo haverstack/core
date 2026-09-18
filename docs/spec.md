@@ -8,18 +8,19 @@ A **Stack** is a structured, portable personal or organizational data store. It 
 
 The spec is split into focused documents:
 
-| Document                                      | Covers                                                                    |
-| --------------------------------------------- | ------------------------------------------------------------------------- |
-| [Data model](./spec/data-model.md)            | Records, IDs, associations, types, schemas, migrations, queries           |
-| [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                |
-| [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement    |
-| [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it      |
-| [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft/hard delete        |
-| [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection    |
-| [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery  |
-| [Adapters](./spec/adapters.md)                | Adapter contract, backends, capabilities, concurrency & storage ownership |
-| [Wire format](./spec/wire-format.md)          | The HTTP API stack servers implement and `adapter-api` consumes           |
-| [Change feed](./spec/change-feed.md)          | The wire encoding of the change events above — `GET /changes` over SSE    |
+| Document                                      | Covers                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------ |
+| [Data model](./spec/data-model.md)            | Records, IDs, associations, types, schemas, migrations, queries                |
+| [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                     |
+| [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement         |
+| [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it           |
+| [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft/hard delete             |
+| [Change journal](./spec/journal.md)           | The durable log of what each change moved, and the association deltas it keeps |
+| [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection         |
+| [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery       |
+| [Adapters](./spec/adapters.md)                | Adapter contract, backends, capabilities, concurrency & storage ownership      |
+| [Wire format](./spec/wire-format.md)          | The HTTP API stack servers implement and `adapter-api` consumes                |
+| [Change feed](./spec/change-feed.md)          | The wire encoding of the change events above — `GET /changes` over SSE         |
 
 ## Stack initialization
 
@@ -64,7 +65,7 @@ const adapter = await LocalAdapter.openOrInitialize({
 });
 ```
 
-**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `mutate`, `patchContent`, `delete`, `undelete`, `associate`, `dissociate`, `getVersions`, `getVersion`, `restoreVersion`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`) plus a `features` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted — see [Versioning § Version history](./spec/versioning.md#version-history).
+**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `getEntityByDid`, `getOwnerEntity`, `mutate`, `patchContent`, `delete`, `undelete`, `associate`, `dissociate`, `commitMigration`, `getVersions`, `getVersion`, `restoreVersion`, `getJournal`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`), `subscribe()` for [change events](./spec/events.md#subscribing), and a `features` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted — see [Versioning § Version history](./spec/versioning.md#version-history).
 
 ### The `_config` record
 

@@ -248,6 +248,23 @@ stack.registerMigration({
 
 Migration is **lazy** — records are migrated in memory on read, and committed to disk the next time they are updated. Use `stack.migrateAll()` to commit eagerly.
 
+### History, and watching for changes
+
+Every write a record undergoes is recorded twice, in two durable tiers the library keeps for you:
+
+- **Version history** — a full snapshot of the record's prior state, taken on every mutation that bumps `version`. `getVersions()` reads it and `restoreVersion()` puts one back. It answers _what could be put back_.
+- **The change journal** — one entry per change, naming which aspects moved, who moved them, and the association deltas nothing else retains. `getJournal()` reads it. It answers _what happened_.
+
+Both are on the **mutate surface**, not the read surface: a plain reader of a record is not handed its past. A hard delete destroys both, which is what makes it the erasure primitive.
+
+```ts
+const unsubscribe = await stack.subscribe((change) => {
+  console.log(change.kind, change.ops, change.recordId);
+});
+```
+
+`subscribe()` reports **that** something changed; `query()` and `get()` report what it now is. Associations are the one aspect that moves without bumping `version` — they are invertible, so they need no snapshot — which is why their deltas ride the change event and are kept by the journal rather than by version history.
+
 ### Adapters
 
 The adapter interface is split into `StackRecordAdapter` (structured records) and `StackBlobAdapter` (binary files). Packages follow a naming convention that makes the type clear:

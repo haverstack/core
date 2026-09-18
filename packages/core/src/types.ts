@@ -768,7 +768,7 @@ export type ActorOptions = {
  *
  * That split is the whole argument for the tier: content's prior state is
  * recoverable from a snapshot, and an association's is recoverable from
- * nothing at all. See docs/spec/versioning.md § The change journal.
+ * nothing at all. See docs/spec/journal.md.
  */
 export type JournalEntryInput = {
   ops: ChangeOp[];
@@ -789,14 +789,12 @@ export type JournalEntryInput = {
 };
 
 /**
- * One durable entry in a record's change journal. `seq` is dense from 1
- * per record and is the entry's only ordering: `at` is wall-clock and
- * `version` stands still across an association change, so neither orders
- * the log on its own.
+ * One durable entry in a record's change journal.
  *
  * Envelope-level by design — `content` lives on a RecordVersion, and
  * duplicating it here would make the journal the larger of the two stores
  * for no recovery anyone asked for.
+ * See docs/spec/journal.md § Ordering for why `seq` is the only ordering.
  */
 export type RecordJournalEntry = JournalEntryInput & {
   seq: number;
@@ -1149,8 +1147,8 @@ export interface StackRecordAdapter {
    * is most of the way to no mechanism at all, so an adapter with no
    * journal to read refuses the call rather than declining to have the
    * method: a foreign server that offers none says so through its own
-   * capability error, which can name why. See docs/spec/versioning.md
-   * § The change journal.
+   * capability error, which can name why. See docs/spec/journal.md
+   * § Reading it.
    */
   getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**

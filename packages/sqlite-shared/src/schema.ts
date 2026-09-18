@@ -77,12 +77,7 @@ export const RECORD_SCHEMA_SQL = `
   -- them, and the association deltas nothing else retains. Envelope-level
   -- by design — content lives on a versions row, and copying it here
   -- would make the journal the larger of the two stores.
-  --
-  -- seq is dense from 1 per record and is the only ordering: at is wall
-  -- clock, and version stands still across an association change, so
-  -- neither orders the log alone. It is allocated inside the appending
-  -- write, which is why this table needs none of the collision healing
-  -- versions does. See docs/spec/versioning.md § The change journal.
+  -- See docs/spec/journal.md.
   CREATE TABLE IF NOT EXISTS journal (
     record_id   TEXT NOT NULL REFERENCES records(id),
     seq         INTEGER NOT NULL,

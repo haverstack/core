@@ -270,6 +270,203 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     });
 
     // -----------------------------------------------------------------
+    // Change journal — the second durable tier
+    // -----------------------------------------------------------------
+    describe('change journal', () => {
+      test('getJournal is implemented, and an empty log means nothing changed', async () => {
+        // Not an optional method: "nothing changed" and "this adapter does
+        // not remember" are different answers, and an empty log has to mean
+        // the first unconditionally. See docs/spec/journal.md § Reading it.
+        expect(typeof adapter.getJournal).toBe('function');
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        expect(await adapter.getJournal(record.id)).toEqual([]);
+      });
+
+      test('an entry is stamped from the row the write produced, not from the caller', async () => {
+        const record = makeRecord({ content: { title: 'v1' } });
+        await adapter.createRecord(record, {
+          journal: { ops: ['create'], kind: 'created' },
+        });
+        await adapter.mutateRecord(
+          record.id,
+          { contentPatch: { title: 'v2' } },
+          { bumpsVersion: true, journal: { ops: ['patch'], kind: 'changed' } },
+        );
+
+        const log = await adapter.getJournal(record.id);
+        expect(log).toHaveLength(2);
+        // version, typeId and parentId are the adapter's to stamp: Stack
+        // supplies only the half the record cannot report afterwards.
+        expect(log[0]!.version).toBe(record.version);
+        expect(log[1]!.version).toBe(record.version + 1);
+        expect(log[0]!.typeId).toBe(record.typeId);
+        expect(log[0]!.at).toBeInstanceOf(Date);
+      });
+
+      test('seq is dense from 1, ascending, and counted per record', async () => {
+        const first = makeRecord();
+        const second = makeRecord();
+        await adapter.createRecord(first, { journal: { ops: ['create'], kind: 'created' } });
+        await adapter.createRecord(second, { journal: { ops: ['create'], kind: 'created' } });
+        await adapter.associate(
+          first.id,
+          { kind: 'tag', label: 'a' },
+          { journal: { ops: ['associate'], kind: 'changed' } },
+        );
+        await adapter.associate(
+          first.id,
+          { kind: 'tag', label: 'b' },
+          { journal: { ops: ['associate'], kind: 'changed' } },
+        );
+
+        expect((await adapter.getJournal(first.id)).map((e) => e.seq)).toEqual([1, 2, 3]);
+        // Per record, so a busy neighbour never advances this one's log.
+        expect((await adapter.getJournal(second.id)).map((e) => e.seq)).toEqual([1]);
+      });
+
+      test('an association change journals a version that stands still', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        await adapter.associate(
+          record.id,
+          { kind: 'tag', label: 'starred' },
+          {
+            journal: {
+              ops: ['associate'],
+              kind: 'changed',
+              associationsAdded: [{ kind: 'tag', label: 'starred' }],
+            },
+          },
+        );
+        await adapter.dissociate(
+          record.id,
+          { kind: 'tag', label: 'starred' },
+          {
+            journal: {
+              ops: ['dissociate'],
+              kind: 'changed',
+              associationsRemoved: [{ kind: 'tag', label: 'starred' }],
+            },
+          },
+        );
+
+        const log = await adapter.getJournal(record.id);
+        expect(log.map((e) => e.version)).toEqual([record.version, record.version]);
+        expect(log[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+        expect(log[1]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
+      });
+
+      test('associationsReplaced survives the round trip', async () => {
+        // The one field with no counterpart on the change feed, and the
+        // whole reason this tier exists: nothing else retains the
+        // attachmentRecordId a re-point discarded.
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const replaced = {
+          kind: 'attachment' as const,
+          label: 'avatar',
+          fileId: 'a'.repeat(64),
+          attachmentRecordId: uniqueId('old'),
+        };
+        await adapter.associate(
+          record.id,
+          { kind: 'attachment', label: 'avatar', fileId: 'a'.repeat(64) },
+          {
+            journal: {
+              ops: ['associate'],
+              kind: 'changed',
+              associationsAdded: [{ kind: 'attachment', label: 'avatar', fileId: 'a'.repeat(64) }],
+              associationsReplaced: [replaced],
+            },
+          },
+        );
+        const [entry] = await adapter.getJournal(record.id);
+        expect(entry!.associationsReplaced).toEqual([replaced]);
+      });
+
+      test('previousParentId tells "did not move" apart from "moved off the root"', async () => {
+        // The one field on any entry where null is a value rather than an
+        // input spelling. Collapsing both to absent loses which happened.
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
+        const record = makeRecord();
+        await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
+        await adapter.mutateRecord(
+          record.id,
+          { parentId: parent.id },
+          {
+            bumpsVersion: true,
+            journal: { ops: ['reparent'], kind: 'changed', previousParentId: null },
+          },
+        );
+
+        const log = await adapter.getJournal(record.id);
+        expect(log[0]!.previousParentId).toBeUndefined();
+        expect(log[1]!.previousParentId).toBeNull();
+        expect(log[1]!.parentId).toBe(parent.id);
+      });
+
+      test('sinceSeq is exclusive, limit bounds, and omitting both reads the whole log', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
+        for (const label of ['a', 'b', 'c']) {
+          await adapter.associate(
+            record.id,
+            { kind: 'tag', label },
+            { journal: { ops: ['associate'], kind: 'changed' } },
+          );
+        }
+
+        expect(await adapter.getJournal(record.id)).toHaveLength(4);
+        expect((await adapter.getJournal(record.id, { sinceSeq: 2 })).map((e) => e.seq)).toEqual([
+          3, 4,
+        ]);
+        expect((await adapter.getJournal(record.id, { limit: 2 })).map((e) => e.seq)).toEqual([
+          1, 2,
+        ]);
+        expect(
+          (await adapter.getJournal(record.id, { sinceSeq: 1, limit: 2 })).map((e) => e.seq),
+        ).toEqual([2, 3]);
+        expect(await adapter.getJournal(record.id, { sinceSeq: 99 })).toEqual([]);
+      });
+
+      test('a failed mutation leaves no entry behind', async () => {
+        const missing = uniqueId('missing');
+        await expectStackErrorCode(
+          adapter.mutateRecord(
+            missing,
+            { contentPatch: { title: 'x' } },
+            { bumpsVersion: true, journal: { ops: ['patch'], kind: 'changed' } },
+          ),
+          'not_found',
+        );
+        expect(await adapter.getJournal(missing)).toEqual([]);
+      });
+
+      test('a soft delete keeps the journal; a hard delete destroys it', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
+        await adapter.deleteRecord(record.id, {
+          journal: { ops: ['delete'], kind: 'deleted' },
+        });
+        // A tombstone is recoverable, and its journal is part of what
+        // recovers it.
+        expect(await adapter.getJournal(record.id)).toHaveLength(2);
+
+        await adapter.deleteRecord(record.id, { hard: true });
+        expect(await adapter.getJournal(record.id)).toEqual([]);
+
+        // And the log restarts: a purge that left rows behind would hand
+        // the next record at this id a history that is not its own.
+        await adapter.createRecord(makeRecord({ id: record.id }), {
+          journal: { ops: ['create'], kind: 'created' },
+        });
+        expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1]);
+      });
+    });
+
+    // -----------------------------------------------------------------
     // Migration
     // -----------------------------------------------------------------
     describe('commitMigration', () => {

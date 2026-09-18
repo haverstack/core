@@ -241,105 +241,129 @@ class UnscopedSubscription extends Subscription {
 }
 
 /**
- * Assemble what the emitter knows about one mutation.
+ * One change, held between the two halves it is written in.
  *
- * The actor is read off the record for every version-bumping op, because
- * `updatedBy`/`updatedVia` were stamped by that same write and so agree
- * with what was persisted by construction. `associate`/`dissociate` don't
- * bump, so they stamp nothing on the record either — their actor travels
- * as `opts.actor` instead, the same way hard delete's does, since reading
- * the record would report whoever's *last version-bumping write* this is,
- * not who just changed the association. Hard delete stamps nothing and
- * leaves nothing to read, so its actor is the requester, passed in. A
- * purge also drops `parentId` and the create-time `appId`: the frame says
- * that a record of some type was destroyed, and nothing further about
- * whose it was. See docs/spec/events.md § Purged records carry nothing.
+ * A change lands twice: the durable half travels into the adapter's
+ * transaction ahead of the write, and the live half is built from the
+ * record that write produced. Naming the change once — its ops, its kind,
+ * its actor, what it moved — is what makes "the entry set is the event
+ * set" true by construction rather than by convention. No verb can journal
+ * one thing and announce another, and a verb that writes only one half has
+ * to say so where it does it. See docs/spec/journal.md § The entry set is
+ * the event set.
  */
-export function buildEmission(
-  ops: ChangeOp | ChangeOp[],
-  record: StackRecord,
-  opts: {
-    actor?: ChangeActor;
-    at?: Date;
-    previousParentId?: string | null;
-    associationsAdded?: Association[];
-    associationsRemoved?: Association[];
-  } = {},
-): EmittedChange {
-  const list = Array.isArray(ops) ? ops : [ops];
-  if (list.length === 0) {
-    throw new Error('buildEmission: a change reports at least one op');
-  }
-  const kind = resolveKind(list);
+export class PendingChange {
+  readonly ops: ChangeOp[];
+  readonly kind: ChangeKind;
 
-  if (kind === 'purged') {
+  constructor(
+    ops: ChangeOp | ChangeOp[],
+    private readonly moved: {
+      /**
+       * The requester behind a write that stamps nothing on the record
+       * itself. A version-bumping write stamps `updatedBy`/`updatedVia`,
+       * so its emission reads them back instead — see emission() below.
+       */
+      actor?: ChangeActor;
+      previousParentId?: string | null;
+      associationsAdded?: Association[];
+      associationsRemoved?: Association[];
+      /** Journal-only; the feed reports what is current. */
+      associationsReplaced?: Association[];
+    } = {},
+  ) {
+    const list = Array.isArray(ops) ? ops : [ops];
+    if (list.length === 0) {
+      throw new Error('PendingChange: a change reports at least one op');
+    }
+    this.ops = list;
+    this.kind = resolveKind(list);
+  }
+
+  /**
+   * The durable half, handed to the adapter as `journal` so that it lands
+   * in the same write as the mutation it describes.
+   *
+   * Absent for a purge, which destroys the log an entry would be appended
+   * to. The rule lives here rather than at each call site that would
+   * otherwise have to remember it. See docs/spec/journal.md § A hard
+   * delete destroys the journal.
+   */
+  get journal(): JournalEntryInput | undefined {
+    if (this.kind === 'purged') return undefined;
+    const { actor, previousParentId, associationsReplaced } = this.moved;
+    return {
+      ops: this.ops,
+      kind: this.kind,
+      ...(actor && { actor }),
+      ...(previousParentId !== undefined && { previousParentId }),
+      ...this.associationDeltas(),
+      ...(associationsReplaced?.length && { associationsReplaced }),
+    };
+  }
+
+  /**
+   * The live half, built from the record the write produced — for a purge,
+   * from the record as it stood immediately before destruction.
+   *
+   * The actor is read off the record for every version-bumping op, because
+   * `updatedBy`/`updatedVia` were stamped by that same write and so agree
+   * with what was persisted by construction. `associate`/`dissociate`
+   * don't bump, so they stamp nothing and the requester travels here
+   * instead — reading the record would report whoever's last
+   * version-bumping write this is, not who just changed the association.
+   * Hard delete leaves nothing to read at all, and its frame also drops
+   * `parentId` and the create-time `appId`: it says that a record of some
+   * type was destroyed and nothing further about whose it was. See
+   * docs/spec/events.md § Purged records carry nothing.
+   */
+  emission(record: StackRecord, at?: Date): EmittedChange {
+    if (this.kind === 'purged') {
+      return {
+        record,
+        change: {
+          kind: this.kind,
+          ops: this.ops,
+          recordId: record.id,
+          typeId: record.typeId,
+          version: record.version,
+          updatedAt: at ?? new Date(),
+          ...(this.moved.actor && { actor: this.moved.actor }),
+        },
+      };
+    }
+
+    const actor = bumpsVersion(this.ops) ? actorOf(record, this.kind) : this.moved.actor;
     return {
       record,
+      ...(this.moved.previousParentId !== undefined && {
+        previousParentId: this.moved.previousParentId,
+      }),
       change: {
-        kind,
-        ops: list,
+        kind: this.kind,
+        ops: this.ops,
         recordId: record.id,
         typeId: record.typeId,
         version: record.version,
-        updatedAt: opts.at ?? new Date(),
-        ...(opts.actor && { actor: opts.actor }),
+        updatedAt: record.updatedAt,
+        ...(record.parentId !== undefined && { parentId: record.parentId }),
+        ...(actor && { actor }),
+        ...this.associationDeltas(),
       },
     };
   }
 
-  // A non-bumping write (associate/dissociate) never stamped the record,
-  // so `record.updatedBy` reports whoever's last *bumping* write this is,
-  // not who just changed the association — only opts.actor is trustworthy.
-  const actor = bumpsVersion(list) ? (opts.actor ?? actorOf(record, kind)) : opts.actor;
-  return {
-    record,
-    ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
-    change: {
-      kind,
-      ops: list,
-      recordId: record.id,
-      typeId: record.typeId,
-      version: record.version,
-      updatedAt: record.updatedAt,
-      ...(record.parentId !== undefined && { parentId: record.parentId }),
-      ...(actor && { actor }),
-      ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
-      ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
-    },
-  };
-}
-
-/**
- * The durable half of a change, built before the write that it describes
- * — where an emission is built after one. The two carry the same facts
- * about what moved and who moved it; they differ in what they can read
- * off the record, which at this point has not been written yet. So the
- * adapter stamps the record-derived fields and this names the rest.
- * See docs/spec/versioning.md § The change journal.
- */
-export function buildJournalEntry(
-  ops: ChangeOp | ChangeOp[],
-  opts: {
-    actor?: ChangeActor;
-    previousParentId?: string | null;
-    associationsAdded?: Association[];
-    associationsRemoved?: Association[];
-    associationsReplaced?: Association[];
-  } = {},
-): JournalEntryInput {
-  const list = Array.isArray(ops) ? ops : [ops];
-  if (list.length === 0) {
-    throw new Error('buildJournalEntry: a change reports at least one op');
+  /** The two lists both halves carry, present only where non-empty. */
+  private associationDeltas(): Pick<
+    JournalEntryInput,
+    'associationsAdded' | 'associationsRemoved'
+  > {
+    const { associationsAdded, associationsRemoved } = this.moved;
+    return {
+      ...(associationsAdded?.length && { associationsAdded }),
+      ...(associationsRemoved?.length && { associationsRemoved }),
+    };
   }
-  return {
-    ops: list,
-    kind: resolveKind(list),
-    ...(opts.actor && { actor: opts.actor }),
-    ...(opts.previousParentId !== undefined && { previousParentId: opts.previousParentId }),
-    ...(opts.associationsAdded?.length && { associationsAdded: opts.associationsAdded }),
-    ...(opts.associationsRemoved?.length && { associationsRemoved: opts.associationsRemoved }),
-    ...(opts.associationsReplaced?.length && { associationsReplaced: opts.associationsReplaced }),
-  };
 }
 
 /**
