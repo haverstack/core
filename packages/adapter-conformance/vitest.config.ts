@@ -5,8 +5,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter-entry.ts'),
+      '@haverstack/core/testing': resolve(__dirname, '../core/src/testing.ts'),
       '@haverstack/core': resolve(__dirname, '../core/src/index.ts'),
-      '@haverstack/adapter-conformance': resolve(__dirname, '../adapter-conformance/src/index.ts'),
     },
   },
   test: {

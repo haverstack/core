@@ -495,11 +495,11 @@ export class SharedSqlRecordLogic {
       JournalOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
     const target = await this.getVersion(id, version);
-    if (!target) throw new Error(`Version not found: ${id}@${version}`);
+    if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
 
     // Associations are never restored — a snapshot never carries them, so
     // there is nothing here to roll the associations table back to.
@@ -533,7 +533,7 @@ export class SharedSqlRecordLogic {
     // writer slipping in between the two is caught rather than overwritten
     // — same shape as mutateRecord() and restoreVersion().
     const existing = await this.getRecord(id);
-    if (!existing) throw new Error(`Record not found: "${id}"`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
     this.exec.transaction(() => {

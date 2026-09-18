@@ -8,6 +8,7 @@ export default defineConfig({
       '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter-entry.ts'),
       '@haverstack/core': resolve(__dirname, '../core/src/index.ts'),
       '@haverstack/sqlite-shared': resolve(__dirname, '../sqlite-shared/src/index.ts'),
+      '@haverstack/adapter-conformance': resolve(__dirname, '../adapter-conformance/src/index.ts'),
     },
   },
   test: {

@@ -21,6 +21,18 @@ import type { StackRecord, Association, Permission } from '../src/types.js';
 // "ancient" test timestamp forward to the real current time).
 const idWithTimestamp = (ms: number): string => `${crockford32Encode(ms).padStart(9, '0')}000`;
 
+// A deterministic, valid-shaped (64-char lowercase hex) fileId for a given
+// seed — real adapters (and MemoryAdapter) validate this shape at
+// getAttachment(), so a fixture fileId has to look like one even where the
+// test is about permissions, not blob storage. The seed keeps call sites
+// readable without pinning a real SHA-256 digest to test intent.
+function fakeFileId(seed: string): string {
+  const hex = Array.from(seed)
+    .map((c) => c.codePointAt(0)!.toString(16).padStart(2, '0'))
+    .join('');
+  return hex.repeat(Math.ceil(64 / hex.length)).slice(0, 64);
+}
+
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
 const MEMBER = 'member-456';
@@ -2215,39 +2227,42 @@ describe('ScopedStack.putAttachment', () => {
 
 describe('ScopedStack.getAttachment', () => {
   test('owner can always download', async () => {
-    adapter.blobs.set('any-file-id', { data: new Uint8Array([1]), modifiedAt: new Date() });
-    const bytes = await stack.asEntity(OWNER).getAttachment('any-file-id');
+    const fileId = fakeFileId('any-file-id');
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const bytes = await stack.asEntity(OWNER).getAttachment(fileId);
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
   test('requester who can read a record referencing the file can download', async () => {
-    adapter.blobs.set('file-referenced', { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const fileId = fakeFileId('file-referenced');
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.grant(MEMBER, [{ actions: ['read-any'], typeId: NOTE }]);
     const record = await stack.create(NOTE, { text: 'has attachment' });
     await stack.associate(record.id, {
       kind: 'attachment',
       label: 'cover',
-      fileId: 'file-referenced',
+      fileId,
     });
 
-    const bytes = await stack.asEntity(MEMBER).getAttachment('file-referenced');
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
   test('uploader can download their own upload before it is associated with any record', async () => {
-    adapter.blobs.set('file-mine', { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const fileId = fakeFileId('file-mine');
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.create(
       '_attachment@1',
-      { fileId: 'file-mine', mimeType: 'image/png', size: 1 },
+      { fileId, mimeType: 'image/png', size: 1 },
       { entityId: MEMBER },
     );
 
-    const bytes = await stack.asEntity(MEMBER).getAttachment('file-mine');
+    const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
   test('requester with no relation to the file is denied', async () => {
-    await expect(stack.asEntity(STRANGER).getAttachment('file-nobody')).rejects.toThrow(
+    await expect(stack.asEntity(STRANGER).getAttachment(fakeFileId('file-nobody'))).rejects.toThrow(
       StackPermissionError,
     );
   });
@@ -2259,23 +2274,25 @@ describe('ScopedStack.getAttachment', () => {
   test('uploader can access an upload that is not their first (regression)', async () => {
     const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const incapableStack = await Stack.create(incapableAdapter);
-    incapableAdapter.blobs.set('file-first', { data: new Uint8Array([1]), modifiedAt: new Date() });
-    incapableAdapter.blobs.set('file-second', {
+    const fileFirst = fakeFileId('file-first');
+    const fileSecond = fakeFileId('file-second');
+    incapableAdapter.blobs.set(fileFirst, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    incapableAdapter.blobs.set(fileSecond, {
       data: new Uint8Array([2]),
       modifiedAt: new Date(),
     });
     await incapableStack.create(
       '_attachment@1',
-      { fileId: 'file-first', mimeType: 'image/png', size: 1 },
+      { fileId: fileFirst, mimeType: 'image/png', size: 1 },
       { entityId: MEMBER },
     );
     await incapableStack.create(
       '_attachment@1',
-      { fileId: 'file-second', mimeType: 'image/png', size: 1 },
+      { fileId: fileSecond, mimeType: 'image/png', size: 1 },
       { entityId: MEMBER },
     );
 
-    const bytes = await incapableStack.asEntity(MEMBER).getAttachment('file-second');
+    const bytes = await incapableStack.asEntity(MEMBER).getAttachment(fileSecond);
     expect(bytes).toBeInstanceOf(Uint8Array);
   });
 
@@ -2283,7 +2300,7 @@ describe('ScopedStack.getAttachment', () => {
   // record and holds its ID gets it, so the file it references is theirs
   // to download on exactly the same terms as a listed one.
   test('a readable unlisted record conveys access to the file it references', async () => {
-    const fileId = 'file-on-unlisted-record';
+    const fileId = fakeFileId('file-on-unlisted-record');
     adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     const record = await stack.create(
       NOTE,
@@ -2301,7 +2318,7 @@ describe('ScopedStack.getAttachment', () => {
   });
 
   test('an unlisted record the requester cannot read conveys nothing', async () => {
-    const fileId = 'file-on-private-unlisted-record';
+    const fileId = fakeFileId('file-on-private-unlisted-record');
     adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     await stack.create(
       NOTE,
@@ -2320,7 +2337,7 @@ describe('ScopedStack.getAttachment', () => {
   // returns records in insertion order, so the 11th-created record lands
   // past a bounded-page cutoff.
   test('requester can download when the only readable referencing record is past the first 10 (regression)', async () => {
-    const fileId = 'file-widely-referenced';
+    const fileId = fakeFileId('file-widely-referenced');
     adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     for (let i = 0; i < 10; i++) {
       await stack.create(
@@ -2345,7 +2362,7 @@ describe('ScopedStack.getAttachment', () => {
   });
 
   test('reference creation (gating check) succeeds when the only readable referencing record is past the first 10', async () => {
-    const fileId = 'file-widely-referenced-2';
+    const fileId = fakeFileId('file-widely-referenced-2');
     for (let i = 0; i < 10; i++) {
       await stack.create(
         NOTE,
@@ -2375,7 +2392,7 @@ describe('ScopedStack.getAttachment', () => {
   });
 
   test('requester who can read none of >10 referencing records is still denied (no false positive)', async () => {
-    const fileId = 'file-widely-referenced-3';
+    const fileId = fakeFileId('file-widely-referenced-3');
     for (let i = 0; i < 12; i++) {
       await stack.create(
         NOTE,
@@ -2857,7 +2874,7 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
   // into a read by first failing to create a metadata record for it, then
   // trying to download it anyway.
   test('exploit regression: a refused create leaves getAttachment() denied too', async () => {
-    const guessedFileId = 'guessed-sha256-hash';
+    const guessedFileId = fakeFileId('guessed-sha256-hash');
     await expect(
       stack.asEntity(MEMBER).create('_attachment@1', {
         fileId: guessedFileId,
