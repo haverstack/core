@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/adapter-conformance",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Runnable conformance suite for StackRecordAdapter/StackBlobAdapter implementers — the invariants docs/spec/adapters.md documents, as tests you point at your own adapter",
   "type": "module",
   "exports": {
