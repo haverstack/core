@@ -3,7 +3,7 @@ import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { StackPermissionError, StackQueryError } from '../src/errors.js';
-import type { RecordJournalEntry } from '../src/types.js';
+import type { RecordChange, RecordJournalEntry } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';
@@ -290,6 +290,82 @@ describe('every entry names who made the change', () => {
     const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER, appId: 'app-1' });
     const entry = (await stack.getJournal(note.id))[0]!;
     expect(entry.actor).toMatchObject({ entityId: OWNER, appId: 'app-1' });
+  });
+});
+
+// -------------------------------------------------------
+// The entry set is the event set
+// -------------------------------------------------------
+
+describe('the journal and the feed report the same change', () => {
+  test('every emitting write appends an entry naming the same ops, kind and actor', async () => {
+    const seen: RecordChange[] = [];
+    const unsubscribe = await stack.subscribe((change) => seen.push(change));
+
+    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
+    const folder = await stack.create(FOLDER, { name: 'box' }, { entityId: OWNER });
+    await stack.patchContent(note.id, { text: 'edited' }, { updatedBy: OWNER });
+    await stack.mutate(
+      note.id,
+      { parentId: folder.id, permissions: [{ access: 'public' }] },
+      { updatedBy: OWNER },
+    );
+    await stack.associate(note.id, { kind: 'tag', label: 'starred' }, { updatedBy: EDITOR });
+    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' }, { updatedBy: EDITOR });
+    await stack.delete(note.id, { updatedBy: OWNER });
+    await stack.undelete(note.id, { updatedBy: OWNER });
+    unsubscribe();
+
+    const log = await stack.getJournal(note.id);
+    const forNote = seen.filter((c) => c.recordId === note.id);
+    // create, patch, the change set, associate, dissociate, delete, undelete
+    expect(log).toHaveLength(7);
+    expect(forNote).toHaveLength(log.length);
+    for (const [i, entry] of log.entries()) {
+      const change = forNote[i]!;
+      expect(entry.ops).toEqual(change.ops);
+      expect(entry.kind).toBe(change.kind);
+      expect(entry.actor).toEqual(change.actor);
+      expect(entry.version).toBe(change.version);
+      expect(entry.typeId).toBe(change.typeId);
+      expect(entry.parentId).toBe(change.parentId);
+    }
+  });
+
+  test('a no-op appends nothing, for the same reason it emits nothing', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    const seen: RecordChange[] = [];
+    const unsubscribe = await stack.subscribe((change) => seen.push(change));
+
+    await stack.patchContent(note.id, { text: 'hello' });
+    await stack.associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.mutate(note.id, { permissions: [] });
+    unsubscribe();
+
+    // One associate moved something; nothing else did.
+    expect(seen).toHaveLength(1);
+    expect((await stack.getJournal(note.id)).slice(1)).toHaveLength(1);
+  });
+
+  test('the association deltas on the frame are the ones the entry keeps', async () => {
+    const note = await stack.create(NOTE, { text: 'hello' });
+    const seen: RecordChange[] = [];
+    const unsubscribe = await stack.subscribe((change) => seen.push(change));
+
+    await stack.mutate(note.id, {
+      associations: [
+        { kind: 'tag', label: 'added' },
+        { kind: 'tag', label: 'kept' },
+      ],
+    });
+    await stack.mutate(note.id, { associations: [{ kind: 'tag', label: 'kept' }] });
+    unsubscribe();
+
+    const log = (await stack.getJournal(note.id)).slice(1);
+    expect(log).toHaveLength(2);
+    expect(log[0]!.associationsAdded).toEqual(seen[0]!.associationsAdded);
+    expect(log[1]!.associationsRemoved).toEqual(seen[1]!.associationsRemoved);
   });
 });
 

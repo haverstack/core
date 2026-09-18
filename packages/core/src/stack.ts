@@ -36,13 +36,7 @@ import { applyMergePatch } from './merge.js';
 import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
 import type { GroupRole } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
-import {
-  ChangeEmitter,
-  RelayDelivery,
-  buildEmission,
-  buildJournalEntry,
-  assertSinceUsable,
-} from './changes.js';
+import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
 import type { ValidationError } from './validate.js';
 import type {
@@ -72,7 +66,6 @@ import type {
   TokenSession,
   ActorOptions,
   ChangeActor,
-  ChangeOp,
   RecordChange,
   RecordChanges,
   SubscribeOptions,
@@ -371,15 +364,10 @@ export interface StackClient {
    * A record's change journal, oldest first. On the mutate surface, on the
    * same footing as getVersions() — a plain reader is refused.
    *
-   * **Local adapters only, for now.** There is no wire surface yet, so
-   * over `APIAdapter` this throws `APIAdapterCapabilityError` against any
-   * server, not merely one advertising no journal. It is on this interface
-   * regardless, for the reason the adapter contract requires it rather
-   * than making it optional: an adapter with nothing to read refuses and
-   * names why, so an empty log always means "nothing changed" and never
-   * "this stack does not remember". A caller deserves that refusal over a
-   * method that isn't there. See docs/spec/versioning.md § The change
-   * journal.
+   * Required of every adapter rather than optional, which is why it sits
+   * here beside the rest: an empty log has to mean "nothing changed"
+   * unconditionally, so an adapter with nothing to read refuses and names
+   * why instead. See docs/spec/journal.md § Reading it.
    */
   getJournal(id: string, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
@@ -452,18 +440,8 @@ export class Stack implements StackClient {
    * and nothing about work they deferred. A handler cannot fail the write:
    * there is nothing left to fail. See docs/spec/events.md § Handlers.
    */
-  private emitChange(
-    op: ChangeOp | ChangeOp[],
-    record: StackRecord,
-    opts: {
-      actor?: ChangeActor;
-      at?: Date;
-      previousParentId?: string | null;
-      associationsAdded?: Association[];
-      associationsRemoved?: Association[];
-    } = {},
-  ): void {
-    this.changes.emit(buildEmission(op, record, opts));
+  private announce(change: PendingChange, record: StackRecord, at?: Date): void {
+    this.changes.emit(change.emission(record, at));
   }
 
   /**
@@ -982,10 +960,9 @@ export class Stack implements StackClient {
       ...(opts.unlisted && { unlistedAt: createdAt }),
     };
 
-    const created = await this.adapter.createRecord(record, {
-      journal: buildJournalEntry('create', { actor: Stack.createActor(record) }),
-    });
-    this.emitChange('create', created);
+    const change = new PendingChange('create', { actor: Stack.createActor(record) });
+    const created = await this.adapter.createRecord(record, { journal: change.journal });
+    this.announce(change, created);
     return created as StackRecord & { content: T };
   }
 
@@ -1095,6 +1072,15 @@ export class Stack implements StackClient {
       : undefined;
 
     const previousParentId = existing.parentId ?? null;
+    const change = new PendingChange(ops, {
+      actor: Stack.actorFrom(opts),
+      ...(ops.includes('reparent') && { previousParentId }),
+      ...(assocDelta && {
+        associationsAdded: assocDelta.added,
+        associationsRemoved: assocDelta.removed,
+        associationsReplaced: assocDelta.replaced,
+      }),
+    });
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       ...(bumps
         ? this.writeOptions(existing, opts)
@@ -1103,22 +1089,9 @@ export class Stack implements StackClient {
             updatedVia: opts.updatedVia,
           }),
       bumpsVersion: bumps,
-      journal: buildJournalEntry(ops, {
-        actor: Stack.actorFrom(opts),
-        ...(ops.includes('reparent') && { previousParentId }),
-        ...(assocDelta && {
-          associationsAdded: assocDelta.added,
-          associationsRemoved: assocDelta.removed,
-          associationsReplaced: assocDelta.replaced,
-        }),
-      }),
+      journal: change.journal,
     });
-    this.emitChange(ops, updated, {
-      ...(ops.includes('reparent') && { previousParentId }),
-      ...(!bumps && { actor: Stack.actorFrom(opts) }),
-      ...(assocDelta?.added.length && { associationsAdded: assocDelta.added }),
-      ...(assocDelta?.removed.length && { associationsRemoved: assocDelta.removed }),
-    });
+    this.announce(change, updated);
     return updated;
   }
 
@@ -1280,19 +1253,15 @@ export class Stack implements StackClient {
     const replaced = (existing.associations ?? []).find((a) => associationEqual(a, association));
     await this.checkAttachmentAssociationPointers([association]);
 
-    const updated = await this.adapter.associate(id, association, {
-      journal: buildJournalEntry('associate', {
-        actor: Stack.actorFrom(opts),
-        associationsAdded: [association],
-        // The association this call overwrites in place, if any. Nothing
-        // else retains the attachmentRecordId it carried.
-        ...(replaced && { associationsReplaced: [replaced] }),
-      }),
-    });
-    this.emitChange('associate', updated, {
+    const change = new PendingChange('associate', {
       actor: Stack.actorFrom(opts),
       associationsAdded: [association],
+      // The association this call overwrites in place, if any. Nothing
+      // else retains the attachmentRecordId it carried.
+      ...(replaced && { associationsReplaced: [replaced] }),
     });
+    const updated = await this.adapter.associate(id, association, { journal: change.journal });
+    this.announce(change, updated);
     return updated;
   }
 
@@ -1332,16 +1301,12 @@ export class Stack implements StackClient {
       );
     }
 
-    const updated = await this.adapter.dissociate(id, association, {
-      journal: buildJournalEntry('dissociate', {
-        actor: Stack.actorFrom(opts),
-        associationsRemoved: [stripAssociationAnnotation(matched)],
-      }),
-    });
-    this.emitChange('dissociate', updated, {
+    const change = new PendingChange('dissociate', {
       actor: Stack.actorFrom(opts),
       associationsRemoved: [stripAssociationAnnotation(matched)],
     });
+    const updated = await this.adapter.dissociate(id, association, { journal: change.journal });
+    this.announce(change, updated);
     return updated;
   }
 
@@ -1424,11 +1389,13 @@ export class Stack implements StackClient {
       // write: a read here instead would race the delete, and afterwards
       // there is nothing left to read. Null means there was no record, so
       // nothing was purged and nothing is announced.
+      const change = new PendingChange('hard-delete', { actor: Stack.actorFrom(opts) });
       const purged = await this.adapter.deleteRecord(id, {
         hard: true,
         expectedVersion: opts.ifVersion,
+        journal: change.journal,
       });
-      if (purged) this.emitChange('hard-delete', purged, { actor: Stack.actorFrom(opts) });
+      if (purged) this.announce(change, purged);
       return;
     }
 
@@ -1439,11 +1406,12 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (existing.deletedAt) return;
 
+    const change = new PendingChange('delete', { actor: Stack.actorFrom(opts) });
     const deleted = await this.adapter.deleteRecord(id, {
       ...this.writeOptions(existing, opts),
-      journal: buildJournalEntry('delete', { actor: Stack.actorFrom(opts) }),
+      journal: change.journal,
     });
-    if (deleted) this.emitChange('delete', deleted);
+    if (deleted) this.announce(change, deleted);
   }
 
   /**
@@ -1461,11 +1429,12 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
+    const change = new PendingChange('undelete', { actor: Stack.actorFrom(opts) });
     const undeleted = await this.adapter.undeleteRecord(id, {
       ...this.writeOptions(existing, opts),
-      journal: buildJournalEntry('undelete', { actor: Stack.actorFrom(opts) }),
+      journal: change.journal,
     });
-    this.emitChange('undelete', undeleted);
+    this.announce(change, undeleted);
     return undeleted;
   }
 
@@ -1546,8 +1515,7 @@ export class Stack implements StackClient {
    * An adapter with no journal to read refuses rather than answering an
    * empty log — "nothing changed" and "this stack does not remember" are
    * not the same answer, and a caller reconstructing an association's
-   * history cannot tell them apart. The refusal is the adapter's own, so
-   * it can name why. See docs/spec/versioning.md § The change journal.
+   * history cannot tell them apart. See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();
@@ -1636,14 +1604,15 @@ export class Stack implements StackClient {
     // Associations never restore, for any Record — a snapshot never
     // carries them, so there's nothing here for the adapter to roll back.
     // See docs/spec/versioning.md § Restore semantics.
+    const change = new PendingChange('restore', {
+      actor: Stack.actorFrom(opts),
+      ...(moves && { previousParentId }),
+    });
     const restored = await this.adapter.restoreVersion(id, version, {
       ...this.writeOptions(existing, opts),
-      journal: buildJournalEntry('restore', {
-        actor: Stack.actorFrom(opts),
-        ...(moves && { previousParentId }),
-      }),
+      journal: change.journal,
     });
-    this.emitChange('restore', restored, moves ? { previousParentId } : {});
+    this.announce(change, restored);
     return restored;
   }
 
@@ -1762,11 +1731,12 @@ export class Stack implements StackClient {
       );
     }
 
+    const change = new PendingChange('migrate', { actor: Stack.actorFrom(opts) });
     const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
       ...this.writeOptions(existing, opts),
-      journal: buildJournalEntry('migrate', { actor: Stack.actorFrom(opts) }),
+      journal: change.journal,
     });
-    this.emitChange('migrate', migrated);
+    this.announce(change, migrated);
     return migrated;
   }
 
@@ -2062,7 +2032,11 @@ export class Stack implements StackClient {
       // The metadata record is written inside the adapter, so create()
       // never sees it and this is the only place it can be announced.
       const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename, appId);
-      this.emitChange('create', record);
+      // The one emission with no journal half of its own: the far side
+      // wrote the record, so it appended the entry in that same write —
+      // the same division saveVersion() follows over this adapter. See
+      // docs/spec/journal.md § The entry set is the event set.
+      this.announce(new PendingChange('create'), record);
       return record as StackRecord & { content: AttachmentContent };
     }
     const fileId = await this.adapter.putAttachment(data);
@@ -2141,7 +2115,11 @@ export class Stack implements StackClient {
       );
       const at = new Date();
       for (const record of deletedRecords) {
-        this.emitChange('hard-delete', record, { actor: Stack.actorFrom(opts), at });
+        this.announce(
+          new PendingChange('hard-delete', { actor: Stack.actorFrom(opts) }),
+          record,
+          at,
+        );
       }
     } else {
       deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(fileId, opts);
