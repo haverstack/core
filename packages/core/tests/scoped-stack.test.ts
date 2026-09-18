@@ -10,7 +10,12 @@ import {
 } from '../src/errors.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
-import type { StackRecord, AuthorityAssociation, DataAssociation } from '../src/types.js';
+import type {
+  StackRecord,
+  Association,
+  AuthorityAssociation,
+  DataAssociation,
+} from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -2699,6 +2704,161 @@ describe('ScopedStack — group role gating', () => {
 });
 
 // -------------------------------------------------------
+// The partition — authority and data share storage, never a call
+// -------------------------------------------------------
+//
+// A write-holder is gated on the write bit alone for associations and
+// cannot reshare. These pin that the bit reaches no part of the ACL,
+// through any spelling. See docs/spec/access-control.md
+// § Record-level permissions.
+
+describe('ScopedStack — the write bit reaches no part of the ACL', () => {
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { scope: 'entity', entityId },
+  });
+  const writeFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'write',
+    grantee: { scope: 'entity', entityId },
+  });
+
+  // Authored by the owner, so MEMBER holds the write bit and nothing else:
+  // they are neither owner nor creator, which is what a reshare needs.
+  const shared = async () =>
+    adapter.createRecord(
+      makeRecord({
+        entityId: OWNER,
+        permissions: [readFor(MEMBER), writeFor(MEMBER)],
+        associations: [{ kind: 'tag', label: 'draft' }],
+      }),
+    );
+
+  test('an associations write leaves the ACL standing', async () => {
+    const record = await shared();
+    const updated = await stack
+      .asEntity(MEMBER)
+      .mutate(record.id, { associations: [{ kind: 'tag', label: 'reviewed' }] });
+
+    expect(updated.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+    expect(updated.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+  });
+
+  /**
+   * An element cast past the types that express the partition. What these
+   * pin is the runtime guard — the refusal a server mapping a request body,
+   * or an import, runs into, where no compiler has seen the value.
+   */
+  const asData = (association: Association): DataAssociation => association as DataAssociation;
+  const asAuthority = (association: Association): AuthorityAssociation =>
+    association as AuthorityAssociation;
+
+  test('an associations key naming an authority kind is refused', async () => {
+    const record = await shared();
+    await expect(
+      stack.asEntity(MEMBER).mutate(record.id, { associations: [asData(readFor(STRANGER))] }),
+    ).rejects.toThrow(StackQueryError);
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .mutate(record.id, { associations: [asData({ kind: 'anyone', label: 'read' })] }),
+    ).rejects.toThrow(StackQueryError);
+    expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+  });
+
+  test('associate()/dissociate() naming an authority kind are refused', async () => {
+    const record = await shared();
+    const scoped = stack.asEntity(MEMBER);
+
+    await expect(scoped.associate(record.id, asData(readFor(STRANGER)))).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(
+      scoped.associate(record.id, asData({ kind: 'anyone', label: 'read' })),
+    ).rejects.toThrow(StackQueryError);
+    await expect(scoped.dissociate(record.id, asData(readFor(MEMBER)))).rejects.toThrow(
+      StackQueryError,
+    );
+    expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+  });
+
+  // Decided before any record is read, so it cannot depend on who is
+  // asking: the owner is refused the misrouting exactly as a write-holder is.
+  test('grantAccess()/revokeAccess() refuse a data kind, for the owner too', async () => {
+    const record = await shared();
+    const tag = asAuthority({ kind: 'tag', label: 'draft' });
+    await expect(stack.asEntity(OWNER).grantAccess(record.id, tag)).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(stack.asEntity(OWNER).revokeAccess(record.id, tag)).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
+  test('grantAccess() is refused to a write-holder and allowed to the owner', async () => {
+    const record = await shared();
+    await expect(stack.asEntity(MEMBER).grantAccess(record.id, readFor(STRANGER))).rejects.toThrow(
+      StackPermissionError,
+    );
+
+    const granted = await stack.asEntity(OWNER).grantAccess(record.id, readFor(STRANGER));
+    expect(granted.permissions).toContainEqual(readFor(STRANGER));
+  });
+
+  test('revokeAccess() is refused to a write-holder and allowed to the creator', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({ entityId: MEMBER, permissions: [readFor(MEMBER), readFor(STRANGER)] }),
+    );
+    await expect(
+      stack.asEntity(STRANGER).revokeAccess(record.id, readFor(STRANGER)),
+    ).rejects.toThrow(StackPermissionError);
+
+    const revoked = await stack.asEntity(MEMBER).revokeAccess(record.id, readFor(STRANGER));
+    expect(revoked.permissions).toEqual([readFor(MEMBER)]);
+  });
+
+  // Write implies read is a cross-element invariant, so it is the removal
+  // of the read — not the write — that the set refuses.
+  test('revokeAccess() of a read while the write stands is refused', async () => {
+    const record = await shared();
+    await expect(stack.asEntity(OWNER).revokeAccess(record.id, readFor(MEMBER))).rejects.toThrow(
+      StackValidationError,
+    );
+
+    // Taking the write first leaves a set the invariant accepts.
+    await stack.asEntity(OWNER).revokeAccess(record.id, writeFor(MEMBER));
+    const revoked = await stack.asEntity(OWNER).revokeAccess(record.id, readFor(MEMBER));
+    expect(revoked.permissions).toBeUndefined();
+  });
+
+  // The whole point of reading the delta: a replacement that drops every
+  // element names nothing at all, so a gate inspecting what the caller
+  // supplied would wave it through.
+  test('a permissions key that drops every element still needs reshare authority', async () => {
+    const record = await shared();
+    await expect(
+      stack.asEntity(MEMBER).mutate(record.id, {
+        permissions: [],
+        associations: [{ kind: 'tag', label: 'draft' }],
+      }),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+  });
+
+  // ...and a set restated is not a reshare, so the write bit alone carries
+  // a change set that names `permissions` without moving it.
+  test('a permissions key that restates the set is not a reshare', async () => {
+    const record = await shared();
+    const updated = await stack.asEntity(MEMBER).mutate(record.id, {
+      permissions: [writeFor(MEMBER), readFor(MEMBER)],
+      associations: [{ kind: 'tag', label: 'reviewed' }],
+    });
+    expect(updated.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+  });
+});
+
+// -------------------------------------------------------
 // Permission — group `role`
 // -------------------------------------------------------
 
@@ -2732,7 +2892,7 @@ describe('Permission — group role restriction', () => {
     expect((await stack.asEntity('group-admin-2').get(record.id))?.id).toBe(record.id);
   });
 
-  test('absent role behaves exactly as today — any member (or admin) qualifies', async () => {
+  test('role: "member" is the wider set — a plain member and an admin both qualify', async () => {
     const admin = 'group-admin-3';
     const group = await adapter.createRecord(
       makeRecord({

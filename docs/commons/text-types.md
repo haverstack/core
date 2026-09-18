@@ -105,7 +105,7 @@ is [`post`](./post.md):
 (Naming trap from prior art: the IndieWeb's "note" post-type is a public short
 utterance — _their_ note is our `post`, not our `note`.)
 
-`post` must be its own type rather than a `message` with `{ access: 'public' }`, for
+`post` must be its own type rather than a `message` carrying an `anyone` read, for
 four mechanical reasons, not just taxonomy:
 
 1. **Sync blast radius.** Outbound bridges map _types_ to external shapes — a bridge's

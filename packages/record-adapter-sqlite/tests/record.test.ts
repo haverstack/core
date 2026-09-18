@@ -10,7 +10,7 @@ import {
   StackNotFoundError,
   StackQueryError,
 } from '@haverstack/core';
-import type { StackRecord } from '@haverstack/core';
+import type { AuthorityAssociation, StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Test helpers
@@ -1642,14 +1642,82 @@ describe('records — relatedTo filter', () => {
 // -------------------------------------------------------
 
 describe('mutateRecord — the `permissions` key', () => {
-  test('replaces permissions and bumps version', async () => {
+  test('replaces permissions', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
     await adapter.mutateRecord(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
-    expect(retrieved?.version).toBe(2);
+  });
+
+  // Both fields project one table, so the only thing keeping a tag write
+  // off an ACL is the kind partition the two keys replace within.
+  test('each key replaces only its own half of the association table', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({
+      associations: [{ kind: 'tag', label: 'draft' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
+    });
+    await adapter.createRecord(record);
+
+    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'reviewed' }] });
+    const afterTags = await adapter.getRecord(record.id);
+    expect(afterTags?.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+    expect(afterTags?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+
+    await adapter.mutateRecord(record.id, { permissions: [] });
+    const afterAcl = await adapter.getRecord(record.id);
+    expect(afterAcl?.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+    expect(afterAcl?.permissions).toBeUndefined();
+  });
+
+  // `role` is in the primary key, so member and admin are two rows rather
+  // than one row overwritten.
+  test('a group grantee round trips per role', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    const permissions: AuthorityAssociation[] = [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+      },
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+      },
+    ];
+    await adapter.mutateRecord(record.id, { permissions });
+    // Row order is the table's, not the write's: both are stored, which is
+    // what the key column buys.
+    expect((await adapter.getRecord(record.id))?.permissions).toEqual(
+      expect.arrayContaining(permissions),
+    );
+    expect((await adapter.getRecord(record.id))?.permissions).toHaveLength(2);
+  });
+
+  // associate()/dissociate() key all kinds alike, which is what
+  // grantAccess()/revokeAccess() ride on.
+  test('associate/dissociate carry an authority element like any other', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord({ associations: [{ kind: 'tag', label: 'draft' }] });
+    await adapter.createRecord(record);
+
+    const grant: AuthorityAssociation = {
+      kind: 'permission',
+      label: 'read',
+      grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+    };
+    const granted = await adapter.associate(record.id, grant);
+    expect(granted.permissions).toEqual([grant]);
+    expect(granted.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
+
+    const revoked = await adapter.dissociate(record.id, grant);
+    expect(revoked.permissions).toBeUndefined();
+    expect(revoked.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
   });
 });
 

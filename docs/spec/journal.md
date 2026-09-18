@@ -36,7 +36,7 @@ type AssociationChange =
 - **`repoint`** — an `associate()` that landed on an identity already there, overwriting its annotation in place. `previous` is the only durable record of the `attachmentRecordId` it discarded. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from).
 - **`remove`** — a dissociate. `previous` is the association **in full**, annotation included, which is what makes a removal as undoable as a re-point. A frame names identity only here, because a notification reports what is current; a log whose whole argument is prior state does not.
 
-`ops` still carries `associate`/`dissociate` — `associate` when any element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame.
+`ops` still carries `associate`/`dissociate` — `associate` when any **data** element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame. An authority element's move is `permissions` instead, derived from the same delta so the op and the edits beneath it cannot disagree.
 
 **An association list holds distinct identities**, so no entry ever names one identity twice. That is enforced where every other change-set rule is, in the invariant layer: a list naming one identity twice describes a state no store can hold, and is refused rather than collapsed. See [Data model § Associations](./data-model.md#associations).
 
@@ -46,16 +46,20 @@ Undoing one entry's association change is a walk over `associations`, with no lo
 
 ```ts
 for (const change of entry.associations ?? []) {
-  if (change.op === 'add') await stack.dissociate(recordId, change.association);
-  else await stack.associate(recordId, change.previous);
+  const element = change.op === 'add' ? change.association : change.previous;
+  const [add, remove] = isAuthority(element)
+    ? [stack.grantAccess, stack.revokeAccess]
+    : [stack.associate, stack.dissociate];
+  if (change.op === 'add') await remove(recordId, element);
+  else await add(recordId, element);
 }
 ```
 
-A `repoint` and a `remove` invert identically — `associate(previous)` puts an association back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for.
+A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
 
 Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
 
-An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots. That is why there is no `permissions` stripping to do here, unlike on a snapshot.
+A permission element's delta rides in that same list, on the same terms as a tag's: `previous` in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where a Record's sharing history lives, under the same mutate-surface gate as [version history](./versioning.md#history-access).
 
 ## The entry set is the event set
 

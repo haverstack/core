@@ -1032,6 +1032,95 @@ export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, Wir
 // Permissions
 // -------------------------------------------------------
 
+export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
+  {
+    name: 'grant-access-entity',
+    description:
+      'POST /records/:id/permissions adds one permission element, amending the set rather than ' +
+      'replacing it, and answering with the record it produced. Permission elements are ' +
+      'associations, so this bumps no version and does not touch updatedAt, and the endpoint ' +
+      'never reads If-Match. It carries the reshare gate, not the write bit: a write-holder who ' +
+      'is neither owner nor creator gets 403. See docs/spec/wire-format.md § Permissions.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      kind: 'permission',
+      label: 'read',
+      grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 1,
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+      ],
+    },
+  },
+  {
+    name: 'grant-access-group-role',
+    description:
+      'A group grantee always names a role: `member` is the wider set and `admin` the narrower, ' +
+      'matching the roster labels where admin implies member. There is no absent-role spelling ' +
+      'to fall back on. See docs/spec/access-control.md § Record-level permissions.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      kind: 'permission',
+      label: 'read',
+      grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 1,
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+        },
+      ],
+    },
+  },
+];
+
+export const revokeAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
+  {
+    name: 'revoke-access-anyone',
+    description:
+      'POST /records/:id/permissions/delete removes one permission element, answering with the ' +
+      'record it produced — here with permissions gone entirely and version/updatedAt exactly ' +
+      'as they already stood. POST, not DELETE, for the reason the association endpoint gives. ' +
+      'Reach to the world is its own kind, so withdrawing it names that kind rather than ' +
+      'clearing a field. See docs/spec/wire-format.md § Permissions.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions/delete',
+    requestBody: { kind: 'anyone', label: 'read' },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 1,
+    },
+  },
+];
+
 export const permissionsChangeFixtures: ConformanceFixture<
   { permissions: unknown[] },
   WireRecord
@@ -3880,6 +3969,8 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...undeleteRecordFixtures,
   ...associateFixtures,
   ...dissociateFixtures,
+  ...grantAccessFixtures,
+  ...revokeAccessFixtures,
   ...permissionsChangeFixtures,
   ...unlistedChangeFixtures,
   ...parentChangeFixtures,
