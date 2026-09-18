@@ -1887,6 +1887,11 @@ describe('ScopedStack — write implies read', () => {
 // bit is not inert beside it and no second read is owed.
 // See docs/spec/access-control.md § Write implies read.
 describe('ScopedStack — an `anyone` read carries the write bit', () => {
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { scope: 'entity', entityId },
+  });
   const writeFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'write',
@@ -1919,6 +1924,27 @@ describe('ScopedStack — an `anyone` read carries the write bit', () => {
     await stack.revokeAccess(record.id, writeFor(MEMBER));
     const privated = await stack.revokeAccess(record.id, anyone);
     expect(privated.permissions).toBeUndefined();
+  });
+
+  // Only the produced set is asked about, so no order is imposed: a key
+  // that drops the write in the same breath as the `anyone` is ordinary.
+  test('a key that strands no write takes the `anyone` away in one call', async () => {
+    const record = await stack.create(NOTE, { text: 'public draft' });
+    await stack.mutate(record.id, { permissions: [anyone, writeFor(MEMBER)] });
+
+    const privated = await stack.mutate(record.id, { permissions: [] });
+    expect(privated.permissions).toBeUndefined();
+  });
+
+  test('a key swapping the world read for the writer own read is one call', async () => {
+    const record = await stack.create(NOTE, { text: 'public draft' });
+    await stack.mutate(record.id, { permissions: [anyone, writeFor(MEMBER)] });
+
+    const scoped = await stack.mutate(record.id, {
+      permissions: [readFor(MEMBER), writeFor(MEMBER)],
+    });
+    expect(scoped.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+    expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
   });
 });
 

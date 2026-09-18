@@ -33,8 +33,11 @@ still needs reshare authority, while a set restated is not a reshare. _Write
 implies read_ becomes a cross-element invariant over the set a write would
 produce, which is what makes revoking a `read` refusable while its `write`
 stands, and an `anyone` element satisfies it for every grantee — a
-world-readable record leaves no writer blind, so revoking the `anyone` is what
-the invariant refuses instead. A permission change is a no-bump write: it
+world-readable record leaves no writer blind. The rule it enforces is that no
+write lands in a set whose grantee cannot read it, whichever verb or key
+produced the set: withdrawing an `anyone` while a write it covered stands is
+refused, while `permissions: []` and a key naming the writer's own `read` in
+its place are ordinary one-call writes. A permission change is a no-bump write: it
 leaves `version` and `updatedAt` where they stand and appends one journal entry
 carrying `previous` per element it moved.
 
