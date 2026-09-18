@@ -18,6 +18,7 @@ import { StackQueryError } from './errors.js';
 import { SYSTEM_TYPES, RECORD_CHANGE_KEYS } from './types.js';
 import type {
   Association,
+  AssociationChange,
   ChangeOp,
   EntityId,
   Permission,
@@ -74,26 +75,49 @@ export function stripAssociationAnnotation(association: Association): Associatio
 
 /**
  * What a `changes.associations` list moves against a record's current
- * associations — the same comparison `changeSetOps` decides `associate`/
- * `dissociate` from, so a change event's added/removed lists can never
- * disagree with whether those ops fired. `added` is each entry as it now
- * stands (current annotation included, a re-point included under its new
- * value); `removed` is identity only, per stripAssociationAnnotation().
+ * associations, one tagged edit per association — the same comparison
+ * `changeSetOps` decides `associate`/`dissociate` from, so which ops fired
+ * and what these report can never disagree.
+ *
+ * An entry that matches something already there by identity displaced it
+ * rather than joining it, which is a `repoint`: the association is still
+ * on the record and only its annotation moved, so no `remove` can describe
+ * it. `previous` is the prior association in full, annotation included —
+ * the only place an overwritten or removed `attachmentRecordId` survives.
+ * See docs/spec/journal.md § The entry.
  */
-export function associationDelta(
-  before: Association[],
-  after: Association[],
-): { added: Association[]; removed: Association[]; replaced: Association[] } {
-  const added = after.filter((a) => !before.some((b) => associationIdentical(a, b)));
-  return {
-    added,
-    removed: before
+export function associationDelta(before: Association[], after: Association[]): AssociationChange[] {
+  const changes: AssociationChange[] = after
+    .filter((a) => !before.some((b) => associationIdentical(a, b)))
+    .map((association) => {
+      const previous = before.find((b) => associationEqual(b, association));
+      return previous
+        ? ({ op: 'repoint', association, previous } as const)
+        : ({ op: 'add', association } as const);
+    });
+  return changes.concat(
+    before
       .filter((b) => !after.some((a) => associationEqual(a, b)))
-      .map(stripAssociationAnnotation),
-    // An addition matching something already there by identity overwrote
-    // it rather than joining it. `removed` cannot report these: the
-    // association is still on the record, only its annotation changed.
-    replaced: added.flatMap((a) => before.filter((b) => associationEqual(a, b))),
+      .map((previous) => ({ op: 'remove', previous })),
+  );
+}
+
+/**
+ * The two flat lists a change frame carries, derived from the tagged
+ * list. The feed reports what is true now, so a `repoint` appears only
+ * under its new value and a `remove` by identity alone — the prior state
+ * the journal keeps has no place on a notification.
+ * See docs/spec/events.md § The event shape.
+ */
+export function feedAssociationDelta(changes: AssociationChange[]): {
+  added: Association[];
+  removed: Association[];
+} {
+  return {
+    added: changes.filter((c) => c.op !== 'remove').map((c) => c.association),
+    removed: changes
+      .filter((c) => c.op === 'remove')
+      .map((c) => stripAssociationAnnotation(c.previous)),
   };
 }
 
@@ -165,9 +189,9 @@ export function changeSetOps(
   }
 
   if (changes.associations) {
-    const { added, removed } = associationDelta(existing.associations ?? [], changes.associations);
-    if (added.length) ops.push('associate');
-    if (removed.length) ops.push('dissociate');
+    const delta = associationDelta(existing.associations ?? [], changes.associations);
+    if (delta.some((c) => c.op !== 'remove')) ops.push('associate');
+    if (delta.some((c) => c.op === 'remove')) ops.push('dissociate');
   }
 
   if (changes.unlisted !== undefined && Boolean(existing.unlistedAt) !== changes.unlisted) {

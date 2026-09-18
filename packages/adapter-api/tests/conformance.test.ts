@@ -389,9 +389,10 @@ describe('deleteRecord fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      // A soft delete produced a version and answers with it; a hard one
-      // destroyed the record and has nothing to answer with.
-      expect(result?.id).toBe(hard ? undefined : fixture.responseBody!.id);
+      // A soft delete answers with the version it produced; a hard one
+      // answers with the record it destroyed, which is where a client
+      // reads the files the purge stranded.
+      expect(result!.id).toBe(fixture.responseBody!.id);
       if (!hard) expect(result!.deletedAt).toBeInstanceOf(Date);
     });
   }
@@ -635,7 +636,7 @@ describe('getJournal fixtures', () => {
         // Presence, not value: `null` is the root here and must survive.
         expect('previousParentId' in log[i]).toBe('previousParentId' in entry);
         expect(log[i].previousParentId).toBe(entry.previousParentId);
-        expect(log[i].associationsReplaced).toEqual(entry.associationsReplaced);
+        expect(log[i].associations).toEqual(entry.associations);
       }
     });
   }

@@ -82,7 +82,10 @@ export const RECORD_SCHEMA_SQL = `
     record_id   TEXT NOT NULL REFERENCES records(id),
     seq         INTEGER NOT NULL,
     at          INTEGER NOT NULL,
-    kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'deleted', 'purged')),
+    -- No 'purged': a purge destroys the log rather than appending to it,
+    -- so the constraint names exactly the kinds an entry can carry.
+    -- See docs/spec/journal.md § A hard delete destroys the journal.
+    kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'deleted')),
     ops         TEXT NOT NULL CHECK (json_valid(ops)),
     version     INTEGER NOT NULL,
     type_id     TEXT NOT NULL,
@@ -93,9 +96,9 @@ export const RECORD_SCHEMA_SQL = `
     -- the same input/state split parentId follows everywhere.
     previous_parent_id TEXT,
     actor       TEXT CHECK (actor IS NULL OR json_valid(actor)),
-    associations_added    TEXT CHECK (associations_added IS NULL OR json_valid(associations_added)),
-    associations_removed  TEXT CHECK (associations_removed IS NULL OR json_valid(associations_removed)),
-    associations_replaced TEXT CHECK (associations_replaced IS NULL OR json_valid(associations_replaced)),
+    -- One tagged edit per association the write moved, each carrying the
+    -- state it displaced. See docs/spec/journal.md § The entry.
+    associations TEXT CHECK (associations IS NULL OR json_valid(associations)),
     PRIMARY KEY (record_id, seq)
   ) STRICT;
 

@@ -781,12 +781,11 @@ export class SharedSqlRecordLogic {
     this.exec.run(
       `INSERT INTO journal
         (record_id, seq, at, kind, ops, version, type_id, parent_id,
-         previous_parent_id, actor, associations_added, associations_removed,
-         associations_replaced)
+         previous_parent_id, actor, associations)
        VALUES (
          ?,
          (SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?),
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recordId,
         recordId,
@@ -799,14 +798,18 @@ export class SharedSqlRecordLogic {
         // '' is the root; NULL is an entry that names no origin at all.
         entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
         entry.actor ? JSON.stringify(entry.actor) : null,
-        entry.associationsAdded?.length ? JSON.stringify(entry.associationsAdded) : null,
-        entry.associationsRemoved?.length ? JSON.stringify(entry.associationsRemoved) : null,
-        entry.associationsReplaced?.length ? JSON.stringify(entry.associationsReplaced) : null,
+        entry.associations?.length ? JSON.stringify(entry.associations) : null,
       ],
     );
   }
 
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    // An empty log means "nothing changed" unconditionally, so a record
+    // that isn't there cannot be spelled that way. A purged record is gone,
+    // and gets the same refusal. See docs/spec/journal.md § Reading it.
+    if (!this.exec.get('SELECT 1 FROM records WHERE id = ?', [id])) {
+      throw new StackNotFoundError(`Record not found: "${id}"`);
+    }
     const conditions = ['record_id = ?'];
     const values: unknown[] = [id];
     if (query.sinceSeq !== undefined) {

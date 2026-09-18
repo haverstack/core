@@ -160,7 +160,7 @@ The pair is reported anyway rather than collapsed to one field, because delegate
 
 ## Success responses
 
-**A `200` carries a body.** Every endpoint that answers `200` is documented above or below with the shape it returns, and a success response always carries that shape — a Record, a Version, a Type, a query envelope, or an array of any of them. An endpoint with nothing to return answers `204` instead: the hard delete, which bumps no version, is the only one in the protocol.
+**A `200` carries a body.** Every endpoint that answers `200` is documented above or below with the shape it returns, and a success response always carries that shape — a Record, a Version, a Type, a query envelope, or an array of any of them. **No endpoint in the protocol answers `204`**: every one of them has something a client cannot get elsewhere, the hard delete included — it bumps no version and still answers with the record it destroyed, which is the only report of what that purge referenced.
 
 Empty is not an encoding of anything — nor is a literal `null`. Absence is `404` — the status a nullable read (`GET /records/:id`, `GET /records/:id/versions/:version`, `GET /types/:id`) answers when the resource does not exist or the requester cannot read it — and an empty array is `[]`. A `200` with no body is a server that has not implemented the endpoint's half of this contract, and `APIAdapter` reports it as an `APIAdapterError` naming the endpoint rather than guessing which of the two it meant. Guessing is what the rest of this spec refuses elsewhere: reading an empty `200` on `GET /records/:id` as "no such record" would let a broken server answer an existence check confidently and wrongly.
 
@@ -229,9 +229,11 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
-**Every mutation answers with the record it produced** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with a Record body. A hard delete produces no version and returns `204`. This holds for the association endpoints too, even though they never bump `version` — the record they answer with simply carries whatever `version`/`updatedAt` it already had (see [Versioning § Version history](./versioning.md#version-history)).
+**Every mutation answers with a record** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with the Record they produced. This holds for the association endpoints too, even though they never bump `version` — the record they answer with simply carries whatever `version`/`updatedAt` it already had (see [Versioning § Version history](./versioning.md#version-history)).
 
-This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them (or, for the association endpoints, off the request's own acting identity, since nothing was persisted to read it back from — see [Events § Attribution](./events.md#attribution)), so a frame cannot disagree with storage. A server answering `204` to any of the above leaves a client unable to say what it just wrote.
+**A hard delete answers `200` with the record it destroyed**, as it last stood — the one response that is not the record a write produced, because this write produces none. A `404` for a record that was not there. It is what makes the purge's own report derivable client-side: the attachment associations and `file-ref` fields in that body are [the files the purge stranded](./attachments.md#a-purge-strands-the-bytes-it-referenced), and the purge has just destroyed every other row naming them, so a client answered `204` could not name the bytes it may now need to erase. This is not in tension with [a `purged` frame carrying nothing](./events.md#purged-records-carry-nothing): a frame fans out to every subscriber and outlives the request, while this body goes only to the requester who authorized the purge — hard delete is owner-only — over the same channel that would have served `GET /records/:id` a moment earlier.
+
+This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them (or, for the association endpoints, off the request's own acting identity, since nothing was persisted to read it back from — see [Events § Attribution](./events.md#attribution)), so a frame cannot disagree with storage. A server answering an empty body to any of the above leaves a client unable to say what it just wrote.
 
 **A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
 
@@ -445,20 +447,21 @@ GET /records/:id/journal?limit=50    — at most 50 entries
       "version": 1,
       "typeId": "com.example/note@1",
       "actor": { "entityId": "did:key:z6Mk..." },
-      "associationsAdded": [
+      "associations": [
         {
-          "kind": "attachment",
-          "label": "avatar",
-          "fileId": "abc123",
-          "attachmentRecordId": "1hk153x00002"
-        }
-      ],
-      "associationsReplaced": [
-        {
-          "kind": "attachment",
-          "label": "avatar",
-          "fileId": "abc123",
-          "attachmentRecordId": "1hk153x00001"
+          "op": "repoint",
+          "association": {
+            "kind": "attachment",
+            "label": "avatar",
+            "fileId": "abc123",
+            "attachmentRecordId": "1hk153x00002"
+          },
+          "previous": {
+            "kind": "attachment",
+            "label": "avatar",
+            "fileId": "abc123",
+            "attachmentRecordId": "1hk153x00001"
+          }
         }
       ]
     }
@@ -467,9 +470,9 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 }
 ```
 
-**This endpoint is not optional.** Every adapter implements `getJournal()`, so a server that answers `404` here leaves the one adapter that fronts a server unable to honor a method the client interface requires. An empty log means _nothing changed_, unconditionally — a server with no journal to offer must not spell "I do not remember" the same way, and the only spelling available to it would be exactly that.
+**This endpoint is not optional.** Every adapter implements `getJournal()`, so a server that answers `404` for a record it holds leaves the one adapter that fronts a server unable to honor a method the client interface requires. An empty log means _nothing changed_, unconditionally — a server with no journal to offer must not spell "I do not remember" the same way, and the only spelling available to it would be exactly that. A record the server does not have is the one `404` this endpoint gives, and it is required: an empty log for a nonexistent or purged record would be that same forbidden spelling.
 
-**`associationsReplaced` is the field a client can get nowhere else.** It carries the association an `associate()` overwrote in place — the `attachmentRecordId` a re-point discarded — and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current, nor on a snapshot, since an association change bumps no `version`. A server that drops it from its response serves a log that cannot answer the question the tier exists for.
+**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and the two that displace something carry `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
 
 **`seq` here is the entry's, not the feed's.** It is a dense integer from 1, per record; [the change feed's `seq`](./change-feed.md#frames) is an opaque server-minted cursor over the whole stack. The two share a name because both order a stream, and no value may be carried from one to the other.
 

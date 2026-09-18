@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { StackPermissionError, StackQueryError } from '../src/errors.js';
+import { StackNotFoundError, StackPermissionError, StackQueryError } from '../src/errors.js';
 import type { RecordChange, RecordJournalEntry } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
@@ -102,8 +102,10 @@ describe('association history survives without a subscriber', () => {
     // actually holds. Nothing was listening while any of this happened.
     const labels = new Set<string>();
     for (const entry of await stack.getJournal(note.id)) {
-      for (const a of entry.associationsAdded ?? []) labels.add(a.label);
-      for (const a of entry.associationsRemoved ?? []) labels.delete(a.label);
+      for (const change of entry.associations ?? []) {
+        if (change.op === 'remove') labels.delete(change.previous.label);
+        else labels.add(change.association.label);
+      }
     }
 
     const current = await stack.get(note.id);
@@ -129,15 +131,17 @@ describe('association history survives without a subscriber', () => {
     });
 
     const log = await stack.getJournal(note.id);
-    const repoint = log.at(-1)!;
-    expect(repoint.ops).toEqual(['associate']);
-    // The new value, as the feed reports it...
-    expect(repoint.associationsAdded?.[0]).toMatchObject({ attachmentRecordId: second.id });
-    // ...and the old one, which nothing else anywhere retains.
-    expect(repoint.associationsReplaced?.[0]).toMatchObject({ attachmentRecordId: first.id });
+    const repoint = log.at(-1)!.associations![0]!;
+    expect(repoint.op).toBe('repoint');
+    // Both halves ride one element: the new value, and the old one that
+    // nothing else anywhere retains.
+    expect(repoint).toMatchObject({
+      association: { attachmentRecordId: second.id },
+      previous: { attachmentRecordId: first.id },
+    });
   });
 
-  test('a removal names identity only, never the annotation it carried', async () => {
+  test('a removal keeps the annotation the association carried', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
     await stack.associate(note.id, {
@@ -148,8 +152,11 @@ describe('association history survives without a subscriber', () => {
     });
     await stack.dissociate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
-    const removed = (await stack.getJournal(note.id)).at(-1)!.associationsRemoved![0]!;
-    expect(removed).toEqual({ kind: 'attachment', label: 'cover', fileId });
+    const removal = (await stack.getJournal(note.id)).at(-1)!.associations![0]!;
+    expect(removal).toEqual({
+      op: 'remove',
+      previous: { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: first.id },
+    });
   });
 
   test('an association change is journaled without moving the record version', async () => {
@@ -184,16 +191,11 @@ describe('an association change is reversible from the log alone', () => {
    * once the write had landed.
    */
   const invert = async (recordId: string, e: RecordJournalEntry) => {
-    for (const added of e.associationsAdded ?? []) {
-      const replaced = (e.associationsReplaced ?? []).find(
-        (r) => r.kind === added.kind && r.label === added.label,
-      );
-      // A re-point inverts by pointing back, not by dropping the reference.
-      if (replaced) await stack.associate(recordId, replaced);
-      else await stack.dissociate(recordId, added);
-    }
-    for (const removed of e.associationsRemoved ?? []) {
-      await stack.associate(recordId, removed);
+    for (const change of e.associations ?? []) {
+      // Every inverse is local to its own element: an add is dropped, and
+      // both a re-point and a removal are put back to `previous`.
+      if (change.op === 'add') await stack.dissociate(recordId, change.association);
+      else await stack.associate(recordId, change.previous);
     }
   };
 
@@ -238,6 +240,45 @@ describe('an association change is reversible from the log alone', () => {
     const cover = (await stack.get(note.id))!.associations!.find((a) => a.label === 'cover')!;
     expect(cover).toMatchObject({ attachmentRecordId: first.id });
   });
+
+  test('two edits sharing a label in one write invert independently', async () => {
+    // An inverse is local to its own element, so nothing has to decide
+    // which edit a sibling belongs to: (kind, label) is not identity —
+    // one record holds two `cover` attachments for different files.
+    const { first, second } = await twoUploads();
+    const other = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const note = await stack.create(NOTE, { text: 'hello' });
+    await stack.associate(note.id, {
+      kind: 'attachment',
+      label: 'cover',
+      fileId: first.content.fileId,
+      attachmentRecordId: first.id,
+    });
+    const before = (await stack.get(note.id))!.associations;
+
+    // One write that re-points the cover it holds and adds a second cover
+    // for different bytes.
+    await stack.mutate(note.id, {
+      associations: [
+        {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: first.content.fileId,
+          attachmentRecordId: second.id,
+        },
+        {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: other.content.fileId,
+          attachmentRecordId: other.id,
+        },
+      ],
+    });
+
+    await invert(note.id, (await stack.getJournal(note.id)).at(-1)!);
+
+    expect((await stack.get(note.id))!.associations).toEqual(before);
+  });
 });
 
 // -------------------------------------------------------
@@ -253,7 +294,9 @@ describe('a hard delete leaves no journal behind', () => {
 
     await stack.delete(note.id, { hard: true });
 
-    expect(await stack.getJournal(note.id)).toEqual([]);
+    // A purged record is gone, so its log is refused rather than answered
+    // empty — the same answer any other missing record gets.
+    await expect(stack.getJournal(note.id)).rejects.toThrow(StackNotFoundError);
     expect(await stack.getVersions(note.id)).toEqual([]);
   });
 
@@ -364,8 +407,14 @@ describe('the journal and the feed report the same change', () => {
 
     const log = (await stack.getJournal(note.id)).slice(1);
     expect(log).toHaveLength(2);
-    expect(log[0]!.associationsAdded).toEqual(seen[0]!.associationsAdded);
-    expect(log[1]!.associationsRemoved).toEqual(seen[1]!.associationsRemoved);
+    // The frame's two flat lists are flattened out of the entry's one, so
+    // neither half can report an edit the other doesn't.
+    expect(
+      log[0]!.associations!.flatMap((c) => (c.op === 'remove' ? [] : [c.association])),
+    ).toEqual(seen[0]!.associationsAdded);
+    expect(log[1]!.associations!.flatMap((c) => (c.op === 'remove' ? [c.previous] : []))).toEqual(
+      seen[1]!.associationsRemoved,
+    );
   });
 });
 
@@ -397,7 +446,22 @@ describe('the read surface', () => {
     // adapter answers this, so an empty answer always means "nothing
     // changed" rather than "this stack does not remember". An adapter with
     // no journal to read refuses instead, in its own vocabulary.
+    // Written beneath Stack, so no entry was ever appended for it.
+    await adapter.createRecord({
+      id: '1hk153x00001',
+      typeId: NOTE,
+      content: { text: 'hello' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      version: 1,
+    });
     expect(await stack.getJournal('1hk153x00001')).toEqual([]);
+  });
+
+  test('a record that does not exist is refused, not answered with an empty log', async () => {
+    // The one case where an empty log would mean something other than
+    // "nothing changed", which is the reading the whole tier rests on.
+    await expect(stack.getJournal('1hk153x0000z')).rejects.toThrow(StackNotFoundError);
   });
 });
 

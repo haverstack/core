@@ -21,13 +21,37 @@ type RecordJournalEntry = {
   parentId?: RecordId; // where the record sat after the change; absent = the root
   previousParentId?: RecordId | null; // present on a move; `null` = off the root
   actor?: ChangeActor;
-  associationsAdded?: Association[];
-  associationsRemoved?: Association[]; // identity only, as on the feed
-  associationsReplaced?: Association[]; // the association an associate() overwrote in place
+  associations?: AssociationChange[]; // one tagged edit per association the write moved
 };
+
+type AssociationChange =
+  | { op: 'add'; association: Association }
+  | { op: 'repoint'; association: Association; previous: Association }
+  | { op: 'remove'; previous: Association };
 ```
 
-**`associationsReplaced` is the one field with no counterpart on the feed.** Re-pointing an `attachmentRecordId` overwrites the old value, and the feed reports only what is [true now](./events.md#the-event-shape). The journal keeps what it replaced, which is what makes a re-point undoable rather than merely observable. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from).
+**`associations` is the field with no counterpart on the feed, and it is shaped for this tier rather than borrowed from that one.** [A frame](./events.md#the-event-shape) carries two flat lists of what is true now, which is the right answer to "what just happened" and the wrong one to "what did it happen to": a list of prior states beside a list of current ones has no join key, and `(kind, label)` is not identity — one record holds two `cover` attachments for different files. So the journal carries the prior state **on the element that displaced it**, and every inverse is local to one edit.
+
+- **`add`** — an association the record did not hold under this identity.
+- **`repoint`** — an `associate()` that landed on an identity already there, overwriting its annotation in place. `previous` is the only durable record of the `attachmentRecordId` it discarded. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from).
+- **`remove`** — a dissociate. `previous` is the association **in full**, annotation included, which is what makes a removal as undoable as a re-point. A frame names identity only here, because a notification reports what is current; a log whose whole argument is prior state does not.
+
+`ops` still carries `associate`/`dissociate` — `associate` when any element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame.
+
+**An association list holds distinct identities**, so no entry ever names one identity twice. That is enforced where every other change-set rule is, in the invariant layer: a list naming one identity twice describes a state no store can hold, and is refused rather than collapsed. See [Data model § Associations](./data-model.md#associations).
+
+### The inverse
+
+Undoing one entry's association change is a walk over `associations`, with no lookup into a sibling list:
+
+```ts
+for (const change of entry.associations ?? []) {
+  if (change.op === 'add') await stack.dissociate(recordId, change.association);
+  else await stack.associate(recordId, change.previous);
+}
+```
+
+A `repoint` and a `remove` invert identically — `associate(previous)` puts an association back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for.
 
 An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots. That is why there is no `permissions` stripping to do here, unlike on a snapshot.
 
@@ -53,11 +77,17 @@ It is **not** the [change feed's `seq`](./change-feed.md#frames), which is an op
 
 ## A hard delete destroys the journal
 
-Exactly as it destroys version history. A log naming what a purged record held — its tags, its containers, who touched it — is precisely the residue [the erasure primitive](./versioning.md#deletion) exists to leave nothing of. So the journal never records a purge: the entry and the record go together. Soft delete keeps it, because a tombstone is recoverable and its journal is part of what recovers it.
+**The log _of_ the purged record.** Exactly as it destroys that record's version history. A log naming what a purged record held — its tags, its containers, who touched it — is precisely the residue [the erasure primitive](./versioning.md#deletion) exists to leave nothing of. So the journal never records a purge: the entry and the record go together, and `kind` has no `purged` value to write. Soft delete keeps it, because a tombstone is recoverable and its journal is part of what recovers it.
+
+**Entries on _other_ records that name the purged id survive**, and are not cleaned up. A record that was moved out of the purged container, or that holds a relationship to it, or whose attachment reference was annotated with its id, carries that id in its own log — that is the other record's history, authored by its writer and gated on its own mutate surface. The purged id also stands in those records' live `parentId`s and association rows, which [Data model § Reparenting](./data-model.md#reparenting) already accepts as ordinary state at rest, so the entry discloses nothing the current state does not. Chasing it would mean a reverse index over every record's log, and rewriting entries would break the one property the tier rests on: an entry says what a write did, and nothing edits it afterwards.
+
+A purged record's id is therefore a pointer to nothing, wherever it survives — which is also why a `remove` entry may keep an `attachmentRecordId` naming an `_attachment` record that has since been destroyed. What the erasure primitive destroys is the purged record's own content, history and log; it does not reach into what other records say.
 
 ## Reading it
 
 - `stack.getJournal(recordId, { sinceSeq?, limit? })` — the log, oldest first.
+
+**A record that does not exist is `StackNotFoundError`, never an empty log.** A purged record is gone, so it is the same refusal. An empty log means "nothing changed" unconditionally — that is the whole argument for the mandatory endpoint below — and it cannot also mean "no such record" without taking the one reading a caller reconstructing an association's history depends on.
 
 `sinceSeq` and `limit` are each a non-negative integer or absent; anything else is refused with `StackQueryError` before an adapter sees it. The window is checked rather than coerced because the two coercions available disagree: a negative `limit` read as a JavaScript slice drops the newest entry, and read as a SQL `LIMIT` removes the ceiling altogether. **Omitting `limit` reads the whole log, and no ceiling is imposed when it is omitted** — unlike a query, where a default page size is a kindness, a truncated journal is a wrong answer to the one caller who needs it, the one reconstructing an association's full history.
 

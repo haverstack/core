@@ -2263,6 +2263,36 @@ describe('_group — at least one admin', () => {
   // The roster the write would produce is what is measured, so every case
   // below is about the post-state rather than about who is being removed.
   describe('change-set associations', () => {
+    test('refuses a list naming one identity twice', async () => {
+      // Two entries under one identity describe a state no store can hold:
+      // an adapter keys associations by identity, so the second displaces
+      // the first and which one the record keeps is left to whichever
+      // adapter is underneath.
+      const record = await stack.create(NOTE_V1, { text: 'hello' });
+      const fileId = 'a'.repeat(64);
+      await expect(
+        stack.mutate(record.id, {
+          associations: [
+            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00001' },
+            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00002' },
+          ],
+        }),
+      ).rejects.toThrow(StackValidationError);
+    });
+
+    test('allows one label across two different referents', async () => {
+      // (kind, label) is not identity — a record holds two `cover`
+      // attachments as long as they name different files.
+      const record = await stack.create(NOTE_V1, { text: 'hello' });
+      const updated = await stack.mutate(record.id, {
+        associations: [
+          { kind: 'attachment', label: 'cover', fileId: 'a'.repeat(64) },
+          { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
+        ],
+      });
+      expect(updated.associations).toHaveLength(2);
+    });
+
     test('refuses a roster replacement that leaves no admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       await expect(stack.mutate(group.id, { associations: [member('member-1')] })).rejects.toThrow(
@@ -2946,10 +2976,73 @@ describe('delete', () => {
     expect(result.records.find((r) => r.id === record.id)).toBeDefined();
   });
 
+  describe('a purge reports the files it stranded', () => {
+    // A purge removes the association and content_index rows naming a
+    // fileId — the only pointers — so the follow-up deleteAttachment()
+    // would otherwise have no argument a caller could supply.
+    const PHOTO = 'com.example.test/purge-photo@1';
+
+    test('names the attachment associations the record held', async () => {
+      const {
+        content: { fileId },
+      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+
+      expect(await stack.delete(note.id, { hard: true })).toEqual({
+        referencedFileIds: [fileId],
+      });
+    });
+
+    test('names a file-ref content field, and names each file once', async () => {
+      await stack.defineType(PHOTO, 'Photo', { coverFileId: { kind: 'file-ref', required: true } });
+      const {
+        content: { fileId },
+      } = await stack.putAttachment(new Uint8Array([4, 5, 6]), 'image/png');
+      const photo = await stack.create(PHOTO, { coverFileId: fileId });
+      // The same file, reached both ways: one file, one entry.
+      await stack.associate(photo.id, { kind: 'attachment', label: 'cover', fileId });
+
+      expect(await stack.delete(photo.id, { hard: true })).toEqual({
+        referencedFileIds: [fileId],
+      });
+    });
+
+    test('the bytes survive the purge — reporting is not deleting', async () => {
+      const data = new Uint8Array([7, 8, 9]);
+      const {
+        content: { fileId },
+      } = await stack.putAttachment(data, 'image/png');
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+
+      const { referencedFileIds } = await stack.delete(note.id, { hard: true });
+      expect(await stack.getAttachment(fileId)).toEqual(data);
+
+      // And the report is exactly what the intentional follow-up takes.
+      for (const stranded of referencedFileIds) await stack.deleteAttachment(stranded);
+      await expect(stack.getAttachment(fileId)).rejects.toThrow(StackNotFoundError);
+    });
+
+    test('a soft delete strands nothing, so it names nothing', async () => {
+      const {
+        content: { fileId },
+      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+      const note = await stack.create(NOTE_V1, { text: 'hello' });
+      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+
+      // A tombstone is recoverable and must find its attachments intact,
+      // so its references still stand.
+      expect(await stack.delete(note.id)).toEqual({ referencedFileIds: [] });
+      await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
+    });
+  });
+
   test('a hard delete of a record that is not there is silent', async () => {
-    await expect(
-      stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true }),
-    ).resolves.toBeUndefined();
+    // Nothing was purged, so nothing was stranded to report.
+    await expect(stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true })).resolves.toEqual({
+      referencedFileIds: [],
+    });
   });
 
   test('a hard delete under a precondition reports a record that is not there', async () => {

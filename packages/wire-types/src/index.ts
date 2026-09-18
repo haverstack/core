@@ -5,6 +5,7 @@ import type {
   StackType,
   RecordVersion,
   Association,
+  AssociationChange,
   Permission,
   ValidationError,
   SchemaDriftViolation,
@@ -181,10 +182,12 @@ export type WireJournalEntry = {
    * happened, so the root sentinel travels here as it does on a request.
    */
   previousParentId?: string | null;
-  associationsAdded?: Association[];
-  associationsRemoved?: Association[];
-  /** The value an `associate()` overwrote in place. Has no counterpart on the change feed. */
-  associationsReplaced?: Association[];
+  /**
+   * One tagged edit per association the write moved, each carrying its own
+   * `previous` where it had one. Has no counterpart on the change feed,
+   * which reports what is true now across two flat lists.
+   */
+  associations?: AssociationChange[];
 };
 
 /**
@@ -215,9 +218,7 @@ export function serializeJournalEntry(e: RecordJournalEntry): WireJournalEntry {
   if (e.actor !== undefined) w.actor = serializeChangeActor(e.actor);
   // Presence, not truthiness: `null` is the root and has to survive.
   if (e.previousParentId !== undefined) w.previousParentId = e.previousParentId;
-  if (e.associationsAdded !== undefined) w.associationsAdded = e.associationsAdded;
-  if (e.associationsRemoved !== undefined) w.associationsRemoved = e.associationsRemoved;
-  if (e.associationsReplaced !== undefined) w.associationsReplaced = e.associationsReplaced;
+  if (e.associations !== undefined) w.associations = e.associations;
   return w;
 }
 

@@ -36,14 +36,7 @@ describe('serializeJournalEntry', () => {
 
   it('omits every optional field the entry does not carry', () => {
     const w = serializeJournalEntry(entry());
-    for (const key of [
-      'parentId',
-      'actor',
-      'previousParentId',
-      'associationsAdded',
-      'associationsRemoved',
-      'associationsReplaced',
-    ]) {
+    for (const key of ['parentId', 'actor', 'previousParentId', 'associations']) {
       expect(key in w).toBe(false);
     }
   });
@@ -70,17 +63,24 @@ describe('serializeJournalEntry', () => {
     });
   });
 
-  it('carries associationsReplaced, which no change frame has', () => {
-    const replaced = [
+  it('carries the tagged association list, which no change frame has', () => {
+    const associations = [
       {
-        kind: 'attachment' as const,
-        label: 'embed',
-        fileId: 'a'.repeat(64),
-        attachmentRecordId: '1hk153x00009',
+        op: 'repoint' as const,
+        association: {
+          kind: 'attachment' as const,
+          label: 'embed',
+          fileId: 'a'.repeat(64),
+          attachmentRecordId: '1hk153x0000b',
+        },
+        previous: {
+          kind: 'attachment' as const,
+          label: 'embed',
+          fileId: 'a'.repeat(64),
+          attachmentRecordId: '1hk153x00009',
+        },
       },
     ];
-    expect(
-      serializeJournalEntry(entry({ associationsReplaced: replaced })).associationsReplaced,
-    ).toEqual(replaced);
+    expect(serializeJournalEntry(entry({ associations })).associations).toEqual(associations);
   });
 });
