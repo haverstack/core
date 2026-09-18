@@ -49,11 +49,20 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
   describe(`record adapter conformance: ${name}`, () => {
     let adapter: StackRecordAdapter;
 
+    // `open()` can reject; `adapter` is then unset (or still holds the
+    // previous test's, already closed). Closing either way throws over
+    // the top of the real initialization error and hides it.
+    let opened = false;
+
     beforeEach(async () => {
+      opened = false;
       adapter = await open();
+      opened = true;
     });
 
     afterEach(async () => {
+      if (!opened) return;
+      opened = false;
       await close?.(adapter);
     });
 
@@ -334,11 +343,17 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     if (capabilities.filter.content !== 'none') {
       describe('content filtering', () => {
         test('filters by a top-level scalar field, excluding what does not match', async () => {
-          await adapter.createRecord(makeRecord({ content: { title: 'a', priority: 1 } }));
+          const match = makeRecord({ content: { title: 'a', priority: 1 } });
           const decoy = makeRecord({ content: { title: 'b', priority: 2 } });
+          await adapter.createRecord(match);
           await adapter.createRecord(decoy);
 
           const result = await adapter.queryRecords({ filter: { content: { priority: 1 } } });
+          // The positive assertion first: `not.toContain` and `every` are
+          // both vacuously true on an empty result, so without this an
+          // adapter that declares filter.content and returns nothing at
+          // all would pass the very test meant to catch it.
+          expect(result.records.map((r) => r.id)).toContain(match.id);
           expect(result.records.map((r) => r.id)).not.toContain(decoy.id);
           expect(
             result.records.every((r) => (r.content as { priority: number }).priority === 1),
@@ -366,6 +381,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(nested);
 
           const result = await adapter.queryRecords({ filter: { content: { priority: 1 } } });
+          expect(result.records.map((r) => r.id)).toContain(scalarMatch.id);
           expect(result.records.map((r) => r.id)).not.toContain(nested.id);
         });
 

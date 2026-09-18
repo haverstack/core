@@ -46,11 +46,20 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
   describe(`blob adapter conformance: ${name}`, () => {
     let adapter: StackBlobAdapter;
 
+    // `open()` can reject; `adapter` is then unset (or still holds the
+    // previous test's, already closed). Closing either way throws over
+    // the top of the real initialization error and hides it.
+    let opened = false;
+
     beforeEach(async () => {
+      opened = false;
       adapter = await open();
+      opened = true;
     });
 
     afterEach(async () => {
+      if (!opened) return;
+      opened = false;
       await close?.(adapter);
     });
 

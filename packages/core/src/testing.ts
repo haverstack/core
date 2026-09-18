@@ -376,7 +376,15 @@ export class MemoryAdapter implements StackAdapter {
    * bare, sort-blind offset this used to be.
    */
   private encodeCursor(sort: QuerySort | undefined, offset: number): string {
-    return btoa(JSON.stringify({ d: this.sortDescriptor(sort), o: offset }));
+    const json = JSON.stringify({ d: this.sortDescriptor(sort), o: offset });
+    // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
+    // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
+    // field name would otherwise make btoa throw an InvalidCharacterError
+    // (a DOMException, not a StackError) out of an otherwise valid query.
+    const bytes = new TextEncoder().encode(json);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
   }
 
   /**
@@ -388,12 +396,20 @@ export class MemoryAdapter implements StackAdapter {
   private decodeCursor(cursor: string, sort: QuerySort | undefined): number {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(atob(cursor));
+      const binary = atob(cursor);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      parsed = JSON.parse(new TextDecoder().decode(bytes));
     } catch {
       throw new StackQueryError(`Malformed cursor: "${cursor}"`);
     }
     const { d, o } = (parsed ?? {}) as { d?: unknown; o?: unknown };
-    if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o)) {
+    // `o >= 0` is part of being well-formed, not a nicety: a crafted
+    // negative offset would reach `results.slice(-3, ...)` and hand back
+    // the tail of the result set as "the next page". Cursors arrive from
+    // the wire uninspected (wire-request copies `?cursor=` verbatim), so
+    // this is the only place the offset is checked at all.
+    if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o) || o < 0) {
       throw new StackQueryError(`Malformed cursor: "${cursor}"`);
     }
     if (d !== this.sortDescriptor(sort)) {
