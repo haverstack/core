@@ -6,7 +6,8 @@
  * The equality helpers answer it against a proposed write, so the no-op
  * decision and a change event's `ops` are the same comparison and can never
  * disagree. The projections answer it against a reader: a soft-deleted
- * Record is its tombstone.
+ * Record is its tombstone, and a journal entry names the ACL it moved
+ * only to a reader who could have moved it.
  *
  * See docs/spec/events.md § The event shape and docs/spec/versioning.md
  * § The tombstone is literal.
@@ -24,6 +25,7 @@ import type {
   EntityId,
   PermissionGrantee,
   RecordChanges,
+  RecordJournalEntry,
   RelationshipTarget,
   StackRecord,
 } from './types.js';
@@ -37,6 +39,10 @@ import type {
  * naming one. See docs/spec/data-model.md § Associations.
  */
 export function associationEqual(a: Association, b: Association): boolean {
+  // Identity is undecidable for a value that is not an association. Two
+  // of them are not "the same one"; validateAssociation() is what names
+  // them, and this must reach that point without throwing first.
+  if (!a || !b) return false;
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
   if (a.kind === 'relationship' && b.kind === 'relationship') {
@@ -55,6 +61,7 @@ export function associationEqual(a: Association, b: Association): boolean {
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolean {
+  if (!a || !b) return false;
   if (a.scope !== b.scope) return false;
   if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
   if (a.scope === 'group' && b.scope === 'group') {
@@ -70,7 +77,7 @@ export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolea
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function isAuthorityAssociation(a: Association): a is AuthorityAssociation {
-  return a.kind === 'permission' || a.kind === 'anyone';
+  return a?.kind === 'permission' || a?.kind === 'anyone';
 }
 
 /**
@@ -380,3 +387,26 @@ export function tombstoneOf(record: StackRecord): StackRecord {
 /** A soft-deleted Record presented as its tombstone; anything else untouched. */
 export const presentDeleted = (record: StackRecord): StackRecord =>
   record.deletedAt ? tombstoneOf(record) : record;
+
+/**
+ * Whether a tagged edit moved an authority element, reading whichever half
+ * of the pair carries one. The delta is one list across the partition, so
+ * every consumer that serves one half alone asks this.
+ */
+export function movesAuthority(change: AssociationChange): boolean {
+  return isAuthorityAssociation(change.op === 'remove' ? change.previous : change.association);
+}
+
+/**
+ * A journal entry as a reader who cannot reshare sees it: the authority
+ * half of its delta dropped, the `permissions` op left standing, so the
+ * entry still names *that* the ACL moved. Passing the mutate-surface gate
+ * buys the record's content history, which is not a route to its sharing
+ * graph. See docs/spec/journal.md § Reading it.
+ */
+export function withoutAuthorityChanges(entry: RecordJournalEntry): RecordJournalEntry {
+  if (!entry.associations?.some(movesAuthority)) return entry;
+  const data = entry.associations.filter((c) => !movesAuthority(c));
+  const { associations: _authority, ...rest } = entry;
+  return data.length ? { ...rest, associations: data } : (rest as RecordJournalEntry);
+}

@@ -61,10 +61,15 @@ export async function checkAccess(
   if (!perms || perms.length === 0) return false;
 
   for (const p of perms) {
-    if (p.kind === 'anyone') {
+    if (p?.kind === 'anyone') {
       if (mode === 'read') return true;
       continue;
     }
+    // Anything that is not a well-formed permission confers nothing. The
+    // set can arrive from an import or a foreign server, where no
+    // compiler has seen it, and an element read past its own kind would
+    // decide access off a grantee it never carried.
+    if (p?.kind !== 'permission' || !p.grantee) continue;
     if (p.label !== mode) continue;
     // The write bit is inert without read alongside it: the mutate surface
     // hands back the record it wrote and opens its whole history, so a
@@ -80,10 +85,20 @@ export async function checkAccess(
   return false;
 }
 
-/** Whether the set carries a `read` for this exact grantee. */
+/**
+ * Whether the set conveys read to this grantee — a `read` of its own, or
+ * an `anyone` that already reaches everyone. A world-readable Record
+ * leaves no writer blind, so demanding a second, redundant `read` beside
+ * the write would refuse a set that withholds nothing. Revoking the
+ * `anyone` is what the invariant catches instead, read off the produced
+ * set like every other removal.
+ * See docs/spec/access-control.md § Write implies read.
+ */
 function holdsRead(permissions: AuthorityAssociation[], grantee: PermissionGrantee): boolean {
-  return permissions.some(
-    (p) => p.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
+  return permissions.some((p) =>
+    p?.kind === 'anyone'
+      ? true
+      : p?.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
   );
 }
 
@@ -119,7 +134,7 @@ export function validatePermissions(
   const list = permissions ?? [];
   const errors: ValidationError[] = [];
   list.forEach((p, i) => {
-    if (p.kind !== 'permission' || p.label !== 'write') return;
+    if (p?.kind !== 'permission' || p.label !== 'write') return;
     if (holdsRead(list, p.grantee)) return;
     errors.push({
       path: `${path}[${i}]`,

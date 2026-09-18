@@ -484,7 +484,9 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Every other nullable field collapses both to absent — a record body spells the root that way — and doing so here would lose which of the two happened. Nothing else keeps a move's origin at all: [no snapshot captures containment](./versioning.md#version-history), so this entry is where an undo reads it from. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
 
-**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`. Unlike a snapshot there is nothing to strip.
+**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`.
+
+**Authority elements are omitted for a requester who may not reshare the record.** An entry's `ops` still carries `permissions`, so the response names that the ACL moved; the `associations` elements carrying a `permission` or `anyone` are dropped, and the field with them when nothing else is in it. Entries are never dropped, so `seq` stays dense and a mixed entry still reports its content half. See [Journal § Reading it](./journal.md#reading-it) — this is the one projection a history response makes, and a server that skips it hands the stack's sharing graph to every write-holder.
 
 **A hard delete destroys the journal**, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./access-control.md#errors-and-information-exposure) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
 

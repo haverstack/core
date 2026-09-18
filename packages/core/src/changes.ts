@@ -27,7 +27,7 @@ import type {
   Unsubscribe,
 } from './types.js';
 import { StackQueryError } from './errors.js';
-import { bumpsVersion, feedAssociationDelta, isAuthorityAssociation } from './record-changes.js';
+import { bumpsVersion, feedAssociationDelta, movesAuthority } from './record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.
@@ -366,11 +366,7 @@ export class PendingChange {
    */
   private associationDeltas(): Pick<RecordChange, 'associationsAdded' | 'associationsRemoved'> {
     const { added, removed } = feedAssociationDelta(
-      (this.moved.associations ?? []).filter((c) =>
-        c.op === 'remove'
-          ? !isAuthorityAssociation(c.previous)
-          : !isAuthorityAssociation(c.association),
-      ),
+      (this.moved.associations ?? []).filter((c) => !movesAuthority(c)),
     );
     return {
       ...(added.length && { associationsAdded: added }),

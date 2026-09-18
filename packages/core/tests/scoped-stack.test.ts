@@ -1883,6 +1883,45 @@ describe('ScopedStack — write implies read', () => {
 // Blind write
 // -------------------------------------------------------
 
+// An `anyone` element reaches the writer like everyone else, so the write
+// bit is not inert beside it and no second read is owed.
+// See docs/spec/access-control.md § Write implies read.
+describe('ScopedStack — an `anyone` read carries the write bit', () => {
+  const writeFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'write',
+    grantee: { scope: 'entity', entityId },
+  });
+  const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+
+  test('a write with no read of its own is honored while `anyone` stands', async () => {
+    const record = await stack.create(NOTE, { text: 'public draft' });
+    await stack.mutate(record.id, { permissions: [anyone, writeFor(MEMBER)] });
+
+    const view = stack.asEntity(MEMBER);
+    expect(await view.get(record.id)).not.toBeNull();
+    const edited = await view.patchContent(record.id, { text: 'edited' });
+    expect(edited.content.text).toBe('edited');
+  });
+
+  // Reached from the other side: the removal is what would leave the
+  // writer blind, so the produced set is what refuses it.
+  test('revoking the `anyone` while that write stands is refused', async () => {
+    const record = await stack.create(NOTE, { text: 'public draft' });
+    await stack.mutate(record.id, { permissions: [anyone, writeFor(MEMBER)] });
+
+    await expect(stack.revokeAccess(record.id, anyone)).rejects.toThrow(StackValidationError);
+    await expect(stack.mutate(record.id, { permissions: [writeFor(MEMBER)] })).rejects.toThrow(
+      StackValidationError,
+    );
+
+    // Withdrawing the writer first leaves a set the invariant accepts.
+    await stack.revokeAccess(record.id, writeFor(MEMBER));
+    const privated = await stack.revokeAccess(record.id, anyone);
+    expect(privated.permissions).toBeUndefined();
+  });
+});
+
 // The one shape that contributes without reading: `create` carries no read
 // companion, since a record you write and cannot read back discloses
 // nothing. See docs/spec/access-control.md § Write implies read.
@@ -2846,6 +2885,18 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
   });
 
+  // The delta refines the escalation on the write-gated branch only. A
+  // change set naming no writable key is gated before a record is in hand
+  // to compute a delta against, so there the key reshares on presence.
+  test('a permissions key sent on its own reshares on presence, restated or not', async () => {
+    const record = await shared();
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .mutate(record.id, { permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
   // ...and a set restated is not a reshare, so the write bit alone carries
   // a change set that names `permissions` without moving it.
   test('a permissions key that restates the set is not a reshare', async () => {
@@ -2855,6 +2906,88 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
       associations: [{ kind: 'tag', label: 'reviewed' }],
     });
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+  });
+});
+
+// -------------------------------------------------------
+// Journal — the authority half is the resharer's
+// -------------------------------------------------------
+
+describe('ScopedStack — the journal names the ACL only to a resharer', () => {
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { scope: 'entity', entityId },
+  });
+  const writeFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'write',
+    grantee: { scope: 'entity', entityId },
+  });
+
+  // MEMBER holds the write bit and nothing else, so they pass the history
+  // gate without being able to move the ACL themselves.
+  const sharedAndMoved = async () => {
+    const record = await adapter.createRecord(
+      makeRecord({ entityId: OWNER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+    );
+    await stack.asEntity(OWNER).grantAccess(record.id, readFor(STRANGER));
+    await stack.asEntity(OWNER).revokeAccess(record.id, readFor(STRANGER));
+    return record;
+  };
+
+  test('a write-holder gets the permissions op without the grantees beneath it', async () => {
+    const record = await sharedAndMoved();
+    const entries = await stack.asEntity(MEMBER).getJournal(record.id);
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.ops)).toEqual([['permissions'], ['permissions']]);
+    expect(entries.every((e) => e.associations === undefined)).toBe(true);
+  });
+
+  test('the owner and the creator get the grantees', async () => {
+    const record = await sharedAndMoved();
+    for (const entries of [
+      await stack.asEntity(OWNER).getJournal(record.id),
+      await stack.getJournal(record.id),
+    ]) {
+      expect(entries[0].associations).toEqual([{ op: 'add', association: readFor(STRANGER) }]);
+      expect(entries[1].associations).toEqual([{ op: 'remove', previous: readFor(STRANGER) }]);
+    }
+
+    const own = await adapter.createRecord(
+      makeRecord({ entityId: MEMBER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+    );
+    await stack.asEntity(MEMBER).grantAccess(own.id, readFor(STRANGER));
+    const byCreator = await stack.asEntity(MEMBER).getJournal(own.id);
+    expect(byCreator[0].associations).toEqual([{ op: 'add', association: readFor(STRANGER) }]);
+  });
+
+  // Asked of both identities, like every other reshare decision: an owner
+  // principal does not carry its subject to the sharing graph.
+  test('delegation is no route to it', async () => {
+    const record = await sharedAndMoved();
+    const entries = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getJournal(record.id);
+    expect(entries.every((e) => e.associations === undefined)).toBe(true);
+  });
+
+  // Elements are dropped, never entries: a mixed write still reports the
+  // half the requester is entitled to, and `seq` stays dense.
+  test('a mixed entry keeps its data half and its place in the log', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({ entityId: OWNER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+    );
+    await stack.asEntity(OWNER).mutate(record.id, {
+      associations: [{ kind: 'tag', label: 'reviewed' }],
+      permissions: [readFor(MEMBER), writeFor(MEMBER), { kind: 'anyone', label: 'read' }],
+    });
+
+    const [entry] = await stack.asEntity(MEMBER).getJournal(record.id);
+    expect(entry.seq).toBe(1);
+    expect(entry.ops).toEqual(expect.arrayContaining(['associate', 'permissions']));
+    expect(entry.associations).toEqual([
+      { op: 'add', association: { kind: 'tag', label: 'reviewed' } },
+    ]);
   });
 });
 

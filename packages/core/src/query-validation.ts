@@ -261,16 +261,51 @@ export function validateAssociation(
   association: Association,
   path = 'association',
 ): ValidationError[] {
-  if (association?.kind === 'permission') {
+  if (!namesKind(association)) {
+    return [
+      {
+        path: `${path}.kind`,
+        message: `Unknown association kind "${String((association as { kind?: unknown })?.kind)}": expected ${[...ASSOCIATION_KINDS].map((k) => `"${k}"`).join(', ')}.`,
+      },
+    ];
+  }
+  if (association.kind === 'permission') {
     return granteeErrors(association, `${path}.grantee`);
   }
-  if (association?.kind === 'anyone') {
+  if (association.kind === 'anyone') {
     return association.label === 'read'
       ? []
       : [{ path: `${path}.label`, message: 'An `anyone` association carries only `read`.' }];
   }
-  if (association?.kind !== 'relationship') return [];
+  if (association.kind !== 'relationship') return [];
   return targetErrors(association.target, `${path}.target`);
+}
+
+/**
+ * Who a duplicated permission names, since kind and label alone don't
+ * distinguish two grants of the same bit to different grantees.
+ */
+function granteeSuffix(association: Association): string {
+  if (association.kind !== 'permission') return '';
+  const g = association.grantee;
+  return g.scope === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
+}
+
+/** The kinds an association may name — the closed set every surface reads. */
+const ASSOCIATION_KINDS = new Set(['tag', 'attachment', 'relationship', 'permission', 'anyone']);
+
+/**
+ * Whether a value is an association at all. Asked ahead of the partition
+ * checks, so a malformed element is named as one rather than reported as
+ * the wrong surface for a kind it never had — a request body supplies raw
+ * JSON, and `null` or `{}` is neither half of the partition.
+ */
+function namesKind(association: Association): boolean {
+  return (
+    !!association &&
+    typeof association === 'object' &&
+    ASSOCIATION_KINDS.has((association as { kind?: unknown }).kind as string)
+  );
 }
 
 /** The bits a permission element may name — the whole of its meaning. */
@@ -328,7 +363,7 @@ export function assertDataAssociations(
   associations: readonly Association[],
   surface: string,
 ): asserts associations is DataAssociation[] {
-  const authority = associations.find(isAuthorityAssociation);
+  const authority = associations.find((a) => namesKind(a) && isAuthorityAssociation(a));
   if (!authority) return;
   throw new StackQueryError(
     `${surface} does not carry authority: a "${authority.kind}" association belongs to the ` +
@@ -345,7 +380,7 @@ export function assertAuthorityAssociations(
   permissions: readonly Association[],
   surface: string,
 ): asserts permissions is AuthorityAssociation[] {
-  const data = permissions.find((a) => !isAuthorityAssociation(a));
+  const data = permissions.find((a) => namesKind(a) && !isAuthorityAssociation(a));
   if (!data) return;
   throw new StackQueryError(
     `${surface} carries authority alone: a "${data.kind}" association belongs to the ` +
@@ -376,7 +411,7 @@ export function validateAssociations(
         ? [
             {
               path: `${path}[${i}]`,
-              message: `Duplicate association identity: ${a.kind} "${a.label}" is named more than once.`,
+              message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
             },
           ]
         : [],

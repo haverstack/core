@@ -66,7 +66,7 @@ await stack.associate(note.id, { kind: 'tag', label: 'favourite' });
 // Or change several things at once — one version, one atomic write
 await stack.mutate(note.id, {
   contentPatch: { title: 'Final title' },
-  permissions: [{ access: 'public' }],
+  permissions: [{ kind: 'anyone', label: 'read' }],
   unlisted: false,
 });
 

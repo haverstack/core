@@ -6572,6 +6572,36 @@ describe('relationship targets', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  // A discriminated union is not a runtime guard, and the kind is what
+  // every surface routes on: a request body supplies raw JSON, and an
+  // element that names no known kind is neither half of the partition.
+  test.each([
+    ['null', null],
+    ['a string', 'tag'],
+    ['an object with no kind', {}],
+    ['an unknown kind', { kind: 'blessing', label: 'x' }],
+  ])('%s is refused as an association, not crashed on', async (_label, element) => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    const association = element as unknown as DataAssociation;
+    const authority = element as unknown as AuthorityAssociation;
+
+    await expect(stack.associate(note.id, association)).rejects.toThrow(StackValidationError);
+    await expect(stack.mutate(note.id, { associations: [association] })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(stack.mutate(note.id, { permissions: [authority] })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(
+      stack.create(NOTE_V1, { text: 'host' }, { associations: [association] }),
+    ).rejects.toThrow(StackValidationError);
+    // Two of them reach the duplicate-identity check, which asks the same
+    // equality every surface does.
+    await expect(
+      stack.mutate(note.id, { associations: [association, association] }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
   test('a target outside the three scopes is refused at create too', async () => {
     await expect(
       stack.create(

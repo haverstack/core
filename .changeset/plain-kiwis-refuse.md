@@ -32,7 +32,22 @@ wholesale replacement that drops every element — which names nothing at all �
 still needs reshare authority, while a set restated is not a reshare. _Write
 implies read_ becomes a cross-element invariant over the set a write would
 produce, which is what makes revoking a `read` refusable while its `write`
-stands. A permission change is a no-bump write: it leaves `version` and
-`updatedAt` where they stand and appends one journal entry carrying `previous`
-per element it moved. `getVersions()`/`getVersion()` correspondingly serve the
-same rows to every requester who passes their gate.
+stands, and an `anyone` element satisfies it for every grantee — a
+world-readable record leaves no writer blind, so revoking the `anyone` is what
+the invariant refuses instead. A permission change is a no-bump write: it
+leaves `version` and `updatedAt` where they stand and appends one journal entry
+carrying `previous` per element it moved.
+
+The journal is therefore where a record's sharing history lives, and reading it
+is gated in two tiers: the mutate surface for the entry, reshare authority for
+its authority half. A write-holder who is neither owner nor creator gets the
+`permissions` op without the grantees beneath it, asked of both identities so
+delegation is no route to it either. Entries are never dropped, so `seq` stays
+dense and a mixed write still reports its content half.
+`getVersions()`/`getVersion()` serve the same `RecordVersion` rows to every
+requester who passes their gate, since a snapshot now carries nothing to
+project.
+
+An association naming no known kind — `null`, `{}`, or a kind outside the five
+— is a `StackValidationError` at every surface that takes one, rather than a
+`TypeError` from the first field read off it.

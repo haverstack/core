@@ -53,7 +53,9 @@ Permission elements share a table, a delta shape and a durability tier with ordi
 - **`associate()`/`dissociate()` refuse authority kinds.** They are gated on the write bit alone, which is exactly why: an authority element reaching them would let a write-holder grant themselves access.
 - **`grantAccess()`/`revokeAccess()`** are the record-level ACL verbs, mirroring the type-level `grant()`/`revoke()`, and carry the reshare gate below. They amend the set where the `permissions` key replaces it — which is the spelling that survives two admins sharing one Record at once, since the later of two concurrent key writes drops what the earlier granted. Same concurrency shape as an [`associations` key write](./data-model.md#mutations), for the same reason.
 
-**The reshare gate reads the computed delta**, not the elements a caller supplied: any `add`, `remove` or `repoint` of a `permission` or `anyone` element, in either direction, requires reshare authority. A gate that inspected only what was named would miss the wholesale replacement that drops everything, which names nothing at all. A `permissions` key that restates the set moves nothing and is not a reshare.
+**The reshare gate reads the computed delta**, not the elements a caller supplied: any `add`, `remove` or `repoint` of a `permission` or `anyone` element, in either direction, requires reshare authority. A gate that inspected only what was named would miss the wholesale replacement that drops everything, which names nothing at all. A `permissions` key that restates the set moves nothing, and alongside a key the write bit already carries it is not a reshare.
+
+A change set naming **no** such key is the one exception, and it reshares on the key's presence: the gate is chosen before a record is in hand to compute a delta against, and reading one ungated to decide would answer whether a Record exists to a requester who may not read it. So a `permissions` key sent on its own asks reshare authority whether or not it moves anything — the refusal a caller who cannot reshare would have earned for any other spelling of the same key.
 
 Three things are therefore impossible for a write-holder, who cannot reshare: wiping the ACL through a wholesale `associations` write, granting themselves a `permission` element, and revoking someone else's.
 
@@ -82,7 +84,7 @@ This is about the **served topology**: for `adapter-local`, direct adapter acces
 
 ### Write implies read
 
-> **Mutation is never blind.** No grantee holds `write` on a Record without a `read` for the same grantee beside it, and a Grant conveys a mutate action only alongside a read action of matching scope.
+> **Mutation is never blind.** No grantee holds `write` on a Record it cannot read — a `read` for the same grantee beside it, or an `anyone` that already reaches everyone — and a Grant conveys a mutate action only alongside a read action of matching scope.
 
 Recoverability is what makes one coarse bit safe, and undo means seeing prior content — so the mutate surface hands back the Record it wrote and opens the Record's whole [history](./versioning.md#history-access), which is retroactive and deliberately not time-sliced. A requester holding `write` with no `read` would therefore be refused by `get()` and `query()` while reading current _and_ every historical content through `mutate()`, `getVersions()` and `restoreVersion()`. The ACL would say strictly less than it does. Both layers refuse the combination instead:
 
@@ -91,11 +93,14 @@ Recoverability is what makes one coarse bit safe, and undo means seeing prior co
 | A `write` element with no `read` for the same `entity` grantee | The write bit is inert without a `read` reaching the same grantee   |
 | A `write` element with no `read` for the same `group` grantee  | Same rule; roster resolution doesn't change it                      |
 | Revoking a `read` while its `write` stands                     | Same rule, reached from the other side                              |
+| Revoking `anyone` while a `write` it was covering stands       | Same rule again: the removal is what leaves the writer blind        |
 | Grant `['update-any']`, `['delete-any']`                       | A `-any` verb needs `read-any` — read over the reach it can mutate  |
 | Grant `['read-own', 'update-any']`                             | Scope mismatch: reading one's own is not reading what it may mutate |
 | Grant `['update-own']`, `['delete-own']`                       | A `-own` verb needs `read-own` or `read-any`                        |
 
 Because the bits are separate elements, this is a **cross-element invariant**, not a check on one element: no element alone can tell whether a `write` means anything. It is asked of the permission set the write would _produce_, the same way the `_group` [at-least-one-admin check](./identity.md#group) reads its post-state — which is what makes `revokeAccess()` of a `read` refusable while the matching `write` still stands.
+
+**An `anyone` element satisfies it for every grantee.** A world-readable Record leaves no writer blind, so a second `read` naming the writer would withhold nothing and refusing the set would be friction, not safety. The post-state reading is what keeps that honest in both directions: revoking the `anyone` is refused while a `write` it was covering stands, so making a Record private again means withdrawing its writers first, in whichever order the owner chooses.
 
 `grantAccess()`/`revokeAccess()`, the `permissions` key at create time and after, and `grant()` reject these with `StackValidationError`, and **evaluation refuses them again** — the same posture the ungrantable system families take. Permission elements or a `_grant` Record can also arrive from an unscoped `Stack`, a JSON import, or a server mapping a request body onto storage, and refusing only at the helper would hold only for what went through it. A `write` element with no `read` beside it, or a Grant carrying mutation without read, confers nothing however it came to exist.
 

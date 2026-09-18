@@ -93,6 +93,7 @@ import {
   associationEqual,
   isGroupRecord,
   presentDeleted,
+  withoutAuthorityChanges,
   assertNonEmptyChangeSet,
 } from './record-changes.js';
 // Every import from stack.js is type-only: a ScopedStack never constructs
@@ -974,7 +975,12 @@ export class ScopedStack implements StackClient {
       changes.parentId !== undefined;
     // `unlisted` reshares on the key's presence alone: it is a boolean, so
     // naming it is the whole of what it can say. `permissions` is a set,
-    // and a set restated is not a reshare — see permissionsMove() below.
+    // and a set restated is not a reshare — see permissionsMove() below,
+    // which refines the escalation on this branch alone. A change set
+    // naming no writable key is gated before any record is in hand to
+    // compute a delta from, so there it reshares on presence, like the
+    // boolean. See docs/spec/access-control.md
+    // § Storage unifies; the API does not.
     const unlists = changes.unlisted !== undefined;
 
     // requireUpdatable() reads the record and applies the write gate; the
@@ -1061,22 +1067,26 @@ export class ScopedStack implements StackClient {
 
   /** The reshare decision alone, for a record already read and write-gated. */
   private async requireReshareOf(record: StackRecord): Promise<void> {
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) {
-      // Group management, not authorship: a creator later demoted from the
-      // admin roster shouldn't retain a side door to reassign who can read
-      // or write the group record.
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
-      return;
-    }
-    // Intersected like every other authority here: the principal must hold
-    // the verb, and the subject must be able to reach this record —
-    // without which an owner principal would carry its subject to records
-    // the subject cannot touch. create() withholds the same reach via
-    // mayGrantAccess().
-    if (!this.mayReshare(this.principalEntityId, record)) throw await this.denialFor(record);
-    if (this.delegated && !this.mayReshare(this.subjectEntityId, record)) {
-      throw await this.denialFor(record);
-    }
+    if (!this.canReshare(record)) throw await this.denialFor(record);
+  }
+
+  /**
+   * Whether this request may decide who else reaches `record` — the
+   * decision requireReshareOf() refuses on, without the refusal, for the
+   * read paths that project on it rather than throw.
+   *
+   * A `_group` asks management, not authorship: a creator later demoted
+   * from the admin roster shouldn't retain a side door to reassign who can
+   * read or write the group record. Everything else is intersected like
+   * every other authority here — the principal must hold it, and the
+   * subject must be able to reach this record, without which an owner
+   * principal would carry its subject to records the subject cannot touch.
+   * create() withholds the same reach via mayGrantAccess().
+   */
+  private canReshare(record: StackRecord): boolean {
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) return this.isGroupManager(record);
+    if (!this.mayReshare(this.principalEntityId, record)) return false;
+    return !this.delegated || this.mayReshare(this.subjectEntityId, record);
   }
 
   /**
@@ -1251,11 +1261,17 @@ export class ScopedStack implements StackClient {
 
   /**
    * See getVersions() — the same mutate-surface gate, for the same reason.
-   * See docs/spec/journal.md § Reading it.
+   *
+   * The journal is where a Record's sharing history lives, and that half
+   * is the resharer's: a reader who could not have moved the ACL is served
+   * the `permissions` op without the elements beneath it, so the entry
+   * still names that it moved. Asked of both identities, so delegation is
+   * no route to it either. See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
-    await this.requireUpdatable(id, { mutating: false });
-    return this.stack.getJournal(id, query);
+    const record = await this.requireUpdatable(id, { mutating: false });
+    const entries = await this.stack.getJournal(id, query);
+    return this.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
   }
 
   /** See getVersions() — the same mutate-surface gate. */
