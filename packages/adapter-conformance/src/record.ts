@@ -23,6 +23,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
+import type { AuthorityAssociation } from '@haverstack/core';
 import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
@@ -270,6 +271,72 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           adapter.associate(uniqueId('missing'), { kind: 'tag', label: 'x' }),
           'not_found',
         );
+      });
+
+      // Authority and data share one stored set, projected into two
+      // fields by kind. Every adapter partitions it for itself, so the
+      // agreement is worth pinning here rather than once per adapter.
+      // See docs/spec/access-control.md § Record-level permissions.
+      test('authority kinds travel the same verbs and project onto permissions', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const grant: AuthorityAssociation = {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'entity', entityId: 'did:key:z6MkConformance' },
+        };
+
+        await adapter.associate(record.id, { kind: 'tag', label: 'draft' });
+        const granted = await adapter.associate(record.id, grant);
+        expect(granted.permissions).toEqual([grant]);
+        expect(granted.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
+        expect(granted.version).toBe(record.version);
+
+        const revoked = await adapter.dissociate(record.id, grant);
+        expect(revoked.permissions ?? []).toEqual([]);
+        expect(revoked.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
+      });
+
+      test('a group grantee keeps its role — member and admin are two entries', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const groupId = uniqueId('grp');
+        const forRole = (role: 'member' | 'admin'): AuthorityAssociation => ({
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId, role },
+        });
+        const member = forRole('member');
+        const admin = forRole('admin');
+
+        await adapter.associate(record.id, member);
+        const both = await adapter.associate(record.id, admin);
+        expect(both.permissions).toEqual(expect.arrayContaining([member, admin]));
+        expect(both.permissions).toHaveLength(2);
+      });
+
+      test('each change-set key replaces only its own half of the set', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+        await adapter.associate(record.id, { kind: 'tag', label: 'draft' });
+        await adapter.associate(record.id, anyone);
+
+        const retagged = await adapter.mutateRecord(
+          record.id,
+          { associations: [{ kind: 'tag', label: 'reviewed' }] },
+          { bumpsVersion: false },
+        );
+        expect(retagged.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+        expect(retagged.permissions).toEqual([anyone]);
+
+        const cleared = await adapter.mutateRecord(
+          record.id,
+          { permissions: [] },
+          { bumpsVersion: false },
+        );
+        expect(cleared.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+        expect(cleared.permissions ?? []).toEqual([]);
       });
     });
 
