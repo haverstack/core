@@ -49,7 +49,8 @@ import type {
   RecordFilter,
   QueryResult,
   Association,
-  Permission,
+  AuthorityAssociation,
+  DataAssociation,
   Migration,
   MigrationFn,
   RecordVersion,
@@ -91,6 +92,8 @@ import {
   assertValidRelatedTo,
   assertValidJournalQuery,
   assertValidSort,
+  assertAuthorityAssociations,
+  assertDataAssociations,
   filtersContent,
   validateAssociation,
   validateAssociations,
@@ -188,8 +191,8 @@ export type CreateRecordOptions = {
    * reconstructing a delegated write. See StackRecord.principalId.
    */
   principalId?: EntityId;
-  permissions?: Permission[];
-  associations?: Association[];
+  permissions?: AuthorityAssociation[];
+  associations?: DataAssociation[];
   /**
    * Create the record already unlisted, so the create event itself is
    * withheld from the feed — there is no window where the record exists
@@ -349,8 +352,8 @@ export interface StackClient {
   /**
    * Apply a change set: any combination of content patch, `parentId`,
    * `permissions`, `associations` and `unlisted`, in one atomic write —
-   * producing one version where it names `contentPatch` or `permissions`,
-   * and none where it doesn't. Keys are read for presence, so `unlisted: false`
+   * producing one version where it names `contentPatch`, and none where it
+   * doesn't. Keys are read for presence, so `unlisted: false`
    * and `parentId: null` are changes; a change set naming no key at all is
    * a StackQueryError. Under ScopedStack each key carries its own gate and
    * one refused key refuses the call.
@@ -369,9 +372,19 @@ export interface StackClient {
    * so it needs no OCC precondition. See docs/spec/versioning.md § Version
    * history.
    */
-  associate(id: string, association: Association): Promise<StackRecord>;
+  associate(id: string, association: DataAssociation): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: string, association: Association): Promise<StackRecord>;
+  dissociate(id: string, association: DataAssociation): Promise<StackRecord>;
+  /**
+   * Extend who reaches a record by one element — the record-level mirror
+   * of the type-level `grant()`, and the amending spelling of the
+   * `permissions` key, which replaces the whole set. Never bumps
+   * `version`/`updatedAt` and takes no `ifVersion`, on the same terms as
+   * associate(). See docs/spec/access-control.md § Record-level permissions.
+   */
+  grantAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
+  /** Withdraw one element of who reaches a record — see grantAccess(). */
+  revokeAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -868,10 +881,18 @@ export class Stack implements StackClient {
     const updatedAt =
       opts.updatedAt instanceof Date ? new Date(opts.updatedAt.getTime()) : createdAt;
 
+    // Ahead of every other check on these two lists: a caller that named
+    // the wrong surface asked for something this layer does not offer, and
+    // reporting its grantee as a malformed relationship target would
+    // describe the mistake as the wrong kind of problem.
+    assertDataAssociations(opts.associations ?? [], 'associations');
+    assertAuthorityAssociations(opts.permissions ?? [], 'permissions');
+
     const errors = [
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
+      ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
       ...validateClockField(opts.createdAt, 'createdAt'),
@@ -1032,9 +1053,10 @@ export class Stack implements StackClient {
 
   /**
    * Apply a change set — content patch, `parentId`, `permissions`,
-   * `associations`, `unlisted`, in any combination — as one atomic write
-   * producing one version and one snapshot. Keys are read for presence, so
-   * `unlisted: false` and `parentId: null` are changes.
+   * `associations`, `unlisted`, in any combination — as one atomic write.
+   * Atomicity is what it is for: a publish is one act, so nothing it names
+   * may half-land. Keys are read for presence, so `unlisted: false` and
+   * `parentId: null` are changes.
    *
    * Every key present is checked against the record as it stands, and a
    * change set already satisfied in all of them writes nothing and returns
@@ -1082,17 +1104,25 @@ export class Stack implements StackClient {
     const bumps = bumpsVersion(ops);
 
     // Computed against the same before/after changeSetOps compared, so
-    // whether associate/dissociate appear in `ops` and what it lists can
-    // never disagree. See docs/spec/events.md § The event shape.
-    const assocDelta = changes.associations
-      ? associationDelta(existing.associations ?? [], changes.associations)
-      : undefined;
+    // whether associate/dissociate/permissions appear in `ops` and what
+    // the journal lists can never disagree. Both halves of the partition
+    // produce the same tagged edits and travel as one list: the journal's
+    // argument is prior state, and an ACL element's is no different from a
+    // tag's. See docs/spec/events.md § The event shape.
+    const assocDelta = [
+      ...(changes.associations
+        ? associationDelta(existing.associations ?? [], changes.associations)
+        : []),
+      ...(changes.permissions
+        ? associationDelta(existing.permissions ?? [], changes.permissions)
+        : []),
+    ];
 
     const previousParentId = existing.parentId ?? null;
     const change = new PendingChange(ops, {
       actor: Stack.actorFrom(opts),
       ...(ops.includes('reparent') && { previousParentId }),
-      ...(assocDelta && { associations: assocDelta }),
+      ...(assocDelta.length && { associations: assocDelta }),
     });
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       ...(bumps
@@ -1139,6 +1169,14 @@ export class Stack implements StackClient {
   ): Promise<Record<string, unknown> | undefined> {
     const { contentPatch, permissions, associations, parentId } = changes;
 
+    // Each key replaces only within its own domain. Asked before the
+    // shape checks below so a misrouted element is reported as the wrong
+    // surface rather than as a malformed value of the right one, and
+    // asked here rather than in `ScopedStack` so an unscoped `Stack`, an
+    // import and a server mapping a request body are all held to it.
+    if (associations) assertDataAssociations(associations, 'associations');
+    if (permissions) assertAuthorityAssociations(permissions, 'permissions');
+
     const errors = [
       ...(contentPatch
         ? [
@@ -1147,7 +1185,9 @@ export class Stack implements StackClient {
             ...validateContentKeys(contentPatch),
           ]
         : []),
-      ...(permissions ? validatePermissions(permissions) : []),
+      ...(permissions
+        ? [...validateAssociations(permissions, 'permissions'), ...validatePermissions(permissions)]
+        : []),
       ...(associations ? validateAssociations(associations) : []),
     ];
     if (errors.length > 0) throw new StackValidationError(errors);
@@ -1222,7 +1262,7 @@ export class Stack implements StackClient {
    * that stops anything downstream relying on the invariant.
    * See docs/spec/identity.md § Group.
    */
-  private assertGroupAdminRemains(record: StackRecord, next: Association[]): void {
+  private assertGroupAdminRemains(record: StackRecord, next: DataAssociation[]): void {
     if (!isGroupRecord(record)) return;
     if (hasGroupAdmin(next)) return;
     throw new StackConflictError(
@@ -1251,10 +1291,11 @@ export class Stack implements StackClient {
    */
   async associate(
     id: string,
-    association: Association,
+    association: DataAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
+    assertDataAssociations([association], 'associate()');
     const errors = validateAssociation(association);
     if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.adapter.getRecord(id);
@@ -1291,10 +1332,11 @@ export class Stack implements StackClient {
    */
   async dissociate(
     id: string,
-    association: Association,
+    association: DataAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
+    assertDataAssociations([association], 'dissociate()');
     const errors = validateAssociation(association);
     if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.adapter.getRecord(id);
@@ -1326,6 +1368,88 @@ export class Stack implements StackClient {
     const updated = await this.adapter.dissociate(id, association, { journal: change.journal });
     this.announce(change, updated);
     return updated;
+  }
+
+  /**
+   * Extend who reaches a record by one element. The amending spelling of
+   * the `permissions` key, and the one that survives two admins sharing a
+   * record at once: a key write replaces the whole set, so the later of
+   * two concurrent ones drops what the earlier granted.
+   * See docs/spec/access-control.md § Record-level permissions.
+   *
+   * Never bumps `version`/`updatedAt` and takes no `ifVersion`, on the
+   * same terms as associate(). An element the record already carries is a
+   * no-op. Returns the record as it now stands.
+   */
+  async grantAccess(
+    id: string,
+    permission: AuthorityAssociation,
+    opts: ActorOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertAuthorityAssociations([permission], 'grantAccess()');
+    const errors = validateAssociation(permission, 'permission');
+    if (errors.length > 0) throw new StackValidationError(errors);
+    const existing = await this.requireRecord(id);
+    const current = existing.permissions ?? [];
+    if (current.some((p) => associationEqual(p, permission))) return existing;
+    this.assertPermissionSet([...current, permission]);
+
+    const change = new PendingChange('permissions', {
+      actor: Stack.actorFrom(opts),
+      associations: [{ op: 'add', association: permission }],
+    });
+    const updated = await this.adapter.associate(id, permission, { journal: change.journal });
+    this.announce(change, updated);
+    return updated;
+  }
+
+  /**
+   * Withdraw one element of who reaches a record — see grantAccess() for
+   * why this is a verb rather than a key write. An element the record does
+   * not carry is a no-op. Returns the record as it now stands.
+   */
+  async revokeAccess(
+    id: string,
+    permission: AuthorityAssociation,
+    opts: ActorOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertAuthorityAssociations([permission], 'revokeAccess()');
+    const errors = validateAssociation(permission, 'permission');
+    if (errors.length > 0) throw new StackValidationError(errors);
+    const existing = await this.requireRecord(id);
+    const current = existing.permissions ?? [];
+    const matched = current.find((p) => associationEqual(p, permission));
+    if (!matched) return existing;
+    this.assertPermissionSet(current.filter((p) => !associationEqual(p, permission)));
+
+    const change = new PendingChange('permissions', {
+      actor: Stack.actorFrom(opts),
+      associations: [{ op: 'remove', previous: matched }],
+    });
+    const updated = await this.adapter.dissociate(id, permission, { journal: change.journal });
+    this.announce(change, updated);
+    return updated;
+  }
+
+  /**
+   * Hold a permission set to the cross-element invariant, asked of the set
+   * the write would *produce* — the same post-state reading the `_group`
+   * at-least-one-admin check takes, and for the same reason: revoking a
+   * `read` is what leaves a `write` standing alone, and no element-wise
+   * check can see it. See docs/spec/access-control.md § Write implies read.
+   */
+  private assertPermissionSet(next: AuthorityAssociation[]): void {
+    const errors = validatePermissions(next);
+    if (errors.length > 0) throw new StackValidationError(errors);
+  }
+
+  /** The record, or the not-found refusal every mutating verb owes. */
+  private async requireRecord(id: string): Promise<StackRecord> {
+    const record = await this.adapter.getRecord(id);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    return record;
   }
 
   /**
@@ -1581,8 +1705,9 @@ export class Stack implements StackClient {
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
    * stored typeId (not the record's current type), and puts back `content`
-   * and `typeId` alone: containment, listing, associations and permissions
-   * are all left exactly where they stand. See docs/spec/versioning.md
+   * and `typeId` alone: containment, listing and associations — authority
+   * ones among them — are all left exactly where they stand, because a
+   * snapshot carries none of them. See docs/spec/versioning.md
    * § Restore semantics.
    */
   async restoreVersion(
@@ -2633,8 +2758,8 @@ export class Stack implements StackClient {
    * Snapshot of a record's prior state, passed with the mutating adapter
    * call so snapshot and mutation land in one atomic write. Carries what
    * only a snapshot preserves: `content` and the `typeId` it is read
-   * under, plus `permissions` for audit. Containment, listing and
-   * associations are all kept by the journal instead, so no version ever
+   * under. Containment, listing and associations — the authority ones
+   * among them — are all kept by the journal instead, so no version ever
    * snapshots them and there is nothing for a restore to roll them back
    * to. See docs/spec/versioning.md § Version history.
    */
@@ -2647,7 +2772,6 @@ export class Stack implements StackClient {
       ...(record.entityId && { entityId: record.entityId }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
-      ...(record.permissions && { permissions: record.permissions }),
     };
   }
 }

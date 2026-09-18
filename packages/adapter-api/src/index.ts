@@ -468,7 +468,6 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
   if (raw.entityId != null) v.entityId = raw.entityId;
   if (raw.updatedBy != null) v.updatedBy = raw.updatedBy;
   if (raw.updatedVia != null) v.updatedVia = raw.updatedVia;
-  if (raw.permissions != null) v.permissions = raw.permissions;
   return v;
 };
 
@@ -1186,29 +1185,37 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
+   * One storage primitive, two endpoints: authority and data share a
+   * table and a delta, and never share a call, so the element's own kind
+   * picks the surface it travels on. A permission routed through the
+   * association endpoint would be refused by any server built on
+   * `ScopedStack`, which is the partition doing its job.
+   * See docs/spec/access-control.md § Storage unifies; the API does not.
+   */
+  private static associationPath(association: Association): string {
+    return association.kind === 'permission' || association.kind === 'anyone'
+      ? 'permissions'
+      : 'associations';
+  }
+
+  /**
    * No `If-Match` — associate()/dissociate() never bump `version`, so
    * there's nothing an `ifVersion` precondition could guard here. See
    * docs/spec/versioning.md § Version history.
    */
   async associate(id: RecordId, association: Association): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
-      'POST',
-      `/records/${id}/associations`,
-      association,
-    );
-    return requireRecordBody(raw, `POST /records/${id}/associations`);
+    const path = `/records/${id}/${APIAdapter.associationPath(association)}`;
+    const raw = await this.request<WireRecord | undefined>('POST', path, association);
+    return requireRecordBody(raw, `POST ${path}`);
   }
 
   /** No `If-Match` — see associate(). */
   async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
     // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
     // §9.3.5) and proxies/gateways are free to drop or reject it.
-    const raw = await this.request<WireRecord | undefined>(
-      'POST',
-      `/records/${id}/associations/delete`,
-      association,
-    );
-    return requireRecordBody(raw, `POST /records/${id}/associations/delete`);
+    const path = `/records/${id}/${APIAdapter.associationPath(association)}/delete`;
+    const raw = await this.request<WireRecord | undefined>('POST', path, association);
+    return requireRecordBody(raw, `POST ${path}`);
   }
 
   // -------------------------------------------------------

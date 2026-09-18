@@ -52,8 +52,8 @@ type RecordChange = {
   updatedAt: Date; // as persisted by this change; unchanged from before on associate/dissociate
   parentId?: RecordId;
   actor?: ChangeActor;
-  associationsAdded?: Association[]; // present when `ops` includes `associate`
-  associationsRemoved?: Association[]; // present when `ops` includes `dissociate`
+  associationsAdded?: DataAssociation[]; // present when `ops` includes `associate`
+  associationsRemoved?: DataAssociation[]; // present when `ops` includes `dissociate`
   record?: StackRecord;
   seq?: string; // resume cursor, on a resumable feed only
 };
@@ -80,6 +80,8 @@ Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `u
 - `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. An attachment's `attachmentRecordId` is not repeated on removal, the same way a `purged` frame never carries the content it destroyed: the field names what happened, not a payload that is no longer current. The journal's [`remove`](./journal.md#the-entry) keeps the annotation, because putting an association back is exactly what that tier is read for.
 
 Neither list is ever present on an op other than `associate`/`dissociate`, and a `mutate()` change set that swaps one association for another (`ops: ['associate', 'dissociate']`) carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
+
+**Both lists carry the data half alone.** Permission elements share the association delta in storage and in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `permissions` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op, the journal entry and [the reshare gate](./access-control.md#storage-unifies-the-api-does-not) cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
 
 **Both lists are derived from the [journal's tagged list](./journal.md#the-entry), not computed beside it.** One write names what it moved once; the durable half takes that list as it stands and the frame is flattened out of it. So a frame can never report an edit an entry doesn't, and the two shapes are a difference in what each tier is read for rather than two comparisons that might disagree.
 

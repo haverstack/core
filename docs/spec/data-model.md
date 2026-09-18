@@ -25,8 +25,8 @@ type StackRecord = {
   updatedVia?: string; // The principal behind that mutation, when it isn't updatedBy
   deletedAt?: Date; // Present if soft-deleted
   unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Access control)
-  permissions?: Permission[]; // Access control (see Access control)
-  associations?: Association[]; // Tags, attachments, relationships
+  permissions?: AuthorityAssociation[]; // Who reaches this Record (see Access control)
+  associations?: DataAssociation[]; // Tags, attachments, relationships
 };
 ```
 
@@ -45,7 +45,7 @@ Because a [version snapshot](./versioning.md#version-history) captures the Recor
 - **Absent means unknown, never "the author".** An unscoped `Stack` names no requester, so it writes no actor — and clears any the Record carried, rather than leaving the previous one in place to be read as this one.
 - **Neither is a permission input.** No grant, permission entry or gate resolves against `updatedBy`. It is an audit fact, not an authority one, and reading it as authority would let a write-holder acquire standing by touching a Record.
 - **Both are assigned from the authenticated session** and ignored on input, on the same terms and for the same reason as `entityId` and `principalId` — see [Wire format § Records](./wire-format.md#records).
-- **`restoreVersion()` stamps the restorer.** A rollback is a write by whoever performs it, so it never restores the stamp along with the content — the same carve-out that keeps it from restoring `permissions`.
+- **`restoreVersion()` stamps the restorer.** A rollback is a write by whoever performs it, so it never restores the stamp along with the content.
 
 ### Record IDs
 
@@ -98,15 +98,19 @@ await stack.mutate(noteId, {
 type RecordChanges = {
   contentPatch?: Record<string, unknown | null>;
   parentId?: string | null;
-  permissions?: Permission[];
-  associations?: Association[];
+  permissions?: AuthorityAssociation[];
+  associations?: DataAssociation[];
   unlisted?: boolean;
 };
 ```
 
-**`associations`, `parentId` and `unlisted` are the keys that do not decide whether the call bumps.** A change set naming only those writes no version and takes no snapshot, exactly as `associate()`/`dissociate()` below do not — each of the three is invertible from the journal entry the write appends, so none ever needed the recoverability a snapshot buys (see [Versioning § Version history](./versioning.md#version-history), and [the change journal](./journal.md) for where their prior state is kept instead). Name any of them alongside `contentPatch` or `permissions` and the call bumps once, covering everything it moved.
+**`contentPatch` is the only key that decides whether the call bumps.** A change set naming only the others writes no version and takes no snapshot, exactly as `associate()`/`dissociate()` below do not — each of them is invertible from the journal entry the write appends, so none ever needed the recoverability a snapshot buys (see [Versioning § Version history](./versioning.md#version-history), and [the change journal](./journal.md) for where their prior state is kept instead). Name any of them alongside `contentPatch` and the call bumps once.
 
-**Every key replaces the aspect it names, except `contentPatch`, which says so in its name.** `permissions` and `associations` replace what the Record holds, `unlisted` sets or clears the withholding, and `parentId` names a container or `null` for the root. `contentPatch` merges instead: an omitted field keeps its current value and `null` removes one. The name carries the whole disambiguation — a key called `content` sitting beside keys that replace would have to be read against this paragraph to know that it doesn't, and the one asymmetry in the envelope is worth a longer key rather than a footnote.
+**One call, one act.** `mutate()` is the only multi-aspect atomic write a Record has, and that — not version batching — is why it exists: a publish is one act, so nothing it names may half-land.
+
+**`associations` and `permissions` are two domains, not one list.** They are [projections over one stored set, partitioned by kind](./access-control.md#storage-unifies-the-api-does-not); each key replaces only within its own, and a kind named in the wrong one is a `StackQueryError`. An app editing tags is never handed the authority half, so it cannot drop it.
+
+**Every key replaces the aspect it names, except `contentPatch`, which says so in its name.** `permissions` and `associations` replace what the Record holds within their own domain, `unlisted` sets or clears the withholding, and `parentId` names a container or `null` for the root. `contentPatch` merges instead: an omitted field keeps its current value and `null` removes one. The name carries the whole disambiguation — a key called `content` sitting beside keys that replace would have to be read against this paragraph to know that it doesn't, and the one asymmetry in the envelope is worth a longer key rather than a footnote.
 
 Content is a patch because uniformity costs more here than it buys. [`limits.contentBytes`](./adapters.md#adapter-capabilities) bounds what travels, so a whole-document write puts a one-field edit against the full ceiling; two apps editing different top-level fields of one Record both survive a patch and clobber one another under replacement; and content read through [`presentAt: 'latest'`](#type-migrations) cannot be written back wholesale at all, since a write validates against the Record's own stored Type and a read-modify-write would submit migrated content to the schema it was migrated away from. A patch touches only the fields the caller named, so none of the three arises.
 
@@ -119,6 +123,8 @@ Content is a patch because uniformity costs more here than it buys. [`limits.con
 **`patchContent(id, patch, opts)`** is the content-only spelling, exactly `mutate()` with `contentPatch` alone. Content edits outnumber every other kind by a wide margin, and the name says what the operation does instead of promising a symmetry with `create()` that a patch does not have.
 
 **`associate()` and `dissociate()` are not the `associations` key.** Each adds or removes a single Association, matched by kind, label and payload, and is a no-op when the Record already stands that way. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
+
+**`grantAccess()` and `revokeAccess()` stand in the same relation to the `permissions` key**, and carry the reshare gate rather than the write bit — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). The concurrency warning above applies to `permissions` exactly as it does to `associations`: two admins granting different people through the key clobber, where the verbs let both land.
 
 **What the envelope does not carry.** `typeId` moves only through [`commitMigration()`](#type-migrations), which replaces content wholesale under a new schema and carries its own owner-only gate. `deletedAt` moves only through `delete()`/`undelete()`: a tombstone transition is a lifecycle step rather than an edit, and [mutations are refused against a tombstone](./versioning.md#mutations-are-refused-not-applied-to-a-tombstone) rather than bundled with one. `createdAt` and `updatedAt` are settable at [create time only, by the owner acting alone](#backdating-on-import). Every remaining native field is stamped by the write itself or is create-only — [Reparenting](#reparenting) gives the full split.
 

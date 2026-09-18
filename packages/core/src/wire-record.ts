@@ -16,9 +16,9 @@ import { StackQueryError, StackValidationError } from './errors.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
 import { RECORD_CHANGE_KEYS } from './types.js';
 import type {
-  Association,
   EntityId,
-  Permission,
+  AuthorityAssociation,
+  DataAssociation,
   RecordChanges,
   TokenSession,
   TypeId,
@@ -111,9 +111,9 @@ export function createOptionsFromWireRecord(
   const appId = optionalString(record, 'appId');
   if (appId !== undefined) options.appId = appId;
 
-  const permissions = optionalArray<Permission>(record, 'permissions');
+  const permissions = optionalArray<AuthorityAssociation>(record, 'permissions');
   if (permissions !== undefined) options.permissions = permissions;
-  const associations = optionalArray<Association>(record, 'associations');
+  const associations = optionalArray<DataAssociation>(record, 'associations');
   if (associations !== undefined) options.associations = associations;
 
   // Presence is the whole signal: an unlisted record is unlisted from
@@ -175,9 +175,9 @@ export function changesFromWireBody(body: unknown): RecordChanges {
     changes.parentId = parentId;
   }
 
-  const permissions = optionalArray<Permission>(envelope, 'permissions');
+  const permissions = optionalArray<AuthorityAssociation>(envelope, 'permissions');
   if (permissions !== undefined) changes.permissions = permissions;
-  const associations = optionalArray<Association>(envelope, 'associations');
+  const associations = optionalArray<DataAssociation>(envelope, 'associations');
   if (associations !== undefined) changes.associations = associations;
 
   if (envelope.unlisted !== undefined) {

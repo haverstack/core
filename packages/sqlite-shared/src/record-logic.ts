@@ -96,7 +96,6 @@ const VERSION_COLUMNS = [
   'entity_id',
   'updated_by',
   'updated_via',
-  'permissions',
 ] as const;
 
 const versionRowValues = (version: RecordVersion): unknown[] => [
@@ -106,7 +105,6 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
   version.entityId ?? null,
   version.updatedBy ?? null,
   version.updatedVia ?? null,
-  version.permissions ? JSON.stringify(version.permissions) : null,
 ];
 
 export type SharedSqlRecordLogicDeps = {
@@ -248,8 +246,8 @@ export class SharedSqlRecordLogic {
           `INSERT INTO records
           (id, type_id, created_at, updated_at, content, version,
            parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
-           deleted_at, unlisted_at, permissions)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           deleted_at, unlisted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             record.id,
             record.typeId,
@@ -265,7 +263,6 @@ export class SharedSqlRecordLogic {
             record.updatedVia ?? null,
             record.deletedAt ? toMs(record.deletedAt) : null,
             record.unlistedAt ? toMs(record.unlistedAt) : null,
-            record.permissions ? JSON.stringify(record.permissions) : null,
           ],
         );
       } catch (err) {
@@ -275,9 +272,8 @@ export class SharedSqlRecordLogic {
         throw err;
       }
 
-      if (record.associations?.length) {
-        this.insertAssociations(record.id, record.associations);
-      }
+      const edges = [...(record.associations ?? []), ...(record.permissions ?? [])];
+      if (edges.length) this.insertAssociations(record.id, edges);
 
       fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
       this.syncContentIndex(record.id, record.typeId, record.content);
@@ -361,10 +357,6 @@ export class SharedSqlRecordLogic {
       sets.push('parent_id = ?');
       values.push(changes.parentId);
     }
-    if (changes.permissions !== undefined) {
-      sets.push('permissions = ?');
-      values.push(changes.permissions.length ? JSON.stringify(changes.permissions) : null);
-    }
     if (changes.unlisted !== undefined) {
       sets.push('unlisted_at = ?');
       // Stamped fresh because this key is only ever present on a
@@ -381,9 +373,7 @@ export class SharedSqlRecordLogic {
         if (sets.length > 0) {
           this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
         }
-        if (changes.associations !== undefined) {
-          this.replaceAssociations(id, changes.associations);
-        }
+        this.replaceAssociationHalves(id, changes);
         this.appendJournal(id, opts.journal);
       });
       return this.reread(id, 'mutateRecord');
@@ -403,9 +393,7 @@ export class SharedSqlRecordLogic {
 
       this.versionedUpdate(id, sets, values, opts, now);
 
-      if (changes.associations !== undefined) {
-        this.replaceAssociations(id, changes.associations);
-      }
+      this.replaceAssociationHalves(id, changes);
 
       if (merged !== undefined) {
         fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
@@ -894,7 +882,8 @@ export class SharedSqlRecordLogic {
          AND related_scope = ?
          AND related_id    = ?
          AND related_ns    = ?
-         AND related_stack = ?`,
+         AND related_stack = ?
+         AND related_role  = ?`,
         [recordId, association.kind, association.label, ...associationKeyColumns(association)],
       );
       this.appendJournal(recordId, opts.journal);
@@ -903,14 +892,40 @@ export class SharedSqlRecordLogic {
     return this.reread(recordId, 'dissociate');
   }
 
+  /** The kinds each change-set key replaces, and nothing else. */
+  private static readonly DATA_KINDS = ['tag', 'attachment', 'relationship'];
+  private static readonly AUTHORITY_KINDS = ['permission', 'anyone'];
+
   /**
-   * Swap a record's association set for `associations` wholesale — the
-   * "replace, don't merge" semantics a change set's association list and a
-   * version snapshot's both carry. Caller-transactional, like every write
-   * below.
+   * Apply a change set's two association keys, each replacing only within
+   * its own half of the partition. That partition is the whole reason a
+   * tag write cannot drop an ACL: the `associations` key deletes data
+   * kinds alone, so the authority rows beside them are never in scope.
+   * Caller-transactional, like every write below.
+   * See docs/spec/access-control.md § Record-level permissions.
    */
-  private replaceAssociations(recordId: string, associations: Association[]): void {
-    this.exec.run('DELETE FROM associations WHERE record_id = ?', [recordId]);
+  private replaceAssociationHalves(recordId: string, changes: RecordChanges): void {
+    if (changes.associations !== undefined) {
+      this.replaceAssociations(recordId, changes.associations, SharedSqlRecordLogic.DATA_KINDS);
+    }
+    if (changes.permissions !== undefined) {
+      this.replaceAssociations(recordId, changes.permissions, SharedSqlRecordLogic.AUTHORITY_KINDS);
+    }
+  }
+
+  /**
+   * Swap one half of a record's association set wholesale — the "replace,
+   * don't merge" semantics a change set's association list carries.
+   */
+  private replaceAssociations(
+    recordId: string,
+    associations: Association[],
+    kinds: string[],
+  ): void {
+    this.exec.run(
+      `DELETE FROM associations WHERE record_id = ? AND kind IN (${kinds.map(() => '?').join(', ')})`,
+      [recordId, ...kinds],
+    );
     if (associations.length) this.insertAssociations(recordId, associations);
   }
 
@@ -930,8 +945,8 @@ export class SharedSqlRecordLogic {
         this.exec.run(
           `INSERT INTO associations
             (record_id, kind, label, file_id, related_scope, related_id, related_ns,
-             related_stack, attachment_record_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             related_stack, related_role, attachment_record_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT DO UPDATE SET attachment_record_id = excluded.attachment_record_id`,
           [
             recordId,

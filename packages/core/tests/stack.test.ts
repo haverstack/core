@@ -27,10 +27,11 @@ import { InvalidDidError } from '../src/did.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
 import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type {
-  Association,
+  DataAssociation,
   AttachmentContent,
   BlobFileInfo,
-  Permission,
+  Association,
+  AuthorityAssociation,
   RecordChange,
   RecordFilter,
   RelationshipTarget,
@@ -2237,12 +2238,12 @@ describe('Stack.commitMigration — _attachment protections', () => {
 // -------------------------------------------------------
 
 describe('_group — at least one admin', () => {
-  const admin = (entityId: string): Association => ({
+  const admin = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'admin',
     target: { scope: 'entity', entityId },
   });
-  const member = (entityId: string): Association => ({
+  const member = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'member',
     target: { scope: 'entity', entityId },
@@ -2635,26 +2636,24 @@ describe('versions', () => {
     expect(raw?.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
   });
 
-  test('restoreVersion never restores permissions, even when the snapshot has them', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'original' });
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v2
-    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2 (permissions: [public])
-    await stack.mutate(record.id, { permissions: [] }); // v4, private again
-    const restored = await stack.restoreVersion(record.id, 2); // v5
+  test('restoreVersion leaves the record’s permissions exactly as they stand', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
+    await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
+    const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
-    expect(restored.permissions).toEqual([]);
+    expect(restored.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
-  test('version snapshot captures permissions when present; RecordVersion has no associations field at all', async () => {
+  test('a version snapshot carries neither associations nor permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v1
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v2, snapshots v1
-    await stack.patchContent(record.id, { text: 'changed' }); // v3, snapshots v2
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
+    await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
     const versions = await stack.getVersions(record.id);
     const v1snap = versions.find((v) => v.version === 1);
     expect(v1snap && 'associations' in v1snap).toBe(false);
-    const v2snap = versions.find((v) => v.version === 2);
-    expect(v2snap?.permissions).toEqual([{ access: 'public' }]);
+    expect(v1snap && 'permissions' in v1snap).toBe(false);
   });
 });
 
@@ -2667,16 +2666,16 @@ describe('versioning rule — mixed mutations', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
     await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v2
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3
-    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v3
-    await stack.delete(record.id); // v4
-    const undeleted = await stack.undelete(record.id); // v5
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
+    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v2
+    await stack.delete(record.id); // v3
+    const undeleted = await stack.undelete(record.id); // v4
 
-    expect(undeleted.version).toBe(5);
+    expect(undeleted.version).toBe(4);
     const versionNumbers = (await stack.getVersions(record.id))
       .map((v) => v.version)
       .sort((a, b) => a - b);
-    expect(versionNumbers).toEqual([1, 2, 3, 4]);
+    expect(versionNumbers).toEqual([1, 2, 3]);
   });
 
   test('no-op mutations never bump version or add a snapshot', async () => {
@@ -2728,13 +2727,20 @@ describe('ifVersion', () => {
     expect(updated.content.text).toBe('from B');
   });
 
-  test('a reshare enforces ifVersion; associate()/dissociate() never bump version', async () => {
+  // A reshare moves no version, so a precondition on one would fence a
+  // write the number it names cannot describe — the same reason
+  // associate()/dissociate() take none.
+  test('a reshare ignores a stale ifVersion; associate()/dissociate() never bump version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
 
-    await expect(
-      stack.mutate(record.id, { permissions: [{ access: 'public' }] }, { ifVersion: 1 }),
-    ).rejects.toThrow(StackVersionConflictError);
+    const reshared = await stack.mutate(
+      record.id,
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+      { ifVersion: 1 }, // stale for the record, but this write never bumps
+    );
+    expect(reshared.version).toBe(2);
+    expect(reshared.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
 
     const associated = await stack.associate(record.id, { kind: 'tag', label: 'x' });
     expect(associated.version).toBe(2);
@@ -2887,7 +2893,7 @@ describe('orphan version row recovery', () => {
     expect(versions[0].version).toBe(1);
   });
 
-  test('an orphan does not block a reshare/delete()/undelete()/restoreVersion() — every verb that still bumps', async () => {
+  test('an orphan does not block any verb that still bumps', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
@@ -2898,10 +2904,9 @@ describe('orphan version row recovery', () => {
       updatedAt: new Date(),
     }); // orphan sitting at the record's current version (2)
 
-    // associate()/dissociate() never touch the snapshot mechanism at all
-    // now, so they have nothing to heal — a reshare (mutate) is the verb
-    // that exercises the orphan-healing path here.
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] }); // v3
+    // Only the verbs that still bump reach the snapshot mechanism, so a
+    // content patch is what exercises the orphan-healing path here.
+    await stack.patchContent(record.id, { text: 'v3' }); // v3
     expect((await stack.get(record.id))?.version).toBe(3);
   });
 
@@ -3836,25 +3841,210 @@ describe('associate / dissociate', () => {
 // The `permissions` key
 // -------------------------------------------------------
 
-describe('Stack.mutate — the `permissions` key', () => {
-  test('bumps version and snapshots the prior state', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
-    const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    expect(updated?.permissions).toEqual([{ access: 'public' }]);
-    const versions = await stack.getVersions(record.id);
-    expect(versions).toHaveLength(1);
-    expect(versions[0].permissions ?? []).toEqual([]);
+// -------------------------------------------------------
+// The partition, at the invariant layer
+// -------------------------------------------------------
+//
+// The refusal lives in `Stack`, not `ScopedStack`, so an import, a
+// server mapping a request body and an unscoped caller are all held to
+// it. See docs/spec/access-control.md § Record-level permissions.
+
+describe('Stack — authority and data never share a call', () => {
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { scope: 'entity', entityId },
   });
 
-  test('is a no-op for a deep-equal permission set — no version bump', async () => {
+  /**
+   * An element cast past the types that express the partition. What these
+   * pin is the runtime guard — the refusal a server mapping a request body,
+   * or an import, runs into, where no compiler has seen the value.
+   */
+  const asData = (association: Association): DataAssociation => association as DataAssociation;
+  const asAuthority = (association: Association): AuthorityAssociation =>
+    association as AuthorityAssociation;
+
+  test('an unscoped associations write naming a permission kind is refused', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
-    await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
+    await expect(
+      stack.mutate(record.id, { associations: [asData(readFor('entity-abc'))] }),
+    ).rejects.toThrow(StackQueryError);
+    await expect(
+      stack.mutate(record.id, { associations: [asData({ kind: 'anyone', label: 'read' })] }),
+    ).rejects.toThrow(StackQueryError);
+    expect((await stack.get(record.id))?.permissions).toBeUndefined();
+  });
+
+  test('create() refuses the same misrouting', async () => {
+    await expect(
+      stack.create(NOTE_V1, { text: 'hello' }, { associations: [asData(readFor('entity-abc'))] }),
+    ).rejects.toThrow(StackQueryError);
+    await expect(
+      stack.create(
+        NOTE_V1,
+        { text: 'hello' },
+        { permissions: [asAuthority({ kind: 'tag', label: 'draft' })] },
+      ),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('associate()/dissociate() refuse an authority kind', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(stack.associate(record.id, asData(readFor('entity-abc')))).rejects.toThrow(
+      StackQueryError,
+    );
+    await expect(
+      stack.dissociate(record.id, asData({ kind: 'anyone', label: 'read' })),
+    ).rejects.toThrow(StackQueryError);
+  });
+
+  test('grantAccess()/revokeAccess() refuse a data kind', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const tag = asAuthority({ kind: 'tag', label: 'draft' });
+    await expect(stack.grantAccess(record.id, tag)).rejects.toThrow(StackQueryError);
+    await expect(stack.revokeAccess(record.id, tag)).rejects.toThrow(StackQueryError);
+  });
+});
+
+// -------------------------------------------------------
+// grantAccess()/revokeAccess()
+// -------------------------------------------------------
+
+describe('Stack.grantAccess/revokeAccess', () => {
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { scope: 'entity', entityId },
+  });
+  const writeFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'write',
+    grantee: { scope: 'entity', entityId },
+  });
+
+  test('amends the set rather than replacing it, and never bumps', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    const updated = await stack.grantAccess(record.id, readFor('entity-b'));
+
+    expect(updated.permissions).toEqual([readFor('entity-a'), readFor('entity-b')]);
+    expect(updated.version).toBe(1);
+    expect(updated.updatedAt).toEqual(record.updatedAt);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
+  });
+
+  test('a grant already held is a no-op — no journal entry', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    expect(await stack.getJournal(record.id)).toHaveLength(2);
+  });
+
+  test('revoking something the record does not carry is a no-op', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const updated = await stack.revokeAccess(record.id, readFor('entity-a'));
+    expect(updated.permissions).toBeUndefined();
+    expect(await stack.getJournal(record.id)).toHaveLength(1);
+  });
+
+  // The invariant reads the set the write would produce, so the refusal
+  // lands on the removal that would leave a write standing alone.
+  test('refuses a grant of write with no read, and a revoke that takes the read away', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(stack.grantAccess(record.id, writeFor('entity-a'))).rejects.toThrow(
+      StackValidationError,
+    );
+
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.grantAccess(record.id, writeFor('entity-a'));
+    await expect(stack.revokeAccess(record.id, readFor('entity-a'))).rejects.toThrow(
+      StackValidationError,
+    );
+  });
+
+  test('throws StackNotFoundError for a missing record', async () => {
+    await expect(stack.grantAccess('nonexistent', readFor('entity-a'))).rejects.toThrow(
+      StackNotFoundError,
+    );
+    await expect(stack.revokeAccess('nonexistent', readFor('entity-a'))).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('a grant appends one journal entry carrying the element, a revoke its `previous`', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.revokeAccess(record.id, readFor('entity-a'));
+
+    const [, granted, revoked] = await stack.getJournal(record.id);
+    expect(granted.ops).toEqual(['permissions']);
+    expect(granted.associations).toEqual([{ op: 'add', association: readFor('entity-a') }]);
+    expect(revoked.ops).toEqual(['permissions']);
+    expect(revoked.associations).toEqual([{ op: 'remove', previous: readFor('entity-a') }]);
+    // Neither moved the record's own version.
+    expect(revoked.version).toBe(1);
+  });
+});
+
+describe('Stack.mutate — the `permissions` key', () => {
+  test('moves the set without bumping version or taking a snapshot', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    expect(await stack.getVersions(record.id)).toHaveLength(1);
+    expect(updated?.version).toBe(1);
+    expect(updated?.updatedAt).toEqual(record.updatedAt);
+    expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+    expect(await stack.getVersions(record.id)).toHaveLength(0);
+  });
+
+  test('replaces only its own domain — a record keeps its associations', async () => {
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      { associations: [{ kind: 'tag', label: 'draft' }] },
+    );
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
+    expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+  });
+
+  test('is a no-op for a set that says the same thing', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    const updated = await adapter.getRecord(record.id);
+    expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+    // The create and the first grant; the restatement adds nothing.
+    expect(await stack.getJournal(record.id)).toHaveLength(2);
+  });
+
+  test('re-ordering the set is a no-op: no journal entry, no event', async () => {
+    const seen: RecordChange[] = [];
+    const entity = { scope: 'entity', entityId: 'entity-abc' } as const;
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      {
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: entity },
+          { kind: 'anyone', label: 'read' },
+        ],
+      },
+    );
+    stack.subscribe((c) => {
+      seen.push(c);
+    });
+    await stack.mutate(record.id, {
+      permissions: [
+        { kind: 'anyone', label: 'read' },
+        { kind: 'permission', label: 'read', grantee: entity },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual([]);
+    expect(await stack.getJournal(record.id)).toHaveLength(1);
   });
 
   test('setting empty permissions on an already-private record is a no-op', async () => {
@@ -3862,6 +4052,40 @@ describe('Stack.mutate — the `permissions` key', () => {
     await stack.mutate(record.id, { permissions: [] });
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
+    expect(await stack.getJournal(record.id)).toHaveLength(1);
+  });
+
+  // The delta is what the journal keeps, so an element that went is
+  // recoverable from it — the whole reason a snapshot owes nothing here.
+  test('appends one entry carrying `previous` per element the write removed', async () => {
+    const entityA = { scope: 'entity', entityId: 'entity-a' } as const;
+    const entityB = { scope: 'entity', entityId: 'entity-b' } as const;
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      {
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: entityA },
+          { kind: 'anyone', label: 'read' },
+        ],
+      },
+    );
+
+    const updated = await stack.mutate(record.id, {
+      permissions: [{ kind: 'permission', label: 'read', grantee: entityB }],
+    });
+
+    expect(updated.version).toBe(record.version);
+    expect(updated.updatedAt).toEqual(record.updatedAt);
+
+    const journal = await stack.getJournal(record.id);
+    expect(journal).toHaveLength(2);
+    expect(journal[1].ops).toEqual(['permissions']);
+    expect(journal[1].associations).toEqual([
+      { op: 'add', association: { kind: 'permission', label: 'read', grantee: entityB } },
+      { op: 'remove', previous: { kind: 'permission', label: 'read', grantee: entityA } },
+      { op: 'remove', previous: { kind: 'anyone', label: 'read' } },
+    ]);
   });
 
   // See docs/spec/access-control.md § Write implies read.
@@ -3869,12 +4093,24 @@ describe('Stack.mutate — the `permissions` key', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(
       stack.mutate(record.id, {
-        permissions: [{ access: 'entity', entityId: 'entity-abc', read: false, write: true }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: 'entity-abc' },
+          },
+        ],
       }),
     ).rejects.toThrow(StackValidationError);
     await expect(
       stack.mutate(record.id, {
-        permissions: [{ access: 'group', groupId: 'group-abc', read: false, write: true }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'group', groupId: 'group-abc', role: 'member' },
+          },
+        ],
       }),
     ).rejects.toThrow(StackValidationError);
     expect((await adapter.getRecord(record.id))?.permissions).toBeUndefined();
@@ -3886,7 +4122,13 @@ describe('Stack.mutate — the `permissions` key', () => {
         NOTE_V1,
         { text: 'hello' },
         {
-          permissions: [{ access: 'entity', entityId: 'entity-abc', read: false, write: true }],
+          permissions: [
+            {
+              kind: 'permission',
+              label: 'write',
+              grantee: { scope: 'entity', entityId: 'entity-abc' },
+            },
+          ],
         },
       ),
     ).rejects.toThrow(StackValidationError);
@@ -3894,41 +4136,99 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('throws StackNotFoundError for a missing record', async () => {
     await expect(
-      stack.mutate('nonexistent', { permissions: [{ access: 'public' }] }),
+      stack.mutate('nonexistent', { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(StackNotFoundError);
   });
 
-  test('adding role: "admin" to a group entry persists and bumps version', async () => {
+  test('adding role: "admin" to a group entry replaces the member grantee', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, {
-      permissions: [{ access: 'group', groupId: 'group-1', read: true, write: true }],
-    }); // v2
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        },
+      ],
+    });
     await stack.mutate(record.id, {
       permissions: [
-        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
       ],
-    }); // v3
+    });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(3);
+    expect(updated?.version).toBe(1);
     expect(updated?.permissions).toEqual([
-      { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+      },
     ]);
   });
 
-  test('removing role: "admin" from a group entry persists and bumps version', async () => {
+  test('widening a group entry to role: "member" replaces the admin grantee', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, {
       permissions: [
-        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
       ],
-    }); // v2
+    });
     await stack.mutate(record.id, {
-      permissions: [{ access: 'group', groupId: 'group-1', read: true, write: true }],
-    }); // v3
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        },
+      ],
+    });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(3);
+    expect(updated?.version).toBe(1);
     expect(updated?.permissions).toEqual([
-      { access: 'group', groupId: 'group-1', read: true, write: true },
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+      },
     ]);
   });
 
@@ -3936,17 +4236,36 @@ describe('Stack.mutate — the `permissions` key', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, {
       permissions: [
-        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
       ],
-    }); // v2
+    });
     await stack.mutate(record.id, {
       permissions: [
-        { access: 'group', groupId: 'group-1', role: 'admin', read: true, write: true },
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        },
       ],
     });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
-    expect(await stack.getVersions(record.id)).toHaveLength(1);
+    expect(updated?.version).toBe(1);
+    // The create and the one grant; the restatement adds nothing.
+    expect(await stack.getJournal(record.id)).toHaveLength(2);
   });
 });
 
@@ -4007,11 +4326,11 @@ describe('Stack.mutate — the `unlisted` key', () => {
     const record = await stack.create(
       NOTE_V1,
       { text: 'hello' },
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
     await stack.mutate(record.id, { unlisted: true });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.permissions).toEqual([{ access: 'public' }]);
+    expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
@@ -4069,9 +4388,11 @@ describe('mutators return the record they produced', () => {
 
   test('a permissions change set returns the record carrying the new permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.mutate(record.id, { permissions: [{ access: 'public' }] });
-    expect(updated.version).toBe(2);
-    expect(updated.permissions).toEqual([{ access: 'public' }]);
+    const updated = await stack.mutate(record.id, {
+      permissions: [{ kind: 'anyone', label: 'read' }],
+    });
+    expect(updated.version).toBe(1);
+    expect(updated.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   test('an unlisted change set returns the record carrying unlistedAt', async () => {
@@ -4091,14 +4412,16 @@ describe('mutators return the record they produced', () => {
     const record = await stack.create(
       NOTE_V1,
       { text: 'hello' },
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
     await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
     const current = await adapter.getRecord(record.id);
 
     expect(await stack.associate(record.id, { kind: 'tag', label: 'favourite' })).toEqual(current);
     expect(await stack.dissociate(record.id, { kind: 'tag', label: 'absent' })).toEqual(current);
-    expect(await stack.mutate(record.id, { permissions: [{ access: 'public' }] })).toEqual(current);
+    expect(
+      await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+    ).toEqual(current);
     expect(await stack.mutate(record.id, { unlisted: false })).toEqual(current);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
@@ -5014,7 +5337,7 @@ describe('attachment association — attachmentRecordId', () => {
   test('associate is a no-op when the pointer is unchanged — no version bump', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const association: Association = {
+    const association: DataAssociation = {
       kind: 'attachment',
       label: 'embed',
       fileId,
@@ -5228,7 +5551,7 @@ describe('attachment association — attachmentRecordId', () => {
   test('a change set restating an association with a dangling pointer is accepted', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const association: Association = {
+    const association: DataAssociation = {
       kind: 'attachment',
       label: 'embed',
       fileId,
@@ -6249,6 +6572,36 @@ describe('relationship targets', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  // A discriminated union is not a runtime guard, and the kind is what
+  // every surface routes on: a request body supplies raw JSON, and an
+  // element that names no known kind is neither half of the partition.
+  test.each([
+    ['null', null],
+    ['a string', 'tag'],
+    ['an object with no kind', {}],
+    ['an unknown kind', { kind: 'blessing', label: 'x' }],
+  ])('%s is refused as an association, not crashed on', async (_label, element) => {
+    const note = await stack.create(NOTE_V1, { text: 'host' });
+    const association = element as unknown as DataAssociation;
+    const authority = element as unknown as AuthorityAssociation;
+
+    await expect(stack.associate(note.id, association)).rejects.toThrow(StackValidationError);
+    await expect(stack.mutate(note.id, { associations: [association] })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(stack.mutate(note.id, { permissions: [authority] })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(
+      stack.create(NOTE_V1, { text: 'host' }, { associations: [association] }),
+    ).rejects.toThrow(StackValidationError);
+    // Two of them reach the duplicate-identity check, which asks the same
+    // equality every surface does.
+    await expect(
+      stack.mutate(note.id, { associations: [association, association] }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
   test('a target outside the three scopes is refused at create too', async () => {
     await expect(
       stack.create(
@@ -6554,14 +6907,14 @@ describe('Stack.mutate — one call, one version', () => {
     const moved = await stack.mutate(note.id, {
       contentPatch: { text: 'edited' },
       parentId: box.id,
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       unlisted: true,
     });
 
     expect(moved.version).toBe(note.version + 1);
     expect(moved.content).toEqual({ text: 'edited' });
     expect(moved.parentId).toBe(box.id);
-    expect(moved.permissions).toEqual([{ access: 'public' }]);
+    expect(moved.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
     expect(moved.unlistedAt).toBeInstanceOf(Date);
   });
 
@@ -6579,7 +6932,7 @@ describe('Stack.mutate — one call, one version', () => {
     await stack.mutate(note.id, {
       contentPatch: { text: 'edited' },
       parentId: box.id,
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
     });
 
     expect(seen).toHaveLength(1);
@@ -6717,7 +7070,7 @@ describe('Stack.mutate — one call, one version', () => {
   // move the record's publish moment with no op reporting it.
   test('restating an aspect does not rewrite it', async () => {
     const unlistedAt = (await stack.mutate(note.id, { unlisted: true })).unlistedAt;
-    const perms: Permission[] = [{ access: 'public' }];
+    const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
     await stack.mutate(note.id, { permissions: perms });
 
     await stack.mutate(note.id, {

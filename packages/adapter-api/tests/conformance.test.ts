@@ -24,6 +24,8 @@ import {
   undeleteRecordFixtures,
   associateFixtures,
   dissociateFixtures,
+  grantAccessFixtures,
+  revokeAccessFixtures,
   permissionsChangeFixtures,
   unlistedChangeFixtures,
   parentChangeFixtures,
@@ -467,6 +469,53 @@ describe('dissociate fixtures', () => {
   }
 });
 
+// The adapter routes by kind: one storage primitive, two endpoints. A
+// permission travelling on the association path would be refused by any
+// server built on ScopedStack, so the routing is what keeps the client
+// honest. See docs/spec/access-control.md
+// § Storage unifies; the API does not.
+describe('grantAccess fixtures', () => {
+  for (const fixture of grantAccessFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.associate(
+        idFromPath(fixture.path),
+        fixture.requestBody as Association,
+      );
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.permissions).toEqual(fixture.responseBody!.permissions);
+      expectNoIfMatch(init);
+    });
+  }
+});
+
+describe('revokeAccess fixtures', () => {
+  for (const fixture of revokeAccessFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.dissociate(
+        idFromPath(fixture.path),
+        fixture.requestBody as Association,
+      );
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.permissions).toBeUndefined();
+      expectNoIfMatch(init);
+    });
+  }
+});
+
 describe('permissions change-set fixtures', () => {
   for (const fixture of permissionsChangeFixtures) {
     test(fixture.name, async () => {
@@ -538,7 +587,7 @@ describe('getVersions fixtures', () => {
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
       expect(result).toHaveLength(fixture.responseBody!.length);
-      expect(result[0].permissions).toEqual(fixture.responseBody![0].permissions);
+      expect(result[0].content).toEqual(fixture.responseBody![0].content);
     });
   }
 });
@@ -555,7 +604,6 @@ describe('getVersion fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result?.permissions).toBeUndefined();
       expect(result?.content).toEqual(fixture.responseBody!.content);
     });
   }

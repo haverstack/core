@@ -18,13 +18,16 @@
  */
 
 import { StackQueryError } from './errors.js';
-import { associationEqual } from './record-changes.js';
+import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   Association,
+  AuthorityAssociation,
+  DataAssociation,
   JournalQuery,
+  PermissionGrantee,
   QuerySort,
   RecordFilter,
   RelationshipTarget,
@@ -258,8 +261,131 @@ export function validateAssociation(
   association: Association,
   path = 'association',
 ): ValidationError[] {
-  if (association?.kind !== 'relationship') return [];
+  if (!namesKind(association)) {
+    return [
+      {
+        path: `${path}.kind`,
+        message: `Unknown association kind "${String((association as { kind?: unknown })?.kind)}": expected ${[...ASSOCIATION_KINDS].map((k) => `"${k}"`).join(', ')}.`,
+      },
+    ];
+  }
+  if (association.kind === 'permission') {
+    return granteeErrors(association, `${path}.grantee`);
+  }
+  if (association.kind === 'anyone') {
+    return association.label === 'read'
+      ? []
+      : [{ path: `${path}.label`, message: 'An `anyone` association carries only `read`.' }];
+  }
+  if (association.kind !== 'relationship') return [];
   return targetErrors(association.target, `${path}.target`);
+}
+
+/**
+ * Who a duplicated permission names, since kind and label alone don't
+ * distinguish two grants of the same bit to different grantees.
+ */
+function granteeSuffix(association: Association): string {
+  if (association.kind !== 'permission') return '';
+  const g = association.grantee;
+  return g.scope === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
+}
+
+/** The kinds an association may name — the closed set every surface reads. */
+const ASSOCIATION_KINDS = new Set(['tag', 'attachment', 'relationship', 'permission', 'anyone']);
+
+/**
+ * Whether a value is an association at all. Asked ahead of the partition
+ * checks, so a malformed element is named as one rather than reported as
+ * the wrong surface for a kind it never had — a request body supplies raw
+ * JSON, and `null` or `{}` is neither half of the partition.
+ */
+function namesKind(association: Association): boolean {
+  return (
+    !!association &&
+    typeof association === 'object' &&
+    ASSOCIATION_KINDS.has((association as { kind?: unknown }).kind as string)
+  );
+}
+
+/** The bits a permission element may name — the whole of its meaning. */
+const PERMISSION_LABELS = new Set(['read', 'write']);
+
+/**
+ * Collect what makes a permission element malformed. `role` is required on
+ * a group grantee: there is no "any member" default to fall back on, so an
+ * absent one would otherwise widen or narrow silently depending on how the
+ * reader broke the tie. See docs/spec/access-control.md
+ * § Record-level permissions.
+ */
+function granteeErrors(
+  association: { label: string; grantee: PermissionGrantee },
+  path: string,
+): ValidationError[] {
+  const fail = (message: string): ValidationError[] => [{ path, message }];
+  if (!PERMISSION_LABELS.has(association.label)) {
+    return [
+      {
+        path: `${path.slice(0, -'.grantee'.length)}.label`,
+        message: `Unknown permission label "${association.label}": expected "read" or "write".`,
+      },
+    ];
+  }
+  const grantee = association.grantee;
+  if (!grantee || typeof grantee !== 'object') return fail('A permission requires a grantee.');
+  if (grantee.scope === 'entity') {
+    return grantee.entityId ? [] : fail('An entity grantee requires a non-empty entityId.');
+  }
+  if (grantee.scope === 'group') {
+    if (!grantee.groupId) return fail('A group grantee requires a non-empty groupId.');
+    return grantee.role === 'member' || grantee.role === 'admin'
+      ? []
+      : fail('A group grantee requires a role of "member" or "admin".');
+  }
+  return fail(
+    `Unknown permission grantee scope "${String((grantee as { scope?: unknown }).scope)}": expected "entity" or "group".`,
+  );
+}
+
+/**
+ * Refuse an authority element reaching the data half of the partition.
+ * The two share a table, a delta shape and a durability tier; they never
+ * share a call, because an app editing tags would otherwise be able to
+ * replace an ACL it was never shown. Thrown rather than collected: the
+ * caller named the wrong surface, not a malformed value, and the verb it
+ * wanted is `grantAccess()`/`revokeAccess()`.
+ *
+ * Lives here, in the invariant layer, so an unscoped `Stack`, an import
+ * and a server mapping a request body are all held to it.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export function assertDataAssociations(
+  associations: readonly Association[],
+  surface: string,
+): asserts associations is DataAssociation[] {
+  const authority = associations.find((a) => namesKind(a) && isAuthorityAssociation(a));
+  if (!authority) return;
+  throw new StackQueryError(
+    `${surface} does not carry authority: a "${authority.kind}" association belongs to the ` +
+      '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
+  );
+}
+
+/**
+ * The mirror of assertDataAssociations(): the `permissions` surface takes
+ * authority kinds alone, so a tag routed through it is refused rather than
+ * quietly becoming an ACL entry the `associations` projection never shows.
+ */
+export function assertAuthorityAssociations(
+  permissions: readonly Association[],
+  surface: string,
+): asserts permissions is AuthorityAssociation[] {
+  const data = permissions.find((a) => namesKind(a) && !isAuthorityAssociation(a));
+  if (!data) return;
+  throw new StackQueryError(
+    `${surface} carries authority alone: a "${data.kind}" association belongs to the ` +
+      '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
+  );
 }
 
 /** validateAssociation() over a create's `associations` array. */
@@ -285,7 +411,7 @@ export function validateAssociations(
         ? [
             {
               path: `${path}[${i}]`,
-              message: `Duplicate association identity: ${a.kind} "${a.label}" is named more than once.`,
+              message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
             },
           ]
         : [],

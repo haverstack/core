@@ -5,6 +5,9 @@
  */
 
 import type {
+  AuthorityAssociation,
+  DataAssociation,
+  PermissionGrantee,
   RecordJournalEntry,
   StackRecord,
   StackType,
@@ -15,6 +18,23 @@ import type {
 
 export const toMs = (d: Date): number => d.getTime();
 export const fromMs = (ms: number): Date => new Date(ms);
+
+/**
+ * A record's stored edges, split into the two fields it presents.
+ * Partitioned by kind rather than stored apart: one table, one delta, one
+ * durability tier, and an app editing tags never sees the authority half.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export const partitionAssociations = (
+  associations: Association[],
+): { associations: DataAssociation[]; permissions: AuthorityAssociation[] } => ({
+  associations: associations.filter(
+    (a): a is DataAssociation => a.kind !== 'permission' && a.kind !== 'anyone',
+  ),
+  permissions: associations.filter(
+    (a): a is AuthorityAssociation => a.kind === 'permission' || a.kind === 'anyone',
+  ),
+});
 
 export const rowToRecord = (
   row: Record<string, unknown>,
@@ -41,14 +61,25 @@ export const rowToRecord = (
   if (row.updated_via != null) record.updatedVia = row.updated_via as string;
   if (row.deleted_at != null) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.unlisted_at != null) record.unlistedAt = fromMs(row.unlisted_at as number);
-  if (row.permissions != null) record.permissions = JSON.parse(row.permissions as string);
-  if (associations.length) record.associations = associations;
+  const partitioned = partitionAssociations(associations);
+  if (partitioned.associations.length) record.associations = partitioned.associations;
+  if (partitioned.permissions.length) record.permissions = partitioned.permissions;
   return record;
 };
 
 export const rowToAssociation = (row: Record<string, unknown>): Association => {
   if (row.kind === 'tag') {
     return { kind: 'tag', label: row.label as string };
+  }
+  if (row.kind === 'anyone') {
+    return { kind: 'anyone', label: 'read' };
+  }
+  if (row.kind === 'permission') {
+    return {
+      kind: 'permission',
+      label: row.label as 'read' | 'write',
+      grantee: rowToGrantee(row),
+    };
   }
   if (row.kind === 'attachment') {
     const attachmentRecordId = row.attachment_record_id as string;
@@ -71,19 +102,42 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
 };
 
 /**
- * The five columns that identify an association, in the order every
+ * The six columns that identify an association, in the order every
  * INSERT and DELETE below binds them. One helper because the two must
  * agree exactly — a dissociate that bound them differently would delete
  * nothing and report success.
  */
-export const associationKeyColumns = (a: Association): [string, string, string, string, string] => {
-  if (a.kind === 'attachment') return [a.fileId, '', '', '', ''];
-  if (a.kind !== 'relationship') return ['', '', '', '', ''];
+export const associationKeyColumns = (
+  a: Association,
+): [string, string, string, string, string, string] => {
+  if (a.kind === 'attachment') return [a.fileId, '', '', '', '', ''];
+  if (a.kind === 'permission') {
+    const g = a.grantee;
+    return g.scope === 'entity'
+      ? ['', 'entity', g.entityId, '', '', '']
+      : ['', 'group', g.groupId, '', '', g.role];
+  }
+  if (a.kind !== 'relationship') return ['', '', '', '', '', ''];
   const t = a.target;
-  if (t.scope === 'entity') return ['', 'entity', t.entityId, '', ''];
-  if (t.scope === 'external') return ['', 'external', t.id, t.ns, ''];
-  return ['', 'record', t.recordId, '', t.stackUrl ?? ''];
+  if (t.scope === 'entity') return ['', 'entity', t.entityId, '', '', ''];
+  if (t.scope === 'external') return ['', 'external', t.id, t.ns, '', ''];
+  return ['', 'record', t.recordId, '', t.stackUrl ?? '', ''];
 };
+
+/**
+ * A permission's grantee, read back off the columns a relationship target
+ * otherwise uses. `related_role` is what tells the two group sets apart —
+ * `member` is the wider one. See docs/spec/access-control.md
+ * § Record-level permissions.
+ */
+const rowToGrantee = (row: Record<string, unknown>): PermissionGrantee =>
+  row.related_scope === 'group'
+    ? {
+        scope: 'group',
+        groupId: row.related_id as string,
+        role: row.related_role as 'member' | 'admin',
+      }
+    : { scope: 'entity', entityId: row.related_id as string };
 
 const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
   const id = row.related_id as string;
@@ -119,7 +173,6 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
   if (row.entity_id != null) v.entityId = row.entity_id as string;
   if (row.updated_by != null) v.updatedBy = row.updated_by as string;
   if (row.updated_via != null) v.updatedVia = row.updated_via as string;
-  if (row.permissions != null) v.permissions = JSON.parse(row.permissions as string);
   return v;
 };
 

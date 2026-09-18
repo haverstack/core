@@ -56,7 +56,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.patchContent(note.id, { text: 'edited' });
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
     await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
+    await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
     await stack.restoreVersion(note.id, 1);
@@ -110,16 +110,17 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     });
   });
 
-  test('the version reported is the one the mutation produced — unchanged for associate(), which never bumps', async () => {
+  test('the version reported is the one the mutation produced — unchanged for the ops that never bump', async () => {
     const note = await stack.create(NOTE, { text: 'v1' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'v2' });
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
+    await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.patchContent(note.id, { text: 'v3' });
 
-    expect(seen.map((c) => c.version)).toEqual([2, 2, 3]);
+    expect(seen.map((c) => c.version)).toEqual([2, 2, 2, 3]);
     // Read back rather than inferred: the last event agrees with storage.
     const stored = await stack.get(note.id);
     expect(seen.at(-1)!.version).toBe(stored!.version);
@@ -141,8 +142,8 @@ describe('a mutation that changes nothing emits nothing', () => {
     ],
     [
       'setting a deep-equal permission set',
-      async (id: string) => stack.mutate(id, { permissions: [{ access: 'public' }] }),
-      async (id: string) => stack.mutate(id, { permissions: [{ access: 'public' }] }),
+      async (id: string) => stack.mutate(id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+      async (id: string) => stack.mutate(id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ],
     [
       'deleting an already-deleted record',

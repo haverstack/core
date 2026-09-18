@@ -36,7 +36,7 @@ type AssociationChange =
 - **`repoint`** — an `associate()` that landed on an identity already there, overwriting its annotation in place. `previous` is the only durable record of the `attachmentRecordId` it discarded. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from).
 - **`remove`** — a dissociate. `previous` is the association **in full**, annotation included, which is what makes a removal as undoable as a re-point. A frame names identity only here, because a notification reports what is current; a log whose whole argument is prior state does not.
 
-`ops` still carries `associate`/`dissociate` — `associate` when any element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame.
+`ops` still carries `associate`/`dissociate` — `associate` when any **data** element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame. An authority element's move is `permissions` instead, derived from the same delta so the op and the edits beneath it cannot disagree.
 
 **An association list holds distinct identities**, so no entry ever names one identity twice. That is enforced where every other change-set rule is, in the invariant layer: a list naming one identity twice describes a state no store can hold, and is refused rather than collapsed. See [Data model § Associations](./data-model.md#associations).
 
@@ -46,16 +46,20 @@ Undoing one entry's association change is a walk over `associations`, with no lo
 
 ```ts
 for (const change of entry.associations ?? []) {
-  if (change.op === 'add') await stack.dissociate(recordId, change.association);
-  else await stack.associate(recordId, change.previous);
+  const element = change.op === 'add' ? change.association : change.previous;
+  const [add, remove] = isAuthority(element)
+    ? [stack.grantAccess, stack.revokeAccess]
+    : [stack.associate, stack.dissociate];
+  if (change.op === 'add') await remove(recordId, element);
+  else await add(recordId, element);
 }
 ```
 
-A `repoint` and a `remove` invert identically — `associate(previous)` puts an association back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for.
+A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
 
 Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
 
-An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots. That is why there is no `permissions` stripping to do here, unlike on a snapshot.
+A permission element's delta rides in that same list, on the same terms as a tag's: `previous` in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where a Record's sharing history lives, and [reading it](#reading-it) is gated accordingly: the mutate surface for the entry, reshare authority for its authority half.
 
 ## The entry set is the event set
 
@@ -94,6 +98,10 @@ A purged record's id is therefore a pointer to nothing, wherever it survives —
 `sinceSeq` and `limit` are each a non-negative integer or absent; anything else is refused with `StackQueryError` before an adapter sees it. The window is checked rather than coerced because the two coercions available disagree: a negative `limit` read as a JavaScript slice drops the newest entry, and read as a SQL `LIMIT` removes the ceiling altogether. **Omitting `limit` reads the whole log, and no ceiling is imposed when it is omitted** — unlike a query, where a default page size is a kindness, a truncated journal is a wrong answer to the one caller who needs it, the one reconstructing an association's full history.
 
 **Gated on the mutate surface, exactly as [history is](./versioning.md#history-access), and for the same reason.** A log of who changed what, gated on current read access, would make a record's past exactly as reachable as its present — the retroactivity that rule exists to prevent. An association label is content enough to matter: gaining read access today is not an entitlement to the trail of every tag the record has ever carried. A write-holder, the owner, or a creator passes; a plain reader gets `StackPermissionError`, the same answer `getVersions()` gives.
+
+**The authority half is the resharer's.** Passing that gate buys a record's content history, which is not a route to its sharing graph: an entry's `permissions` op is served to everyone who passes, and the elements beneath it — the grantees a write added, re-pointed or removed — only to a requester who [may reshare the record](./access-control.md#the-write-bit-a-recoverability-trust-model). A write-holder who is neither owner nor creator therefore learns _that_ the ACL moved and not who it moved to, which is exactly what they can learn from the [feed](./events.md#the-event-shape). Asked of both identities, so a [delegated](./access-control.md#delegation-principal-and-subject) principal is no route to it either.
+
+The projection drops elements from an entry, never the entry: `seq` stays [dense](#ordering) for every reader, and an entry that moved content and the ACL in one atomic write still reports the content half in full. A reader who cannot see an authority element cannot [invert](#the-inverse) it either — but `grantAccess()`/`revokeAccess()` would refuse them that write anyway, so the walk loses nothing it could have performed.
 
 **Every adapter implements `getJournal()` — it is not an optional method.** An adapter with no journal to read refuses the call; it does not decline to have it. "Nothing changed" and "this stack does not remember" are not the same answer, and a caller reconstructing an association's history cannot tell them apart, so an empty log has to mean the first unconditionally. That is what makes [the wire endpoint](./wire-format.md#journal) mandatory rather than a capability a server advertises: the alternative spelling available to a server with no journal is an empty log, which is the one answer it must not give. A subscription is refused against a server advertising no feed because [a feed is a live connection](./change-feed.md#advertising-it) a client can be told up front it will not get; a log is a question with a wrong answer, so the endpoint is required of everyone instead.
 

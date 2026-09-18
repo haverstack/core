@@ -129,7 +129,7 @@ describe('createOptionsFromWireRecord — unlistedAt', () => {
 
 describe('createOptionsFromWireRecord — forwarded record fields', () => {
   test('id, parentId, appId, permissions and associations pass through', () => {
-    const permissions = [{ access: 'public' as const }];
+    const permissions = [{ kind: 'anyone', label: 'read' }];
     const associations = [{ kind: 'tag' as const, label: 'starred' }];
     const { typeId, content, options } = parse(
       wireBody({
@@ -270,14 +270,14 @@ describe('changesFromWireBody', () => {
       changesFromWireBody({
         contentPatch: { title: 'x', dropped: null },
         parentId: 'box1',
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
         associations: [{ kind: 'tag', label: 'starred' }],
         unlisted: false,
       }),
     ).toEqual({
       contentPatch: { title: 'x', dropped: null },
       parentId: 'box1',
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       associations: [{ kind: 'tag', label: 'starred' }],
       unlisted: false,
     });
