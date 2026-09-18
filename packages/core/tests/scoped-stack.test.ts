@@ -495,9 +495,9 @@ describe('ScopedStack mutators return the record they produced', () => {
 
     const unlisted = await scoped.mutate(record.id, { unlisted: true });
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
-    // associate/dissociate never bump; permissions and unlisted are the
-    // only two real bumps on top of the created record's version 1.
-    expect(unlisted.version).toBe(3);
+    // Only the permissions change bumps: associate, dissociate and unlist
+    // are all no-bump writes over the created record's version 1.
+    expect(unlisted.version).toBe(2);
   });
 });
 
@@ -746,58 +746,51 @@ describe('ScopedStack — versions', () => {
       );
     });
 
-    // The owner-exemption and delegation-doesn't-inherit-it cases are
-    // pinned once, generally, by the parentId tests below — the whole
-    // gating block is skipped for owner-acting-alone regardless of which
-    // field it would have gated.
+    // Content's file refs are the only reference a snapshot can put back,
+    // so the owner exemption and its non-inheritance under delegation are
+    // pinned through that field.
+    const PHOTO_NOTE = 'com.example.test/photo-note-exempt@1';
+    const UNREACHABLE_FILE = 'a'.repeat(64);
 
-    test('rejects restoring a parentId naming a container the requester cannot read', async () => {
-      const box = await adapter.createRecord(makeRecord());
+    const photoRecordWithUnreachableSnapshot = async () => {
+      await stack.defineType(PHOTO_NOTE, 'Photo note', { coverFileId: { kind: 'file-ref' } });
+      await stack.grant(MEMBER, [{ actions: ['read-any', 'update-any'], typeId: PHOTO_NOTE }]);
       const record = await adapter.createRecord(
         makeRecord({
+          typeId: PHOTO_NOTE,
           version: 2,
           permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
         }),
       );
       await adapter.saveVersion(record.id, {
         version: 1,
-        typeId: NOTE,
-        content: {},
+        typeId: PHOTO_NOTE,
+        content: { coverFileId: UNREACHABLE_FILE },
         updatedAt: new Date(),
-        parentId: box.id,
       });
-      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
-        StackPermissionError,
-      );
+      return record;
+    };
+
+    test('the owner acting alone is exempt from the whole gate', async () => {
+      const record = await photoRecordWithUnreachableSnapshot();
+      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
+      expect(restored.content).toEqual({ coverFileId: UNREACHABLE_FILE });
     });
 
-    test('allows restoring a parentId naming a container the requester can read', async () => {
-      const box = await adapter.createRecord(
-        makeRecord({
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
-        }),
-      );
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        parentId: box.id,
-      });
-      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
-      expect(restored.parentId).toBe(box.id);
+    // The gate resolves against the subject, which is whose reach the
+    // restore would widen, so the owner's exemption does not travel.
+    test('an owner principal acting for someone else is not exempt', async () => {
+      const record = await photoRecordWithUnreachableSnapshot();
+      await expect(
+        stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
+      ).rejects.toThrow(StackPermissionError);
     });
 
-    // No reference is created by a restore that doesn't move the record,
-    // so rolling content back is not refused on the strength of a
-    // container the record is already sitting in.
-    test('a parentId the restore would not change is not re-gated', async () => {
+    // Containment is not on a snapshot and a restore does not settle it, so
+    // there is no destination for the gate to ask about — a record sitting
+    // in a container the requester cannot read still rolls its content
+    // back. See docs/spec/versioning.md § Restore semantics.
+    test('containment is not gated, whatever container the record sits in', async () => {
       const box = await adapter.createRecord(makeRecord());
       const record = await adapter.createRecord(
         makeRecord({
@@ -811,15 +804,15 @@ describe('ScopedStack — versions', () => {
         typeId: NOTE,
         content: { text: 'older' },
         updatedAt: new Date(),
-        parentId: box.id,
       });
       const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
       expect(restored.content).toEqual({ text: 'older' });
+      expect(restored.parentId).toBe(box.id);
     });
 
-    // A restore to the root reaches no container, so there is nothing to
-    // gate — the same way a change set's `parentId: null` is ungated.
-    test('restoring to the root needs no read on anything', async () => {
+    // A container hard-deleted out from under the record costs it nothing
+    // either: the record keeps its dangling parent and its rollback.
+    test('a hard-deleted container blocks no restore', async () => {
       const box = await adapter.createRecord(makeRecord());
       const record = await adapter.createRecord(
         makeRecord({
@@ -831,79 +824,13 @@ describe('ScopedStack — versions', () => {
       await adapter.saveVersion(record.id, {
         version: 1,
         typeId: NOTE,
-        content: {},
+        content: { text: 'older' },
         updatedAt: new Date(),
       });
+      await stack.delete(box.id, { hard: true });
+
       const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
-      expect(restored.parentId).toBeUndefined();
-    });
-
-    test('the owner is exempt from the parentId gate too', async () => {
-      const box = await adapter.createRecord(makeRecord());
-      const record = await adapter.createRecord(makeRecord({ version: 2 }));
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        parentId: box.id,
-      });
-      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
-      expect(restored.parentId).toBe(box.id);
-    });
-
-    // The one write that may produce a dangling parent: history put back is
-    // not a caller naming a destination, so an unrelated deletion does not
-    // cost the record its rollback. See docs/spec/versioning.md § Restore
-    // semantics.
-    //
-    // This holds because restoreVersion() skips its whole snapshot-gating
-    // block for the owner acting alone, not because canReadReferent() now
-    // exempts them — the owner never reaches the gate here at all. That
-    // wrapper is what this pins, and it is not redundant with the exemption.
-    test('the owner restores a snapshot whose container has since been hard-deleted', async () => {
-      const box = await adapter.createRecord(makeRecord());
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        parentId: box.id,
-      });
-      await stack.delete(box.id, { hard: true });
-
-      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
-      expect(restored.parentId).toBe(box.id);
-    });
-
-    // Not by the existence check, which restore is exempt from, but by the
-    // reference gate, which cannot grant read on a container that is gone.
-    test('a non-owner is still refused that restore', async () => {
-      const box = await adapter.createRecord(makeRecord());
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: {},
-        updatedAt: new Date(),
-        parentId: box.id,
-      });
-      await stack.delete(box.id, { hard: true });
-
-      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
-        StackPermissionError,
-      );
+      expect(restored.content).toEqual({ text: 'older' });
     });
   });
 });
@@ -3366,9 +3293,15 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     expect(moved.parentId).toBe(unreadableBox.id);
   });
 
-  test('the actor is stamped on the move', async () => {
+  // A move bumps nothing, so it leaves the record's updatedBy/updatedVia
+  // where they stand and the actor travels on the journal entry instead —
+  // the same route an association change's does.
+  test('the actor travels on the journal entry rather than the record', async () => {
     const moved = await stack.asEntity(MEMBER).mutate(writable.id, { parentId: readableBox.id });
-    expect(moved.updatedBy).toBe(MEMBER);
+    expect(moved.updatedBy).toBeUndefined();
+    const entries = await stack.getJournal(writable.id);
+    expect(entries.at(-1)?.ops).toEqual(['reparent']);
+    expect(entries.at(-1)?.actor).toEqual({ entityId: MEMBER });
   });
 });
 

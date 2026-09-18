@@ -348,8 +348,9 @@ export interface StackClient {
   getOwnerEntity(): Promise<StackRecord | null>;
   /**
    * Apply a change set: any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted`, in one atomic write
-   * producing one version. Keys are read for presence, so `unlisted: false`
+   * `permissions`, `associations` and `unlisted`, in one atomic write —
+   * producing one version where it names `contentPatch` or `permissions`,
+   * and none where it doesn't. Keys are read for presence, so `unlisted: false`
    * and `parentId: null` are changes; a change set naming no key at all is
    * a StackQueryError. Under ScopedStack each key carries its own gate and
    * one refused key refuses the call.
@@ -1073,11 +1074,11 @@ export class Stack implements StackClient {
     // writes nothing.
     if (ops.length === 0) return existing;
 
-    // A change set touching only `associations` doesn't bump — the same
-    // rule associate()/dissociate() follow unconditionally. Its actor
-    // travels as an explicit opt rather than a record stamp, since a
-    // non-bumping write never touches updatedBy/updatedVia.
-    // See docs/spec/versioning.md § Version history.
+    // A change set naming only aspects the journal already keeps in full
+    // doesn't bump — the same rule associate()/dissociate() follow
+    // unconditionally. Its actor travels as an explicit opt rather than a
+    // record stamp, since a non-bumping write never touches
+    // updatedBy/updatedVia. See docs/spec/versioning.md § Version history.
     const bumps = bumpsVersion(ops);
 
     // Computed against the same before/after changeSetOps compared, so
@@ -1579,10 +1580,10 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
-   * stored typeId (not the record's current type), restores `parentId`
-   * (absent on the snapshot is the root, so a restore always settles
-   * containment), and restores neither associations nor permissions. See
-   * docs/spec/versioning.md § Restore semantics.
+   * stored typeId (not the record's current type), and puts back `content`
+   * and `typeId` alone: containment, listing, associations and permissions
+   * are all left exactly where they stand. See docs/spec/versioning.md
+   * § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -1632,30 +1633,12 @@ export class Stack implements StackClient {
       );
     }
 
-    // A restore that puts a container back is an edge-adding site like
-    // a change set's `parentId`, and the chain above that container may have moved since
-    // the snapshot was taken. The cycle walk therefore applies — but
-    // assertParentExists() deliberately does not: a restore is not a caller
-    // naming a destination, it is history being put back, and the container
-    // may have been hard-deleted since. Refusing here would make an
-    // unrelated deletion cost the record its content rollback, which is the
-    // recoverability this whole verb exists for. A dangling parentId is
-    // legal at rest anyway — deleting a container never touches its
-    // children. See docs/spec/versioning.md § Restore semantics.
-    const previousParentId = existing.parentId ?? null;
-    const targetParentId = target.parentId ?? null;
-    const moves = targetParentId !== previousParentId;
-    if (moves && targetParentId !== null) {
-      await this.assertNoParentCycle(id, targetParentId);
-    }
-
-    // Associations never restore, for any Record — a snapshot never
-    // carries them, so there's nothing here for the adapter to roll back.
+    // A restore adds no containment edge and takes none away, so there is
+    // no cycle for it to close and nothing for the destination checks to
+    // gate. Containment and associations alike are kept by the journal,
+    // which reconstructs either without a snapshot.
     // See docs/spec/versioning.md § Restore semantics.
-    const change = new PendingChange('restore', {
-      actor: Stack.actorFrom(opts),
-      ...(moves && { previousParentId }),
-    });
+    const change = new PendingChange('restore', { actor: Stack.actorFrom(opts) });
     const restored = await this.adapter.restoreVersion(id, version, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -2648,13 +2631,12 @@ export class Stack implements StackClient {
 
   /**
    * Snapshot of a record's prior state, passed with the mutating adapter
-   * call so snapshot and mutation land in one atomic write. `parentId` is
-   * always present (`null` where the record has none) so restore can
-   * distinguish "at the root" from a snapshot that omits the key entirely
-   * ("leave as-is"). Never carries `associations` — associate()/
-   * dissociate() don't bump, so no version ever snapshots the association
-   * set, and there is nothing for a restore to roll back to. See
-   * docs/spec/versioning.md § Version history.
+   * call so snapshot and mutation land in one atomic write. Carries what
+   * only a snapshot preserves: `content` and the `typeId` it is read
+   * under, plus `permissions` for audit. Containment, listing and
+   * associations are all kept by the journal instead, so no version ever
+   * snapshots them and there is nothing for a restore to roll them back
+   * to. See docs/spec/versioning.md § Version history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
     return {
@@ -2665,7 +2647,6 @@ export class Stack implements StackClient {
       ...(record.entityId && { entityId: record.entityId }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
       ...(record.updatedVia && { updatedVia: record.updatedVia }),
-      ...(record.parentId !== undefined && { parentId: record.parentId }),
       ...(record.permissions && { permissions: record.permissions }),
     };
   }

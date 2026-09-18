@@ -30,7 +30,6 @@ import type {
   Association,
   AttachmentContent,
   BlobFileInfo,
-  ChangeOp,
   Permission,
   RecordChange,
   RecordFilter,
@@ -1298,14 +1297,46 @@ describe('Stack.mutate — the `parentId` key', () => {
     expect(moved.parentId).toBeUndefined();
   });
 
-  test('bumps version and snapshots the prior state', async () => {
+  // The journal entry carries previousParentId, which is the whole prior
+  // state a move destroys, so no snapshot is owed and `version` — the
+  // ordinal of the snapshot history — stands still.
+  // See docs/spec/versioning.md § Version history.
+  test('leaves version, updatedAt and the snapshot history untouched', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const moved = await stack.mutate(note.id, { parentId: box.id });
+    expect(moved.version).toBe(1);
+    expect(moved.updatedAt).toEqual(note.updatedAt);
+    expect(await stack.getVersions(note.id)).toEqual([]);
+  });
+
+  test('appends one journal entry naming where the record came from', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.mutate(note.id, { parentId: box.id });
+    const entries = await stack.getJournal(note.id);
+    expect(entries).toHaveLength(2); // create, then the move
+    expect(entries[1].ops).toEqual(['reparent']);
+    expect(entries[1].version).toBe(1);
+    expect(entries[1].parentId).toBe(box.id);
+    expect(entries[1].previousParentId).toBeNull();
+  });
+
+  // A set that names a bumping aspect alongside the move bumps once,
+  // covering everything it moved, and journals one entry naming both.
+  test('a content patch alongside the move bumps exactly once', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    const moved = await stack.mutate(note.id, {
+      contentPatch: { text: 'edited' },
+      parentId: box.id,
+    });
     expect(moved.version).toBe(2);
-    const versions = await stack.getVersions(note.id);
-    expect(versions.length).toBe(1);
-    expect(versions[0].content).toEqual({ text: 'note' });
+    expect(await stack.getVersions(note.id)).toHaveLength(1);
+    const entries = await stack.getJournal(note.id);
+    expect(entries).toHaveLength(2);
+    expect([...entries[1].ops].sort()).toEqual(['patch', 'reparent']);
+    expect(entries[1].previousParentId).toBeNull();
   });
 
   test('leaves content untouched', async () => {
@@ -1337,12 +1368,26 @@ describe('Stack.mutate — the `parentId` key', () => {
     );
   });
 
-  test('honors ifVersion', async () => {
+  // A precondition on `version` can fence nothing here: the move does not
+  // move the number it names. Same stance an `associations`-only set takes.
+  // See docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
+  test('ifVersion alongside a parentId-only set is not checked', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.mutate(note.id, { parentId: box.id }, { ifVersion: 99 })).rejects.toThrow(
-      StackVersionConflictError,
-    );
+    const moved = await stack.mutate(note.id, { parentId: box.id }, { ifVersion: 99 });
+    expect(moved.parentId).toBe(box.id);
+  });
+
+  test('ifVersion is checked again once a bumping aspect shares the set', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await expect(
+      stack.mutate(
+        note.id,
+        { contentPatch: { text: 'edited' }, parentId: box.id },
+        { ifVersion: 99 },
+      ),
+    ).rejects.toThrow(StackVersionConflictError);
   });
 
   test('the record itself is refused as its own parent', async () => {
@@ -1492,133 +1537,76 @@ describe('Stack.mutate — the `parentId` key', () => {
 // See docs/spec/versioning.md § Restore semantics.
 // -------------------------------------------------------
 
-describe('Stack.restoreVersion — parentId', () => {
-  test('a snapshot records the container the record sat in', async () => {
+describe('Stack.restoreVersion — containment', () => {
+  // Containment is the journal's to keep, so a snapshot says nothing about
+  // it and a restore settles nothing. See docs/spec/versioning.md
+  // § Version history.
+  test('a snapshot carries no parentId, whatever container the record sat in', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.mutate(note.id, { parentId: null });
-    const [snapshot] = await stack.getVersions(note.id);
-    expect(snapshot.parentId).toBe(box.id);
-  });
-
-  // A snapshot spells containment the way a record does — absent is the
-  // root — so `null` never appears on one.
-  test('a snapshot of a root record omits parentId', async () => {
-    const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.patchContent(note.id, { text: 'edited' });
     const [snapshot] = await stack.getVersions(note.id);
     expect('parentId' in snapshot).toBe(false);
   });
 
-  test('a snapshot carries the container the record sat in', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.patchContent(note.id, { text: 'edited' });
-    const [snapshot] = await stack.getVersions(note.id);
-    expect(snapshot.parentId).toBe(box.id);
-  });
-
-  test('restoring puts the record back in the container it left', async () => {
+  test('restoring leaves a record in the container it sits in now', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const other = await stack.create(NOTE_V1, { text: 'other' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
+    await stack.patchContent(note.id, { text: 'edited' });
     await stack.mutate(note.id, { parentId: other.id });
+    const restored = await stack.restoreVersion(note.id, 1);
+    expect(restored.content).toEqual({ text: 'note' });
+    expect(restored.parentId).toBe(other.id);
+  });
+
+  test('restoring a snapshot taken at the root leaves a contained record contained', async () => {
+    const box = await stack.create(NOTE_V1, { text: 'box' });
+    const note = await stack.create(NOTE_V1, { text: 'note' });
+    await stack.patchContent(note.id, { text: 'edited' });
+    await stack.mutate(note.id, { parentId: box.id });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBe(box.id);
   });
 
-  test('restoring a snapshot taken at the root moves the record back to the root', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.mutate(note.id, { parentId: box.id });
-    const restored = await stack.restoreVersion(note.id, 1);
-    expect(restored.parentId).toBeUndefined();
-  });
-
-  test('a restore that moves the record is itself restorable', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.mutate(note.id, { parentId: null });
-    await stack.restoreVersion(note.id, 1);
-    const back = await stack.restoreVersion(note.id, 2);
-    expect(back.parentId).toBeUndefined();
-  });
-
-  test('restoring rolls content and containment back alongside the move, but leaves associations exactly as they stand', async () => {
+  test('restoring rolls content back and leaves associations exactly as they stand', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.associate(note.id, { kind: 'tag', label: 'pinned' }); // no bump
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.mutate(note.id, { parentId: null });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'pinned' }]);
     expect(restored.parentId).toBe(box.id);
   });
 
-  // A snapshot always settles containment, so one with no parentId — a
-  // foreign server's, or a hand-built saveVersion() — restores the record
-  // to the root rather than leaving it where it sits.
-  test('a snapshot with no parentId key restores the record to the root', async () => {
+  // A restore adds no containment edge, so it cannot close a loop — the
+  // chain that would have been a cycle is left exactly as it is.
+  test('a restore under a container that now sits beneath the record is not a cycle', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await adapter.saveVersion(note.id, {
-      version: 1,
-      typeId: NOTE_V1,
-      content: { text: 'older' },
-      updatedAt: new Date(),
-    });
+    await stack.patchContent(note.id, { text: 'edited' });
+    await stack.mutate(note.id, { parentId: null });
+    await stack.mutate(box.id, { parentId: note.id });
     const restored = await stack.restoreVersion(note.id, 1);
-    expect(restored.content).toEqual({ text: 'older' });
+    expect(restored.content).toEqual({ text: 'note' });
     expect(restored.parentId).toBeUndefined();
   });
 
-  // ...and that counts as a move, so a subscription filtered on the origin
-  // container is told the record left it.
-  test('a restore to the root reaches a subscription filtered on the origin', async () => {
+  // A hard-deleted container never cost a record its content rollback, and
+  // now has nothing to do with one: the record stays where it is, dangling
+  // parent and all.
+  test('a record whose container was hard-deleted still rolls its content back', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await adapter.saveVersion(note.id, {
-      version: 1,
-      typeId: NOTE_V1,
-      content: { text: 'older' },
-      updatedAt: new Date(),
-    });
-    const seen: { recordId: string; ops: ChangeOp[] }[] = [];
-    await stack.subscribe((c) => seen.push({ recordId: c.recordId, ops: c.ops }), {
-      filter: { parentId: box.id },
-    });
-    await stack.restoreVersion(note.id, 1);
-    expect(seen).toEqual([{ recordId: note.id, ops: ['restore'] }]);
-  });
-
-  // Putting a container back is an edge-adding site like a change set's `parentId`: the
-  // chain above it may have moved since the snapshot was taken.
-  test('a restore that would make the record its own ancestor is refused', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.mutate(note.id, { parentId: null });
-    await stack.mutate(box.id, { parentId: note.id });
-    await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(StackConflictError);
-  });
-
-  // Restore is exempt from the reference check a change set's `parentId` pays: it is
-  // history being put back, not a caller naming a destination, and refusing
-  // would let an unrelated deletion cost the record its content rollback.
-  test('a snapshot naming a since-deleted container restores anyway', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.mutate(note.id, { parentId: null });
+    await stack.patchContent(note.id, { text: 'edited' });
     await stack.delete(box.id, { hard: true });
     const restored = await stack.restoreVersion(note.id, 1);
-    expect(restored.parentId).toBe(box.id);
-    // ...and the content came back with it, which is the point.
     expect(restored.content).toEqual({ text: 'note' });
+    expect(restored.parentId).toBe(box.id);
   });
 
-  // The contrast that makes the exemption legible: naming the same gone
-  // container directly is refused.
-  test('naming that same deleted container as parentId is refused', async () => {
+  test('naming a deleted container as parentId is still refused', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.delete(box.id, { hard: true });
@@ -3967,12 +3955,27 @@ describe('Stack.mutate — the `permissions` key', () => {
 // -------------------------------------------------------
 
 describe('Stack.mutate — the `unlisted` key', () => {
-  test('bumps version and sets unlistedAt', async () => {
+  // The journal's `unlist`/`list` ops are complete and invertible, so a
+  // listing transition needs no snapshot and leaves `version` and
+  // `updatedAt` where they stood.
+  // See docs/spec/versioning.md § Version history.
+  test('sets unlistedAt without bumping version or updatedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, { unlisted: true });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(2);
+    expect(updated?.version).toBe(1);
+    expect(updated?.updatedAt).toEqual(record.updatedAt);
     expect(updated?.unlistedAt).toBeInstanceOf(Date);
+    expect(await stack.getVersions(record.id)).toEqual([]);
+  });
+
+  test('appends one journal entry per transition', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.mutate(record.id, { unlisted: true });
+    const entries = await stack.getJournal(record.id);
+    expect(entries).toHaveLength(2); // create, then the unlist
+    expect(entries[1].ops).toEqual(['unlist']);
+    expect(entries[1].version).toBe(1);
   });
 
   test('clears unlistedAt on the reverse call', async () => {
@@ -3980,18 +3983,24 @@ describe('Stack.mutate — the `unlisted` key', () => {
     await stack.mutate(record.id, { unlisted: true });
     await stack.mutate(record.id, { unlisted: false });
     const updated = await adapter.getRecord(record.id);
-    expect(updated?.version).toBe(3);
+    expect(updated?.version).toBe(1);
     expect(updated?.unlistedAt).toBeUndefined();
   });
 
-  test('is a no-op when already in the requested state — no version bump', async () => {
+  test('is a no-op when already in the requested state — no journal entry', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.mutate(record.id, { unlisted: false });
-    expect((await adapter.getRecord(record.id))?.version).toBe(1);
+    expect(await stack.getJournal(record.id)).toHaveLength(1);
 
     await stack.mutate(record.id, { unlisted: true });
     await stack.mutate(record.id, { unlisted: true });
-    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+    expect(await stack.getJournal(record.id)).toHaveLength(2);
+  });
+
+  test('ifVersion alongside an unlisted-only set is not checked', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    const unlisted = await stack.mutate(record.id, { unlisted: true }, { ifVersion: 99 });
+    expect(unlisted.unlistedAt).toBeInstanceOf(Date);
   });
 
   test('does not touch permissions', async () => {
@@ -4068,11 +4077,11 @@ describe('mutators return the record they produced', () => {
   test('an unlisted change set returns the record carrying unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const unlisted = await stack.mutate(record.id, { unlisted: true });
-    expect(unlisted.version).toBe(2);
+    expect(unlisted.version).toBe(1);
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
 
     const relisted = await stack.mutate(record.id, { unlisted: false });
-    expect(relisted.version).toBe(3);
+    expect(relisted.version).toBe(1);
     expect(relisted.unlistedAt).toBeUndefined();
   });
 
@@ -6561,7 +6570,7 @@ describe('Stack.mutate — one call, one version', () => {
     const versions = await stack.getVersions(note.id);
     expect(versions).toHaveLength(1);
     expect(versions[0]).toMatchObject({ version: 1, content: { text: 'hello' } });
-    expect(versions[0]!.parentId).toBeUndefined();
+    expect('parentId' in versions[0]!).toBe(false);
   });
 
   test('emits one event naming every aspect that actually moved', async () => {

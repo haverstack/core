@@ -240,14 +240,6 @@ export type RecordVersion = {
   /** The principal behind that mutation, when it isn't `updatedBy`. */
   updatedVia?: EntityId;
   /**
-   * The container the record sat in, absent for the root — the same
-   * spelling `StackRecord` uses, because a snapshot states where the
-   * record *was*, not an instruction to apply. `null` is an input
-   * spelling (a change set's `parentId`, `RecordFilter`) and never appears here.
-   * See docs/spec/versioning.md § Version history.
-   */
-  parentId?: RecordId;
-  /**
    * Never present. Associations don't share content's versioning:
    * associate()/dissociate() don't bump `version`, so there is no version
    * of a record whose snapshot would describe its association set.
@@ -750,11 +742,11 @@ export type SnapshotOptions = {
 /**
  * Whether a mutateRecord() call advances `version`/`updatedAt` at all.
  * `Stack` computes this from which aspects a change set actually moves — a
- * change set touching only `associations` doesn't bump, the same rule
- * StackRecordAdapter.associate()/dissociate() follow unconditionally.
- * Absent means `true`; every other mutating method bumps every time, so
- * only mutateRecord() takes this. See docs/spec/versioning.md § Version
- * history.
+ * change set touching only `associations`, `parentId` and/or `unlisted`
+ * doesn't bump, the same rule StackRecordAdapter.associate()/dissociate()
+ * follow unconditionally. Absent means `true`; every other mutating method
+ * bumps every time, so only mutateRecord() takes this. See
+ * docs/spec/versioning.md § Version history.
  */
 export type BumpVersionOptions = {
   bumpsVersion?: boolean;
@@ -779,8 +771,8 @@ export type ActorOptions = {
  * stamps from the row it just wrote, so the two can never drift.
  *
  * That split is the whole argument for the tier: content's prior state is
- * recoverable from a snapshot, and an association's is recoverable from
- * nothing at all. See docs/spec/journal.md.
+ * recoverable from a snapshot, and nothing else's is recoverable from
+ * anything but this. See docs/spec/journal.md.
  */
 export type JournalEntryInput = {
   ops: ChangeOp[];
@@ -811,7 +803,10 @@ export type RecordJournalEntry = JournalEntryInput & {
   seq: number;
   /** When the entry was appended — not the record's `updatedAt`, which an association change leaves alone. */
   at: Date;
-  /** The version this change produced; unchanged from before on associate/dissociate. */
+  /**
+   * The version this change produced; unchanged from before on
+   * associate/dissociate, reparent, unlist and list.
+   */
   version: number;
   typeId: TypeId;
   /** Where the record sat after the change, absent for the root. */
@@ -853,9 +848,9 @@ export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
 
 /**
  * The precise verb behind a ChangeKind, for consumers that distinguish a
- * reshare from an edit. Every entry but `associate`/`dissociate` bumps
- * `version`; those two don't, and carry the record's version/updatedAt
- * exactly as they stood before the call. See docs/spec/versioning.md
+ * reshare from an edit. `associate`, `dissociate`, `reparent`, `unlist`
+ * and `list` carry the record's version/updatedAt exactly as they stood
+ * before the call; every other entry bumps. See docs/spec/versioning.md
  * § Version history.
  */
 export type ChangeOp =
@@ -1134,8 +1129,8 @@ export interface StackRecordAdapter {
   /**
    * Add an association. Never bumps `version`/`updatedAt` and never
    * snapshots — a set-add composes correctly regardless of write order, so
-   * it needs neither the OCC `ifVersion` guards content, `parentId` and
-   * `permissions`, nor the rollback history that guards. See
+   * it needs neither the OCC `ifVersion` guards content and `permissions`,
+   * nor the rollback history that guards. See
    * docs/spec/versioning.md § Version history and § Optimistic concurrency.
    */
   associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
@@ -1163,15 +1158,12 @@ export interface StackRecordAdapter {
    */
   getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
-   * Restore a record to a previous version's content and `parentId`
-   * (absent on the snapshot means the root, so a restore always settles
-   * containment). Never restores `permissions` or `associations` — a
-   * snapshot never carries the latter at all, so there is nothing an
-   * adapter could restore associations *from*. Bumps version internally.
-   * Throws StackNotFoundError if the version doesn't exist.
-   *
-   * The acyclicity check on a restore that moves the record belongs to the
-   * caller (Stack.restoreVersion()), exactly as it does for a change set's `parentId`.
+   * Restore a record to a previous version's `content` and `typeId` —
+   * everything a snapshot carries. Containment, listing, `permissions` and
+   * `associations` are left where they stand; a snapshot carries none of
+   * them, so there is nothing an adapter could restore them *from*. Bumps
+   * version internally. Throws StackNotFoundError if the version doesn't
+   * exist.
    */
   restoreVersion(
     id: RecordId,

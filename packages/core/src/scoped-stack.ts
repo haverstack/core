@@ -1213,12 +1213,10 @@ export class ScopedStack implements StackClient {
 
   /**
    * Re-runs the reference-creation checks against the snapshot, so a
-   * restore can't re-convey access to a file or record the subject can no
-   * longer reach today — the snapshot's `parentId` among them, gated
-   * exactly as a change set's `parentId` gates a destination named directly. Only the
-   * owner acting alone is exempt: under delegation the checks resolve
-   * against the subject, which is whose reach the restore would widen.
-   * See docs/spec/versioning.md § Restore semantics.
+   * restore can't re-convey access to a file the subject can no longer
+   * reach today. Only the owner acting alone is exempt: under delegation
+   * the checks resolve against the subject, which is whose reach the
+   * restore would widen. See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -1237,22 +1235,11 @@ export class ScopedStack implements StackClient {
             (target.content as Record<string, unknown>)[field] !==
             (record.content as Record<string, unknown>)[field],
         );
-        // Only a restore that moves the record *into* a container creates a
-        // reference. A snapshot at the root names nothing, and a parentId
-        // the restore would not change is not re-gated: the record is
-        // already there, so a content rollback is not refused over a move
-        // it isn't making.
-        if (
-          target.parentId !== undefined &&
-          target.parentId !== record.parentId &&
-          !(await this.canReadReferent(target.parentId))
-        ) {
-          throw new StackPermissionError();
-        }
         await this.requireFileRefAccess(target.typeId, target.content);
-        // No association gate: a snapshot never carries `associations`, so
-        // a restore never introduces one — see docs/spec/versioning.md
-        // § Restore semantics.
+        // Content's file refs are the only reference a restore can put
+        // back: containment and associations are not on a snapshot at all,
+        // so a restore never introduces either — see
+        // docs/spec/versioning.md § Restore semantics.
       }
     }
     return this.stack.restoreVersion(id, version, { ...opts, ...this.actor });

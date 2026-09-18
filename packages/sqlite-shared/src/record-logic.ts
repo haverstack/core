@@ -96,7 +96,6 @@ const VERSION_COLUMNS = [
   'entity_id',
   'updated_by',
   'updated_via',
-  'parent_id',
   'permissions',
 ] as const;
 
@@ -107,7 +106,6 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
   version.entityId ?? null,
   version.updatedBy ?? null,
   version.updatedVia ?? null,
-  version.parentId ?? null,
   version.permissions ? JSON.stringify(version.permissions) : null,
 ];
 
@@ -321,13 +319,13 @@ export class SharedSqlRecordLogic {
    * one call is one version whatever it moved.
    *
    * `opts.bumpsVersion: false` is a change set that touches only
-   * `associations` — Stack computes this from which ops the set actually
-   * moves. Such a write skips the records-table UPDATE (and the snapshot)
-   * entirely: nothing on that row changes, so there is nothing to bump and
-   * no version to snapshot. `expectedVersion`, if given, is still
-   * re-checked synchronously inside the transaction — the CAS guard the
-   * bumping path gets from its UPDATE's WHERE clause, restated as a read
-   * because there is no UPDATE here to carry it. See
+   * `associations`, `parentId` and/or `unlisted` — Stack computes this from
+   * which ops the set actually moves. Such a write still lands its columns,
+   * but leaves `version`, `updatedAt` and the actor stamps exactly as they
+   * stood and takes no snapshot. `expectedVersion`, if given, is re-checked
+   * synchronously inside the transaction — the CAS guard the bumping path
+   * gets from its UPDATE's WHERE clause, restated as a read because the
+   * UPDATE here carries no version predicate. See
    * docs/spec/versioning.md § Version history.
    *
    * The expectedVersion check for a bumping write is standalone rather than
@@ -350,11 +348,39 @@ export class SharedSqlRecordLogic {
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
 
+    const now = toMs(new Date());
+
+    // Assembled rather than written out per aspect: every aspect is the
+    // same column-and-value pair on one row, and a fixed statement per
+    // combination would be 2^4 of them. Built before the no-bump branch
+    // because both paths write the same columns; only `content` is the
+    // bumping path's alone, since a patch always bumps.
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (changes.parentId !== undefined) {
+      sets.push('parent_id = ?');
+      values.push(changes.parentId);
+    }
+    if (changes.permissions !== undefined) {
+      sets.push('permissions = ?');
+      values.push(changes.permissions.length ? JSON.stringify(changes.permissions) : null);
+    }
+    if (changes.unlisted !== undefined) {
+      sets.push('unlisted_at = ?');
+      // Stamped fresh because this key is only ever present on a
+      // transition — Stack narrows a change set to the aspects that
+      // actually moved before it reaches an adapter.
+      values.push(changes.unlisted ? now : null);
+    }
+
     if (opts.bumpsVersion === false) {
       this.exec.transaction(() => {
         const current = this.readRecord(id);
         if (!current) throw new StackNotFoundError(`Record not found: "${id}"`);
         this.checkExpectedVersion(current, opts.expectedVersion);
+        if (sets.length > 0) {
+          this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
+        }
         if (changes.associations !== undefined) {
           this.replaceAssociations(id, changes.associations);
         }
@@ -366,32 +392,9 @@ export class SharedSqlRecordLogic {
     const merged = changes.contentPatch
       ? applyMergePatch(existing.content, changes.contentPatch)
       : undefined;
-
-    // Assembled rather than written out per aspect: every one of these is
-    // the same column-and-value pair on one row, and a fixed statement per
-    // combination would be 2^5 of them.
-    const sets: string[] = [];
-    const values: unknown[] = [];
     if (merged !== undefined) {
-      sets.push('content = ?');
-      values.push(JSON.stringify(merged));
-    }
-    if (changes.parentId !== undefined) {
-      sets.push('parent_id = ?');
-      values.push(changes.parentId);
-    }
-    if (changes.permissions !== undefined) {
-      sets.push('permissions = ?');
-      values.push(changes.permissions.length ? JSON.stringify(changes.permissions) : null);
-    }
-
-    const now = toMs(new Date());
-    if (changes.unlisted !== undefined) {
-      sets.push('unlisted_at = ?');
-      // Stamped fresh because this key is only ever present on a
-      // transition — Stack narrows a change set to the aspects that
-      // actually moved before it reaches an adapter.
-      values.push(changes.unlisted ? now : null);
+      sets.unshift('content = ?');
+      values.unshift(JSON.stringify(merged));
     }
 
     this.exec.transaction(() => {
@@ -501,18 +504,12 @@ export class SharedSqlRecordLogic {
     const target = await this.getVersion(id, version);
     if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
 
-    // Associations are never restored — a snapshot never carries them, so
-    // there is nothing here to roll the associations table back to.
+    // Only content and its type are restored — a snapshot carries nothing
+    // else, so there is nothing here to roll containment, listing or the
+    // associations table back to.
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      this.rewriteContent(
-        id,
-        target.typeId,
-        target.content,
-        opts,
-        ['parent_id = ?'],
-        [target.parentId ?? null],
-      );
+      this.rewriteContent(id, target.typeId, target.content, opts);
       this.appendJournal(id, opts.journal);
     });
 
@@ -547,8 +544,7 @@ export class SharedSqlRecordLogic {
 
   /**
    * Replace a record's type and content wholesale — what restoreVersion and
-   * commitMigration each do, differing only in where the content came from
-   * and whether the container moves with it.
+   * commitMigration each do, differing only in where the content came from.
    *
    * The order is the constraint: fts5Strategy.remove() has to read the old
    * content off the records row, so it runs before the UPDATE, and the
@@ -561,17 +557,10 @@ export class SharedSqlRecordLogic {
     typeId: TypeId,
     content: Record<string, unknown>,
     opts: ExpectedVersionOptions & ActorOptions,
-    extraSets: string[] = [],
-    extraValues: unknown[] = [],
   ): void {
     const json = JSON.stringify(content);
     fts5Strategy.remove(this.exec, id);
-    this.versionedUpdate(
-      id,
-      ['type_id = ?', 'content = ?', ...extraSets],
-      [typeId, json, ...extraValues],
-      opts,
-    );
+    this.versionedUpdate(id, ['type_id = ?', 'content = ?'], [typeId, json], opts);
     fts5Strategy.insert(this.exec, id, json);
     this.syncContentIndex(id, typeId, content);
   }

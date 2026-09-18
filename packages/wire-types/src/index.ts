@@ -95,7 +95,6 @@ export type WireVersion = {
   entityId?: string;
   updatedBy?: string;
   updatedVia?: string;
-  parentId?: string;
   permissions?: Permission[];
 };
 
@@ -145,7 +144,6 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.entityId !== undefined) w.entityId = v.entityId;
   if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
-  if (v.parentId !== undefined) w.parentId = v.parentId;
   if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;
 }

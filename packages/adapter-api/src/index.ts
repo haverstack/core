@@ -468,10 +468,6 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
   if (raw.entityId != null) v.entityId = raw.entityId;
   if (raw.updatedBy != null) v.updatedBy = raw.updatedBy;
   if (raw.updatedVia != null) v.updatedVia = raw.updatedVia;
-  // Absent is the root, as on a record. A foreign server that spells the
-  // root `null` — mirroring the input side, where `null` is how a caller
-  // asks for it — means the same thing, so both land as absent here.
-  if (raw.parentId != null) v.parentId = raw.parentId;
   if (raw.permissions != null) v.permissions = raw.permissions;
   return v;
 };
