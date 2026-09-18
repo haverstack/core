@@ -1194,10 +1194,8 @@ export class ScopedStack implements StackClient {
   /**
    * See getVersions() — the same mutate-surface gate, for the same reason.
    * A journal entry carries no snapshot `permissions` to strip: it names
-   * that a permission set moved, never what it moved to. The change a
-   * record's ACL underwent is auditable by a write-holder; the sharing
-   * graph it produced stays on the record and on its snapshots.
-   * See docs/spec/versioning.md § The change journal.
+   * that a permission set moved, never what it moved to.
+   * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     await this.requireUpdatable(id, { mutating: false });

@@ -418,7 +418,7 @@ A snapshot body carries `parentId` exactly as the Record body above does: presen
 
 **A snapshot body carries no `associations`.** No version has ever captured one — the association endpoints and an `associations`-only change set don't bump `version`, so there is no moment at which a snapshot is taken of them — and a restore correspondingly leaves a record's associations exactly where they stand, whatever the snapshot it puts back. `WireVersion` has no such field, so a server that emits one is writing a key every client drops. See [Versioning § Version history](./versioning.md#version-history).
 
-The second durable tier a mutation writes is [the change journal](#journal), below — the record of what each change moved, which is where an association's prior state is recovered from, since no snapshot holds one.
+The second durable tier a mutation writes is [the change journal](./journal.md), served by [the endpoint below](#journal) — the record of what each change moved, which is where an association's prior state is recovered from, since no snapshot holds one.
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). A restore that puts a different container back is a move, so it answers **403** where the requester cannot read that container and **409** where it would make the record its own ancestor — the same two refusals a change set's `parentId` gives for a destination named directly. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
@@ -426,7 +426,7 @@ The second durable tier a mutation writes is [the change journal](#journal), bel
 
 ## Journal
 
-**The second durable tier, beside version history.** A snapshot answers _what could be put back_; a [journal](./versioning.md#the-change-journal) entry answers _what happened_ — which aspects a change moved, who moved them, and the association deltas nothing else retains. It is the only place an association's prior state survives, since no version captures one.
+The wire encoding of [the change journal](./journal.md) — the second durable tier a mutation writes, and the only place an association's prior state survives. The entry shape, the ordering rule, the permission gate and the erasure rule are that document's; what follows is what this endpoint adds.
 
 ```
 GET /records/:id/journal             — the log, oldest first
@@ -445,7 +445,22 @@ GET /records/:id/journal?limit=50    — at most 50 entries
       "version": 1,
       "typeId": "com.example/note@1",
       "actor": { "entityId": "did:key:z6Mk..." },
-      "associationsAdded": [{ "kind": "tag", "label": "starred" }]
+      "associationsAdded": [
+        {
+          "kind": "attachment",
+          "label": "avatar",
+          "fileId": "abc123",
+          "attachmentRecordId": "1hk153x00002"
+        }
+      ],
+      "associationsReplaced": [
+        {
+          "kind": "attachment",
+          "label": "avatar",
+          "fileId": "abc123",
+          "attachmentRecordId": "1hk153x00001"
+        }
+      ]
     }
   ],
   "cursor": null
@@ -454,15 +469,17 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **This endpoint is not optional.** Every adapter implements `getJournal()`, so a server that answers `404` here leaves the one adapter that fronts a server unable to honor a method the client interface requires. An empty log means _nothing changed_, unconditionally — a server with no journal to offer must not spell "I do not remember" the same way, and the only spelling available to it would be exactly that.
 
-**`seq` is a dense integer from 1, per record, and is the entry's only ordering.** `at` is wall clock and `version` stands still across an association change, so neither orders the log alone. It is **not** the [change feed's `seq`](./change-feed.md#frames), which is an opaque server-minted cursor over the whole stack; the two share a name because both order a stream, and no value may be carried from one to the other.
+**`associationsReplaced` is the field a client can get nowhere else.** It carries the association an `associate()` overwrote in place — the `attachmentRecordId` a re-point discarded — and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current, nor on a snapshot, since an association change bumps no `version`. A server that drops it from its response serves a log that cannot answer the question the tier exists for.
+
+**`seq` here is the entry's, not the feed's.** It is a dense integer from 1, per record; [the change feed's `seq`](./change-feed.md#frames) is an opaque server-minted cursor over the whole stack. The two share a name because both order a stream, and no value may be carried from one to the other.
 
 **`cursor` is the only end-of-log signal**, exactly as it is on [a query](#response-envelope). A server MAY answer a page shorter than the `limit` asked for — this is the one read with no ceiling when `limit` is omitted, so it needs that freedom — which is why a short page must not be read as an exhausted log. `cursor` carries the `seq` to send back as `sinceSeq`, and is `null` once nothing follows. `APIAdapter.getJournal()` follows it to the end, so the library contract that omitting `limit` reads the whole log survives whatever page size a server picks.
 
 **`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Every other nullable field collapses both to absent — a record body and a snapshot spell the root that way — and doing so here would lose which of the two happened. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
 
-**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`. A log of who changed what, gated on current read access, would make a record's past as reachable as its present. Unlike a snapshot there is nothing to strip: an entry names _that_ a permission set moved, never what it moved to.
+**Gated on the mutate surface, exactly as [the version endpoints are](#versions).** A requester holding write, or the owner, or the creator, passes; a plain reader gets `403`. Unlike a snapshot there is nothing to strip.
 
-**A hard delete destroys the journal**, exactly as it destroys version history, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./access-control.md#errors-and-information-exposure) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
+**A hard delete destroys the journal**, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./access-control.md#errors-and-information-exposure) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
 
 `@haverstack/core/wire` exports `parseJournalParams()`, so a server decodes `sinceSeq` and `limit` with the same grammar `APIAdapter` builds them with. Neither has a default: omitting `limit` reads the whole log by contract, so supplying a page size on the server's behalf would truncate exactly the caller that omitted it — a server bounds a page with `cursor` instead, which says so.
 

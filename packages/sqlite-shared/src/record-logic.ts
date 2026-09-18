@@ -762,7 +762,7 @@ export class SharedSqlRecordLogic {
    * `seq` is allocated here, from the log's own max, rather than computed
    * by the caller. That is what spares this table the collision healing
    * versions needs: nothing outside this statement ever holds a seq it
-   * expects to be free. See docs/spec/versioning.md § The change journal.
+   * expects to be free. See docs/spec/journal.md § Ordering.
    */
   private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
     if (!entry) return;

@@ -84,7 +84,7 @@ The same rules are enforced locally, so a client-minted ID behaves identically w
 
 ## Mutations
 
-**One call, one version.** `mutate(id, changes, opts)` is the write surface for an existing Record. It takes a change set naming any combination of aspects, applies them in a single atomic write, and produces exactly one new version carrying one snapshot of the prior state.
+**One call, one version.** `mutate(id, changes, opts)` is the write surface for an existing Record. It takes a change set naming any combination of aspects, applies them in a single atomic write, and produces exactly one new version carrying one snapshot of the prior state — however many aspects it moved.
 
 ```ts
 await stack.mutate(noteId, {
@@ -104,6 +104,8 @@ type RecordChanges = {
 };
 ```
 
+**`associations` is the one key that does not decide whether the call bumps.** A change set whose only key is `associations` writes no version and takes no snapshot, exactly as `associate()`/`dissociate()` below do not — associations are invertible, so they never needed the recoverability a snapshot buys (see [Versioning § Version history](./versioning.md#version-history), and [the change journal](./journal.md) for where their prior state is kept instead). Name it alongside any other aspect and the call bumps once, covering everything it moved.
+
 **Every key replaces the aspect it names, except `contentPatch`, which says so in its name.** `permissions` and `associations` replace what the Record holds, `unlisted` sets or clears the withholding, and `parentId` names a container or `null` for the root. `contentPatch` merges instead: an omitted field keeps its current value and `null` removes one. The name carries the whole disambiguation — a key called `content` sitting beside keys that replace would have to be read against this paragraph to know that it doesn't, and the one asymmetry in the envelope is worth a longer key rather than a footnote.
 
 Content is a patch because uniformity costs more here than it buys. [`limits.contentBytes`](./adapters.md#adapter-capabilities) bounds what travels, so a whole-document write puts a one-field edit against the full ceiling; two apps editing different top-level fields of one Record both survive a patch and clobber one another under replacement; and content read through [`presentAt: 'latest'`](#type-migrations) cannot be written back wholesale at all, since a write validates against the Record's own stored Type and a read-modify-write would submit migrated content to the schema it was migrated away from. A patch touches only the fields the caller named, so none of the three arises.
@@ -116,7 +118,7 @@ Content is a patch because uniformity costs more here than it buys. [`limits.con
 
 **`patchContent(id, patch, opts)`** is the content-only spelling, exactly `mutate()` with `contentPatch` alone. Content edits outnumber every other kind by a wide margin, and the name says what the operation does instead of promising a symmetry with `create()` that a patch does not have.
 
-**`associate()` and `dissociate()` are not the `associations` key.** Each adds or removes a single Association, matched by kind, label and payload, and is a no-op when the Record already stands that way. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
+**`associate()` and `dissociate()` are not the `associations` key.** Each adds or removes a single Association, matched by kind, label and payload, and is a no-op when the Record already stands that way. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
 
 **What the envelope does not carry.** `typeId` moves only through [`commitMigration()`](#type-migrations), which replaces content wholesale under a new schema and carries its own owner-only gate. `deletedAt` moves only through `delete()`/`undelete()`: a tombstone transition is a lifecycle step rather than an edit, and [mutations are refused against a tombstone](./versioning.md#mutations-are-refused-not-applied-to-a-tombstone) rather than bundled with one. `createdAt` and `updatedAt` are settable at [create time only, by the owner acting alone](#backdating-on-import). Every remaining native field is stamped by the write itself or is create-only — [Reparenting](#reparenting) gives the full split.
 
