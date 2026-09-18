@@ -145,14 +145,6 @@ export const rowToJournalEntry = (row: Record<string, unknown>): RecordJournalEn
     e.previousParentId = row.previous_parent_id === '' ? null : (row.previous_parent_id as string);
   }
   if (row.actor != null) e.actor = JSON.parse(row.actor as string);
-  if (row.associations_added != null) {
-    e.associationsAdded = JSON.parse(row.associations_added as string);
-  }
-  if (row.associations_removed != null) {
-    e.associationsRemoved = JSON.parse(row.associations_removed as string);
-  }
-  if (row.associations_replaced != null) {
-    e.associationsReplaced = JSON.parse(row.associations_replaced as string);
-  }
+  if (row.associations != null) e.associations = JSON.parse(row.associations as string);
   return e;
 };

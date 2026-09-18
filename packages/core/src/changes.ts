@@ -15,7 +15,7 @@
  */
 
 import type {
-  Association,
+  AssociationChange,
   ChangeActor,
   JournalEntryInput,
   ChangeFilter,
@@ -27,7 +27,7 @@ import type {
   Unsubscribe,
 } from './types.js';
 import { StackQueryError } from './errors.js';
-import { bumpsVersion } from './record-changes.js';
+import { bumpsVersion, feedAssociationDelta } from './record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.
@@ -266,10 +266,13 @@ export class PendingChange {
        */
       actor?: ChangeActor;
       previousParentId?: string | null;
-      associationsAdded?: Association[];
-      associationsRemoved?: Association[];
-      /** Journal-only; the feed reports what is current. */
-      associationsReplaced?: Association[];
+      /**
+       * What the write moved, association by association. One list for
+       * both halves: the journal takes it as it stands and the feed is
+       * flattened out of it, so neither can report an edit the other
+       * doesn't.
+       */
+      associations?: AssociationChange[];
     } = {},
   ) {
     const list = Array.isArray(ops) ? ops : [ops];
@@ -291,14 +294,13 @@ export class PendingChange {
    */
   get journal(): JournalEntryInput | undefined {
     if (this.kind === 'purged') return undefined;
-    const { actor, previousParentId, associationsReplaced } = this.moved;
+    const { actor, previousParentId, associations } = this.moved;
     return {
       ops: this.ops,
       kind: this.kind,
       ...(actor && { actor }),
       ...(previousParentId !== undefined && { previousParentId }),
-      ...this.associationDeltas(),
-      ...(associationsReplaced?.length && { associationsReplaced }),
+      ...(associations?.length && { associations }),
     };
   }
 
@@ -353,15 +355,15 @@ export class PendingChange {
     };
   }
 
-  /** The two lists both halves carry, present only where non-empty. */
-  private associationDeltas(): Pick<
-    JournalEntryInput,
-    'associationsAdded' | 'associationsRemoved'
-  > {
-    const { associationsAdded, associationsRemoved } = this.moved;
+  /**
+   * The frame's two flat lists, flattened out of the one the journal
+   * takes. Present only where non-empty.
+   */
+  private associationDeltas(): Pick<RecordChange, 'associationsAdded' | 'associationsRemoved'> {
+    const { added, removed } = feedAssociationDelta(this.moved.associations ?? []);
     return {
-      ...(associationsAdded?.length && { associationsAdded }),
-      ...(associationsRemoved?.length && { associationsRemoved }),
+      ...(added.length && { associationsAdded: added }),
+      ...(removed.length && { associationsRemoved: removed }),
     };
   }
 }

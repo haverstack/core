@@ -18,6 +18,7 @@
  */
 
 import { StackQueryError } from './errors.js';
+import { associationEqual } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
@@ -262,11 +263,34 @@ export function validateAssociation(
 }
 
 /** validateAssociation() over a create's `associations` array. */
+/**
+ * Every association in a list, plus the one rule a list has that a single
+ * association does not: **identities are distinct**. A list naming one
+ * identity twice describes a state no store can hold — an adapter keys
+ * associations by identity, so the second entry displaces the first — and
+ * which of the two the record ends up with is a question the caller did
+ * not mean to ask. Refused rather than collapsed, for the reason an empty
+ * change set is refused: every way of producing one is a caller bug.
+ * See docs/spec/data-model.md § Associations.
+ */
 export function validateAssociations(
   associations: Association[] | undefined,
   path = 'associations',
 ): ValidationError[] {
-  return (associations ?? []).flatMap((a, i) => validateAssociation(a, `${path}[${i}]`));
+  const list = associations ?? [];
+  return [
+    ...list.flatMap((a, i) => validateAssociation(a, `${path}[${i}]`)),
+    ...list.flatMap((a, i) =>
+      list.slice(0, i).some((b) => associationEqual(a, b))
+        ? [
+            {
+              path: `${path}[${i}]`,
+              message: `Duplicate association identity: ${a.kind} "${a.label}" is named more than once.`,
+            },
+          ]
+        : [],
+    ),
+  ];
 }
 
 /**

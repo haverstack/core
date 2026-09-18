@@ -283,6 +283,12 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.getJournal(record.id)).toEqual([]);
       });
 
+      test('a record that is not there is refused, never answered empty', async () => {
+        // The one case where an empty log would mean something other than
+        // "nothing changed". See docs/spec/journal.md § Reading it.
+        await expectStackErrorCode(adapter.getJournal(uniqueId('missing')), 'not_found');
+      });
+
       test('an entry is stamped from the row the write produced, not from the caller', async () => {
         const record = makeRecord({ content: { title: 'v1' } });
         await adapter.createRecord(record, {
@@ -335,7 +341,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             journal: {
               ops: ['associate'],
               kind: 'changed',
-              associationsAdded: [{ kind: 'tag', label: 'starred' }],
+              associations: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }],
             },
           },
         );
@@ -346,43 +352,100 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             journal: {
               ops: ['dissociate'],
               kind: 'changed',
-              associationsRemoved: [{ kind: 'tag', label: 'starred' }],
+              associations: [{ op: 'remove', previous: { kind: 'tag', label: 'starred' } }],
             },
           },
         );
 
         const log = await adapter.getJournal(record.id);
         expect(log.map((e) => e.version)).toEqual([record.version, record.version]);
-        expect(log[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
-        expect(log[1]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
+        expect(log[0]!.associations).toEqual([
+          { op: 'add', association: { kind: 'tag', label: 'starred' } },
+        ]);
+        expect(log[1]!.associations).toEqual([
+          { op: 'remove', previous: { kind: 'tag', label: 'starred' } },
+        ]);
       });
 
-      test('associationsReplaced survives the round trip', async () => {
-        // The one field with no counterpart on the change feed, and the
-        // whole reason this tier exists: nothing else retains the
+      test("a repoint's previous survives the round trip", async () => {
+        // The half with no counterpart on the change feed, and the whole
+        // reason this tier exists: nothing else retains the
         // attachmentRecordId a re-point discarded.
         const record = makeRecord();
         await adapter.createRecord(record);
-        const replaced = {
+        const previous = {
           kind: 'attachment' as const,
           label: 'avatar',
           fileId: 'a'.repeat(64),
           attachmentRecordId: uniqueId('old'),
         };
-        await adapter.associate(
+        const association = {
+          kind: 'attachment' as const,
+          label: 'avatar',
+          fileId: 'a'.repeat(64),
+          attachmentRecordId: uniqueId('new'),
+        };
+        await adapter.associate(record.id, association, {
+          journal: {
+            ops: ['associate'],
+            kind: 'changed',
+            associations: [{ op: 'repoint', association, previous }],
+          },
+        });
+        const [entry] = await adapter.getJournal(record.id);
+        expect(entry!.associations).toEqual([{ op: 'repoint', association, previous }]);
+      });
+
+      test('a removal keeps the annotation it carried', async () => {
+        // A removed association is as undoable from the log as a re-pointed
+        // one: `previous` is the association in full, attachmentRecordId
+        // included, not the identity a change frame reports.
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const previous = {
+          kind: 'attachment' as const,
+          label: 'cover',
+          fileId: 'b'.repeat(64),
+          attachmentRecordId: uniqueId('upload'),
+        };
+        await adapter.associate(record.id, previous);
+        await adapter.dissociate(
           record.id,
-          { kind: 'attachment', label: 'avatar', fileId: 'a'.repeat(64) },
+          { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
           {
             journal: {
-              ops: ['associate'],
+              ops: ['dissociate'],
               kind: 'changed',
-              associationsAdded: [{ kind: 'attachment', label: 'avatar', fileId: 'a'.repeat(64) }],
-              associationsReplaced: [replaced],
+              associations: [{ op: 'remove', previous }],
             },
           },
         );
         const [entry] = await adapter.getJournal(record.id);
-        expect(entry!.associationsReplaced).toEqual([replaced]);
+        expect(entry!.associations).toEqual([{ op: 'remove', previous }]);
+      });
+
+      test('an association list is keyed by identity, last wins', async () => {
+        // Association identity is the association table's primary key, so a
+        // list naming one identity twice is a state no store can hold.
+        // An adapter that kept both would let a record reach one a SQL
+        // adapter cannot represent.
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const fileId = 'c'.repeat(64);
+        const winner = uniqueId('second');
+        const updated = await adapter.mutateRecord(
+          record.id,
+          {
+            associations: [
+              { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: uniqueId('first') },
+              { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: winner },
+            ],
+          },
+          { bumpsVersion: false },
+        );
+        expect(updated.associations).toEqual([
+          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: winner },
+        ]);
       });
 
       test('previousParentId tells "did not move" apart from "moved off the root"', async () => {
@@ -441,7 +504,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           ),
           'not_found',
         );
-        expect(await adapter.getJournal(missing)).toEqual([]);
+        // The record was never created, so its log is refused rather than
+        // read — what matters is that the entry did not land somewhere.
+        await expectStackErrorCode(adapter.getJournal(missing), 'not_found');
       });
 
       test('a soft delete keeps the journal; a hard delete destroys it', async () => {
@@ -455,7 +520,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.getJournal(record.id)).toHaveLength(2);
 
         await adapter.deleteRecord(record.id, { hard: true });
-        expect(await adapter.getJournal(record.id)).toEqual([]);
+        // Gone with the record, so the log is refused: an empty one would
+        // mean "nothing changed", which is the one reading it must keep.
+        await expectStackErrorCode(adapter.getJournal(record.id), 'not_found');
 
         // And the log restarts: a purge that left rows behind would hand
         // the next record at this id a history that is not its own.

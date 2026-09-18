@@ -833,11 +833,32 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
   {
     name: 'delete-record-hard',
     description:
-      'DELETE /records/:id?hard=true permanently removes the record and its history. The one ' +
-      'mutation with no record to answer with: it produces no version, so 204 and no body.',
+      'DELETE /records/:id?hard=true permanently removes the record, its history and its ' +
+      'journal, and answers 200 with the record as it last stood. It is the one response that ' +
+      'is not the record a write produced, because this write produces none: the body is the ' +
+      "purge's only report of what it destroyed, and a client reads the files it stranded — " +
+      'the attachment associations and file-ref fields — off it. Every other row naming those ' +
+      'files is gone by the time the response lands. A purged frame still carries nothing: ' +
+      'that fans out to every subscriber, this goes to the owner who authorized the purge. ' +
+      'See docs/spec/attachments.md § A purge strands the bytes it referenced.',
     method: 'DELETE',
     path: '/records/1hk153x00001?hard=true',
-    responseStatus: 204,
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 2,
+      associations: [
+        {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        },
+      ],
+    },
   },
 ];
 
@@ -1430,7 +1451,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           version: 1,
           typeId: 'com.example/note@1',
           actor: { entityId: 'entity-contributor-789' },
-          associationsAdded: [{ kind: 'tag', label: 'starred' }],
+          associations: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }],
         },
       ],
       cursor: null,
@@ -1464,11 +1485,12 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
   {
     name: 'get-journal-entry-keeps-what-an-associate-overwrote',
     description:
-      'associationsReplaced is the field with no counterpart on the change feed, and the whole ' +
+      '`associations` is the field with no counterpart on the change feed, and the whole ' +
       "reason this tier exists. Re-pointing an attachment association's attachmentRecordId " +
       'overwrites the old value in place; the feed reports only what is true now, so the entry ' +
-      'is the only record of what it replaced. associationsAdded carries the new value and ' +
-      'associationsReplaced the old one, both on the one entry. ' +
+      'is the only record of what it replaced. A repoint carries both halves on one element — ' +
+      'the association as it now stands and the `previous` it displaced — so no consumer has ' +
+      'to join one list against another to find the pair. ' +
       'See docs/spec/attachments.md § Naming the upload a reference came from.',
     method: 'GET',
     path: '/records/1hk153x00001/journal?sinceSeq=2',
@@ -1483,20 +1505,59 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           version: 1,
           typeId: 'com.example/note@1',
           actor: { entityId: 'entity-owner-123' },
-          associationsAdded: [
+          associations: [
             {
-              kind: 'attachment',
-              label: 'embed',
-              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-              attachmentRecordId: '1hk153x0000b',
+              op: 'repoint',
+              association: {
+                kind: 'attachment',
+                label: 'embed',
+                fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+                attachmentRecordId: '1hk153x0000b',
+              },
+              previous: {
+                kind: 'attachment',
+                label: 'embed',
+                fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+                attachmentRecordId: '1hk153x00009',
+              },
             },
           ],
-          associationsReplaced: [
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-journal-entry-keeps-what-a-dissociate-removed',
+    description:
+      'A removal is as undoable from the log as a re-point: `previous` is the association in ' +
+      'full, attachmentRecordId included. The change frame for the same write names identity ' +
+      'only — kind, label and fileId — because a notification reports what is true now, and ' +
+      'the annotation no longer describes anything current. That asymmetry is the tier: the ' +
+      'feed says what happened, the journal says what it happened to. ' +
+      'See docs/spec/journal.md § The entry.',
+    method: 'GET',
+    path: '/records/1hk153x00001/journal?sinceSeq=3',
+    responseStatus: 200,
+    responseBody: {
+      entries: [
+        {
+          seq: 4,
+          at: '2024-01-04T00:00:00.000Z',
+          kind: 'changed',
+          ops: ['dissociate'],
+          version: 1,
+          typeId: 'com.example/note@1',
+          actor: { entityId: 'entity-owner-123' },
+          associations: [
             {
-              kind: 'attachment',
-              label: 'embed',
-              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-              attachmentRecordId: '1hk153x00009',
+              op: 'remove',
+              previous: {
+                kind: 'attachment',
+                label: 'embed',
+                fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+                attachmentRecordId: '1hk153x0000b',
+              },
             },
           ],
         },
@@ -1732,6 +1793,23 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
+    },
+  },
+  {
+    name: 'error-not-found-journal-of-a-record-that-is-gone',
+    description:
+      'GET /records/:id/journal for a record the server does not have — never created, or ' +
+      'hard-deleted — returns 404 / code "not_found", never an empty log. An empty log means ' +
+      '"nothing changed" unconditionally, which is the reading a client reconstructing an ' +
+      "association's history depends on; answering it here would make that reading " +
+      'ambiguous exactly where it matters. This is the one 404 the journal endpoint gives: ' +
+      'the endpoint itself is mandatory, so a server with no journal to offer may not answer ' +
+      '404 for a record it holds. See docs/spec/journal.md § Reading it.',
+    method: 'GET',
+    path: '/records/1hk153x0a00b/journal',
+    responseStatus: 404,
+    responseBody: {
+      error: { code: 'not_found', message: 'Record "1hk153x0a00b" not found.' },
     },
   },
   {
@@ -3285,7 +3363,17 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'The owner hard-deletes a note that had a parent and an author.',
           method: 'DELETE',
           path: '/records/1hk153x00002?hard=true',
-          responseStatus: 204,
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x00002',
+            typeId: 'com.example/note@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { title: 'Gone', body: 'Destroyed' },
+            version: 1,
+            parentId: '1hk153x0000f',
+            entityId: 'entity-owner-123',
+          },
         },
         frames: [
           {

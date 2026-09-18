@@ -131,7 +131,6 @@ import {
   takesIfVersion,
   effectiveChanges,
   stampGroupAdmin,
-  stripAssociationAnnotation,
   isGroupRecord,
 } from './record-changes.js';
 import { ScopedStack } from './scoped-stack.js';
@@ -298,6 +297,23 @@ export type DeleteRecordOptions = IfVersionOptions & {
   hard?: boolean;
 };
 
+/**
+ * What a delete reports back. Information, not action: a purge never
+ * touches the blob store, and nothing here is deleted by having been
+ * named. See docs/spec/attachments.md § A purge strands the bytes it
+ * referenced.
+ */
+export type DeleteResult = {
+  /**
+   * The files the purged record referenced — its attachment associations
+   * and its `file-ref` content fields, deduplicated. The purge removes the
+   * only rows naming them, so this is the caller's one chance to hold the
+   * argument `deleteAttachment()` takes. Empty on a soft delete, which
+   * strands nothing: a tombstone's references stand.
+   */
+  referencedFileIds: FileId[];
+};
+
 export type DefineTypeOptions = {
   migratesFrom?: TypeId;
 };
@@ -355,7 +371,7 @@ export interface StackClient {
   associate(id: string, association: Association): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
   dissociate(id: string, association: Association): Promise<StackRecord>;
-  delete(id: string, opts?: DeleteRecordOptions): Promise<void>;
+  delete(id: string, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
@@ -1065,7 +1081,7 @@ export class Stack implements StackClient {
     const bumps = bumpsVersion(ops);
 
     // Computed against the same before/after changeSetOps compared, so
-    // whether associate/dissociate appear in `ops` and what these list can
+    // whether associate/dissociate appear in `ops` and what it lists can
     // never disagree. See docs/spec/events.md § The event shape.
     const assocDelta = changes.associations
       ? associationDelta(existing.associations ?? [], changes.associations)
@@ -1075,11 +1091,7 @@ export class Stack implements StackClient {
     const change = new PendingChange(ops, {
       actor: Stack.actorFrom(opts),
       ...(ops.includes('reparent') && { previousParentId }),
-      ...(assocDelta && {
-        associationsAdded: assocDelta.added,
-        associationsRemoved: assocDelta.removed,
-        associationsReplaced: assocDelta.replaced,
-      }),
+      ...(assocDelta && { associations: assocDelta }),
     });
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
       ...(bumps
@@ -1230,10 +1242,11 @@ export class Stack implements StackClient {
    * different `attachmentRecordId` — or none, which clears the one stored —
    * re-points that association in place, rather than adding a second
    * reference to the same file. The emitted event's `associationsAdded`
-   * carries the association as it now stands either way — a re-point's
-   * old `attachmentRecordId` is not reported anywhere; nothing keeps it
-   * once this call lands. See docs/spec/events.md § The event shape.
-   * Returns the record as it now stands — unchanged on a no-op.
+   * carries the association as it now stands either way; what a re-point
+   * overwrote is kept only by the journal, on that entry's `repoint`. See
+   * docs/spec/events.md § The event shape and docs/spec/journal.md
+   * § The entry. Returns the record as it now stands — unchanged on a
+   * no-op.
    */
   async associate(
     id: string,
@@ -1255,10 +1268,11 @@ export class Stack implements StackClient {
 
     const change = new PendingChange('associate', {
       actor: Stack.actorFrom(opts),
-      associationsAdded: [association],
-      // The association this call overwrites in place, if any. Nothing
-      // else retains the attachmentRecordId it carried.
-      ...(replaced && { associationsReplaced: [replaced] }),
+      // A re-point carries what it overwrote: nothing else retains the
+      // attachmentRecordId that association held.
+      associations: [
+        replaced ? { op: 'repoint', association, previous: replaced } : { op: 'add', association },
+      ],
     });
     const updated = await this.adapter.associate(id, association, { journal: change.journal });
     this.announce(change, updated);
@@ -1270,9 +1284,9 @@ export class Stack implements StackClient {
    * — see associate(). Matched by kind, label, and payload. No-op if not
    * found. The emitted event's `associationsRemoved` names the association
    * by identity only — an attachment's `attachmentRecordId` is not
-   * repeated there, since it no longer describes anything current. See
-   * docs/spec/events.md § The event shape. Returns the record as it now
-   * stands — unchanged on a no-op.
+   * repeated there, since it no longer describes anything current, and the
+   * journal is where it survives. See docs/spec/events.md § The event
+   * shape. Returns the record as it now stands — unchanged on a no-op.
    */
   async dissociate(
     id: string,
@@ -1303,7 +1317,10 @@ export class Stack implements StackClient {
 
     const change = new PendingChange('dissociate', {
       actor: Stack.actorFrom(opts),
-      associationsRemoved: [stripAssociationAnnotation(matched)],
+      // In full, annotation included — what makes a removal as undoable
+      // from the log as a re-point is. The frame this becomes still names
+      // identity only. See docs/spec/journal.md § The entry.
+      associations: [{ op: 'remove', previous: matched }],
     });
     const updated = await this.adapter.dissociate(id, association, { journal: change.journal });
     this.announce(change, updated);
@@ -1376,8 +1393,14 @@ export class Stack implements StackClient {
    * version; a no-op if already deleted. `_config` is never deletable
    * (docs/spec.md § The `_config` record). See docs/spec/versioning.md
    * § Deletion.
+   *
+   * A purge reports the files the record referenced. It deletes none of
+   * them — byte lifetime is not the purged record's to decide — but it
+   * destroys the only rows naming them, so a caller who means to erase the
+   * bytes too has nowhere else to read the argument from afterwards. See
+   * docs/spec/attachments.md § A purge strands the bytes it referenced.
    */
-  async delete(id: string, opts: DeleteRecordOptions & ActorOptions = {}): Promise<void> {
+  async delete(id: string, opts: DeleteRecordOptions & ActorOptions = {}): Promise<DeleteResult> {
     this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
       throw new StackConflictError(
@@ -1395,8 +1418,9 @@ export class Stack implements StackClient {
         expectedVersion: opts.ifVersion,
         journal: change.journal,
       });
-      if (purged) this.announce(change, purged);
-      return;
+      if (!purged) return { referencedFileIds: [] };
+      this.announce(change, purged);
+      return { referencedFileIds: await this.referencedFileIds(purged) };
     }
 
     const existing = await this.adapter.getRecord(id);
@@ -1404,7 +1428,9 @@ export class Stack implements StackClient {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkIfVersion(existing, opts.ifVersion);
-    if (existing.deletedAt) return;
+    // A tombstone's references stand — undelete() must find its
+    // attachments intact — so nothing is stranded and nothing is reported.
+    if (existing.deletedAt) return { referencedFileIds: [] };
 
     const change = new PendingChange('delete', { actor: Stack.actorFrom(opts) });
     const deleted = await this.adapter.deleteRecord(id, {
@@ -1412,6 +1438,26 @@ export class Stack implements StackClient {
       journal: change.journal,
     });
     if (deleted) this.announce(change, deleted);
+    return { referencedFileIds: [] };
+  }
+
+  /**
+   * The files a record references, by the same definition
+   * deleteAttachment() and the garbage sweep use: attachment associations
+   * and top-level `file-ref` content fields. An `_attachment` record's own
+   * `fileId` is a plain string by design and is not one, which is why
+   * purging a metadata record reports nothing — see initSystemTypes().
+   */
+  private async referencedFileIds(record: StackRecord): Promise<FileId[]> {
+    const fromAssociations = (record.associations ?? []).flatMap((a) =>
+      a.kind === 'attachment' ? [a.fileId] : [],
+    );
+    const type = await this.getType(record.typeId);
+    const content = record.content as Record<string, unknown>;
+    const fromContent = Object.entries(type?.schema ?? {}).flatMap(([field, def]) =>
+      def.kind === 'file-ref' && typeof content[field] === 'string' ? [content[field]] : [],
+    );
+    return [...new Set([...fromAssociations, ...fromContent])];
   }
 
   /**
@@ -1515,7 +1561,9 @@ export class Stack implements StackClient {
    * An adapter with no journal to read refuses rather than answering an
    * empty log — "nothing changed" and "this stack does not remember" are
    * not the same answer, and a caller reconstructing an association's
-   * history cannot tell them apart. See docs/spec/journal.md § Reading it.
+   * history cannot tell them apart. A record that isn't there is
+   * StackNotFoundError for the same reason, a purged one included.
+   * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();

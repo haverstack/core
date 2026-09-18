@@ -106,6 +106,18 @@ export type RelationshipAssociation = {
 export type Association = TagAssociation | AttachmentAssociation | RelationshipAssociation;
 
 /**
+ * One association a write moved, and what it moved from. Every inverse is
+ * local to one element — there is no join back to a sibling list, so there
+ * is no join key to get wrong. `previous` is carried in full, annotation
+ * included, which is what makes both a `repoint` and a `remove` undoable.
+ * See docs/spec/journal.md § The entry.
+ */
+export type AssociationChange =
+  | { op: 'add'; association: Association }
+  | { op: 'repoint'; association: Association; previous: Association }
+  | { op: 'remove'; previous: Association };
+
+/**
  * The aspects of an existing record one mutate() call may move, in any
  * combination. Every key replaces the aspect it names except
  * `contentPatch`, which merges at the top level — omitted keeps, `null`
@@ -776,16 +788,15 @@ export type JournalEntryInput = {
   actor?: ChangeActor;
   /** The container a move took the record out of, `null` for the root. */
   previousParentId?: RecordId | null;
-  associationsAdded?: Association[];
-  /** Identity only, as on the feed — never the annotation a removal carried. */
-  associationsRemoved?: Association[];
   /**
-   * An association as it stood before an `associate()` overwrote it in
-   * place. The only durable record of an `attachmentRecordId` a re-point
-   * discarded. See docs/spec/attachments.md § Naming the upload a
-   * reference came from.
+   * What an association mutation moved, one tagged edit per association.
+   * The journal's own shape, not the feed's two flat lists: a log whose
+   * whole argument is prior state carries `previous` beside the thing that
+   * displaced it, rather than leaving a consumer to re-derive which entry
+   * of one list overwrote which entry of another. See
+   * docs/spec/journal.md § The entry.
    */
-  associationsReplaced?: Association[];
+  associations?: AssociationChange[];
 };
 
 /**

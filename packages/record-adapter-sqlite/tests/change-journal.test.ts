@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
+import { StackNotFoundError } from '@haverstack/core';
 import type { StackRecord, JournalEntryInput } from '@haverstack/core';
 
 let testDir: string;
@@ -131,24 +132,35 @@ describe('appendJournal', () => {
         journal: entry({
           ops: ['associate'],
           kind: 'changed',
-          associationsAdded: [
-            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-new' },
-          ],
-          associationsReplaced: [
-            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-old' },
+          associations: [
+            {
+              op: 'repoint',
+              association: {
+                kind: 'attachment',
+                label: 'cover',
+                fileId,
+                attachmentRecordId: 'rec-new',
+              },
+              previous: {
+                kind: 'attachment',
+                label: 'cover',
+                fileId,
+                attachmentRecordId: 'rec-old',
+              },
+            },
           ],
         }),
       },
     );
 
     const [logged] = await adapter.getJournal(record.id);
-    expect(logged!.associationsAdded).toEqual([
-      { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-new' },
+    expect(logged!.associations).toEqual([
+      {
+        op: 'repoint',
+        association: { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-new' },
+        previous: { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-old' },
+      },
     ]);
-    expect(logged!.associationsReplaced).toEqual([
-      { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-old' },
-    ]);
-    expect(logged!.associationsRemoved).toBeUndefined();
   });
 });
 
@@ -235,7 +247,7 @@ describe('the log outlives the process that wrote it', () => {
         journal: entry({
           ops: ['associate'],
           kind: 'changed',
-          associationsAdded: [{ kind: 'tag', label: 'draft' }],
+          associations: [{ op: 'add', association: { kind: 'tag', label: 'draft' } }],
         }),
       },
     );
@@ -244,7 +256,9 @@ describe('the log outlives the process that wrote it', () => {
     const reopened = await NativeSQLiteRecordAdapter.open({ path: dbPath });
     const log = await reopened.getJournal(record.id);
     expect(log.map((e) => e.ops.join())).toEqual(['create', 'associate']);
-    expect(log[1]!.associationsAdded).toEqual([{ kind: 'tag', label: 'draft' }]);
+    expect(log[1]!.associations).toEqual([
+      { op: 'add', association: { kind: 'tag', label: 'draft' } },
+    ]);
     await reopened.close();
   });
 });
@@ -278,6 +292,13 @@ describe('getJournal', () => {
 
   test('a record with no journal reads as an empty log', async () => {
     const adapter = await initAdapter();
-    expect(await adapter.getJournal('rec-missing')).toEqual([]);
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    expect(await adapter.getJournal(record.id)).toEqual([]);
+  });
+
+  test('a record that is not there is refused, never answered empty', async () => {
+    const adapter = await initAdapter();
+    await expect(adapter.getJournal('rec-missing')).rejects.toThrow(StackNotFoundError);
   });
 });

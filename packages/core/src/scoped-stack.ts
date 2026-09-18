@@ -100,6 +100,7 @@ import type {
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   DeleteRecordOptions,
+  DeleteResult,
   GetRecordOptions,
   IfVersionOptions,
   StackClient,
@@ -1156,7 +1157,7 @@ export class ScopedStack implements StackClient {
    * reach it, and delegation doesn't carry it either. Everyone else is
    * limited to soft delete.
    */
-  async delete(id: string, opts: DeleteRecordOptions = {}): Promise<void> {
+  async delete(id: string, opts: DeleteRecordOptions = {}): Promise<DeleteResult> {
     await this.requireDeletable(id);
     if (opts.hard && !this.ownerActingAlone) {
       throw new StackPermissionError('Hard delete is owner-only');

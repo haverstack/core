@@ -500,9 +500,7 @@ const parseJournalEntry = (raw: WireJournalEntry): RecordJournalEntry => {
     };
   }
   if (raw.previousParentId !== undefined) e.previousParentId = raw.previousParentId;
-  if (raw.associationsAdded != null) e.associationsAdded = raw.associationsAdded;
-  if (raw.associationsRemoved != null) e.associationsRemoved = raw.associationsRemoved;
-  if (raw.associationsReplaced != null) e.associationsReplaced = raw.associationsReplaced;
+  if (raw.associations != null) e.associations = raw.associations;
   return e;
 };
 
@@ -1097,19 +1095,28 @@ export class APIAdapter implements StackAdapter {
 
   /**
    * A soft delete answers with the record it produced; a hard delete bumps
-   * no version, so it has none to answer with and returns 204 — null here,
-   * the same shape a local adapter reports for a record that was not there.
+   * no version and answers with the record it destroyed, which is where
+   * the files the purge stranded are read from. Null is reserved for a
+   * purge that found nothing, the same shape a local adapter reports.
    */
   async deleteRecord(
     id: RecordId,
     opts: { hard?: boolean; expectedVersion?: number } = {},
   ): Promise<StackRecord | null> {
     const path = opts.hard ? `/records/${id}?hard=true` : `/records/${id}`;
-    const raw = await this.request<WireRecord | undefined>('DELETE', path, undefined, {
+    const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
       ifMatch: opts.expectedVersion,
+      // An unconditional hard delete of a record that isn't there purged
+      // nothing, which is not an error — the same answer the local
+      // adapters give by returning null. A CAS is a real precondition, so
+      // its 404 is left to throw.
+      ...(opts.hard && opts.expectedVersion === undefined && { nullOn404: true }),
     });
-    if (opts.hard) return raw ? parseRecord(raw) : null;
-    return requireRecordBody(raw, `DELETE /records/${id}`);
+    // The purge answers with the record it destroyed: it is the only
+    // report of what it referenced, and every other row naming those files
+    // is gone. See docs/spec/wire-format.md § Records.
+    if (opts.hard) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
+    return requireRecordBody(raw ?? undefined, `DELETE /records/${id}`);
   }
 
   async undeleteRecord(

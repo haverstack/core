@@ -619,6 +619,10 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    // An empty log means "nothing changed" unconditionally, so a record
+    // that isn't there cannot be spelled that way.
+    // See docs/spec/journal.md § Reading it.
+    if (!this.records.has(id)) throw new StackNotFoundError(`Record not found: "${id}"`);
     const log = this.journals.get(id) ?? [];
     const after = query.sinceSeq === undefined ? log : log.filter((e) => e.seq > query.sinceSeq!);
     return query.limit === undefined ? after : after.slice(0, query.limit);
@@ -701,9 +705,24 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
  * mirroring the SQL adapters' rowToRecord, so the same mutation sequence
  * produces identically-shaped records on the test double and real storage.
  */
+/**
+ * Sets a record's association set, keyed by identity as every adapter's
+ * association table is: a list naming one identity twice collapses to one
+ * entry, last wins. Core refuses such a list before an adapter sees it —
+ * this is what keeps a direct caller from reaching a state a SQL store
+ * cannot represent. See docs/spec/adapters.md § Associations are keyed by
+ * identity.
+ */
 function withAssociations(record: StackRecord, associations: Association[]): StackRecord {
   const { associations: _drop, ...rest } = record;
-  return associations.length ? { ...rest, associations } : (rest as StackRecord);
+  const keyed = associations.reduce<Association[]>(
+    (acc, a) =>
+      acc.some((b) => associationEqual(a, b))
+        ? acc.map((b) => (associationEqual(a, b) ? a : b))
+        : [...acc, a],
+    [],
+  );
+  return keyed.length ? { ...rest, associations: keyed } : (rest as StackRecord);
 }
 
 /**

@@ -896,20 +896,37 @@ describe('deleteRecord', () => {
     expect(deleted?.deletedAt).toBeInstanceOf(Date);
   });
 
-  test('a hard delete has no record to answer with', async () => {
+  test('a hard delete that answers with no body is refused', async () => {
+    // The body is the purge's only report of what it referenced, so a
+    // server that withholds it leaves the client unable to name the bytes
+    // the purge stranded.
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).resolves.toBeNull();
+    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).rejects.toThrow(
+      APIAdapterError,
+    );
   });
 
-  test('appends ?hard=true for hard delete', async () => {
+  test('appends ?hard=true for hard delete, and returns what it destroyed', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
-    await adapter.deleteRecord('rec-abc123', { hard: true });
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    const purged = await adapter.deleteRecord('rec-abc123', { hard: true });
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123?hard=true`,
       expect.objectContaining({ method: 'DELETE' }),
     );
+    // The body is the purge's only report of what it referenced.
+    expect(purged!.id).toBe(RECORD_RAW.id);
+  });
+
+  test('a hard delete of a record that is not there purges nothing', async () => {
+    // Parity with the local adapters, which return null rather than
+    // throwing for an unconditional purge that found nothing.
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'not_found', message: 'gone' } }, 404),
+    );
+    expect(await adapter.deleteRecord('rec-abc123', { hard: true })).toBeNull();
   });
 });
 
@@ -1458,12 +1475,15 @@ describe('a mutation answering with no Record body', () => {
     await expect(call(adapter)).rejects.toThrow(/no Record body/);
   });
 
-  // The one mutation that legitimately has none: a hard delete bumps no
-  // version, so 204 is the answer rather than a missing one.
-  test('a hard delete answers 204 and returns null', async () => {
+  // A hard delete bumps no version, and still owes a body: it answers with
+  // the record it destroyed, which is the only report of the files it
+  // stranded. See docs/spec/wire-format.md § Records.
+  test('a hard delete is held to the same rule', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).resolves.toBeNull();
+    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).rejects.toThrow(
+      /no Record body/,
+    );
   });
 });
 
@@ -1609,7 +1629,11 @@ describe('getJournal', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
-        entries: [entry(1, { associationsAdded: [{ kind: 'tag', label: 'starred' }] })],
+        entries: [
+          entry(1, {
+            associations: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }],
+          }),
+        ],
         cursor: null,
       }),
     );
@@ -1620,7 +1644,9 @@ describe('getJournal', () => {
     expect(url).toBe(`${BASE_URL}/records/1hk153x00001/journal`);
     expect(log).toHaveLength(1);
     expect(log[0].at).toBeInstanceOf(Date);
-    expect(log[0].associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+    expect(log[0].associations).toEqual([
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
   });
 
   test('follows the cursor until the log is exhausted', async () => {
