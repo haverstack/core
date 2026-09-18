@@ -22,12 +22,20 @@ import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
-import { StackVersionConflictError, StackConflictError, StackNotFoundError } from './errors.js';
+import {
+  StackVersionConflictError,
+  StackConflictError,
+  StackNotFoundError,
+  StackQueryError,
+} from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
 import { targetEqual } from './record-changes.js';
 
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+
+/** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 /**
  * Every value reachable by walking `segments`, spreading arrays
@@ -164,7 +172,7 @@ export class MemoryAdapter implements StackAdapter {
       JournalOptions = {},
   ) {
     const existing = this.records.get(id);
-    if (!existing) throw new Error(`Not found: ${id}`);
+    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(existing, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
 
@@ -240,7 +248,7 @@ export class MemoryAdapter implements StackAdapter {
       JournalOptions = {},
   ) {
     const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const { deletedAt: _deletedAt, ...rest } = record;
@@ -344,12 +352,54 @@ export class MemoryAdapter implements StackAdapter {
     }
 
     const limit = query.limit ?? 50;
-    const start = query.cursor ? Number(query.cursor) : 0;
+    const start = query.cursor ? this.decodeCursor(query.cursor, query.sort) : 0;
     const page = results.slice(start, start + limit);
     const nextStart = start + limit;
-    const cursor = nextStart < results.length ? String(nextStart) : null;
+    const cursor = nextStart < results.length ? this.encodeCursor(query.sort, nextStart) : null;
 
     return { records: page, cursor };
+  }
+
+  /** The sort a cursor was minted under, as an opaque comparable descriptor. */
+  private sortDescriptor(sort: QuerySort | undefined): string {
+    return JSON.stringify([
+      sort?.contentField ?? null,
+      sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
+      sort?.direction ?? 'desc',
+    ]);
+  }
+
+  /**
+   * Stringified offset into insertion order, paired with the sort it was
+   * minted under — mirroring the real adapters' cursor stability guarantee
+   * (docs/spec/data-model.md § Sorting and pagination) rather than the
+   * bare, sort-blind offset this used to be.
+   */
+  private encodeCursor(sort: QuerySort | undefined, offset: number): string {
+    return btoa(JSON.stringify({ d: this.sortDescriptor(sort), o: offset }));
+  }
+
+  /**
+   * Throws StackQueryError for a cursor that doesn't decode at all, or one
+   * minted under a different sort than `sort` names — the same refusal a
+   * cursor replayed under a changed sort gets from the real adapters,
+   * rather than silently paging through the wrong order.
+   */
+  private decodeCursor(cursor: string, sort: QuerySort | undefined): number {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(atob(cursor));
+    } catch {
+      throw new StackQueryError(`Malformed cursor: "${cursor}"`);
+    }
+    const { d, o } = (parsed ?? {}) as { d?: unknown; o?: unknown };
+    if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o)) {
+      throw new StackQueryError(`Malformed cursor: "${cursor}"`);
+    }
+    if (d !== this.sortDescriptor(sort)) {
+      throw new StackQueryError(`Cursor was minted under a different sort than this query names.`);
+    }
+    return o;
   }
 
   /**
@@ -399,7 +449,7 @@ export class MemoryAdapter implements StackAdapter {
    */
   async associate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
     // re-pointed `attachmentRecordId` lands on the association already
     // there rather than adding a second reference to the same file.
@@ -416,7 +466,7 @@ export class MemoryAdapter implements StackAdapter {
   /** Never bumps `version`/`updatedAt` — see associate(). */
   async dissociate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
     const updated = withAssociations(record, assocs);
     this.records.set(id, updated);
@@ -495,10 +545,10 @@ export class MemoryAdapter implements StackAdapter {
       JournalOptions = {},
   ) {
     const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     const target = (this.versions.get(id) ?? []).find((v) => v.version === version);
-    if (!target) throw new Error(`Version not found: ${id}@${version}`);
+    if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const merged = { ...record, typeId: target.typeId, content: target.content };
     // A snapshot always settles containment: absent is the root, so a
@@ -519,7 +569,7 @@ export class MemoryAdapter implements StackAdapter {
       JournalOptions = {},
   ) {
     const record = this.records.get(id);
-    if (!record) throw new Error(`Not found: ${id}`);
+    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.expectedVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
@@ -580,6 +630,9 @@ export class MemoryAdapter implements StackAdapter {
     return fileId;
   }
   async getAttachment(fileId: string): Promise<Uint8Array> {
+    if (!SHA256_HEX_RE.test(fileId)) {
+      throw new StackQueryError(`Invalid fileId: expected 64-character lowercase hex string`);
+    }
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return blob.data;

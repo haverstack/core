@@ -1,11 +1,8 @@
 {
-  "name": "@haverstack/record-adapter-sqlite",
-  "version": "0.25.0",
-  "description": "Native SQLite (node:sqlite) record adapter for Haverstack — Node's built-in engine, no native compilation",
+  "name": "@haverstack/adapter-conformance",
+  "version": "0.1.0",
+  "description": "Runnable conformance suite for StackRecordAdapter/StackBlobAdapter implementers — the invariants docs/spec/adapters.md documents, as tests you point at your own adapter",
   "type": "module",
-  "engines": {
-    "node": ">=22.5.0"
-  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -20,33 +17,31 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/haverstack/core.git",
-    "directory": "packages/record-adapter-sqlite"
+    "directory": "packages/adapter-conformance"
   },
   "license": "CC0-1.0",
   "keywords": [
     "haverstack",
-    "sqlite",
-    "node:sqlite",
-    "record",
+    "conformance",
     "adapter",
-    "personal data",
-    "storage"
+    "storage",
+    "testing"
   ],
   "scripts": {
     "prepublishOnly": "pnpm run build",
-    "build": "tsup",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests"
+  },
+  "peerDependencies": {
+    "vitest": "^4.0.0"
   },
   "dependencies": {
     "@haverstack/core": "workspace:^"
   },
   "devDependencies": {
-    "@haverstack/adapter-conformance": "workspace:*",
-    "@haverstack/sqlite-shared": "workspace:*",
     "@types/node": "^22.0.0",
-    "tsup": "^8.5.1",
     "typescript": "^5.5.0",
     "vitest": "^4.1.11"
   }
