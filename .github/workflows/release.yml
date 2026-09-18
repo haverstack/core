@@ -33,6 +33,13 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # setup-node's bundled npm (10.9.x) crashes with "Cannot read
+      # properties of null (reading 'edgesOut')" in verify-pack's throwaway
+      # `npm install` once a packed tarball combines a regular dependency
+      # with a peerDependency resolved from the registry — the shape
+      # @haverstack/adapter-conformance introduced (it depends on
+      # @haverstack/core and peers on vitest). npm 12 doesn't have the bug.
+      - run: npm install -g npm@12
       - run: pnpm install --frozen-lockfile
 
       # Opens (or refreshes) the version PR while changesets are pending, and
