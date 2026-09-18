@@ -10,7 +10,7 @@ import {
 } from '../src/errors.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
-import type { StackRecord, Association, Permission } from '../src/types.js';
+import type { StackRecord, AuthorityAssociation, DataAssociation } from '../src/types.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -71,12 +71,12 @@ const MISSING_ID = '1hk153xffffz';
 // -------------------------------------------------------
 
 describe('ScopedStack — a group keeps at least one admin', () => {
-  const admin = (entityId: string): Association => ({
+  const admin = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'admin',
     target: { scope: 'entity', entityId },
   });
-  const member = (entityId: string): Association => ({
+  const member = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'member',
     target: { scope: 'entity', entityId },
@@ -170,7 +170,9 @@ describe('ScopedStack — read access', () => {
   });
 
   test('anonymous requester can read a public record', async () => {
-    const record = await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
+    const record = await adapter.createRecord(
+      makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }),
+    );
     const view = stack.asEntity(null);
     expect((await view.get(record.id))?.id).toBe(record.id);
   });
@@ -178,7 +180,9 @@ describe('ScopedStack — read access', () => {
   test('entity with a matching read grant can read', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
@@ -187,7 +191,9 @@ describe('ScopedStack — read access', () => {
   test('entity without a matching grant cannot read', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
@@ -204,7 +210,13 @@ describe('ScopedStack — read access', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
@@ -224,7 +236,13 @@ describe('ScopedStack — read access', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
@@ -244,7 +262,13 @@ describe('ScopedStack — read access', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: notAGroup.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: notAGroup.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
@@ -261,7 +285,13 @@ describe('ScopedStack — read access', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
@@ -278,7 +308,13 @@ describe('ScopedStack — read access', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
@@ -306,7 +342,9 @@ describe('ScopedStack — write access', () => {
   });
 
   test('public access does not grant write', async () => {
-    const record = await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
+    const record = await adapter.createRecord(
+      makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }),
+    );
     await expect(stack.asEntity(STRANGER).patchContent(record.id, { text: 'hi' })).rejects.toThrow(
       StackPermissionError,
     );
@@ -315,7 +353,10 @@ describe('ScopedStack — write access', () => {
   test('entity with write:true can update', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const updated = await stack.asEntity(MEMBER).patchContent(record.id, { text: 'hi' });
@@ -325,7 +366,9 @@ describe('ScopedStack — write access', () => {
   test('entity with write:false cannot update even with read:true', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await expect(stack.asEntity(MEMBER).patchContent(record.id, { text: 'hi' })).rejects.toThrow(
@@ -343,7 +386,10 @@ describe('ScopedStack — write access', () => {
   test('write:true holder can soft-delete but not hard-delete', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
@@ -372,7 +418,10 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         deletedAt: new Date(),
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const undeleted = await stack.asEntity(MEMBER).undelete(record.id);
@@ -382,7 +431,10 @@ describe('ScopedStack — write access', () => {
   test('a write-holder soft-delete is undeletable by the owner — recoverability holds', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await stack.asEntity(MEMBER).delete(record.id);
@@ -395,8 +447,8 @@ describe('ScopedStack — write access', () => {
 
   test('associate/dissociate and a permissions change set enforce write access', async () => {
     const record = await adapter.createRecord(makeRecord());
-    const tag: Association = { kind: 'tag', label: 'starred' };
-    const perms: Permission[] = [{ access: 'public' }];
+    const tag: DataAssociation = { kind: 'tag', label: 'starred' };
+    const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
 
     await expect(stack.asEntity(STRANGER).associate(record.id, tag)).rejects.toThrow(
       StackNotFoundError,
@@ -416,10 +468,13 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         entityId: OWNER,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
-    const perms: Permission[] = [{ access: 'public' }];
+    const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
     await expect(stack.asEntity(MEMBER).mutate(record.id, { permissions: perms })).rejects.toThrow(
       StackPermissionError,
     );
@@ -449,7 +504,10 @@ describe('ScopedStack.mutate — the `unlisted` key', () => {
     const record = await adapter.createRecord(
       makeRecord({
         entityId: OWNER,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await expect(stack.asEntity(MEMBER).mutate(record.id, { unlisted: true })).rejects.toThrow(
@@ -490,14 +548,33 @@ describe('ScopedStack mutators return the record they produced', () => {
     const dissociated = await scoped.dissociate(record.id, { kind: 'tag', label: 'favourite' });
     expect(dissociated.associations).toBeUndefined();
 
-    const permissioned = await scoped.mutate(record.id, { permissions: [{ access: 'public' }] });
-    expect(permissioned.permissions).toEqual([{ access: 'public' }]);
+    const permissioned = await scoped.mutate(record.id, {
+      permissions: [{ kind: 'anyone', label: 'read' }],
+    });
+    expect(permissioned.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+
+    const granted = await scoped.grantAccess(record.id, {
+      kind: 'permission',
+      label: 'read',
+      grantee: { scope: 'entity', entityId: MEMBER },
+    });
+    expect(granted.permissions).toContainEqual({
+      kind: 'permission',
+      label: 'read',
+      grantee: { scope: 'entity', entityId: MEMBER },
+    });
+
+    const revoked = await scoped.revokeAccess(record.id, { kind: 'anyone', label: 'read' });
+    expect(revoked.permissions).toEqual([
+      { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+    ]);
 
     const unlisted = await scoped.mutate(record.id, { unlisted: true });
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
-    // Only the permissions change bumps: associate, dissociate and unlist
-    // are all no-bump writes over the created record's version 1.
-    expect(unlisted.version).toBe(2);
+    // None of these bumps: every one is an association or a listing
+    // transition, all of them no-bump writes over the created record's
+    // version 1.
+    expect(unlisted.version).toBe(1);
   });
 });
 
@@ -509,8 +586,8 @@ describe('ScopedStack mutators return the record they produced', () => {
 // confirmed it to, so guessed and derived IDs stay unconfirmable.
 // See docs/spec/access-control.md § Errors and information exposure.
 describe('ScopedStack — record-existence disclosure', () => {
-  const tag: Association = { kind: 'tag', label: 'starred' };
-  const perms: Permission[] = [{ access: 'public' }];
+  const tag: DataAssociation = { kind: 'tag', label: 'starred' };
+  const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
 
   // Every verb that takes a record ID, asked of the same requester about a
   // record that exists and one that does not.
@@ -541,7 +618,9 @@ describe('ScopedStack — record-existence disclosure', () => {
   test('a requester who can read the record is told the verb was refused', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const view = stack.asEntity(MEMBER);
@@ -628,7 +707,9 @@ describe('ScopedStack — versions', () => {
   test('getVersions/getVersion deny a read-only requester', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await adapter.saveVersion(record.id, {
@@ -648,7 +729,10 @@ describe('ScopedStack — versions', () => {
   test('getVersions/getVersion allow a write-holder', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await adapter.saveVersion(record.id, {
@@ -661,37 +745,35 @@ describe('ScopedStack — versions', () => {
     await expect(stack.asEntity(MEMBER).getVersion(record.id, 1)).resolves.not.toBeNull();
   });
 
-  test('getVersions/getVersion strip snapshot permissions for a non-owner write-holder, but not for the owner', async () => {
+  test('getVersions/getVersion serve the same rows to a write-holder and to the owner', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: NOTE,
-      content: {},
-      updatedAt: new Date(),
-      permissions: [{ access: 'entity', entityId: 'someone-else', read: true, write: false }],
+      content: { title: 'snapshotted' },
+      updatedAt: new Date(0),
+      entityId: 'someone-else',
     });
 
     const [memberList, memberSingle] = await Promise.all([
       stack.asEntity(MEMBER).getVersions(record.id),
       stack.asEntity(MEMBER).getVersion(record.id, 1),
     ]);
-    expect(memberList[0].permissions).toBeUndefined();
-    expect(memberSingle?.permissions).toBeUndefined();
-
     const [ownerList, ownerSingle] = await Promise.all([
       stack.asEntity(OWNER).getVersions(record.id),
       stack.asEntity(OWNER).getVersion(record.id, 1),
     ]);
-    expect(ownerList[0].permissions).toEqual([
-      { access: 'entity', entityId: 'someone-else', read: true, write: false },
-    ]);
-    expect(ownerSingle?.permissions).toEqual([
-      { access: 'entity', entityId: 'someone-else', read: true, write: false },
-    ]);
+
+    expect(memberList).toEqual(ownerList);
+    expect(memberSingle).toEqual(ownerSingle);
+    expect(memberList[0].entityId).toBe('someone-else');
   });
 
   test('getVersions/getVersion on a group require admin, not just membership', async () => {
@@ -732,7 +814,10 @@ describe('ScopedStack — versions', () => {
         makeRecord({
           typeId: PHOTO_NOTE,
           version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+          permissions: [
+            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          ],
         }),
       );
       await adapter.saveVersion(record.id, {
@@ -759,7 +844,10 @@ describe('ScopedStack — versions', () => {
         makeRecord({
           typeId: PHOTO_NOTE,
           version: 2,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+          permissions: [
+            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          ],
         }),
       );
       await adapter.saveVersion(record.id, {
@@ -796,7 +884,10 @@ describe('ScopedStack — versions', () => {
         makeRecord({
           version: 2,
           parentId: box.id,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+          permissions: [
+            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          ],
         }),
       );
       await adapter.saveVersion(record.id, {
@@ -818,7 +909,10 @@ describe('ScopedStack — versions', () => {
         makeRecord({
           version: 2,
           parentId: box.id,
-          permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+          permissions: [
+            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          ],
         }),
       );
       await adapter.saveVersion(record.id, {
@@ -842,7 +936,9 @@ describe('ScopedStack — versions', () => {
 describe('ScopedStack.query', () => {
   test('filters out records the requester cannot read', async () => {
     await adapter.createRecord(makeRecord()); // private
-    const pub = await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
+    const pub = await adapter.createRecord(
+      makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }),
+    );
 
     const result = await stack.asEntity(null).query();
     expect(result.records.map((r) => r.id)).toEqual([pub.id]);
@@ -857,7 +953,7 @@ describe('ScopedStack.query', () => {
     for (let i = 0; i < 6; i++) {
       const isPublic = i === 5;
       const record = await adapter.createRecord(
-        makeRecord(isPublic ? { permissions: [{ access: 'public' }] } : {}),
+        makeRecord(isPublic ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
       );
       if (isPublic) visibleId = record.id;
     }
@@ -874,7 +970,9 @@ describe('ScopedStack.query', () => {
     // page is fetched. Page 3 (pub,pub): both visible, pushing the total to
     // 3 — over the requested limit of 2, by design.
     for (let i = 0; i < 6; i++) {
-      await adapter.createRecord(makeRecord(i >= 3 ? { permissions: [{ access: 'public' }] } : {}));
+      await adapter.createRecord(
+        makeRecord(i >= 3 ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
+      );
     }
 
     const result = await stack
@@ -885,7 +983,7 @@ describe('ScopedStack.query', () => {
   });
 
   test('clamps an oversized limit to MAX_QUERY_LIMIT (1000)', async () => {
-    await adapter.createRecord(makeRecord({ permissions: [{ access: 'public' }] }));
+    await adapter.createRecord(makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }));
     const result = await stack.asEntity(null).query({ limit: 9_999_999 });
     // The limit is silently clamped — no error thrown, results still returned.
     expect(result.records.length).toBeGreaterThanOrEqual(0);
@@ -910,7 +1008,7 @@ describe('ScopedStack.query', () => {
 
     test('the owner acting alone may pass it', async () => {
       await adapter.createRecord(
-        makeRecord({ unlistedAt: new Date(), permissions: [{ access: 'public' }] }),
+        makeRecord({ unlistedAt: new Date(), permissions: [{ kind: 'anyone', label: 'read' }] }),
       );
       const result = await stack.asEntity(OWNER).query({ filter: { includeUnlisted: true } });
       expect(result.records).toHaveLength(1);
@@ -925,7 +1023,7 @@ describe('ScopedStack.query', () => {
 
     test('unlisted records are excluded from a scoped query by default', async () => {
       await adapter.createRecord(
-        makeRecord({ unlistedAt: new Date(), permissions: [{ access: 'public' }] }),
+        makeRecord({ unlistedAt: new Date(), permissions: [{ kind: 'anyone', label: 'read' }] }),
       );
       const result = await stack.asEntity(null).query();
       expect(result.records).toHaveLength(0);
@@ -1655,7 +1753,7 @@ describe('ScopedStack — grant-based update/delete', () => {
 // See docs/spec/access-control.md § Write implies read.
 describe('ScopedStack — write implies read', () => {
   /** A record with one prior version, whose permissions bypass validation. */
-  async function recordWithHistory(permissions: Permission[]): Promise<StackRecord> {
+  async function recordWithHistory(permissions: AuthorityAssociation[]): Promise<StackRecord> {
     const record = await adapter.createRecord(
       makeRecord({ version: 2, content: { text: 'current' }, permissions }),
     );
@@ -1670,7 +1768,7 @@ describe('ScopedStack — write implies read', () => {
 
   test('a write bit without read conveys neither the mutate surface nor history', async () => {
     const record = await recordWithHistory([
-      { access: 'entity', entityId: MEMBER, read: false, write: true },
+      { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
     ]);
     const view = stack.asEntity(MEMBER);
     expect(await view.get(record.id)).toBeNull();
@@ -1694,7 +1792,11 @@ describe('ScopedStack — write implies read', () => {
       target: { scope: 'entity', entityId: MEMBER },
     });
     const record = await recordWithHistory([
-      { access: 'group', groupId: group.id, read: false, write: true },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { scope: 'group', groupId: group.id, role: 'member' },
+      },
     ]);
     const view = stack.asEntity(MEMBER);
     await expect(view.patchContent(record.id, { text: 'edited' })).rejects.toThrow(
@@ -1804,7 +1906,9 @@ describe('ScopedStack — blind write', () => {
     ).rejects.toThrow(StackPermissionError);
 
     await stack.mutate(box.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     const posted = await stack
       .asEntity(MEMBER)
@@ -1890,7 +1994,10 @@ describe('ScopedStack.commitMigration', () => {
   test('record-level write on the record does not authorize migrating it', async () => {
     const record = await stack.create(COMMENT, { text: 'hello' });
     await stack.mutate(record.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
 
@@ -1949,7 +2056,10 @@ describe('ScopedStack.commitMigration', () => {
   test('a write-holder cannot migrate a _grant record, even to a type they could otherwise create', async () => {
     const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
     await stack.mutate(grantRecord.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
 
@@ -1965,7 +2075,10 @@ describe('ScopedStack.commitMigration', () => {
       did: 'did:key:z6MkNotesApp',
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
 
@@ -2235,7 +2348,9 @@ describe('ScopedStack.getAttachment', () => {
       {
         unlisted: true,
         associations: [{ kind: 'attachment', label: 'cover', fileId }],
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
     expect(await stack.asEntity(MEMBER).get(record.id)).not.toBeNull();
@@ -2280,7 +2395,9 @@ describe('ScopedStack.getAttachment', () => {
       { text: 'readable' },
       {
         associations: [{ kind: 'attachment', label: 'x', fileId }],
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
 
@@ -2306,7 +2423,9 @@ describe('ScopedStack.getAttachment', () => {
       { text: 'readable' },
       {
         associations: [{ kind: 'attachment', label: 'x', fileId }],
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
 
@@ -2427,7 +2546,7 @@ describe('ScopedStack — group role gating', () => {
 
   test('plain member cannot add or remove roster associations', async () => {
     const group = await makeGroup();
-    const newMember: Association = {
+    const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
       target: { scope: 'entity', entityId: STRANGER },
@@ -2435,7 +2554,7 @@ describe('ScopedStack — group role gating', () => {
     await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
       StackNotFoundError,
     );
-    const existingMember: Association = {
+    const existingMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
       target: { scope: 'entity', entityId: MEMBER },
@@ -2456,7 +2575,7 @@ describe('ScopedStack — group role gating', () => {
     const updated = await stack.asEntity(ADMIN).patchContent(group.id, { name: 'renamed' });
     expect(updated.content.name).toBe('renamed');
 
-    const newMember: Association = {
+    const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
       target: { scope: 'entity', entityId: STRANGER },
@@ -2490,12 +2609,15 @@ describe('ScopedStack — group role gating', () => {
     // The self-amplifying-roster hole this issue closes: a group with a
     // generic write grant must not let that grantee touch the roster.
     const group = await makeGroup({
-      permissions: [{ access: 'entity', entityId: STRANGER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: STRANGER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: STRANGER } },
+      ],
     });
     await expect(
       stack.asEntity(STRANGER).patchContent(group.id, { name: 'renamed' }),
     ).rejects.toThrow(StackPermissionError);
-    const newMember: Association = {
+    const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
       target: { scope: 'entity', entityId: STRANGER },
@@ -2507,7 +2629,7 @@ describe('ScopedStack — group role gating', () => {
 
   test('a permissions change set on a group requires admin, not just record authorship', async () => {
     const group = await makeGroup({ entityId: MEMBER });
-    const perms: Permission[] = [{ access: 'public' }];
+    const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
     // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
     await expect(stack.asEntity(MEMBER).mutate(group.id, { permissions: perms })).rejects.toThrow(
       StackNotFoundError,
@@ -2598,7 +2720,11 @@ describe('Permission — group role restriction', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { access: 'group', groupId: group.id, role: 'admin', read: true, write: false },
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'admin' },
+          },
         ],
       }),
     );
@@ -2619,7 +2745,13 @@ describe('Permission — group role restriction', () => {
     );
     const record = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'group', groupId: group.id, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
       }),
     );
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
@@ -2915,7 +3047,9 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     await stack.grant(MEMBER, [{ actions: ['create'], typeId: COMMENT }]);
     readableNote = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     unreadableNote = await adapter.createRecord(makeRecord());
@@ -3200,13 +3334,18 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
   beforeEach(async () => {
     readableBox = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     unreadableBox = await adapter.createRecord(makeRecord());
     writable = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
   });
@@ -3253,7 +3392,9 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
   test('write on the record is required', async () => {
     const readOnly = await adapter.createRecord(
       makeRecord({
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     await expect(
@@ -3267,7 +3408,10 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     const inside = await adapter.createRecord(
       makeRecord({
         parentId: unreadableBox.id,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     const moved = await stack.asEntity(MEMBER).mutate(inside.id, { parentId: null });
@@ -3409,7 +3553,10 @@ describe('ScopedStack — file-ref content field gating', () => {
       PHOTO_NOTE,
       { coverFileId: fileId },
       {
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
 
@@ -3543,7 +3690,9 @@ describe('ScopedStack — delegation', () => {
     const shared = await adapter.createRecord(
       makeRecord({
         typeId: NOTE,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     );
     // Undelegated, the same subject reaches it — the mask is what changes.
@@ -3576,9 +3725,9 @@ describe('ScopedStack — delegation', () => {
     const view = stack.asEntity(APP, { onBehalfOf: OWNER });
     const record = await view.create(COMMENT, { text: 'hi' });
     expect(record.entityId).toBe(OWNER);
-    await expect(view.mutate(record.id, { permissions: [{ access: 'public' }] })).rejects.toThrow(
-      StackPermissionError,
-    );
+    await expect(
+      view.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+    ).rejects.toThrow(StackPermissionError);
   });
 
   // The owner-or-creator rule is asked of both identities. An owner
@@ -3588,9 +3737,9 @@ describe('ScopedStack — delegation', () => {
     const record = await stack.create(COMMENT, { text: 'owner private' });
     const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
 
-    await expect(view.mutate(record.id, { permissions: [{ access: 'public' }] })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      view.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+    ).rejects.toThrow(StackNotFoundError);
     expect((await stack.get(record.id))?.permissions).toBeUndefined();
   });
 
@@ -3602,9 +3751,9 @@ describe('ScopedStack — delegation', () => {
 
     await stack
       .asEntity(OWNER, { onBehalfOf: MEMBER })
-      .mutate(record.id, { permissions: [{ access: 'public' }] });
+      .mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
 
-    expect((await stack.get(record.id))?.permissions).toEqual([{ access: 'public' }]);
+    expect((await stack.get(record.id))?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   // Closes the route from the gate above to the _app registry: a card the
@@ -3616,7 +3765,10 @@ describe('ScopedStack — delegation', () => {
 
     await expect(
       view.mutate(card.id, {
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       }),
     ).rejects.toThrow(StackNotFoundError);
     await expect(view.patchContent(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
@@ -3630,7 +3782,10 @@ describe('ScopedStack — delegation', () => {
   test('an owner principal cannot set a card binding for a subject holding write on it', async () => {
     const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
     await stack.mutate(card.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
 
@@ -3676,7 +3831,7 @@ describe('ScopedStack — delegation', () => {
       view.create(
         COMMENT,
         { text: 'meant to stay private' },
-        { permissions: [{ access: 'public' }] },
+        { permissions: [{ kind: 'anyone', label: 'read' }] },
       ),
     ).rejects.toThrow(StackPermissionError);
 
@@ -3698,8 +3853,8 @@ describe('ScopedStack — delegation', () => {
     await grantAll(MEMBER);
     const record = await stack
       .asEntity(MEMBER)
-      .create(COMMENT, { text: 'hi' }, { permissions: [{ access: 'public' }] });
-    expect(record.permissions).toEqual([{ access: 'public' }]);
+      .create(COMMENT, { text: 'hi' }, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    expect(record.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   // Bytes follow the same intersection as the records describing them.
@@ -3760,21 +3915,6 @@ describe('ScopedStack — delegation', () => {
     // Soft delete is still reachable, so the refusal is about the verb.
     await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id);
     expect((await stack.get(record.id))?.deletedAt).toBeDefined();
-  });
-
-  test('an owner principal does not disclose snapshot permissions to its subject', async () => {
-    const record = await stack.create(COMMENT, { text: 'v1' });
-    await stack.mutate(record.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
-    });
-    await stack.patchContent(record.id, { text: 'v2' });
-
-    const versions = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getVersions(record.id);
-    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
-
-    // The owner acting alone still sees them.
-    const direct = await stack.asEntity(OWNER).getVersions(record.id);
-    expect(direct.some((v) => v.permissions !== undefined)).toBe(true);
   });
 
   test('an owner principal cannot delete attachments for its subject', async () => {
@@ -3841,7 +3981,10 @@ describe('ScopedStack — _app bindings', () => {
       name: 'My Notes App',
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     await expect(stack.asEntity(MEMBER).patchContent(shared.id, { did: MEMBER })).rejects.toThrow(
@@ -3859,7 +4002,10 @@ describe('ScopedStack — _app bindings', () => {
     });
     await stack.patchContent(shared.id, { did: APP_DID });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     await expect(stack.asEntity(MEMBER).restoreVersion(shared.id, 1)).rejects.toThrow(
@@ -3877,7 +4023,10 @@ describe('ScopedStack — _app bindings', () => {
       did: APP_DID,
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     const updated = await stack.asEntity(MEMBER).patchContent(shared.id, { version: '2.0.0' });
@@ -3903,7 +4052,10 @@ describe('ScopedStack — _app bindings', () => {
       did: APP_DID,
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     for (const field of ['did', 'appId']) {
@@ -3937,7 +4089,10 @@ describe('ScopedStack — _app bindings', () => {
       did: APP_DID,
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     const scoped = stack.asEntity(MEMBER);
@@ -3965,7 +4120,10 @@ describe('ScopedStack — _app.appId is owner-only', () => {
       did: APP_DID,
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     await expect(
@@ -3980,7 +4138,10 @@ describe('ScopedStack — _app.appId is owner-only', () => {
       did: APP_DID,
     });
     await stack.mutate(shared.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
 
     const updated = await stack.asEntity(MEMBER).patchContent(shared.id, { version: '2.0.0' });
@@ -4083,7 +4244,10 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
   const shareGrantRecord = async () => {
     const [grantRecord] = await stack.grant(MEMBER, [{ typeId: NOTE, actions: ['read-own'] }]);
     await stack.mutate(grantRecord.id, {
-      permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      ],
     });
     return grantRecord;
   };
@@ -4118,7 +4282,7 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
 
     await expect(scoped.delete(grantRecord.id)).rejects.toThrow(StackPermissionError);
     await expect(
-      scoped.mutate(grantRecord.id, { permissions: [{ access: 'public' }] }),
+      scoped.mutate(grantRecord.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -4143,19 +4307,11 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
     expect(await scoped.get(grantRecord.id)).not.toBeNull();
 
     const versions = await scoped.getVersions(grantRecord.id);
-    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(versions.map((v) => v.version)).toEqual([1]);
     expect((versions[0].content as { actions: string[] }).actions).toEqual(['read-own']);
 
     const v1 = await scoped.getVersion(grantRecord.id, 1);
     expect(v1).not.toBeNull();
-  });
-
-  test('a write-holder reading grant history still gets snapshot permissions stripped', async () => {
-    const grantRecord = await shareGrantRecord();
-    await stack.patchContent(grantRecord.id, { actions: ['read-any'] });
-
-    const versions = await stack.asEntity(MEMBER).getVersions(grantRecord.id);
-    expect(versions.every((v) => v.permissions === undefined)).toBe(true);
   });
 
   // Restoring is a write, so it stays fenced even though reading the
@@ -4250,7 +4406,10 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
 // -------------------------------------------------------
 
 describe('ScopedStack — soft delete presents a tombstone', () => {
-  const writeBit = [{ access: 'entity' as const, entityId: MEMBER, read: true, write: true }];
+  const writeBit: AuthorityAssociation[] = [
+    { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+  ];
 
   const deletedRecord = async () => {
     const record = await stack.create(
@@ -4323,7 +4482,10 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
 });
 
 describe('ScopedStack — mutating a soft-deleted record', () => {
-  const writeBit = [{ access: 'entity' as const, entityId: MEMBER, read: true, write: true }];
+  const writeBit: AuthorityAssociation[] = [
+    { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+  ];
 
   const deleted = async () => {
     const record = await stack.create(NOTE, { text: 'gone' }, { permissions: writeBit });
@@ -4390,7 +4552,7 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
       makeRecord({
         typeId: '_entity@1',
         content: { did: 'did:key:x', name: 'X' },
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     );
     const found = await stack.asEntity(STRANGER).getEntityByDid('did:key:x');
@@ -4432,7 +4594,7 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
         typeId: '_entity@1',
         content: { did: 'did:key:x', name: 'X' },
         unlistedAt: new Date(),
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     );
     const found = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getEntityByDid('did:key:x');
@@ -4445,7 +4607,7 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
         typeId: '_entity@1',
         content: { did: 'did:key:x', name: 'X' },
         unlistedAt: new Date(),
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     );
     expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
@@ -4479,7 +4641,10 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       { text: 'hello' },
       {
         entityId: OWNER,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
   });
@@ -4492,9 +4657,9 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
 
   test('a write-holder may not reshare, alone or bundled with an edit', async () => {
     const scoped = stack.asEntity(MEMBER);
-    await expect(scoped.mutate(note.id, { permissions: [{ access: 'public' }] })).rejects.toThrow(
-      StackPermissionError,
-    );
+    await expect(
+      scoped.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+    ).rejects.toThrow(StackPermissionError);
     await expect(
       scoped.mutate(note.id, { contentPatch: { text: 'edited' }, unlisted: true }),
     ).rejects.toThrow(StackPermissionError);
@@ -4507,7 +4672,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
     await expect(
       scoped.mutate(note.id, {
         contentPatch: { text: 'edited' },
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     ).rejects.toThrow(StackPermissionError);
 
@@ -4520,11 +4685,11 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
     const scoped = stack.asEntity(OWNER);
     const done = await scoped.mutate(note.id, {
       contentPatch: { text: 'edited' },
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       unlisted: true,
     });
     expect(done.version).toBe(2);
-    expect(done.permissions).toEqual([{ access: 'public' }]);
+    expect(done.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   // The pre-state rule: gates read the record as it stands, never as the
@@ -4537,7 +4702,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
     await expect(
       scoped.mutate(note.id, {
         parentId: secret.id,
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     ).rejects.toThrow(StackPermissionError);
 
@@ -4550,7 +4715,9 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       { text: 'box2' },
       {
         entityId: OWNER,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: false }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
     const scoped = stack.asEntity(MEMBER);
@@ -4592,9 +4759,9 @@ describe('ScopedStack.mutate — delegated principals', () => {
     const app = stack.asEntity('did:key:zApp', { onBehalfOf: OWNER });
     // Not found rather than forbidden: an ungranted app cannot read the
     // record, so the refusal tells it nothing a read would not have.
-    await expect(app.mutate(note.id, { permissions: [{ access: 'public' }] })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      app.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+    ).rejects.toThrow(StackNotFoundError);
     await expect(app.mutate(note.id, { unlisted: true })).rejects.toThrow(StackNotFoundError);
     expect((await stack.get(note.id))!.version).toBe(1);
   });
@@ -4607,12 +4774,15 @@ describe('ScopedStack.mutate — delegated principals', () => {
       { text: 'hello' },
       {
         entityId: OWNER,
-        permissions: [{ access: 'entity', entityId: MEMBER, read: true, write: true }],
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
       },
     );
     const forMember = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
     await expect(
-      forMember.mutate(shared.id, { permissions: [{ access: 'public' }] }),
+      forMember.mutate(shared.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(StackPermissionError);
 
     // The same call's content half is within the subject's reach, and is

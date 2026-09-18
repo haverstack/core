@@ -538,7 +538,7 @@ describe('getVersions fixtures', () => {
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
       expect(result).toHaveLength(fixture.responseBody!.length);
-      expect(result[0].permissions).toEqual(fixture.responseBody![0].permissions);
+      expect(result[0].content).toEqual(fixture.responseBody![0].content);
     });
   }
 });
@@ -555,7 +555,6 @@ describe('getVersion fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result?.permissions).toBeUndefined();
       expect(result?.content).toEqual(fixture.responseBody!.content);
     });
   }

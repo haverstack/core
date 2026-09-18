@@ -27,7 +27,7 @@ import {
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
-import type { StackRecord, StackType, RecordVersion, Association } from '@haverstack/core';
+import type { StackRecord, StackType, RecordVersion, DataAssociation } from '@haverstack/core';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -702,7 +702,7 @@ describe('getRecord', () => {
       entityId: 'entity-1',
       appId: 'app-1',
       deletedAt: '2024-06-16T00:00:00.000Z',
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       associations: [{ kind: 'tag', label: 'starred' }],
     };
     mockFetch.mockResolvedValueOnce(jsonResponse(withOptionals));
@@ -711,7 +711,7 @@ describe('getRecord', () => {
     expect(result!.entityId).toBe('entity-1');
     expect(result!.appId).toBe('app-1');
     expect(result!.deletedAt).toBeInstanceOf(Date);
-    expect(result!.permissions).toEqual([{ access: 'public' }]);
+    expect(result!.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
     expect(result!.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
   });
 });
@@ -755,7 +755,7 @@ describe('mutateRecord', () => {
       {
         contentPatch: { text: 'Updated' },
         parentId: 'box-1',
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
         unlisted: false,
       },
       { expectedVersion: 1 },
@@ -767,7 +767,7 @@ describe('mutateRecord', () => {
     expect(JSON.parse(init.body as string)).toEqual({
       contentPatch: { text: 'Updated' },
       parentId: 'box-1',
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       unlisted: false,
     });
   });
@@ -866,7 +866,7 @@ describe('permissions through a change set', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     const updated = await adapter.mutateRecord('rec-abc123', {
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
     });
     expect(updated.id).toBe('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
@@ -874,7 +874,9 @@ describe('permissions through a change set', () => {
       expect.objectContaining({ method: 'PATCH' }),
     );
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ permissions: [{ access: 'public' }] });
+    expect(JSON.parse(init.body as string)).toEqual({
+      permissions: [{ kind: 'anyone', label: 'read' }],
+    });
   });
 });
 
@@ -1240,7 +1242,7 @@ describe('associate', () => {
   test('sends POST /records/:id/associations', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: Association = { kind: 'tag', label: 'starred' };
+    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
     await adapter.associate('rec-abc123', assoc);
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/associations`,
@@ -1251,7 +1253,7 @@ describe('associate', () => {
   test('sends the association as JSON body', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: Association = { kind: 'tag', label: 'starred' };
+    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
     await adapter.associate('rec-abc123', assoc);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual(assoc);
@@ -1263,7 +1265,7 @@ describe('dissociate', () => {
   test('sends POST /records/:id/associations/delete', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: Association = { kind: 'tag', label: 'starred' };
+    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
     await adapter.dissociate('rec-abc123', assoc);
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/associations/delete`,
@@ -1274,7 +1276,7 @@ describe('dissociate', () => {
   test('sends the association as JSON body', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: Association = { kind: 'tag', label: 'starred' };
+    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
     await adapter.dissociate('rec-abc123', assoc);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual(assoc);
@@ -1286,7 +1288,7 @@ describe('dissociate', () => {
 // -------------------------------------------------------
 
 describe('a mutation that bumps a version must answer with a Record', () => {
-  const ASSOC: Association = {
+  const ASSOC: DataAssociation = {
     kind: 'relationship',
     label: 'author',
     target: { scope: 'record', recordId: 'rec-other' },
@@ -1311,7 +1313,7 @@ describe('a mutation that bumps a version must answer with a Record', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
     await expect(
-      adapter.mutateRecord('rec-abc123', { permissions: [{ access: 'public' }] }),
+      adapter.mutateRecord('rec-abc123', { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(APIAdapterError);
   });
 
@@ -1380,17 +1382,20 @@ describe('getVersion', () => {
   // A stray `associations` key can still arrive from an older or foreign
   // server — RecordVersion has no field for it, so the parser drops it
   // rather than surfacing it. See docs/spec/versioning.md § Version history.
-  test('parses permissions when present and ignores a stray associations key', async () => {
+  // A snapshot is content and the typeId it is read under. Neither
+  // association half bumps a version, so a server emitting either is
+  // writing a key this client drops.
+  test('ignores stray associations and permissions keys', async () => {
     const adapter = await openAdapter();
     const withOptionals = {
       ...VERSION_RAW,
       associations: [{ kind: 'tag', label: 'starred' }],
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
     };
     mockFetch.mockResolvedValueOnce(jsonResponse(withOptionals));
     const version = await adapter.getVersion('rec-abc123', 1);
     expect(version && 'associations' in version).toBe(false);
-    expect(version?.permissions).toEqual([{ access: 'public' }]);
+    expect(version && 'permissions' in version).toBe(false);
   });
 });
 
@@ -1435,7 +1440,7 @@ describe('a mutation answering with no Record body', () => {
     content: { text: 'Hello world' },
     version: 1,
   };
-  const tag: Association = { kind: 'tag', label: 'starred' };
+  const tag: DataAssociation = { kind: 'tag', label: 'starred' };
 
   test.each([
     ['createRecord', (a: APIAdapter) => a.createRecord(record)],

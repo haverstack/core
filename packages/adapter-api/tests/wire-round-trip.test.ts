@@ -333,7 +333,7 @@ describe('POST /records round trip', () => {
     const record = recordToCreate({
       parentId: '0000000parnt',
       appId: 'com.example.editor',
-      permissions: [{ access: 'public' }],
+      permissions: [{ kind: 'anyone', label: 'read' }],
       associations: [{ kind: 'tag', label: 'starred' }],
     });
     const { typeId, content, options } = await roundTripCreate(record, {

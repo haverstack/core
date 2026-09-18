@@ -529,14 +529,14 @@ describe('expectedVersion', () => {
     await expect(
       adapter.mutateRecord(
         record.id,
-        { permissions: [{ access: 'public' }] },
+        { permissions: [{ kind: 'anyone', label: 'read' }] },
         { expectedVersion: 99 },
       ),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
 
     await adapter.mutateRecord(
       record.id,
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
       { expectedVersion: 1 },
     );
     expect((await adapter.getRecord(record.id))?.version).toBe(2);
@@ -1646,9 +1646,9 @@ describe('mutateRecord — the `permissions` key', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { permissions: [{ access: 'public' }] });
+    await adapter.mutateRecord(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     const retrieved = await adapter.getRecord(record.id);
-    expect(retrieved?.permissions).toEqual([{ access: 'public' }]);
+    expect(retrieved?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
     expect(retrieved?.version).toBe(2);
   });
 });
@@ -2323,7 +2323,11 @@ describe('actor attribution', () => {
     const read = await adapter.getRecord(r.id);
     expect([read?.updatedBy, read?.updatedVia]).toEqual([OTHER, APP]);
 
-    await adapter.mutateRecord(r.id, { permissions: [{ access: 'public' }] }, { updatedBy: ACTOR });
+    await adapter.mutateRecord(
+      r.id,
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+      { updatedBy: ACTOR },
+    );
     expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
 
     await adapter.deleteRecord(r.id, { updatedBy: OTHER });

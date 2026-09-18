@@ -1037,30 +1037,35 @@ export const permissionsChangeFixtures: ConformanceFixture<
   WireRecord
 >[] = [
   {
-    name: 'set-permissions-public',
+    name: 'set-permissions-anyone',
     description:
-      "A change set's `permissions` key replaces all permissions. The response is the " +
-      'updated Record, since this bumps version like any other mutation. See ' +
-      'docs/spec/wire-format.md § Records.',
+      "A change set's `permissions` key replaces the whole permission set, and nothing else: " +
+      'the `associations` key is a separate domain, so a Record keeps its tags across this ' +
+      'write. Permission entries are associations, so this bumps no version and does not ' +
+      'move updatedAt — the journal carries the delta in full. See ' +
+      'docs/spec/wire-format.md § Records and docs/spec/access-control.md ' +
+      '§ Record-level permissions.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
-    requestBody: { permissions: [{ access: 'public' }] },
+    requestBody: { permissions: [{ kind: 'anyone', label: 'read' }] },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
-      permissions: [{ access: 'public' }],
+      version: 1,
+      permissions: [{ kind: 'anyone', label: 'read' }],
+      associations: [{ kind: 'tag', label: 'draft' }],
     },
   },
   {
     name: 'set-permissions-empty-is-private',
     description:
       'An empty permissions array makes the record private (owner-only), and the record comes ' +
-      'back with no permissions field at all rather than an empty one.',
+      'back with no permissions field at all rather than an empty one. Its associations are ' +
+      'untouched: the two keys replace within their own domains.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { permissions: [] },
@@ -1069,9 +1074,10 @@ export const permissionsChangeFixtures: ConformanceFixture<
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 3,
+      version: 1,
+      associations: [{ kind: 'tag', label: 'draft' }],
     },
   },
 ];
@@ -1181,16 +1187,15 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
 // -------------------------------------------------------
 //
 // GET /records/:id/versions[/:version] require mutate-surface
-// authorization, not plain read access, and strip snapshot `permissions`
-// for non-owners (docs/spec/versioning.md § History access). These pin the
-// success shape; the 403 case is error-permission-denied-versions-read-only.
+// authorization, not plain read access (docs/spec/versioning.md
+// § History access). These pin the success shape; the 403 case is
+// error-permission-denied-versions-read-only.
 
 export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
   {
-    name: 'get-versions-owner-includes-permissions',
+    name: 'get-versions-owner',
     description:
-      'GET /records/:id/versions for the stack owner returns every snapshot field verbatim, ' +
-      'including permissions.',
+      'GET /records/:id/versions for the stack owner returns every snapshot field verbatim.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
@@ -1200,19 +1205,17 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
         typeId: 'com.example/note@1',
         content: { title: 'original title' },
         updatedAt: '2024-01-01T00:00:00.000Z',
-        permissions: [
-          { access: 'entity', entityId: 'entity-member-456', read: true, write: false },
-        ],
       },
     ],
   },
   {
-    name: 'get-versions-non-owner-write-holder-strips-permissions',
+    name: 'get-versions-non-owner-write-holder-sees-the-same-rows',
     description:
       'GET /records/:id/versions for a non-owner write-holder — who passes the mutate-surface ' +
-      'gate above — omits permissions from every returned snapshot. entityId is not stripped, ' +
-      'nor are updatedBy/updatedVia: they are the same class of fact as the author a reader ' +
-      'already sees on the live record.',
+      'gate above — returns exactly what the owner sees. A snapshot carries content and the ' +
+      'typeId it is read under, and nothing a reader who already passed that gate is denied: ' +
+      'entityId and updatedBy/updatedVia are the same class of fact as the author on the live ' +
+      'record. See docs/spec/versioning.md § History access.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
@@ -1231,10 +1234,10 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
 
 export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = [
   {
-    name: 'get-version-single-strips-permissions-for-non-owner',
+    name: 'get-version-single',
     description:
-      'GET /records/:id/versions/:version applies the same non-owner permissions-stripping as ' +
-      'the list endpoint above, for the single-version fetch.',
+      'GET /records/:id/versions/:version applies the same mutate-surface gate as the list ' +
+      'endpoint above, for the single-version fetch.',
     method: 'GET',
     path: '/records/1hk153x00001/versions/1',
     responseStatus: 200,
@@ -1246,14 +1249,14 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
     },
   },
   {
-    name: 'get-version-carries-no-containment-or-listing-state',
+    name: 'get-version-carries-no-containment-listing-or-authority-state',
     description:
-      'A snapshot carries what only a snapshot preserves: content, the typeId it is read ' +
-      'under, and the permissions kept for audit. It names no parentId and no unlistedAt, ' +
-      'whatever container the record sat in or whether it was listed at the time — those ' +
-      'aspects bump no version, so no version is ever taken of them. A server that emits ' +
-      'either is writing a key every client drops. Assumes the record was in 1hk153x0000f ' +
-      'and unlisted when version 2 was taken. ' +
+      'A snapshot carries what only a snapshot preserves: content and the typeId it is read ' +
+      'under. It names no parentId, no unlistedAt and no permissions, whatever container the ' +
+      'record sat in, whether it was listed, or who reached it at the time — those aspects ' +
+      'bump no version, so no version is ever taken of them. A server that emits any of them ' +
+      'is writing a key every client drops. Assumes the record was in 1hk153x0000f and ' +
+      'unlisted when version 2 was taken. ' +
       'See docs/spec/versioning.md § Version history.',
     method: 'GET',
     path: '/records/1hk153x00001/versions/2',
@@ -1915,16 +1918,24 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-permission-write-without-read',
     description:
-      "A change set's `permissions` key carrying an entry with write and no read returns 422 " +
-      'with code "validation". A ' +
-      'write-holder reaches the record and its whole history through the mutate surface, so the ' +
-      'combination withholds nothing while appearing to — the server refuses it wherever a ' +
-      'request body carries permissions, POST /records included. See ' +
-      'docs/spec/access-control.md § Write implies read.',
+      "A change set's `permissions` key producing a set where some grantee holds `write` with " +
+      'no `read` beside it returns 422 with code "validation". A write-holder reaches the ' +
+      'record and its whole history through the mutate surface, so the combination withholds ' +
+      'nothing while appearing to. A cross-element invariant, asked of the set the write would ' +
+      'produce: the same 422 answers a `permissions` key that drops the `read` out from under ' +
+      'a `write` already stored. The server refuses it wherever a request body carries ' +
+      'permissions, POST /records included. See docs/spec/access-control.md ' +
+      '§ Write implies read.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: {
-      permissions: [{ access: 'entity', entityId: 'did:key:z6MkMember', read: false, write: true }],
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+      ],
     },
     responseStatus: 422,
     responseBody: {
@@ -1935,9 +1946,57 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
           {
             path: 'permissions[0]',
             message:
-              'write requires read: a write-holder reaches the record and its history through the mutate surface, so `write: true, read: false` withholds nothing',
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
           },
         ],
+      },
+    },
+  },
+  {
+    name: 'error-query-permission-kind-in-associations-key',
+    description:
+      'A `permission` named in the `associations` key returns 400 with code "query". ' +
+      'Authority and data share storage and never share a call: the association verbs are ' +
+      'gated on the write bit alone, so an authority element reaching them would let a ' +
+      'write-holder grant themselves access. The refusal is the wrong-surface answer, not a ' +
+      'malformed-value one. See docs/spec/access-control.md § Record-level permissions.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: {
+      associations: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+      ],
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message:
+          'associations does not carry authority: a "permission" association belongs to the ' +
+          '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
+      },
+    },
+  },
+  {
+    name: 'error-query-association-kind-in-permissions-key',
+    description:
+      'The mirror refusal: a `tag` named in the `permissions` key returns 400 with code ' +
+      '"query", rather than quietly becoming an ACL entry the `associations` projection never ' +
+      'shows. See docs/spec/access-control.md § Record-level permissions.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { permissions: [{ kind: 'tag', label: 'draft' }] },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message:
+          'permissions carries authority alone: a "tag" association belongs to the ' +
+          '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
       },
     },
   },

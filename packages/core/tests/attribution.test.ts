@@ -92,16 +92,22 @@ describe('attribution — updatedBy tracks the actor', () => {
   });
 
   // Resharing is owner-or-creator-only and never delegated, so the creator
-  // is the only non-owner who can perform it — but it still restamps, which
-  // is what makes "who widened access to this" answerable at all.
+  // is the only non-owner who can perform it. A reshare bumps no version,
+  // so it leaves the record's own stamps where they stand and answers
+  // "who widened access to this" from the journal entry's actor instead.
   test('a permissions change set records who reshared', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
 
-    await stack.asEntity(AUTHOR).mutate(created.id, { permissions: [{ access: 'public' }] });
+    await stack
+      .asEntity(AUTHOR)
+      .mutate(created.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
 
-    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
+    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    const entry = (await stack.getJournal(created.id)).at(-1);
+    expect(entry?.ops).toEqual(['permissions']);
+    expect(entry?.actor?.entityId).toBe(AUTHOR);
   });
 
   test('a delegated write records both halves', async () => {

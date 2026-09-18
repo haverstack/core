@@ -37,6 +37,8 @@ import type {
   AppId,
   Association,
   AttachmentContent,
+  AuthorityAssociation,
+  DataAssociation,
   EntityId,
   GrantAction,
   GrantContent,
@@ -63,6 +65,8 @@ import {
   StackValidationError,
 } from './errors.js';
 import {
+  assertAuthorityAssociations,
+  assertDataAssociations,
   assertSortCapability,
   assertValidRelatedTo,
   assertValidSort,
@@ -85,10 +89,10 @@ import {
   queryAllPages,
 } from './stack-reads.js';
 import {
+  associationDelta,
   associationEqual,
   isGroupRecord,
   presentDeleted,
-  stripVersionPermissions,
   assertNonEmptyChangeSet,
 } from './record-changes.js';
 // Every import from stack.js is type-only: a ScopedStack never constructs
@@ -957,18 +961,30 @@ export class ScopedStack implements StackClient {
       if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
     }
 
-    const reshares = changes.permissions !== undefined || changes.unlisted !== undefined;
+    // Refused here as well as in `Stack` below, so the partition is a
+    // refusal rather than a permission question: an `associations` key
+    // naming an authority kind is the wrong surface for every requester,
+    // owner included.
+    if (changes.associations) assertDataAssociations(changes.associations, 'associations');
+    if (changes.permissions) assertAuthorityAssociations(changes.permissions, 'permissions');
+
     const writes =
       changes.contentPatch !== undefined ||
       changes.associations !== undefined ||
       changes.parentId !== undefined;
+    // `unlisted` reshares on the key's presence alone: it is a boolean, so
+    // naming it is the whole of what it can say. `permissions` is a set,
+    // and a set restated is not a reshare — see permissionsMove() below.
+    const unlists = changes.unlisted !== undefined;
 
     // requireUpdatable() reads the record and applies the write gate; the
     // reshare keys need the record before their own gate, and a change set
     // carrying only those must not be held to the write gate it doesn't
     // need. One read either way.
     const record = writes ? await this.requireUpdatable(id) : await this.requireReshareable(id);
-    if (writes && reshares) await this.requireReshareOf(record);
+    if (writes && (unlists || this.permissionsMove(record, changes))) {
+      await this.requireReshareOf(record);
+    }
 
     if (changes.contentPatch) {
       const patch = changes.contentPatch;
@@ -1028,6 +1044,19 @@ export class ScopedStack implements StackClient {
     // soft-delete refusal has to be asked here too — after the authority
     // decision above, for the reason refuseIfDeleted() gives.
     return this.refuseIfDeleted(record, true);
+  }
+
+  /**
+   * Whether a change set's `permissions` key actually moves the ACL. Read
+   * off the computed delta rather than the elements the caller supplied:
+   * a gate that inspected only what was named would miss the wholesale
+   * replacement that drops everything, which names nothing at all. Any
+   * add, remove or repoint in either direction is a reshare.
+   * See docs/spec/access-control.md § Record-level permissions.
+   */
+  private permissionsMove(record: StackRecord, changes: RecordChanges): boolean {
+    if (changes.permissions === undefined) return false;
+    return associationDelta(record.permissions ?? [], changes.permissions).length > 0;
   }
 
   /** The reshare decision alone, for a record already read and write-gated. */
@@ -1140,15 +1169,45 @@ export class ScopedStack implements StackClient {
     throw await this.denialFor(record, 'Only the stack owner may write a _grant record');
   }
 
-  async associate(id: string, association: Association): Promise<StackRecord> {
+  /**
+   * Gated on the write bit alone, which is why the kind refusal comes
+   * first: authority reached through this verb would be exactly the
+   * escalation the partition exists to stop, decided before any record is
+   * read so it cannot depend on who is asking.
+   */
+  async associate(id: string, association: DataAssociation): Promise<StackRecord> {
+    assertDataAssociations([association], 'associate()');
     const record = await this.requireUpdatable(id);
     await this.requireAssociationAccess(record.typeId, association);
     return this.stack.associate(id, association, this.actor);
   }
 
-  async dissociate(id: string, association: Association): Promise<StackRecord> {
+  /** See associate() — the same write gate, the same kind refusal. */
+  async dissociate(id: string, association: DataAssociation): Promise<StackRecord> {
+    assertDataAssociations([association], 'dissociate()');
     await this.requireUpdatable(id);
     return this.stack.dissociate(id, association, this.actor);
+  }
+
+  /**
+   * Extend who reaches a record — the reshare gate's own verb, on the
+   * owner-or-creator rule the `permissions` key carries. The write bit
+   * does not confer it: a write-holder who could grant would escalate to
+   * deciding who else reaches the record, which is the whole of what
+   * scoping access is for.
+   * See docs/spec/access-control.md § Record-level permissions.
+   */
+  async grantAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord> {
+    assertAuthorityAssociations([permission], 'grantAccess()');
+    await this.requireReshareable(id);
+    return this.stack.grantAccess(id, permission, this.actor);
+  }
+
+  /** Withdraw one element of who reaches a record — see grantAccess(). */
+  async revokeAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord> {
+    assertAuthorityAssociations([permission], 'revokeAccess()');
+    await this.requireReshareable(id);
+    return this.stack.revokeAccess(id, permission, this.actor);
   }
 
   /**
@@ -1177,25 +1236,21 @@ export class ScopedStack implements StackClient {
 
   /**
    * History is the mutation/recovery surface, not a read surface — gated
-   * like patchContent(), with snapshot `permissions` stripped for everyone but
-   * the owner acting alone — a snapshot's permissions are the stack's
-   * sharing graph, which delegation is not a route to. Reading history
-   * changes nothing, so it is the one path the `_grant` write fence leaves
-   * alone: seeing how a Record you can already read got that way is not
-   * the escalation that fence exists to stop, and losing it would leave a
-   * write-holder unable to audit the Record they hold.
-   * See docs/spec/versioning.md § History access.
+   * like patchContent(). A snapshot carries content and the typeId it is
+   * read under, so every requester who passes that gate sees the same
+   * rows. Reading history changes nothing, so it is the one path the
+   * `_grant` write fence leaves alone: seeing how a Record you can already
+   * read got that way is not the escalation that fence exists to stop, and
+   * losing it would leave a write-holder unable to audit the Record they
+   * hold. See docs/spec/versioning.md § History access.
    */
   async getVersions(id: string): Promise<RecordVersion[]> {
     await this.requireUpdatable(id, { mutating: false });
-    const versions = await this.stack.getVersions(id);
-    return this.ownerActingAlone ? versions : versions.map(stripVersionPermissions);
+    return this.stack.getVersions(id);
   }
 
   /**
    * See getVersions() — the same mutate-surface gate, for the same reason.
-   * A journal entry carries no snapshot `permissions` to strip: it names
-   * that a permission set moved, never what it moved to.
    * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
@@ -1203,12 +1258,10 @@ export class ScopedStack implements StackClient {
     return this.stack.getJournal(id, query);
   }
 
-  /** See getVersions() — same mutate-surface gate, same permissions stripping. */
+  /** See getVersions() — the same mutate-surface gate. */
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
     await this.requireUpdatable(id, { mutating: false });
-    const target = await this.stack.getVersion(id, version);
-    if (!target) return null;
-    return this.ownerActingAlone ? target : stripVersionPermissions(target);
+    return this.stack.getVersion(id, version);
   }
 
   /**

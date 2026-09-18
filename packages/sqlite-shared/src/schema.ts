@@ -23,14 +23,23 @@ export const RECORD_SCHEMA_SQL = `
     updated_by  TEXT,
     updated_via TEXT,
     deleted_at  INTEGER,
-    unlisted_at INTEGER,
-    permissions TEXT CHECK (permissions IS NULL OR json_valid(permissions))
+    unlisted_at INTEGER
   ) STRICT;
 
+  -- Every edge a record carries, authority and data alike: a permission
+  -- entry has element identity and a delta the same shape as a tag's, so
+  -- it earns the same table and the same durability tier. The permissions
+  -- and associations fields are projections over it, partitioned by
+  -- kind. See docs/spec/access-control.md § Record-level permissions.
+  --
   -- A relationship's target is (related_scope, related_id) plus one
   -- qualifier: related_stack for a record in another stack, related_ns for
   -- a foreign namespace. All four are in the primary key, so two targets
-  -- differing only by namespace are two associations.
+  -- differing only by namespace are two associations. A permission's
+  -- grantee reuses them — related_scope 'entity' or 'group', related_id the
+  -- DID or group id — plus related_role, which only a group grantee sets
+  -- and which is in the key because member and admin name two different
+  -- sets of people.
   --
   -- attachment_record_id stays out of the primary key: it annotates a
   -- reference rather than naming one, so re-pointing it updates the row an
@@ -42,20 +51,21 @@ export const RECORD_SCHEMA_SQL = `
   -- for the filter directions it cannot answer.
   CREATE TABLE IF NOT EXISTS associations (
     record_id     TEXT NOT NULL REFERENCES records(id),
-    kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
+    kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship', 'permission', 'anyone')),
     label         TEXT NOT NULL,
     file_id       TEXT NOT NULL DEFAULT '',
-    related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external')),
+    related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external', 'group')),
     related_id    TEXT NOT NULL DEFAULT '',
     related_ns    TEXT NOT NULL DEFAULT '',
     related_stack TEXT NOT NULL DEFAULT '',
+    related_role  TEXT NOT NULL DEFAULT '' CHECK (related_role IN ('', 'member', 'admin')),
     attachment_record_id TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
+    PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack, related_role)
   ) STRICT;
 
-  -- Content, the type it is read under, and the permissions kept for
-  -- audit. No parent_id, unlisted_at or associations column: none of those
-  -- aspects bumps version, so no version ever snapshots one. See
+  -- Content and the type it is read under. No parent_id, unlisted_at or
+  -- associations column: none of those aspects bumps version, so no
+  -- version ever snapshots one. See
   -- docs/spec/versioning.md § Version history.
   CREATE TABLE IF NOT EXISTS versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
@@ -66,7 +76,6 @@ export const RECORD_SCHEMA_SQL = `
     entity_id   TEXT,
     updated_by  TEXT,
     updated_via TEXT,
-    permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)
   ) STRICT;
 

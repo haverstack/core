@@ -6,8 +6,7 @@
  * The equality helpers answer it against a proposed write, so the no-op
  * decision and a change event's `ops` are the same comparison and can never
  * disagree. The projections answer it against a reader: a soft-deleted
- * Record is its tombstone, and a snapshot's `permissions` are owner-only
- * audit data.
+ * Record is its tombstone.
  *
  * See docs/spec/events.md § The event shape and docs/spec/versioning.md
  * § The tombstone is literal.
@@ -19,11 +18,12 @@ import { SYSTEM_TYPES, RECORD_CHANGE_KEYS } from './types.js';
 import type {
   Association,
   AssociationChange,
+  AuthorityAssociation,
   ChangeOp,
+  DataAssociation,
   EntityId,
-  Permission,
+  PermissionGrantee,
   RecordChanges,
-  RecordVersion,
   RelationshipTarget,
   StackRecord,
 } from './types.js';
@@ -42,7 +42,50 @@ export function associationEqual(a: Association, b: Association): boolean {
   if (a.kind === 'relationship' && b.kind === 'relationship') {
     return targetEqual(a.target, b.target);
   }
+  if (a.kind === 'permission' && b.kind === 'permission') {
+    return granteeEqual(a.grantee, b.grantee);
+  }
   return true;
+}
+
+/**
+ * Structural equality per grantee arm. `role` is required, so there is no
+ * absent-means-any spelling to normalize: two group grantees differing
+ * only by role are two grantees.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolean {
+  if (a.scope !== b.scope) return false;
+  if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
+  if (a.scope === 'group' && b.scope === 'group') {
+    return a.groupId === b.groupId && a.role === b.role;
+  }
+  return false;
+}
+
+/**
+ * Whether an association carries authority rather than data — the
+ * partition `StackRecord.permissions` and `StackRecord.associations`
+ * project, and the line `associate()`/`dissociate()` refuse to cross.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export function isAuthorityAssociation(a: Association): a is AuthorityAssociation {
+  return a.kind === 'permission' || a.kind === 'anyone';
+}
+
+/**
+ * One stored association set split into the two the record presents. An
+ * app editing tags never sees the authority half, so it cannot drop it.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export function partitionAssociations(associations: Association[]): {
+  associations: DataAssociation[];
+  permissions: AuthorityAssociation[];
+} {
+  return {
+    associations: associations.filter((a): a is DataAssociation => !isAuthorityAssociation(a)),
+    permissions: associations.filter(isAuthorityAssociation),
+  };
 }
 
 /**
@@ -132,18 +175,6 @@ export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boole
   return false;
 }
 
-export function permissionEqual(a: Permission, b: Permission): boolean {
-  if (a.access !== b.access) return false;
-  if (a.access === 'public') return true;
-  if (a.access === 'entity' && b.access === 'entity') {
-    return a.entityId === b.entityId && a.read === b.read && a.write === b.write;
-  }
-  if (a.access === 'group' && b.access === 'group') {
-    return a.groupId === b.groupId && a.role === b.role && a.read === b.read && a.write === b.write;
-  }
-  return false;
-}
-
 /**
  * A change set has to name at least one aspect. Refused rather than read
  * as a no-op: it addresses nothing, so there is nothing it could have
@@ -184,7 +215,10 @@ export function changeSetOps(
     ops.push('reparent');
   }
 
-  if (changes.permissions && !permissionsEqual(existing.permissions ?? [], changes.permissions)) {
+  if (
+    changes.permissions &&
+    associationDelta(existing.permissions ?? [], changes.permissions).length > 0
+  ) {
     ops.push('permissions');
   }
 
@@ -204,14 +238,16 @@ export function changeSetOps(
 /**
  * The ops whose prior state the journal already carries in full, so a
  * snapshot would preserve nothing a restore could not otherwise reach:
- * an association delta, a `previousParentId`, and a listing transition
- * whose inverse is the op's own opposite. A change set naming only these
- * is a no-bump write, same as calling associate()/dissociate() directly.
+ * an association delta — authority elements included — a
+ * `previousParentId`, and a listing transition whose inverse is the op's
+ * own opposite. A change set naming only these is a no-bump write, same
+ * as calling associate()/dissociate() directly.
  * See docs/spec/versioning.md § Version history.
  */
 const NO_BUMP_OPS: ReadonlySet<ChangeOp> = new Set<ChangeOp>([
   'associate',
   'dissociate',
+  'permissions',
   'reparent',
   'unlist',
   'list',
@@ -235,6 +271,7 @@ export function bumpsVersion(ops: ChangeOp[]): boolean {
  */
 const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = new Set([
   'associations',
+  'permissions',
   'parentId',
   'unlisted',
 ]);
@@ -288,19 +325,15 @@ export function contentEqual(a: Record<string, unknown>, b: Record<string, unkno
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function permissionsEqual(a: Permission[], b: Permission[]): boolean {
-  return a.length === b.length && a.every((p, i) => permissionEqual(p, b[i]));
-}
-
 /**
  * Ensures `creator` carries an `admin` relationship association, adding one
  * if it's not already present. Used to bootstrap a `_group` record's first
  * admin at create time.
  */
 export function stampGroupAdmin(
-  associations: Association[] | undefined,
+  associations: DataAssociation[] | undefined,
   creator: EntityId,
-): Association[] {
+): DataAssociation[] {
   const list = associations ?? [];
   const alreadyAdmin = list.some(
     (a) =>
@@ -322,17 +355,6 @@ export function stampGroupAdmin(
  */
 export function isGroupRecord(record: StackRecord): boolean {
   return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
-}
-
-/**
- * Drops a snapshot's `permissions` — owner-only audit data, never served
- * to a non-owner history reader. `entityId` (change attribution) stays.
- * See docs/spec/versioning.md § History access.
- */
-export function stripVersionPermissions(version: RecordVersion): RecordVersion {
-  if (version.permissions === undefined) return version;
-  const { permissions: _permissions, ...rest } = version;
-  return rest;
 }
 
 /**

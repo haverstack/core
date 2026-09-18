@@ -103,7 +103,60 @@ export type RelationshipAssociation = {
   target: RelationshipTarget;
 };
 
-export type Association = TagAssociation | AttachmentAssociation | RelationshipAssociation;
+/**
+ * A grant of access to the Record carrying it. The bit is the label, so
+ * granting and revoking are a plain add and remove and the element's
+ * identity carries its whole meaning. Its grantee shape is its own rather
+ * than a `RelationshipTarget`: a target names no role and has no group
+ * scope. See docs/spec/access-control.md § Record-level permissions.
+ */
+export type PermissionAssociation = {
+  kind: 'permission';
+  label: 'read' | 'write';
+  grantee: PermissionGrantee;
+};
+
+/**
+ * Who a permission reaches. `role` is required — `member` is the wider
+ * set, `admin` the narrower, matching the roster labels where admin
+ * implies member. See docs/spec/identity.md § Group.
+ */
+export type PermissionGrantee =
+  | { scope: 'entity'; entityId: EntityId }
+  | { scope: 'group'; groupId: RecordId; role: 'member' | 'admin' };
+
+/**
+ * Reach to the world, spelled affirmatively: it names no grantee and
+ * carries no bit beyond `read`, so no dropped field on a
+ * `PermissionAssociation` can produce it.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export type AnyoneAssociation = {
+  kind: 'anyone';
+  label: 'read';
+};
+
+/**
+ * The authority half of the association table — what the `permissions`
+ * field projects. See docs/spec/access-control.md § Record-level
+ * permissions.
+ */
+export type AuthorityAssociation = PermissionAssociation | AnyoneAssociation;
+
+/**
+ * The data half — what the `associations` field projects, and the only
+ * kinds `associate()`/`dissociate()` accept.
+ * See docs/spec/data-model.md § Associations.
+ */
+export type DataAssociation = TagAssociation | AttachmentAssociation | RelationshipAssociation;
+
+/**
+ * Every edge a Record carries, authority and data alike. One shape, one
+ * delta and one durability tier; the two halves stay separate call
+ * surfaces because they carry different authority.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+export type Association = DataAssociation | AuthorityAssociation;
 
 /**
  * One association a write moved, and what it moved from. Every inverse is
@@ -132,8 +185,8 @@ export type AssociationChange =
 export type RecordChanges = {
   contentPatch?: Record<string, unknown | null>;
   parentId?: string | null;
-  permissions?: Permission[];
-  associations?: Association[];
+  permissions?: AuthorityAssociation[];
+  associations?: DataAssociation[];
   unlisted?: boolean;
 };
 
@@ -145,27 +198,6 @@ export const RECORD_CHANGE_KEYS = [
   'associations',
   'unlisted',
 ] as const satisfies readonly (keyof RecordChanges)[];
-
-// -------------------------------------------------------
-// Permissions
-// -------------------------------------------------------
-
-/**
- * Grants of access to a Record. Absence of permissions (empty or undefined)
- * means private — readable only by the stack owner. Permissions are
- * declarative intent; enforcement is the API adapter's responsibility.
- */
-export type Permission =
-  | { access: 'public' }
-  | { access: 'entity'; entityId: EntityId; read: boolean; write: boolean }
-  | {
-      access: 'group';
-      groupId: RecordId;
-      /** Restricts this entry to group admins. Absent = any member (member or admin). */
-      role?: 'admin';
-      read: boolean;
-      write: boolean;
-    };
 
 // -------------------------------------------------------
 // Records
@@ -215,8 +247,14 @@ export type StackRecord = {
    * docs/spec/unlisted.md.
    */
   unlistedAt?: Date;
-  permissions?: Permission[];
-  associations?: Association[];
+  /**
+   * Who reaches this Record, projected from the association table's
+   * authority kinds. Absent or empty means private — readable only by the
+   * stack owner. Declarative intent; enforcement is `ScopedStack`'s.
+   * See docs/spec/access-control.md § Record-level permissions.
+   */
+  permissions?: AuthorityAssociation[];
+  associations?: DataAssociation[];
 };
 
 // -------------------------------------------------------
@@ -239,13 +277,6 @@ export type RecordVersion = {
   updatedBy?: EntityId;
   /** The principal behind that mutation, when it isn't `updatedBy`. */
   updatedVia?: EntityId;
-  /**
-   * Never present. Associations don't share content's versioning:
-   * associate()/dissociate() don't bump `version`, so there is no version
-   * of a record whose snapshot would describe its association set.
-   * See docs/spec/versioning.md § Version history.
-   */
-  permissions?: Permission[];
 };
 
 // -------------------------------------------------------
@@ -1073,10 +1104,9 @@ export interface StackRecordAdapter {
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
    * Apply a change set — any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted` — in one write. One call is
-   * one version, however many version-bumping aspects it names: separate
-   * per-aspect methods would make a change set either several versions or
-   * an atomicity claim storage could not honor.
+   * `permissions`, `associations` and `unlisted` — in one write. It is the
+   * only multi-aspect atomic write a record has: a publish is one act, so
+   * separate per-aspect methods would leave it able to half-land.
    *
    * The content patch merges at the top level only — each key it names is
    * replaced whole. Never touches `typeId`; a type change goes through
@@ -1085,8 +1115,8 @@ export interface StackRecordAdapter {
    *
    * `opts.bumpsVersion` says whether this call advances `version`/
    * `updatedAt` and stores the snapshot — `false` for a change set that
-   * touches only `associations`, matching associate()/dissociate() below,
-   * which never bump. `Stack` computes it; an adapter never has to infer it
+   * touches only association sets, `permissions` among them, matching
+   * associate()/dissociate() below, which never bump. `Stack` computes it; an adapter never has to infer it
    * from the change set's own keys.
    *
    * `Stack` owns everything above storage: validation, the acyclicity
@@ -1129,8 +1159,8 @@ export interface StackRecordAdapter {
   /**
    * Add an association. Never bumps `version`/`updatedAt` and never
    * snapshots — a set-add composes correctly regardless of write order, so
-   * it needs neither the OCC `ifVersion` guards content and `permissions`,
-   * nor the rollback history that guards. See
+   * it needs neither the OCC `ifVersion` guards content, nor the rollback
+   * history that guards. See
    * docs/spec/versioning.md § Version history and § Optimistic concurrency.
    */
   associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
@@ -1159,9 +1189,10 @@ export interface StackRecordAdapter {
   getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
    * Restore a record to a previous version's `content` and `typeId` —
-   * everything a snapshot carries. Containment, listing, `permissions` and
-   * `associations` are left where they stand; a snapshot carries none of
-   * them, so there is nothing an adapter could restore them *from*. Bumps
+   * everything a snapshot carries. Containment, listing and associations,
+   * authority ones included, are left where they stand; a snapshot carries
+   * none of them, so there is nothing an adapter could restore them
+   * *from*. Bumps
    * version internally. Throws StackNotFoundError if the version doesn't
    * exist.
    */

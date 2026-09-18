@@ -6,7 +6,8 @@ import type {
   RecordVersion,
   Association,
   AssociationChange,
-  Permission,
+  AuthorityAssociation,
+  DataAssociation,
   ValidationError,
   SchemaDriftViolation,
   StackErrorCode,
@@ -46,8 +47,8 @@ export type WireRecord = {
   updatedVia?: string;
   deletedAt?: string;
   unlistedAt?: string;
-  permissions?: Permission[];
-  associations?: Association[];
+  permissions?: AuthorityAssociation[];
+  associations?: DataAssociation[];
 };
 
 /**
@@ -95,7 +96,6 @@ export type WireVersion = {
   entityId?: string;
   updatedBy?: string;
   updatedVia?: string;
-  permissions?: Permission[];
 };
 
 export function serializeRecord(r: StackRecord): WireRecord {
@@ -144,7 +144,6 @@ export function serializeVersion(v: RecordVersion): WireVersion {
   if (v.entityId !== undefined) w.entityId = v.entityId;
   if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
   if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
-  if (v.permissions !== undefined) w.permissions = v.permissions;
   return w;
 }
 

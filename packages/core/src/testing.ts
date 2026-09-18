@@ -14,6 +14,8 @@ import type {
   QueryResult,
   RecordFilter,
   Association,
+  AuthorityAssociation,
+  DataAssociation,
   AdapterCapabilities,
   BlobFileInfo,
   QuerySort,
@@ -186,7 +188,9 @@ export class MemoryAdapter implements StackAdapter {
     if (changes.contentPatch) {
       next = { ...next, content: applyMergePatch(next.content, changes.contentPatch) };
     }
-    if (changes.permissions) next = { ...next, permissions: changes.permissions };
+    // Each key replaces only within its own half of the partition, which
+    // is what keeps a tag write from touching an ACL it was never shown.
+    if (changes.permissions) next = withPermissions(next, changes.permissions);
     if (changes.associations) next = withAssociations(next, changes.associations);
 
     const parentId =
@@ -468,12 +472,13 @@ export class MemoryAdapter implements StackAdapter {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
     // re-pointed `attachmentRecordId` lands on the association already
-    // there rather than adding a second reference to the same file.
-    const assocs = record.associations ?? [];
+    // there rather than adding a second reference to the same file. Both
+    // halves of the partition share one table, so both reach this verb.
+    const assocs = allAssociations(record);
     const next = assocs.some((a) => associationEqual(a, association))
       ? assocs.map((a) => (associationEqual(a, association) ? association : a))
       : [...assocs, association];
-    const updated = withAssociations(record, next);
+    const updated = withAssociationSet(record, next);
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;
@@ -483,8 +488,8 @@ export class MemoryAdapter implements StackAdapter {
   async dissociate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const assocs = (record.associations ?? []).filter((a) => !associationEqual(a, association));
-    const updated = withAssociations(record, assocs);
+    const assocs = allAssociations(record).filter((a) => !associationEqual(a, association));
+    const updated = withAssociationSet(record, assocs);
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;
@@ -698,21 +703,29 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   };
 }
 
+/** Whether an association carries authority — mirrors core's own predicate. */
+const isAuthority = (a: Association): a is AuthorityAssociation =>
+  a.kind === 'permission' || a.kind === 'anyone';
+
 /**
- * Sets a record's associations, omitting the key entirely when empty —
- * mirroring the SQL adapters' rowToRecord, so the same mutation sequence
- * produces identically-shaped records on the test double and real storage.
+ * A record's whole association table, both projections rejoined — what
+ * associate()/dissociate() act on, since storage keys all kinds alike.
  */
+function allAssociations(record: StackRecord): Association[] {
+  return [...(record.associations ?? []), ...(record.permissions ?? [])];
+}
+
 /**
  * Sets a record's association set, keyed by identity as every adapter's
  * association table is: a list naming one identity twice collapses to one
  * entry, last wins. Core refuses such a list before an adapter sees it —
  * this is what keeps a direct caller from reaching a state a SQL store
- * cannot represent. See docs/spec/adapters.md § Associations are keyed by
- * identity.
+ * cannot represent. Both projections are written, omitting either key when
+ * empty — mirroring the SQL adapters' rowToRecord, so the same mutation
+ * sequence produces identically-shaped records on the test double and real
+ * storage. See docs/spec/adapters.md § Associations are keyed by identity.
  */
-function withAssociations(record: StackRecord, associations: Association[]): StackRecord {
-  const { associations: _drop, ...rest } = record;
+function withAssociationSet(record: StackRecord, associations: Association[]): StackRecord {
   const keyed = associations.reduce<Association[]>(
     (acc, a) =>
       acc.some((b) => associationEqual(a, b))
@@ -720,7 +733,24 @@ function withAssociations(record: StackRecord, associations: Association[]): Sta
         : [...acc, a],
     [],
   );
-  return keyed.length ? { ...rest, associations: keyed } : (rest as StackRecord);
+  const { associations: _dropA, permissions: _dropP, ...rest } = record;
+  const data = keyed.filter((a): a is DataAssociation => !isAuthority(a));
+  const authority = keyed.filter(isAuthority);
+  return {
+    ...(rest as StackRecord),
+    ...(data.length && { associations: data }),
+    ...(authority.length && { permissions: authority }),
+  };
+}
+
+/** withAssociationSet() over the data half alone — the `associations` key. */
+function withAssociations(record: StackRecord, associations: DataAssociation[]): StackRecord {
+  return withAssociationSet(record, [...associations, ...(record.permissions ?? [])]);
+}
+
+/** withAssociationSet() over the authority half alone — the `permissions` key. */
+function withPermissions(record: StackRecord, permissions: AuthorityAssociation[]): StackRecord {
+  return withAssociationSet(record, [...(record.associations ?? []), ...permissions]);
 }
 
 /**
@@ -733,6 +763,16 @@ function associationEqual(a: Association, b: Association): boolean {
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
   if (a.kind === 'relationship' && b.kind === 'relationship') {
     return targetEqual(a.target, b.target);
+  }
+  if (a.kind === 'permission' && b.kind === 'permission') {
+    const x = a.grantee;
+    const y = b.grantee;
+    if (x.scope !== y.scope) return false;
+    if (x.scope === 'entity' && y.scope === 'entity') return x.entityId === y.entityId;
+    if (x.scope === 'group' && y.scope === 'group') {
+      return x.groupId === y.groupId && x.role === y.role;
+    }
+    return false;
   }
   return true;
 }

@@ -3,7 +3,12 @@ import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { StackNotFoundError, StackPermissionError, StackQueryError } from '../src/errors.js';
-import type { RecordChange, RecordJournalEntry } from '../src/types.js';
+import type {
+  Association,
+  AuthorityAssociation,
+  RecordChange,
+  RecordJournalEntry,
+} from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';
@@ -31,7 +36,7 @@ describe('every emitting write appends exactly one entry', () => {
     await stack.patchContent(note.id, { text: 'edited' });
     await stack.associate(note.id, { kind: 'tag', label: 'starred' });
     await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.mutate(note.id, { permissions: [{ access: 'public' }] });
+    await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
 
@@ -190,12 +195,23 @@ describe('an association change is reversible from the log alone', () => {
    * prior state, and until this log there was nowhere to read it from
    * once the write had landed.
    */
+  const isAuthority = (a: Association): a is AuthorityAssociation =>
+    a.kind === 'permission' || a.kind === 'anyone';
+
   const invert = async (recordId: string, e: RecordJournalEntry) => {
     for (const change of e.associations ?? []) {
       // Every inverse is local to its own element: an add is dropped, and
-      // both a re-point and a removal are put back to `previous`.
-      if (change.op === 'add') await stack.dissociate(recordId, change.association);
-      else await stack.associate(recordId, change.previous);
+      // both a re-point and a removal are put back to `previous`. Which
+      // verb carries it is the element's own half of the partition.
+      const element = change.op === 'add' ? change.association : change.previous;
+      if (isAuthority(element)) {
+        if (change.op === 'add') await stack.revokeAccess(recordId, element);
+        else await stack.grantAccess(recordId, element);
+      } else if (change.op === 'add') {
+        await stack.dissociate(recordId, element);
+      } else {
+        await stack.associate(recordId, element);
+      }
     }
   };
 
@@ -350,7 +366,7 @@ describe('the journal and the feed report the same change', () => {
     await stack.patchContent(note.id, { text: 'edited' }, { updatedBy: OWNER });
     await stack.mutate(
       note.id,
-      { parentId: folder.id, permissions: [{ access: 'public' }] },
+      { parentId: folder.id, permissions: [{ kind: 'anyone', label: 'read' }] },
       { updatedBy: OWNER },
     );
     await stack.associate(note.id, { kind: 'tag', label: 'starred' }, { updatedBy: EDITOR });
@@ -477,8 +493,9 @@ describe('the journal is gated on the mutate surface, like version history', () 
       {
         entityId: OWNER,
         permissions: [
-          { access: 'entity', entityId: READER, read: true, write: false },
-          { access: 'entity', entityId: EDITOR, read: true, write: true },
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: EDITOR } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: EDITOR } },
         ],
       },
     );

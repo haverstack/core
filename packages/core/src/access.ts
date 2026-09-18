@@ -8,7 +8,16 @@
  */
 
 import { SYSTEM_TYPES } from './types.js';
-import type { Association, EntityId, Permission, RecordId, StackRecord } from './types.js';
+import type {
+  Association,
+  AuthorityAssociation,
+  DataAssociation,
+  EntityId,
+  PermissionGrantee,
+  RecordId,
+  StackRecord,
+} from './types.js';
+import { granteeEqual } from './record-changes.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
@@ -25,8 +34,9 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 
 /**
  * Check whether an entity has read or write access to a Record: absent
- * permissions = owner only; public = anyone reads; entity = direct match;
- * group = walk the _group Record's roster associations. See
+ * permissions = owner only; an `anyone` element = anyone reads; an
+ * `entity` grantee = direct match; a `group` grantee = walk the _group
+ * Record's roster associations. See
  * docs/spec/access-control.md § Record-level permissions.
  *
  * The entity here is the **subject** — record-level permissions are written
@@ -51,55 +61,71 @@ export async function checkAccess(
   if (!perms || perms.length === 0) return false;
 
   for (const p of perms) {
-    if (p.access === 'public' && mode === 'read') return true;
-
-    if (p.access === 'entity' && p.entityId === subjectEntityId) {
-      if (entryConveys(p, mode)) return true;
+    if (p.kind === 'anyone') {
+      if (mode === 'read') return true;
+      continue;
     }
-
-    if (p.access === 'group' && subjectEntityId) {
-      const role = await resolveGroupRole(p.groupId, subjectEntityId, resolveRecord);
-      const satisfiesRole = p.role === 'admin' ? role === 'admin' : role !== null;
-      if (satisfiesRole && entryConveys(p, mode)) return true;
-    }
+    if (p.label !== mode) continue;
+    // The write bit is inert without read alongside it: the mutate surface
+    // hands back the record it wrote and opens its whole history, so a
+    // write element standing alone would disclose exactly what withholding
+    // read asks to withhold. Refused at the write by validatePermissions()
+    // and again here, since a permission element can also arrive from an
+    // import or a foreign server.
+    // See docs/spec/access-control.md § Write implies read.
+    if (mode === 'write' && !holdsRead(perms, p.grantee)) continue;
+    if (await granteeCovers(p.grantee, subjectEntityId, resolveRecord)) return true;
   }
 
   return false;
 }
 
-/**
- * Whether an entry the requester already matches conveys `mode`. The write
- * bit is inert without read alongside it: the mutate surface hands back the
- * record it wrote and opens its whole history, so a write bit without read
- * would disclose exactly what withholding read asks to withhold. Refused at
- * the write by validatePermissions() and again here, since a `permissions`
- * array can also arrive from an import or a foreign server. See
- * docs/spec/access-control.md § Write implies read.
- */
-function entryConveys(p: { read: boolean; write: boolean }, mode: AccessMode): boolean {
-  return mode === 'read' ? p.read : p.write && p.read;
+/** Whether the set carries a `read` for this exact grantee. */
+function holdsRead(permissions: AuthorityAssociation[], grantee: PermissionGrantee): boolean {
+  return permissions.some(
+    (p) => p.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
+  );
 }
 
 /**
- * Rejects permission entries that convey write without read — the shape
- * entryConveys() refuses to honor, caught at the point of storage so an
- * owner writing one is told rather than left with a bit that does nothing.
+ * Whether a grantee reaches this subject. `role: 'member'` is the wider
+ * set — an admin satisfies it — and `role: 'admin'` the narrower.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+async function granteeCovers(
+  grantee: PermissionGrantee,
+  subjectEntityId: EntityId | null,
+  resolveRecord: RecordResolver,
+): Promise<boolean> {
+  if (!subjectEntityId) return false;
+  if (grantee.scope === 'entity') return grantee.entityId === subjectEntityId;
+  const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord);
+  return grantee.role === 'admin' ? role === 'admin' : role !== null;
+}
+
+/**
+ * Rejects a permission set where some grantee holds `write` with no `read`
+ * beside it — the shape checkAccess() refuses to honor. A cross-element
+ * invariant, so it is asked of the set the write would *produce*, the same
+ * way the `_group` at-least-one-admin check reads its post-state: an
+ * element-wise check could not see the `read` that makes a `write` mean
+ * something, nor a removal that takes it away.
  * See docs/spec/access-control.md § Write implies read.
  */
 export function validatePermissions(
-  permissions: Permission[] | undefined,
+  permissions: AuthorityAssociation[] | undefined,
   path = 'permissions',
 ): ValidationError[] {
+  const list = permissions ?? [];
   const errors: ValidationError[] = [];
-  (permissions ?? []).forEach((p, i) => {
-    if (p.access === 'public') return;
-    if (p.write && !p.read) {
-      errors.push({
-        path: `${path}[${i}]`,
-        message:
-          'write requires read: a write-holder reaches the record and its history through the mutate surface, so `write: true, read: false` withholds nothing',
-      });
-    }
+  list.forEach((p, i) => {
+    if (p.kind !== 'permission' || p.label !== 'write') return;
+    if (holdsRead(list, p.grantee)) return;
+    errors.push({
+      path: `${path}[${i}]`,
+      message:
+        'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
+    });
   });
   return errors;
 }
@@ -134,7 +160,7 @@ async function resolveGroupRole(
  * app's own `member` relationships become a roster.
  */
 export function groupRoleFromAssociations(
-  associations: Association[] | undefined,
+  associations: DataAssociation[] | undefined,
   entityId: EntityId,
 ): GroupRole | null {
   let role: GroupRole | null = null;
@@ -163,7 +189,7 @@ export function groupRoleFromAssociations(
  * the Record is in the `_group` family first. See docs/spec/identity.md
  * § Group.
  */
-export function hasGroupAdmin(associations: Association[] | undefined): boolean {
+export function hasGroupAdmin(associations: DataAssociation[] | undefined): boolean {
   return (associations ?? []).some(isGroupAdminAssociation);
 }
 

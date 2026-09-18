@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { RecordChange, StackRecord } from '../src/types.js';
+import type { AuthorityAssociation, RecordChange, StackRecord } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
@@ -48,7 +48,7 @@ describe('a record the subscriber cannot read produces no event', () => {
     const note = await stack.create(
       NOTE,
       { text: 'public' },
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
     await settle();
 
@@ -64,7 +64,11 @@ describe('a record the subscriber cannot read produces no event', () => {
     await stack.create(
       NOTE,
       { text: 'shared' },
-      { permissions: [{ access: 'entity', entityId: READER, read: true, write: false }] },
+      {
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+        ],
+      },
     );
     await settle();
 
@@ -78,7 +82,9 @@ describe('a record the subscriber cannot read produces no event', () => {
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
     await stack.mutate(note.id, {
-      permissions: [{ access: 'entity', entityId: READER, read: true, write: false }],
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+      ],
     });
     await settle();
 
@@ -89,7 +95,11 @@ describe('a record the subscriber cannot read produces no event', () => {
     const note = await stack.create(
       NOTE,
       { text: 'shared' },
-      { permissions: [{ access: 'entity', entityId: READER, read: true, write: false }] },
+      {
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+        ],
+      },
     );
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
@@ -105,7 +115,11 @@ describe('a record the subscriber cannot read produces no event', () => {
     const visible = await stack.create(
       NOTE,
       { text: 'shared' },
-      { permissions: [{ access: 'entity', entityId: READER, read: true, write: false }] },
+      {
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+        ],
+      },
     );
     const hidden = await stack.create(NOTE, { text: 'private' });
     const reader = collector();
@@ -268,7 +282,15 @@ describe('a revocation takes effect on the next event, not the next subscription
     const note = await stack.create(
       NOTE,
       { text: 'team note' },
-      { permissions: [{ access: 'group', groupId: group.id, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
+      },
     );
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
@@ -365,7 +387,11 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
 
 describe('scoped delivery keeps the guarantees the emitter makes', () => {
   test('per-record order survives the asynchronous permission check', async () => {
-    const note = await stack.create(NOTE, { text: 'v1' }, { permissions: [{ access: 'public' }] });
+    const note = await stack.create(
+      NOTE,
+      { text: 'v1' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
     const anon = collector();
     await stack.asEntity(null).subscribe(anon.handler, { filter: { typeId: NOTE } });
 
@@ -413,7 +439,11 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
   });
 
   test('unsubscribing stops delivery even mid-flight', async () => {
-    const note = await stack.create(NOTE, { text: 'v1' }, { permissions: [{ access: 'public' }] });
+    const note = await stack.create(
+      NOTE,
+      { text: 'v1' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
     const anon = collector();
     const unsubscribe = await stack
       .asEntity(null)
@@ -432,7 +462,7 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
 // -------------------------------------------------------
 
 describe('the feed carries no more of a soft-deleted record than get() does', () => {
-  const publicRead = [{ access: 'public' as const }];
+  const publicRead: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
 
   test('a soft-delete frame carries a tombstone, not the body', async () => {
     const note = await stack.create(NOTE, { text: 'secret' }, { permissions: publicRead });
