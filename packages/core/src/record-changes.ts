@@ -202,21 +202,47 @@ export function changeSetOps(
 }
 
 /**
- * Whether a change set's ops advance `version`/`updatedAt` at all.
- * `associate`/`dissociate` don't — a change set touching only
- * `associations` is a no-bump write, same as calling associate()/
- * dissociate() directly. Every other op does. See
- * docs/spec/versioning.md § Version history.
+ * The ops whose prior state the journal already carries in full, so a
+ * snapshot would preserve nothing a restore could not otherwise reach:
+ * an association delta, a `previousParentId`, and a listing transition
+ * whose inverse is the op's own opposite. A change set naming only these
+ * is a no-bump write, same as calling associate()/dissociate() directly.
+ * See docs/spec/versioning.md § Version history.
+ */
+const NO_BUMP_OPS: ReadonlySet<ChangeOp> = new Set<ChangeOp>([
+  'associate',
+  'dissociate',
+  'reparent',
+  'unlist',
+  'list',
+]);
+
+/**
+ * Whether a change set's ops advance `version`/`updatedAt` at all. After
+ * the no-bump set above, this is `patch` and the whole-record verbs.
+ * See docs/spec/versioning.md § Version history.
  */
 export function bumpsVersion(ops: ChangeOp[]): boolean {
-  return ops.some((op) => op !== 'associate' && op !== 'dissociate');
+  return ops.some((op) => !NO_BUMP_OPS.has(op));
 }
 
 /**
- * Whether `ifVersion` applies to a change set. A set whose only key is
- * `associations` carries no precondition — it composes regardless of write
- * order, the same reason associate()/dissociate() take none. Any other
- * aspect named restores the guard over the whole call.
+ * The keys that guard nothing, because none of them moves `version` — a
+ * precondition on it would fence a write that the number it names cannot
+ * describe. They compose regardless of write order, the same reason
+ * associate()/dissociate() take no precondition at all.
+ * See docs/spec/versioning.md § Optimistic concurrency.
+ */
+const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = new Set([
+  'associations',
+  'parentId',
+  'unlisted',
+]);
+
+/**
+ * Whether `ifVersion` applies to a change set. A set naming only keys from
+ * the no-precondition list above carries none; any other aspect named
+ * restores the guard over the whole call.
  *
  * Read off the keys the caller wrote rather than the ops the set turns out
  * to move, so a stale caller is told its version is stale whatever its
@@ -224,7 +250,9 @@ export function bumpsVersion(ops: ChangeOp[]): boolean {
  * holds. See docs/spec/versioning.md § Optimistic concurrency.
  */
 export function takesIfVersion(changes: RecordChanges): boolean {
-  return RECORD_CHANGE_KEYS.some((key) => key !== 'associations' && changes[key] !== undefined);
+  return RECORD_CHANGE_KEYS.some(
+    (key) => !NO_PRECONDITION_KEYS.has(key) && changes[key] !== undefined,
+  );
 }
 
 /**

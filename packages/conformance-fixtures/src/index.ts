@@ -1085,8 +1085,11 @@ export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, W
     name: 'set-unlisted-true',
     description:
       "A change set's `unlisted` key withholds a record from enumeration without changing who may " +
-      'read it: the response carries unlistedAt and the bumped version, but permissions (if any) ' +
-      "are untouched. Orthogonal to the change set's `permissions` key — see docs/spec/unlisted.md.",
+      'read it: the response carries unlistedAt, and permissions (if any) are untouched. ' +
+      'It bumps no version and does not move updatedAt — the journal carries the transition ' +
+      'in full, so no snapshot is owed. unlistedAt is the write moment all the same, which is ' +
+      "why it runs ahead of updatedAt here. Orthogonal to the change set's `permissions` key — " +
+      'see docs/spec/unlisted.md and docs/spec/versioning.md § Version history.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { unlisted: true },
@@ -1095,9 +1098,9 @@ export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, W
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
+      version: 1,
       unlistedAt: '2024-01-02T00:00:00.000Z',
     },
   },
@@ -1106,7 +1109,8 @@ export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, W
     description:
       'A change set carrying `"unlisted": false` reverses it — the record comes back ' +
       'with unlistedAt absent, and is enumerable again by an unfiltered query() and the change ' +
-      'feed. Idempotent, like undelete: assumes prior state from set-unlisted-true.',
+      'feed. Idempotent, like undelete, and no-bump in the same direction it was set: assumes ' +
+      'prior state from set-unlisted-true.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { unlisted: false },
@@ -1115,9 +1119,9 @@ export const unlistedChangeFixtures: ConformanceFixture<{ unlisted: boolean }, W
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 3,
+      version: 1,
     },
   },
 ];
@@ -1130,11 +1134,13 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
   {
     name: 'set-parent-moves-a-record-into-a-container',
     description:
-      "A change set's `parentId` key moves a record between containers. It bumps version like any " +
-      'other mutation and touches nothing else — content, permissions and associations come ' +
-      'back as they were. Containment decides which listings enumerate the record, never who ' +
-      'may read it, so the response is not a permission change. See ' +
-      'docs/spec/data-model.md § Reparenting.',
+      "A change set's `parentId` key moves a record between containers, and touches nothing " +
+      'else — content, permissions and associations come back as they were. It bumps no ' +
+      'version and does not move updatedAt: the journal entry carries previousParentId, so a ' +
+      'move is already reversible without a snapshot. Containment decides which listings ' +
+      'enumerate the record, never who may read it, so the response is not a permission ' +
+      'change. See docs/spec/data-model.md § Reparenting and docs/spec/versioning.md ' +
+      '§ Version history.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { parentId: '1hk153x0000f' },
@@ -1143,9 +1149,9 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 2,
+      version: 1,
       parentId: '1hk153x0000f',
     },
   },
@@ -1163,9 +1169,9 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
       id: '1hk153x00001',
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Hello', body: 'World' },
-      version: 3,
+      version: 1,
     },
   },
 ];
@@ -1240,12 +1246,15 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
     },
   },
   {
-    name: 'get-version-carries-the-container-the-snapshot-was-taken-in',
+    name: 'get-version-carries-no-containment-or-listing-state',
     description:
-      'A snapshot records where the record sat, so a restore can put it back. It spells ' +
-      'parentId exactly as a record does — absent is the root, and null never appears on a ' +
-      'response — so version 1 above, taken at the root, carries no parentId key while this ' +
-      'one names the container. Assumes the record was in 1hk153x0000f at version 2.',
+      'A snapshot carries what only a snapshot preserves: content, the typeId it is read ' +
+      'under, and the permissions kept for audit. It names no parentId and no unlistedAt, ' +
+      'whatever container the record sat in or whether it was listed at the time — those ' +
+      'aspects bump no version, so no version is ever taken of them. A server that emits ' +
+      'either is writing a key every client drops. Assumes the record was in 1hk153x0000f ' +
+      'and unlisted when version 2 was taken. ' +
+      'See docs/spec/versioning.md § Version history.',
     method: 'GET',
     path: '/records/1hk153x00001/versions/2',
     responseStatus: 200,
@@ -1254,7 +1263,6 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
       typeId: 'com.example/note@1',
       content: { title: 'title before restore' },
       updatedAt: '2024-01-02T00:00:00.000Z',
-      parentId: '1hk153x0000f',
     },
   },
 ];
@@ -1276,9 +1284,8 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
       'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
       'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
       "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
-      'alongside the pre-existing version 1 snapshot being restored from. The record sat in ' +
-      '1hk153x0000f at that point, so its auto-snapshot carries that parentId; version 1 was ' +
-      'taken at the root and carries none.',
+      'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
+      'a container, whichever one the record sat in when it was taken.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
@@ -1288,7 +1295,6 @@ export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireV
         typeId: 'com.example/note@1',
         content: { title: 'title before restore' },
         updatedAt: '2024-01-04T00:00:00.000Z',
-        parentId: '1hk153x0000f',
       },
       {
         version: 1,
@@ -1373,10 +1379,9 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     name: 'restore-version',
     description:
       "POST /records/:id/restore/:version creates a new version from an old snapshot's " +
-      'content and parentId — never its permissions, and never associations, which no ' +
-      'snapshot captures and which a restore leaves exactly where they stand. No request ' +
-      'body: the server holds the snapshot already. Version 1 was taken at the root, so the ' +
-      'restored record comes back with parentId absent.',
+      'content and typeId — never its permissions, and never the containment, listing or ' +
+      'associations no snapshot captures, all of which a restore leaves exactly where they ' +
+      'stand. No request body: the server holds the snapshot already.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/1',
     responseStatus: 200,
@@ -1390,13 +1395,13 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     },
   },
   {
-    name: 'restore-version-puts-the-record-back-in-its-old-container',
+    name: 'restore-version-leaves-the-record-where-it-sits',
     description:
-      'A restore undoes a move like any other mutation: the snapshot at version 2 was taken ' +
-      'in 1hk153x0000f, so restoring it returns the record carrying that parentId, whatever ' +
-      'container it sits in now. A restore that reaches a container the requester cannot ' +
-      "read answers 403, the same gate a change set's `parentId` applies to a destination " +
-      'named directly. See docs/spec/versioning.md § Restore semantics.',
+      'A restore settles content and nothing else: the record comes back in whatever ' +
+      'container it is in now, whichever one the snapshot was taken in. Undoing a move is a ' +
+      "change set's `parentId` — the journal entry for the move names where it came from. " +
+      'Assumes the record is in 1hk153x0000f and the snapshot at version 2 was taken at the ' +
+      'root. See docs/spec/versioning.md § Restore semantics.',
     method: 'POST',
     path: '/records/1hk153x00001/restore/2',
     responseStatus: 200,
@@ -1570,9 +1575,11 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
     description:
       'previousParentId is the one field on any response where null is a value rather than an ' +
       'input spelling. Absent means the entry is not a reparent; present and null means the ' +
-      'record moved out of the root. Collapsing the two — as a record body and a snapshot ' +
-      'both do, where absent is the root — would lose which one happened. parentId, which ' +
-      'says where the record landed, follows the ordinary rule and is absent for the root. ' +
+      'record moved out of the root. Collapsing the two — as a record body does, where ' +
+      'absent is the root — would lose which one happened, and this entry is the only place ' +
+      "a move's origin survives at all. parentId, which says where the record landed, " +
+      'follows the ordinary rule and is absent for the root. `version` stands still across a ' +
+      'move, as it does across an association change. ' +
       'See docs/spec/wire-format.md § Journal.',
     method: 'GET',
     path: '/records/1hk153x00001/journal?sinceSeq=3',
@@ -1584,7 +1591,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           at: '2024-01-04T00:00:00.000Z',
           kind: 'changed',
           ops: ['reparent'],
-          version: 2,
+          version: 1,
           typeId: 'com.example/note@1',
           parentId: '1hk153x0000f',
           previousParentId: null,
@@ -3158,8 +3165,10 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'includeUnlisted already knows this record from before, and the record’s new state ' +
       '(unlistedAt now set) would otherwise be excluded by the very filter this event announces, ' +
       'so the transition is delivered on the same terms as an ordinary soft delete: the point is ' +
-      'telling a subscriber to drop its copy, not that the record is gone. See ' +
-      'docs/spec/events.md § The unlisted transition.',
+      'telling a subscriber to drop its copy, not that the record is gone. Unlike a soft ' +
+      'delete it bumps no version, so the frame carries the version and updatedAt the record ' +
+      'already had. See docs/spec/events.md § The unlisted transition and ' +
+      'docs/spec/versioning.md § Version history.',
     path: '/changes',
     responseStatus: 200,
     openingFrames: [READY],
@@ -3176,9 +3185,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: '1hk153x00001',
             typeId: 'com.example/note@1',
             createdAt: '2024-01-01T00:00:00.000Z',
-            updatedAt: '2024-01-03T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
-            version: 3,
+            version: 2,
             entityId: FEED_OWNER,
             unlistedAt: '2024-01-03T00:00:00.000Z',
           },
@@ -3192,8 +3201,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               ops: ['unlist'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
-              version: 3,
-              updatedAt: '2024-01-03T00:00:00.000Z',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
               actor: { entityId: FEED_OWNER },
             },
           },
@@ -3210,7 +3219,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'its own filter to tell a departure from an arrival. The record’s post-change state ' +
       'alone would answer only for the destination, which is why this transition is matched ' +
       'against both containers. Kind is "changed", not "deleted": the record is still there ' +
-      'and still readable — only its container moved. See ' +
+      'and still readable — only its container moved. A move bumps no version, so the frame ' +
+      'carries the version and updatedAt the record already had. See ' +
       'docs/spec/events.md § The reparent transition.',
     path: '/changes?parentId=1hk153x0000f',
     responseStatus: 200,
@@ -3228,9 +3238,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: '1hk153x00001',
             typeId: 'com.example/note@1',
             createdAt: '2024-01-01T00:00:00.000Z',
-            updatedAt: '2024-01-03T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
-            version: 3,
+            version: 2,
             entityId: FEED_OWNER,
             parentId: '1hk153x0000g',
           },
@@ -3244,8 +3254,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               ops: ['reparent'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
-              version: 3,
-              updatedAt: '2024-01-03T00:00:00.000Z',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
               parentId: '1hk153x0000g',
               actor: { entityId: FEED_OWNER },
             },
@@ -3279,9 +3289,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: '1hk153x00001',
             typeId: 'com.example/note@1',
             createdAt: '2024-01-01T00:00:00.000Z',
-            updatedAt: '2024-01-04T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
-            version: 4,
+            version: 2,
             entityId: FEED_OWNER,
           },
         },
@@ -3294,8 +3304,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               ops: ['list'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
-              version: 4,
-              updatedAt: '2024-01-04T00:00:00.000Z',
+              version: 2,
+              updatedAt: '2024-01-02T00:00:00.000Z',
               actor: { entityId: FEED_OWNER },
             },
           },

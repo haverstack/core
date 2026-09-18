@@ -53,11 +53,9 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
   ) STRICT;
 
-  -- parent_id holds the container the record sat in, NULL for the root --
-  -- the same encoding records.parent_id uses, since a snapshot states
-  -- where the record was rather than an instruction to apply.
-  -- No associations column: associate()/dissociate() don't bump version,
-  -- so no version ever snapshots the association set. See
+  -- Content, the type it is read under, and the permissions kept for
+  -- audit. No parent_id, unlisted_at or associations column: none of those
+  -- aspects bumps version, so no version ever snapshots one. See
   -- docs/spec/versioning.md § Version history.
   CREATE TABLE IF NOT EXISTS versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
@@ -68,7 +66,6 @@ export const RECORD_SCHEMA_SQL = `
     entity_id   TEXT,
     updated_by  TEXT,
     updated_via TEXT,
-    parent_id   TEXT,
     permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),
     PRIMARY KEY (record_id, version)
   ) STRICT;

@@ -730,35 +730,26 @@ describe('filtering is exact', () => {
     expect(seen.at(-1)).toMatchObject({ kind: 'changed', ops: ['reparent'] });
   });
 
-  // Undoing a move is a move: a restore that puts a different container
-  // back is matched against both sides exactly as a reparent is.
-  test('a restore that moves the record reaches the container it left', async () => {
+  // `reparent` is the only op matched against two containers. A restore
+  // settles content alone, so the container the snapshot was taken in is
+  // not a side of anything — only the one the record is in now hears it.
+  test('a restore reaches only the container the record is in, whatever the snapshot said', async () => {
     const from = await stack.create(NOTE, { text: 'from' });
     const to = await stack.create(NOTE, { text: 'to' });
     const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
+    await stack.patchContent(note.id, { text: 'edited' });
     await stack.mutate(note.id, { parentId: to.id });
-    const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { parentId: to.id } });
+    const origin = collector();
+    const destination = collector();
+    await stack.subscribe(origin.handler, { filter: { parentId: from.id } });
+    await stack.subscribe(destination.handler, { filter: { parentId: to.id } });
 
     await stack.restoreVersion(note.id, 1);
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.ops).toEqual(['restore']);
-    expect(seen[0]!.parentId).toBe(from.id);
-  });
-
-  test('a restore that moves the record reaches the container it arrived in', async () => {
-    const from = await stack.create(NOTE, { text: 'from' });
-    const to = await stack.create(NOTE, { text: 'to' });
-    const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
-    await stack.mutate(note.id, { parentId: to.id });
-    const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { parentId: from.id } });
-
-    await stack.restoreVersion(note.id, 1);
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.parentId).toBe(from.id);
+    expect(origin.seen).toHaveLength(0);
+    expect(destination.seen).toHaveLength(1);
+    expect(destination.seen[0]!.ops).toEqual(['restore']);
+    expect(destination.seen[0]!.parentId).toBe(to.id);
   });
 
   test('a restore that leaves the record where it is reaches only its container', async () => {

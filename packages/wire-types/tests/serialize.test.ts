@@ -80,22 +80,12 @@ describe('serializeVersion', () => {
     expect(serializeVersion(version()).updatedAt).toBe('2024-01-01T00:00:00.000Z');
   });
 
-  // A snapshot spells parentId the way a record does: absent is the root.
+  // A snapshot describes content and the type it is read under; the
+  // aspects that bump no version are the journal's, and never travel here.
   // See docs/spec/versioning.md § Version history.
-  it('carries a container parentId', () => {
-    expect(serializeVersion(version({ parentId: '1hk153x0000f' })).parentId).toBe('1hk153x0000f');
-  });
-
-  it('omits parentId for a snapshot taken at the root', () => {
-    expect('parentId' in serializeVersion(version())).toBe(false);
-  });
-
-  // Serialization carries what it is given — Stack is where a caller-named
-  // parentId is validated — so '' has to survive the trip rather than be
-  // read as a spelling of absence.
-  it('keeps an empty-string parentId', () => {
-    const w = serializeVersion(version({ parentId: '' }));
-    expect('parentId' in w).toBe(true);
-    expect(w.parentId).toBe('');
+  it('carries no containment or listing state', () => {
+    const w = serializeVersion(version());
+    expect('parentId' in w).toBe(false);
+    expect('unlistedAt' in w).toBe(false);
   });
 });

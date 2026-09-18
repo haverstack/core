@@ -1825,47 +1825,48 @@ describe('versions', () => {
     expect(retrieved?.entityId).toBe('entity-123');
   });
 
-  // Absent is the root, exactly as on a record, so the column is a plain
-  // nullable TEXT rather than JSON. See sqlite-shared/src/schema.ts.
-  test('a snapshot round-trips the root, a container, and an empty-string id', async () => {
+  // The `versions` table has no parent_id column: containment bumps no
+  // version, so no snapshot is ever taken of it. See sqlite-shared/src/schema.ts
+  // and docs/spec/versioning.md § Version history.
+  test('a snapshot carries no containment, however one is handed in', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
     const base = { typeId: record.typeId, content: {}, updatedAt: new Date('2024-01-01') };
     await adapter.saveVersion(record.id, { ...base, version: 1 });
-    await adapter.saveVersion(record.id, { ...base, version: 2, parentId: 'box-1' });
-    await adapter.saveVersion(record.id, { ...base, version: 3, parentId: '' });
+    await adapter.saveVersion(record.id, {
+      ...base,
+      version: 2,
+      ...({ parentId: 'box-1' } as Record<string, unknown>),
+    });
 
-    expect((await adapter.getVersion(record.id, 1))?.parentId).toBeUndefined();
-    expect((await adapter.getVersion(record.id, 2))?.parentId).toBe('box-1');
-    expect((await adapter.getVersion(record.id, 3))?.parentId).toBe('');
+    expect('parentId' in (await adapter.getVersion(record.id, 1))!).toBe(false);
+    expect('parentId' in (await adapter.getVersion(record.id, 2))!).toBe(false);
   });
 
-  test('restoreVersion writes the snapshot parentId back', async () => {
+  test('restoreVersion leaves the record in the container it sits in', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     await adapter.createRecord(box);
-    const record = makeRecord({ version: 2 });
+    const record = makeRecord({ version: 2, parentId: box.id });
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
       typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date('2024-01-01'),
-      parentId: box.id,
     });
     const restored = await adapter.restoreVersion(record.id, 1);
+    expect(restored.content).toEqual({ text: 'original' });
     expect(restored.parentId).toBe(box.id);
     expect((await adapter.queryRecords({ filter: { parentId: box.id } })).records).toHaveLength(1);
   });
 
-  // A snapshot always settles containment, so a snapshot with no parentId
-  // restores the record to the root rather than leaving it where it sits.
-  test('restoreVersion clears parentId for a snapshot taken at the root', async () => {
+  test('restoreVersion leaves a root record at the root', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     await adapter.createRecord(box);
-    const record = makeRecord({ version: 2, parentId: box.id });
+    const record = makeRecord({ version: 2 });
     await adapter.createRecord(record);
     await adapter.saveVersion(record.id, {
       version: 1,
@@ -1935,21 +1936,17 @@ describe('versions', () => {
 
     // The overwrite has to replace every column the insert writes. A column
     // left behind keeps the orphan's value and surfaces later as a restore
-    // putting the record somewhere the healing snapshot never said.
+    // putting back something the healing snapshot never said.
     test('healing an orphan replaces every snapshot field, not just content', async () => {
       const adapter = await initAdapter();
-      const box = makeRecord();
-      await adapter.createRecord(box);
       const record = makeRecord({ version: 1, content: { text: 'original' } });
       await adapter.createRecord(record);
-      // The orphan claims a container the record was never in, plus an
-      // actor trail of its own.
+      // The orphan carries an actor trail of its own alongside its content.
       await adapter.saveVersion(record.id, {
         version: 1,
         typeId: record.typeId,
         content: { text: 'stale' },
         updatedAt: record.updatedAt,
-        parentId: box.id,
         updatedBy: 'entity-stale',
         updatedVia: 'app-stale',
       });
@@ -1969,13 +1966,11 @@ describe('versions', () => {
 
       const healed = await adapter.getVersion(record.id, 1);
       expect(healed?.content).toEqual({ text: 'original' });
-      expect(healed?.parentId).toBeUndefined();
       expect(healed?.updatedBy).toBeUndefined();
       expect(healed?.updatedVia).toBeUndefined();
 
-      // And the restore that reads it leaves the record at the root.
       const restored = await adapter.restoreVersion(record.id, 1);
-      expect(restored.parentId).toBeUndefined();
+      expect(restored.content).toEqual({ text: 'original' });
     });
 
     test('a snapshot for a version the record has already moved past is a genuine conflict, rejected with no partial apply', async () => {

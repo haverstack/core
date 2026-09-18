@@ -1,12 +1,12 @@
 # Change journal
 
-**The second durable tier a mutation writes, beside [version history](./versioning.md#version-history): what each change moved, who moved it, and the association deltas nothing else retains.** A snapshot answers _what could be put back_; a journal entry answers _what happened_. Content needs only the first, because its prior state is in the snapshot. Associations need the second, because theirs is nowhere.
+**The second durable tier a mutation writes, beside [version history](./versioning.md#version-history): what each change moved, who moved it, and the deltas nothing else retains.** A snapshot answers _what could be put back_; a journal entry answers _what happened_. Content needs only the first, because its prior state is in the snapshot. Associations, containment and listing need the second, because theirs is nowhere else.
 
 This document is the model and the local API. Its wire encoding — `GET /records/:id/journal`, its paging and its refusals — is [Wire format § Journal](./wire-format.md#journal).
 
 ## Why the tier exists
 
-[Associations are invertible](./versioning.md#version-history) — the inverse of an `associate()` is a `dissociate()` of the same shape — but invertibility is not recoverability: an inverse exists, and deriving _which_ inverse takes the prior state. A subscriber watching the [change feed](./events.md) at the moment of the write sees the delta go past; the journal is where anyone who was not listening reads it afterwards. A feed is a notification, not a store — widening it into one is [the wrong answer](./events.md#what-a-feed-is-not) to this question, because a replayable feed would have to re-decide readability long after the record it describes has moved on, and would keep naming records a hard delete destroyed.
+[These aspects are invertible](./versioning.md#version-history) — the inverse of an `associate()` is a `dissociate()` of the same shape, of an `unlist` a `list`, of a move a move back — but invertibility is not recoverability: an inverse exists, and deriving _which_ inverse takes the prior state. That is what an entry carries, and why it is the whole recovery story for all three: a move's `previousParentId` lives nowhere else. A subscriber watching the [change feed](./events.md) at the moment of the write sees the delta go past; the journal is where anyone who was not listening reads it afterwards. A feed is a notification, not a store — widening it into one is [the wrong answer](./events.md#what-a-feed-is-not) to this question, because a replayable feed would have to re-decide readability long after the record it describes has moved on, and would keep naming records a hard delete destroyed.
 
 ## The entry
 
@@ -16,7 +16,7 @@ type RecordJournalEntry = {
   at: Date; // when the entry was appended
   kind: ChangeKind;
   ops: ChangeOp[];
-  version: number; // the version this change produced; unchanged on associate/dissociate
+  version: number; // the version this change produced; unchanged on associate/dissociate, reparent, unlist and list
   typeId: TypeId;
   parentId?: RecordId; // where the record sat after the change; absent = the root
   previousParentId?: RecordId | null; // present on a move; `null` = off the root
@@ -53,6 +53,8 @@ for (const change of entry.associations ?? []) {
 
 A `repoint` and a `remove` invert identically — `associate(previous)` puts an association back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for.
 
+Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
+
 An entry names _that_ a permission set moved, never what it moved to — the sharing graph stays on the record and on its snapshots. That is why there is no `permissions` stripping to do here, unlike on a snapshot.
 
 ## The entry set is the event set
@@ -65,7 +67,7 @@ It is one rule rather than two lists because the two halves are built from one o
 
 ## Ordering
 
-**`seq` is dense from 1 per record, and is the entry's only ordering.** `at` is wall clock, and `version` stands still across an association change, so neither orders the log alone.
+**`seq` is dense from 1 per record, and is the entry's only ordering.** `at` is wall clock, and `version` stands still across every [no-bump write](./versioning.md#version-history), so neither orders the log alone. `seq` is therefore the count of a record's changes, where `version` counts only its recoverable states.
 
 It is allocated by the adapter inside the appending write, from the log's own maximum — never computed by `Stack` from a value it read earlier. That is why the journal needs none of the collision healing [a snapshot needs](./versioning.md#snapshot-atomicity): no writer ever holds a `seq` it expects to still be free.
 

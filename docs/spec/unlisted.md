@@ -42,7 +42,7 @@ await stack.mutate(recordId, { unlisted: true }); // withhold an existing Record
 await stack.mutate(recordId, { unlisted: false }); // relist it
 ```
 
-The `unlisted` key is gated exactly like [`permissions`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule there too. Naming it beside other keys in one [change set](./data-model.md#mutations) relaxes neither gate. No-op if the Record is already in the requested state, which answers with the Record unchanged — see [Versioning § Version history](./versioning.md#version-history).
+The `unlisted` key is gated exactly like [`permissions`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule there too. Naming it beside other keys in one [change set](./data-model.md#mutations) relaxes neither gate. No-op if the Record is already in the requested state, which answers with the Record unchanged. A transition that does move it is a [no-bump write](./versioning.md#version-history): `version` and `updatedAt` stand still, and the journal's `unlist`/`list` op is the whole record of what happened, since its inverse is the op's own opposite.
 
 ## `includeUnlisted` is owner-only
 

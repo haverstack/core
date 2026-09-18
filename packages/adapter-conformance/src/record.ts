@@ -146,6 +146,52 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(updated.version).toBe(record.version + 1);
       });
 
+      // A change set naming only aspects the journal keeps in full arrives
+      // with `bumpsVersion: false`. The columns still land; `version`,
+      // `updatedAt` and the actor stamps do not move.
+      // See docs/spec/versioning.md § Version history.
+      test('a no-bump mutateRecord writes parentId and unlisted without moving version', async () => {
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
+        const record = makeRecord({ content: { title: 'Hello' } });
+        await adapter.createRecord(record);
+
+        const moved = await adapter.mutateRecord(
+          record.id,
+          { parentId: parent.id },
+          { bumpsVersion: false },
+        );
+        expect(moved.parentId).toBe(parent.id);
+        expect(moved.version).toBe(record.version);
+        expect(moved.updatedAt).toEqual(record.updatedAt);
+
+        const unlisted = await adapter.mutateRecord(
+          record.id,
+          { unlisted: true },
+          { bumpsVersion: false },
+        );
+        expect(unlisted.unlistedAt).toBeInstanceOf(Date);
+        expect(unlisted.version).toBe(record.version);
+        expect(unlisted.parentId).toBe(parent.id);
+
+        const listed = await adapter.mutateRecord(
+          record.id,
+          { unlisted: false },
+          { bumpsVersion: false },
+        );
+        expect(listed.unlistedAt).toBeUndefined();
+        expect(listed.version).toBe(record.version);
+      });
+
+      test('a no-bump mutateRecord takes no snapshot', async () => {
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        await adapter.mutateRecord(record.id, { parentId: parent.id }, { bumpsVersion: false });
+        expect(await adapter.getVersions(record.id)).toEqual([]);
+      });
+
       test('soft deleteRecord sets deletedAt; undeleteRecord clears it', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
@@ -244,7 +290,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(version?.content).toEqual(record.content);
       });
 
-      test('restoreVersion restores content and parentId, bumps version, and never touches associations', async () => {
+      test('restoreVersion restores content, bumps version, and leaves containment and associations where they stand', async () => {
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
         const record = makeRecord({ content: { title: 'v1' } });
         await adapter.createRecord(record);
         await adapter.saveVersion(record.id, {
@@ -254,11 +302,13 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           updatedAt: record.updatedAt,
         });
         await adapter.mutateRecord(record.id, { contentPatch: { title: 'v2' } });
+        await adapter.mutateRecord(record.id, { parentId: parent.id }, { bumpsVersion: false });
         await adapter.associate(record.id, { kind: 'tag', label: 'keep-me' });
 
         const restored = await adapter.restoreVersion(record.id, record.version);
         expect(restored.content).toEqual({ title: 'v1' });
         expect(restored.version).toBe(record.version + 2); // patch, then restore
+        expect(restored.parentId).toBe(parent.id);
         expect(restored.associations).toContainEqual({ kind: 'tag', label: 'keep-me' });
       });
 
@@ -450,7 +500,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
 
       test('previousParentId tells "did not move" apart from "moved off the root"', async () => {
         // The one field on any entry where null is a value rather than an
-        // input spelling. Collapsing both to absent loses which happened.
+        // input spelling. Collapsing both to absent loses which happened —
+        // and since a move takes no snapshot, this entry is the only place
+        // its origin survives at all.
         const parent = makeRecord();
         await adapter.createRecord(parent);
         const record = makeRecord();
@@ -459,7 +511,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           record.id,
           { parentId: parent.id },
           {
-            bumpsVersion: true,
+            bumpsVersion: false,
             journal: { ops: ['reparent'], kind: 'changed', previousParentId: null },
           },
         );
