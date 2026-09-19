@@ -16,6 +16,7 @@
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import type {
+  JournalOptions,
   JournalQuery,
   RecordJournalEntry,
   StackAdapter,
@@ -204,8 +205,8 @@ export class LocalAdapter implements StackAdapter {
     return this.record.timezone;
   }
 
-  async createRecord(record: StackRecord): Promise<StackRecord> {
-    return this.record.createRecord(record);
+  async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
+    return this.record.createRecord(record, opts);
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
@@ -249,12 +250,20 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
-  async associate(id: RecordId, association: Association): Promise<StackRecord> {
-    return this.record.associate(id, association);
+  async associate(
+    id: RecordId,
+    association: Association,
+    opts?: JournalOptions,
+  ): Promise<StackRecord> {
+    return this.record.associate(id, association, opts);
   }
 
-  async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
-    return this.record.dissociate(id, association);
+  async dissociate(
+    id: RecordId,
+    association: Association,
+    opts?: JournalOptions,
+  ): Promise<StackRecord> {
+    return this.record.dissociate(id, association, opts);
   }
 
   async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {

@@ -263,3 +263,87 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     expect(await adapter.getRecord('meta1')).toBeNull();
   });
 });
+
+// -------------------------------------------------------
+// Journal delegation
+// -------------------------------------------------------
+
+describe('journal', () => {
+  test('records the entry a create carries', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ id: 'rec1' }), {
+      journal: { kind: 'created', ops: ['create'], actor: { entityId: 'entity-123' } },
+    });
+
+    const entries = await adapter.getJournal(record.id);
+    expect(entries.map((e) => ({ seq: e.seq, ops: e.ops }))).toEqual([{ seq: 1, ops: ['create'] }]);
+    expect(entries[0]!.actor).toEqual({ entityId: 'entity-123' });
+  });
+
+  test('records the entry an associate carries, with what it displaced', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'rec1' }));
+    const association = { kind: 'attachment', label: 'embed', fileId: 'file-1' } as const;
+
+    await adapter.associate(
+      'rec1',
+      { ...association, attachmentRecordId: 'meta1' },
+      {
+        journal: {
+          kind: 'changed',
+          ops: ['associate'],
+          associations: [
+            { op: 'add', association: { ...association, attachmentRecordId: 'meta1' } },
+          ],
+        },
+      },
+    );
+    await adapter.associate(
+      'rec1',
+      { ...association, attachmentRecordId: 'meta2' },
+      {
+        journal: {
+          kind: 'changed',
+          ops: ['associate'],
+          associations: [
+            {
+              op: 'repoint',
+              association: { ...association, attachmentRecordId: 'meta2' },
+              previous: { ...association, attachmentRecordId: 'meta1' },
+            },
+          ],
+        },
+      },
+    );
+
+    const entries = await adapter.getJournal('rec1');
+    expect(entries.map((e) => e.seq)).toEqual([1, 2]);
+    // The re-point's `previous` is the only surviving record of the
+    // attachmentRecordId the second associate overwrote.
+    expect(entries[1]!.associations).toEqual([
+      {
+        op: 'repoint',
+        association: { ...association, attachmentRecordId: 'meta2' },
+        previous: { ...association, attachmentRecordId: 'meta1' },
+      },
+    ]);
+  });
+
+  test('records the entry a dissociate carries', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(makeRecord({ id: 'rec1' }));
+    const association = { kind: 'tag', label: 'draft' } as const;
+    await adapter.associate('rec1', association);
+    await adapter.dissociate('rec1', association, {
+      journal: {
+        kind: 'changed',
+        ops: ['dissociate'],
+        associations: [{ op: 'remove', previous: association }],
+      },
+    });
+
+    const entries = await adapter.getJournal('rec1');
+    expect(entries.map((e) => e.ops)).toEqual([['dissociate']]);
+    expect(entries[0]!.associations).toEqual([{ op: 'remove', previous: association }]);
+  });
+});
