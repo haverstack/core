@@ -48,8 +48,8 @@ type RecordChange = {
   ops: ChangeOp[]; // non-empty; one entry per aspect this change moved
   recordId: RecordId;
   typeId: TypeId; // as stored at the moment of the change
-  version: number; // the version this change produced; unchanged from before on associate/dissociate, which never bump
-  updatedAt: Date; // as persisted by this change; unchanged from before on associate/dissociate
+  version: number; // the version this change produced; unchanged on every no-bump write
+  updatedAt: Date; // as persisted by this change; unchanged on every no-bump write
   parentId?: RecordId;
   actor?: ChangeActor;
   associationsAdded?: DataAssociation[]; // present when `ops` includes `associate`

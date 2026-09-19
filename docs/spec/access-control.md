@@ -6,7 +6,7 @@ Whether a Record is _enumerable_ is a separate question from who may read it, an
 
 ## Record-level permissions
 
-All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement is the responsibility of the API adapter; the local storage adapters ignore the permissions field.
+All Records are **private by default** — readable only by the stack owner. The `permissions` field is absent or empty on private records; there is no explicit `private` permission value. Permissions represent _grants_ of access, not restrictions. Enforcement lives in `ScopedStack` (below), so every adapter inherits it; storage adapters read and write the field without consulting it, and it decides nothing on an unscoped `Stack`.
 
 **A permission is an association.** It has element identity, so granting and revoking are a plain add and remove, and the same delta the association tier already computes describes it exactly. That is what lets a permission change be journalled like any other edge rather than snapshotted as a whole list — see [Journal § The entry](./journal.md#the-entry).
 

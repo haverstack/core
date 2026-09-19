@@ -63,7 +63,7 @@ An unlisted Record that emits a change event to a default subscriber is not unli
 
 ## What this is not
 
-**Not a fourth `Permission` variant.** `Permission` is a union over mutually exclusive answers to "who may read this"; `unlistedAt` is orthogonal to that question, not another answer to it, and composes with any permission tier — public-and-unlisted (a bonus post) and owner-only-and-unlisted are both coherent, meaning different things.
+**Not a permission element.** The `permissions` set answers "who may read this", one element per grantee it reaches; `unlistedAt` is orthogonal to that question rather than another answer to it, and composes with any set — world-readable-and-unlisted (a bonus post) and owner-only-and-unlisted are both coherent, meaning different things. It is a native field for that reason, not a `kind` alongside `permission` and `anyone`.
 
 **Not per-audience.** There is no listing element parallel to a permission one — enumeration does not vary by who is asking, the way reach does. A record is unlisted for everyone or for no one; if a future need for audience-varying enumeration arises, that is new surface, not a reinterpretation of this field.
 

@@ -132,13 +132,20 @@ Content is a patch because uniformity costs more here than it buys. [`limits.con
 
 ## Associations
 
-Tags, attachments, and relationships are unified under a single **Association** model. All three associate a Record with a labeled payload — the label carries semantic meaning (e.g. `"avatar"`, `"parent"`, `"reply-to"`).
+Tags, attachments, and relationships are unified under a single **Association** model: each associates a Record with a labeled payload, and the label carries semantic meaning (e.g. `"avatar"`, `"parent"`, `"reply-to"`).
+
+Every edge a Record carries is one of these, authority included. The three arms below are the **data** half — what the `associations` field projects and `associate()`/`dissociate()` accept; the authority half is [`permissions`](./access-control.md#record-level-permissions). One shape, one delta and one durability tier across both, and [two call surfaces](./access-control.md#storage-unifies-the-api-does-not), because they carry different authority.
 
 ```ts
-type Association =
+type DataAssociation =
   | { kind: 'tag'; label: string }
   | { kind: 'attachment'; label: string; fileId: string; attachmentRecordId?: string }
   | { kind: 'relationship'; label: string; target: RelationshipTarget };
+
+// The authority half — see Access control § Record-level permissions.
+type AuthorityAssociation = PermissionAssociation | AnyoneAssociation;
+
+type Association = DataAssociation | AuthorityAssociation;
 
 type RelationshipTarget =
   | { scope: 'record'; recordId: string; stackUrl?: string }

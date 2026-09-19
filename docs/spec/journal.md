@@ -14,7 +14,7 @@ This document is the model and the local API. Its wire encoding — `GET /record
 type RecordJournalEntry = {
   seq: number; // dense from 1, per record — the entry's only ordering
   at: Date; // when the entry was appended
-  kind: ChangeKind;
+  kind: Exclude<ChangeKind, 'purged'>; // a purge destroys the log rather than appending to it
   ops: ChangeOp[];
   version: number; // the version this change produced; unchanged on associate/dissociate, reparent, unlist and list
   typeId: TypeId;
