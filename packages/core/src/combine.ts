@@ -1,4 +1,10 @@
-import type { StackAdapter, StackRecordAdapter, StackBlobAdapter } from './types.js';
+import type {
+  RecordChange,
+  StackAdapter,
+  StackRecordAdapter,
+  StackBlobAdapter,
+  SubscribeChangesOptions,
+} from './types.js';
 
 /**
  * Compose a StackRecordAdapter and a StackBlobAdapter into a single StackAdapter.
@@ -50,6 +56,15 @@ export function combineAdapters(parts: {
     ...(parts.record.deleteUnreferencedAttachmentRecords && {
       deleteUnreferencedAttachmentRecords: (fileId: string, metadataTypeIds: string[]) =>
         parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeIds),
+    }),
+
+    // Forwarded on the same terms, and it decides more than it looks:
+    // Stack.relaysChanges reads its presence, so dropping it here would
+    // leave a combined stack quietly emitting only its own writes while a
+    // remote record backend's feed went unread.
+    ...(parts.record.subscribeChanges && {
+      subscribeChanges: (opts: SubscribeChangesOptions, handler: (change: RecordChange) => void) =>
+        parts.record.subscribeChanges!(opts, handler),
     }),
 
     // StackAdapter.putAttachmentWithMetadata is deliberately never

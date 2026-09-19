@@ -20,7 +20,7 @@ type RecordFilter = {
 
 > Unlisted withholds a Record from enumeration and announcement. It never withholds the Record. A requester who may read it and holds its ID gets it. A requester without the ID has no supported way to discover it.
 
-**Nor does it withhold what a Record _confers_.** A `_grant` Record is read with unlisted Records included, so unlisting one is not a second spelling of `revoke()` — see [Access control § Listing and revoking](./access-control.md#listing-and-revoking).
+**Nor does it withhold what a Record _confers_.** Every read that asks what a Record conveys, rather than which Records exist, includes unlisted ones: a `_grant` Record is read that way, so unlisting one is not a second spelling of `revoke()` (see [Access control § Listing and revoking](./access-control.md#listing-and-revoking)), and so are both reads behind file access — the records referencing a `fileId` and the requester's own `_attachment@1` records (see [Attachments § `Stack` vs `ScopedStack` methods](./attachments.md#stack-vs-scopedstack-methods)). Unlisting a Record narrows where it turns up, never what holding it is worth.
 
 That sits inside the same threat model as [record IDs being guessable](./disclosure.md#why-the-distinction-is-earned) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
 

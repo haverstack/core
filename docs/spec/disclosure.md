@@ -22,7 +22,7 @@ Keying on readability rather than on authentication is what makes the rule hold.
 
 Two edges follow from stating the rule this way rather than in terms of grants:
 
-- **Record-level `permissions` count, like any other route to a read.** A requester holding `read: true` on a Record is told plainly that a write was refused, rather than that a Record it can fetch does not exist.
+- **Record-level `permissions` count, like any other route to a read.** A requester holding a `read` element on a Record is told plainly that a write was refused, rather than that a Record it can fetch does not exist.
 - **A refusal that never reads the Record discloses nothing either way, and stays as it is.** `commitMigration()`, `deleteAttachment()` and `collectAttachmentGarbage()` refuse every non-owner identically whether or not the named Record or file exists, so they are not oracles despite answering 403.
 
 ## What the rule does not close

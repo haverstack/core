@@ -2615,6 +2615,52 @@ describe('ScopedStack.getAttachment', () => {
     );
   });
 
+  // Both reads behind file access ask what a record conveys, not which
+  // records exist, so neither is narrowed by listing state.
+  // See docs/spec/unlisted.md.
+  test('an unlisted _attachment record still carries the uploader clause', async () => {
+    const fileId = fakeFileId('file-unlisted-meta');
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const meta = await stack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+    await stack.mutate(meta.id, { unlisted: true });
+
+    expect(await stack.asEntity(MEMBER).getAttachment(fileId)).toBeInstanceOf(Uint8Array);
+  });
+
+  // The same clause on the in-memory branch an adapter reaching no content
+  // takes — the two must agree about which of the uploader's records count.
+  test('an unlisted _attachment record carries it on a content-blind adapter too', async () => {
+    const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const incapableStack = await Stack.create(incapableAdapter);
+    const fileId = fakeFileId('file-unlisted-blind');
+    incapableAdapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    const meta = await incapableStack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'image/png', size: 1 },
+      { entityId: MEMBER },
+    );
+    await incapableStack.mutate(meta.id, { unlisted: true });
+
+    expect(await incapableStack.asEntity(MEMBER).getAttachment(fileId)).toBeInstanceOf(Uint8Array);
+  });
+
+  test('an unlisted referencing record still conveys the file it names', async () => {
+    const fileId = fakeFileId('file-unlisted-ref');
+    adapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
+    await stack.grant({ kind: 'entity', entityId: MEMBER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
+    const record = await stack.create(NOTE, { text: 'has attachment' });
+    await stack.associate(record.id, { kind: 'attachment', label: 'cover', fileId });
+    await stack.mutate(record.id, { unlisted: true });
+
+    expect(await stack.asEntity(MEMBER).getAttachment(fileId)).toBeInstanceOf(Uint8Array);
+  });
+
   // On adapters reaching no content the uploader check matches in
   // memory, cursor-walking so every one of the requester's uploads is
   // considered. IncapableMemoryAdapter forces that fallback path (a
@@ -3484,6 +3530,90 @@ describe('_grant — enumeration does not decide authority', () => {
       ]),
     ).toHaveLength(1);
     expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+  });
+});
+
+// -------------------------------------------------------
+// A _grant's own fields are read as data
+// -------------------------------------------------------
+//
+// grant() refuses these at the write; a Record arriving from an import, a
+// direct adapter write or a foreign server never passed it. Evaluation
+// reads `typeId` and `actions` for their shape for the same reason it
+// reads the grantee's `kind`.
+// See docs/spec/access-control.md § What a grant covers.
+
+describe('_grant — a malformed typeId or actions confers nothing', () => {
+  // Bypasses Stack.create()'s schema validation, which is what a
+  // third-party writer to the same storage also bypasses.
+  const storeGrant = (content: Record<string, unknown>) =>
+    adapter.createRecord(
+      makeRecord({ typeId: '_grant@1', content, permissions: undefined, associations: undefined }),
+    );
+
+  test('an actions string conveys no verb it spells', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await storeGrant({
+      typeId: NOTE,
+      actions: 'read-any',
+      grantee: { kind: 'entity', entityId: STRANGER },
+    });
+
+    expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
+  });
+
+  test('an actions string spelling a mutate verb satisfies no read companion', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await storeGrant({
+      typeId: NOTE,
+      actions: 'delete-any read-any',
+      grantee: { kind: 'entity', entityId: STRANGER },
+    });
+
+    await expect(stack.asEntity(STRANGER).delete(record.id)).rejects.toThrow(StackNotFoundError);
+  });
+
+  test('an unknown action is dropped from a list that otherwise stands', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await storeGrant({
+      typeId: NOTE,
+      actions: ['read-any', 'read-everything'],
+      grantee: { kind: 'entity', entityId: STRANGER },
+    });
+
+    // The recognized half still conveys; the invented verb names nothing.
+    // The refusal is a permission error rather than a not-found, because
+    // the read the same grant carries is what earns the specific answer.
+    expect((await stack.asEntity(STRANGER).get(record.id))?.id).toBe(record.id);
+    await expect(stack.asEntity(STRANGER).delete(record.id)).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a grant naming no typeId denies rather than failing the read', async () => {
+    const record = await stack.create(NOTE, { text: 'private' });
+    await storeGrant({ actions: ['read-any'], grantee: { kind: 'entity', entityId: STRANGER } });
+
+    // A query walks every grant record, so one that named no family would
+    // take every scoped read down with it rather than conferring nothing.
+    expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
+    expect((await stack.asEntity(STRANGER).query({})).records).toEqual([]);
+  });
+
+  test('revoke() reports no match rather than throwing, and listGrants still shows it', async () => {
+    await storeGrant({
+      typeId: NOTE,
+      actions: 'read-any',
+      grantee: { kind: 'entity', entityId: STRANGER },
+    });
+
+    // revoke() matches the stored list at grant()'s own granularity, and a
+    // string is not one. The Record stays findable, which is how an owner
+    // takes away something grant() never wrote.
+    expect(
+      await stack.revoke({ kind: 'entity', entityId: STRANGER }, [
+        { actions: ['read-any'], typeId: NOTE },
+      ]),
+    ).toEqual([]);
+    expect(await stack.listGrants()).toHaveLength(1);
   });
 });
 
