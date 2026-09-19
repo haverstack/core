@@ -862,10 +862,10 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           expect(result.records.map((r) => r.id)).not.toContain(noMatch.id);
         });
 
-        // The invariant the issue's docs/spec/adapters.md § FTS5 names
-        // explicitly: an external-content index's remove step must run
-        // before the row's content changes, or a stale entry stays
-        // searchable under content the record no longer holds.
+        // An external-content index's unindex step must run before the
+        // row's content changes, or a stale entry stays searchable under
+        // content the record no longer holds. See docs/spec/adapters.md
+        // § The search index is unindexed before the row moves.
         test('a content patch is reflected in search — the old content is no longer searchable', async () => {
           const record = makeRecord({ content: { title: 'original wording' } });
           await adapter.createRecord(record);

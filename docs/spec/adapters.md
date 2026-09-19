@@ -93,6 +93,12 @@ SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON
 
 `records_fts` is an external-content index (`content='records'`) declared `columnsize=0`. It carries no copy of the indexed text and no per-row token counts, so it answers `MATCH` — which is all `filter.search` asks of it — but a foreign reader cannot rank against it: `bm25()` and `columnsize()` have no column sizes to read. Ordering a search is a records-column sort here, never a relevance sort. A reader wanting relevance has to build its own index over `records.content` rather than borrow this one.
 
+### The search index is unindexed before the row moves
+
+An external-content index carries no copy of the text it indexes, so removing an entry means handing FTS5 the **old** content: the `('delete', rowid, content)` command, not a plain `DELETE`, which leaves a stale entry still matching. The old content is only readable while the row still holds it, so the unindex step must run **before** the record's content changes or its row is deleted — an adapter that writes the row first leaves the record searchable under content it no longer holds.
+
+This is why a SQLite-backed adapter's write is unindex, write, re-index rather than write-then-reindex, and it applies to every write that can move `content` or `typeId`. `@haverstack/adapter-conformance` pins it from the outside: after a content patch, the record is searchable under its new wording and not under its old.
+
 **Two of this adapter's tables are indexes and two are sources of truth.** `content_index` and `records_fts` are derived from `records.content` and can be dropped and rebuilt; `versions` and `journal` cannot, so they carry their own erasure and permission rules. See [Change journal § Why this is not more duplication](./journal.md#why-this-is-not-more-duplication).
 
 **Content ordering is materialized, not derived.** A `sort.contentField` query reads `content_index`, one row per top-level scalar field a Record holds a value at, carrying the ordered forms in [Sorting by a content field](./data-model.md#sorting-by-a-content-field) — the numeric value, or the folded key and the stored text — plus the file id when the field is a `file-ref`. It is written from `content` on every write that can change content or `typeId`, so a foreign writer that updates a Record without rewriting the row leaves the ordering and the `attachmentFileId` filter stale. Nothing reads it as a source of truth: `content` is.
