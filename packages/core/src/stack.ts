@@ -104,11 +104,12 @@ import {
   grantConveys,
   matchesGrantTarget,
   validateGrantTarget,
+  validateGrantee,
   grantCoversGrantee,
   UNGRANTABLE_SYSTEM_TYPES,
   loadGrantRecords,
 } from './grants.js';
-import type { GrantTarget } from './grants.js';
+import type { GrantQuery, GrantTarget } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
@@ -892,6 +893,7 @@ export class Stack implements StackClient {
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
+      ...validateGrantee(typeId, content),
       ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -1206,7 +1208,10 @@ export class Stack implements StackClient {
       }
       merged = applyMergePatch(existing.content, contentPatch);
 
-      const contentErrors = validateContent(merged, type.schema);
+      const contentErrors = [
+        ...validateContent(merged, type.schema),
+        ...validateGrantee(existing.typeId, merged),
+      ];
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
       if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
@@ -1732,7 +1737,10 @@ export class Stack implements StackClient {
       throw new StackQueryError(`Unknown type: "${target.typeId}"`);
     }
 
-    const errors = validateContent(target.content, type.schema);
+    const errors = [
+      ...validateContent(target.content, type.schema),
+      ...validateGrantee(target.typeId, target.content),
+    ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
@@ -1839,6 +1847,7 @@ export class Stack implements StackClient {
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
+      ...validateGrantee(toTypeId, content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -2563,30 +2572,36 @@ export class Stack implements StackClient {
   }
 
   /**
-   * List _grant records. Omit `target` for all grants;
+   * List _grant records. Omit `query` for all grants;
    * `{ kind: 'authenticated' }` for only default grants;
-   * `{ kind: 'group' }` for grants naming that exact group and role;
+   * `{ kind: 'group' }` for grants naming that exact group and role, or
+   * `role: 'any'` for every grant naming the group;
    * `{ kind: 'entity' }` for the grants that currently apply to that entity
    * (ones naming them, ones naming a group they belong to at a role they
    * hold, plus every default grant) — the same resolution hasGrant() uses.
+   *
+   * Every arm but `entity` answers identity — what `grant()` would have
+   * written with the same argument. The `entity` arm answers coverage, so
+   * its result is not a preview of what `revoke()` would withdraw.
+   * See docs/spec/access-control.md § Type-level grants.
    */
-  async listGrants(target?: GrantTarget): Promise<StackRecord[]> {
+  async listGrants(query?: GrantQuery): Promise<StackRecord[]> {
     this.assertOpen();
-    if (target !== undefined) validateGrantTarget(target);
+    if (query !== undefined) validateGrantTarget(query, true);
     const all = await loadGrantRecords((q) => this.query(q));
-    if (target === undefined) return all;
-    if (target.kind !== 'entity') {
-      return all.filter((r) => matchesGrantTarget(r.content as GrantContent, target));
+    if (query === undefined) return all;
+    if (query.kind !== 'entity') {
+      return all.filter((r) => matchesGrantTarget(r.content as GrantContent, query));
     }
 
-    // An entity target resolves group rosters, since a grant naming a group
+    // An entity query resolves group rosters, since a grant naming a group
     // the entity belongs to also currently applies to them. Shares
     // grantCoversGrantee() with the access checks, so a listing can't
     // disagree with them about who a grant covers.
     const groupRoles = new Map<string, GroupRole | null>();
     const result: StackRecord[] = [];
     for (const r of all) {
-      const covers = await grantCoversGrantee(r.content as GrantContent, target.entityId, {
+      const covers = await grantCoversGrantee(r.content as GrantContent, query.entityId, {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
@@ -2602,13 +2617,20 @@ export class Stack implements StackClient {
    * and each `{ typeId, actions }` pair, at the same granularity grant()
    * writes — the grantee is matched whole, role included. A soft delete
    * like any other — the owner can undelete a revocation.
+   *
+   * Returns the grants it withdrew, as they stood, so a revocation that
+   * matched nothing says so rather than passing in silence. An empty result
+   * is not an error — a grant already withdrawn or never written is the
+   * ordinary case, and re-running a revocation has to stay safe.
+   * See docs/spec/access-control.md § Type-level grants.
    */
   async revoke(
     target: GrantTarget,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
-  ): Promise<void> {
+  ): Promise<StackRecord[]> {
     this.assertOpen();
     validateGrantTarget(target);
+    const revoked: StackRecord[] = [];
     const all = await loadGrantRecords((q) => this.query(q));
     for (const g of grants) {
       const familyId = baseIdOf(g.typeId);
@@ -2621,8 +2643,10 @@ export class Stack implements StackClient {
       });
       for (const match of matches) {
         await this.delete(match.id);
+        revoked.push(match);
       }
     }
+    return revoked;
   }
 
   // -------------------------------------------------------

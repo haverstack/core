@@ -32,6 +32,7 @@ import type {
   BlobFileInfo,
   Association,
   AuthorityAssociation,
+  GrantContent,
   GrantGrantee,
   RecordChange,
   RecordFilter,
@@ -3586,6 +3587,61 @@ describe('grant', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  // A closed object field holds one properties set, so the schema can only
+  // require `kind`. The arm's own fields are required on the write instead:
+  // without that, a grant missing one stores, answers 200, and denies
+  // forever — a share that looks like it worked and never did.
+  test('a group grantee carrying no role is refused on create', async () => {
+    await expect(
+      stack.create('_grant@1', {
+        typeId: NOTE_V1,
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: 'group-abc' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a group grantee carrying an empty groupId is refused on create', async () => {
+    await expect(
+      stack.create('_grant@1', {
+        typeId: NOTE_V1,
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: '', role: 'member' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('an entity grantee carrying no entityId is refused on create', async () => {
+    await expect(
+      stack.create('_grant@1', {
+        typeId: NOTE_V1,
+        actions: ['read-any'],
+        grantee: { kind: 'entity' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a grantee naming an unknown kind is refused on create', async () => {
+    await expect(
+      stack.create('_grant@1', {
+        typeId: NOTE_V1,
+        actions: ['read-any'],
+        grantee: { kind: 'everyone' },
+      }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  // The same refusal on every path that writes content, so a grant cannot
+  // be edited into an arm it does not satisfy.
+  test("a patch dropping a group grantee's role is refused", async () => {
+    const [granted] = await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
+      { actions: ['read-any'], typeId: NOTE_V1 },
+    ]);
+    await expect(
+      stack.patchContent(granted.id, { grantee: { kind: 'group', groupId: 'group-abc' } }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
   test('rejects a group-targeted grant on _grant@1', async () => {
     await expect(
       stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
@@ -3772,6 +3828,48 @@ describe('listGrants', () => {
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 
+  test("role 'any' returns every grant naming the group, whichever role it carries", async () => {
+    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
+      { actions: ['read-any'], typeId: NOTE_V1 },
+    ]);
+    await stack.grant({ kind: 'group', groupId: 'group-xyz', role: 'member' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+
+    const grants = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' });
+    expect(grants).toHaveLength(2);
+    expect(grants.map((g) => (g.content as GrantContent).grantee)).toEqual(
+      expect.arrayContaining([
+        { kind: 'group', groupId: 'group-abc', role: 'member' },
+        { kind: 'group', groupId: 'group-abc', role: 'admin' },
+      ]),
+    );
+  });
+
+  // The listing answers identity, not coverage: a role names the grant, not
+  // someone who might hold it, so the wider tier is not swept in.
+  test('a group role returns only the grants carrying that exact role', async () => {
+    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
+      { actions: ['read-any'], typeId: NOTE_V1 },
+    ]);
+
+    const admin = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'admin' });
+    expect(admin).toHaveLength(1);
+    expect(admin[0].content).toMatchObject({ actions: ['read-any'] });
+  });
+
+  test("a group listing with role 'any' still requires a non-empty groupId", async () => {
+    await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'any' })).rejects.toThrow(
+      StackQueryError,
+    );
+  });
+
   test('a group target naming no group is refused rather than over-reporting', async () => {
     await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
       { actions: ['create'], typeId: NOTE_V1 },
@@ -3810,6 +3908,72 @@ describe('revoke', () => {
     ]);
     const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(0);
+  });
+
+  test('returns the grants it withdrew, as they stood', async () => {
+    const [granted] = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    const withdrawn = await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    expect(withdrawn).toHaveLength(1);
+    expect(withdrawn[0].id).toBe(granted.id);
+    expect(withdrawn[0].content).toMatchObject({
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+  });
+
+  // An empty result is the signal, not an error: re-running a revocation
+  // must stay safe, and a grant already withdrawn is the ordinary case.
+  test('returns an empty array when nothing matched, rather than throwing', async () => {
+    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    expect(
+      await stack.revoke({ kind: 'entity', entityId: 'entity-xyz' }, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).toEqual([]);
+
+    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    expect(
+      await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).toEqual([]);
+  });
+
+  // A revocation aimed at a group's admins must not sweep the members'
+  // grant, which is the wider tier — and the empty result says it did not.
+  test('a group role narrower than the stored grant withdraws nothing, and says so', async () => {
+    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
+      { actions: ['create'], typeId: NOTE_V1 },
+    ]);
+    expect(
+      await stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).toEqual([]);
+    expect(
+      await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
+    ).toHaveLength(1);
+  });
+
+  test("role 'any' is listing-only — grant() and revoke() refuse it", async () => {
+    await expect(
+      stack.grant({ kind: 'group', groupId: 'group-abc', role: 'any' } as never, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).rejects.toThrow(StackQueryError);
+    await expect(
+      stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'any' } as never, [
+        { actions: ['create'], typeId: NOTE_V1 },
+      ]),
+    ).rejects.toThrow(StackQueryError);
   });
 
   test('revocation is a soft delete — the owner can undelete it like any other mutation', async () => {

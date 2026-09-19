@@ -23,8 +23,10 @@ import type {
   RecordId,
   StackQuery,
   StackRecord,
+  TypeId,
 } from './types.js';
 import { queryAllPages } from './stack-reads.js';
+import type { ValidationError } from './validate.js';
 
 /**
  * Valid GrantAction values, for runtime validation in Stack.grant().
@@ -71,18 +73,31 @@ export function grantConveys(actions: readonly string[], action: GrantAction): b
 export type GrantTarget = GrantGrantee;
 
 /**
- * Direct (non-roster) match between a stored _grant's content and a
- * GrantTarget: the whole grantee, `role` included. A target is the identity
- * grant() wrote, so a revoke aimed at the admins of a group leaves the
- * members' grant standing rather than sweeping the wider tier with it.
+ * What listGrants() accepts: a GrantTarget, widened so a group listing can
+ * ask for every role at once. `role: 'any'` is not a role an entity can
+ * hold and never reaches storage — a query can say it, a grantee cannot,
+ * so the two can't be confused for one another.
+ * See docs/spec/access-control.md § Type-level grants.
  */
-export function matchesGrantTarget(content: GrantContent, target: GrantTarget): boolean {
+export type GrantQuery =
+  | { kind: 'entity'; entityId: EntityId }
+  | { kind: 'group'; groupId: RecordId; role: 'member' | 'admin' | 'any' }
+  | { kind: 'authenticated' };
+
+/**
+ * Direct (non-roster) match between a stored _grant's content and a target:
+ * the whole grantee, `role` included. A target is the identity grant()
+ * wrote, so a revoke aimed at a group's admins leaves the members' grant
+ * standing, and a listing returns what the same argument would have
+ * written. A query's `role: 'any'` is the one widening, and it is spelled.
+ */
+export function matchesGrantTarget(content: GrantContent, target: GrantQuery): boolean {
   const g = content.grantee;
   if (!g || g.kind !== target.kind) return false;
   if (g.kind === 'entity') return g.entityId === (target as { entityId: EntityId }).entityId;
   if (g.kind === 'group') {
     const t = target as { groupId: RecordId; role: string };
-    return g.groupId === t.groupId && g.role === t.role;
+    return g.groupId === t.groupId && (t.role === 'any' || g.role === t.role);
   }
   return g.kind === 'authenticated';
 }
@@ -92,9 +107,10 @@ export function matchesGrantTarget(content: GrantContent, target: GrantTarget): 
  * empty groupId or entityId reaches no one, so storing it would leave a
  * grant that can only ever deny while looking like a share that worked.
  * Runtime shapes are checked, not only types: a target crossing a wire
- * arrives as data.
+ * arrives as data. `allowAny` admits the listing-only `role: 'any'`, which
+ * grant() and revoke() refuse because no grant can be written with it.
  */
-export function validateGrantTarget(target: GrantTarget): void {
+export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
   // Read as data, not as the type: a target reaching Stack from a request
   // body or an import has whatever shape it arrived with.
   const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
@@ -110,8 +126,12 @@ export function validateGrantTarget(target: GrantTarget): void {
       if (typeof t.groupId !== 'string' || t.groupId.length === 0) {
         throw new StackQueryError('A group grant target requires a non-empty groupId.');
       }
-      if (t.role !== 'member' && t.role !== 'admin') {
-        throw new StackQueryError("A group grant target requires role 'member' or 'admin'.");
+      if (t.role !== 'member' && t.role !== 'admin' && !(allowAny && t.role === 'any')) {
+        throw new StackQueryError(
+          allowAny
+            ? "A group grant target requires role 'member', 'admin' or 'any'."
+            : "A group grant target requires role 'member' or 'admin'.",
+        );
       }
       // Not a format check: groupId is a reference to an existing Record,
       // like parentId or an association's recordId, and none of those are
@@ -121,6 +141,57 @@ export function validateGrantTarget(target: GrantTarget): void {
       throw new StackQueryError(
         "A grant target must name its tier: { kind: 'entity' }, { kind: 'group' } or { kind: 'authenticated' }.",
       );
+  }
+}
+
+/**
+ * The fields each grantee arm must carry, asked of a `_grant`'s content on
+ * every write. The schema cannot ask it — a closed `object` field holds one
+ * `properties` set, so only `kind` is required there — and an arm missing
+ * its own field would otherwise store, answer 200, then deny forever.
+ * See docs/spec/access-control.md § Type-level grants.
+ */
+export function validateGrantee(typeId: TypeId, content: unknown): ValidationError[] {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
+  const c = content as { grantee?: unknown } | null;
+  const g = c?.grantee as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  // An absent or non-object grantee is the schema's to refuse, and it does.
+  if (!g || typeof g !== 'object') return [];
+  switch (g.kind) {
+    case 'authenticated':
+      return [];
+    case 'entity':
+      return typeof g.entityId === 'string' && g.entityId.length > 0
+        ? []
+        : [
+            {
+              path: 'grantee.entityId',
+              message: 'An entity grantee requires a non-empty entityId',
+            },
+          ];
+    case 'group': {
+      const errors: ValidationError[] = [];
+      if (typeof g.groupId !== 'string' || g.groupId.length === 0) {
+        errors.push({
+          path: 'grantee.groupId',
+          message: 'A group grantee requires a non-empty groupId',
+        });
+      }
+      if (g.role !== 'member' && g.role !== 'admin') {
+        errors.push({
+          path: 'grantee.role',
+          message: "A group grantee requires role 'member' or 'admin'",
+        });
+      }
+      return errors;
+    }
+    default:
+      return [
+        {
+          path: 'grantee.kind',
+          message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
+        },
+      ];
   }
 }
 

@@ -119,6 +119,8 @@ export type {
   ConfigContent,
 } from './types.js';
 
+export type { GrantQuery } from './grants.js';
+
 export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types.js';
 
 // Utilities

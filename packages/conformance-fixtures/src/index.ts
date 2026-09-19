@@ -2111,6 +2111,41 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-grant-group-grantee-without-role',
+    description:
+      'POST /records creating a _grant@1 record whose grantee names the `group` tier but ' +
+      'carries no `role` returns 422 with code "validation". A closed `object` field holds one ' +
+      "properties set, so the schema can only require `kind`; each arm's own fields are " +
+      'required on the write instead. Without that a grant missing one stores, answers 200, ' +
+      'and denies forever at evaluation — a share that reads as though it worked and never ' +
+      'did. An `entity` grantee with no `entityId`, and a grantee naming an unknown `kind`, ' +
+      'are refused the same way. See docs/spec/access-control.md § Type-level grants.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06009',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: '1hk153x05001' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+        ],
+      },
+    },
+  },
+  {
     name: 'error-query-permission-kind-in-associations-key',
     description:
       'A `permission` named in the `associations` key returns 400 with code "query". ' +
