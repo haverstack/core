@@ -263,7 +263,7 @@ const unsubscribe = await stack.subscribe((change) => {
 });
 ```
 
-`subscribe()` reports **that** something changed; `query()` and `get()` report what it now is. Associations are the one aspect that moves without bumping `version` — they are invertible, so they need no snapshot — which is why their deltas ride the change event and are kept by the journal rather than by version history.
+`subscribe()` reports **that** something changed; `query()` and `get()` report what it now is. Content is the one aspect that bumps `version`: associations, permissions, containment and listing state are all invertible, so none of them needs a snapshot and each is recovered from the journal instead. Their deltas ride the change event too, save the permission half — a subscriber is told the ACL moved, and reads what it moved to off the record if it may.
 
 ### Adapters
 

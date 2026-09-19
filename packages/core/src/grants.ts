@@ -12,7 +12,7 @@
 import { baseIdOf } from './schema.js';
 import { StackQueryError } from './errors.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
-import { groupRoleFromAssociations } from './access.js';
+import { carriesRoster, groupRoleFromAssociations } from './access.js';
 import type { GroupRole } from './access.js';
 import type {
   EntityId,
@@ -255,14 +255,13 @@ async function resolveGroupRoleMemoized(
   const cached = groupRoles.get(key);
   if (cached !== undefined) return cached;
   const group = await resolveRecord(groupId);
-  // Only a real `_group` Record carries a roster. Without the family check
+  // Only a live `_group` Record carries a roster. Without the family check
   // any Record's relationship associations would serve as one, and a group
   // migrated out of the family would keep resolving after it had stopped
-  // being a group.
+  // being a group; without the tombstone check a deleted Group would keep
+  // granting what it was deleted to withdraw.
   const role =
-    group && baseIdOf(group.typeId) === SYSTEM_TYPES.GROUP
-      ? groupRoleFromAssociations(group.associations, entityId)
-      : null;
+    group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
   groupRoles.set(key, role);
   return role;
 }
@@ -286,9 +285,21 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
  * itself sit behind a read check. No content prefilter — a stored grant's
  * typeId may be a bare baseId or versioned, so exact matching would wrongly
  * exclude family versions.
+ *
+ * `includeUnlisted`, because withholding a Record from enumeration decides
+ * nothing about what it confers: a listing flag that silently disarmed a
+ * grant would revoke by a spelling that is defined not to. Deleted grants
+ * are excluded on the opposite grounds — a soft delete is exactly how
+ * revoke() withdraws one. The flag reaches listGrants() and revoke()
+ * through this too, which is what keeps an unlisted grant visible to the
+ * owner who wants to withdraw it.
+ * See docs/spec/unlisted.md and docs/spec/access-control.md
+ * § Type-level grants.
  */
 export function loadGrantRecords(
   query: (q: StackQuery) => Promise<QueryResult>,
 ): Promise<StackRecord[]> {
-  return queryAllPages(query, { filter: { typeId: `${SYSTEM_TYPES.GRANT}@1` } });
+  return queryAllPages(query, {
+    filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
+  });
 }

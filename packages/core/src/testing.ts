@@ -31,7 +31,7 @@ import {
   StackQueryError,
 } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
-import { targetEqual } from './record-changes.js';
+import { associationEqual } from './record-changes.js';
 
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
@@ -751,30 +751,6 @@ function withAssociations(record: StackRecord, associations: DataAssociation[]):
 /** withAssociationSet() over the authority half alone — the `permissions` key. */
 function withPermissions(record: StackRecord, permissions: AuthorityAssociation[]): StackRecord {
   return withAssociationSet(record, [...(record.associations ?? []), ...permissions]);
-}
-
-/**
- * Mirrors core's associationEqual(): identity is (kind, label) plus fileId
- * for attachments / the target for relationships. An attachment's
- * `attachmentRecordId` annotates the reference and is outside identity.
- */
-function associationEqual(a: Association, b: Association): boolean {
-  if (a.kind !== b.kind || a.label !== b.label) return false;
-  if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') {
-    return targetEqual(a.target, b.target);
-  }
-  if (a.kind === 'permission' && b.kind === 'permission') {
-    const x = a.grantee;
-    const y = b.grantee;
-    if (x.scope !== y.scope) return false;
-    if (x.scope === 'entity' && y.scope === 'entity') return x.entityId === y.entityId;
-    if (x.scope === 'group' && y.scope === 'group') {
-      return x.groupId === y.groupId && x.role === y.role;
-    }
-    return false;
-  }
-  return true;
 }
 
 /**

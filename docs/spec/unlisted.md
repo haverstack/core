@@ -20,6 +20,8 @@ type RecordFilter = {
 
 > Unlisted withholds a Record from enumeration and announcement. It never withholds the Record. A requester who may read it and holds its ID gets it. A requester without the ID has no supported way to discover it.
 
+**Nor does it withhold what a Record _confers_.** A `_grant` Record is read with unlisted Records included, so unlisting one changes nothing about the authority it carries — and `listGrants()` and `revoke()` read the same set, so it stays visible to the owner who wants to withdraw it. Withdrawing a grant is `revoke()`, which soft-deletes it; that is the whole of the vocabulary, and a listing flag is not a second spelling of it. See [Access control § Type-level grants](./access-control.md#type-level-grants).
+
 That sits inside the same threat model as [record IDs being guessable](./access-control.md#errors-and-information-exposure) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
 
 ## Three tiers, not two

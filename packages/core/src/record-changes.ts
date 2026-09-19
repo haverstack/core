@@ -34,9 +34,11 @@ import type {
  * Association identity — what dissociate() matches and a second associate()
  * of the same reference is a repeat of. Matches the SQLite adapter's
  * association primary key (kind, label, file_id, related_scope, related_id,
- * related_ns, related_stack), which is why an attachment's
+ * related_ns, related_stack, related_role), which is why an attachment's
  * `attachmentRecordId` is absent here: it annotates a reference rather than
- * naming one. See docs/spec/data-model.md § Associations.
+ * naming one. `related_role` is in both because member and admin name two
+ * different sets of people, so two group grantees differing only by role
+ * are two elements. See docs/spec/data-model.md § Associations.
  */
 export function associationEqual(a: Association, b: Association): boolean {
   // Identity is undecidable for a value that is not an association. Two

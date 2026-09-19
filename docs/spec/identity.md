@@ -177,6 +177,16 @@ Three rules hold it, one per way a roster can change:
 
 **The owner does not bypass this.** They can already manage any Group, so the rule costs them nothing they wanted — and a bypass would mean nothing downstream could rely on the invariant, which is most of what it is for.
 
+### Deleting a Group withdraws it
+
+**A soft-deleted `_group` Record carries no roster.** Every place a roster is _resolved_ — a record-level permission's [`group` grantee](./access-control.md#record-level-permissions), a [group-targeted grant](./access-control.md#type-level-grants), and the coverage arm of `listGrants()` — reads a tombstone as naming nobody, so the Group reaches no one for as long as it stands deleted. `undelete()` restores the Group and everything it conveyed, exactly as `undelete()` on a `_grant` Record restores what `revoke()` withdrew: deleting is how each of the two authority families is withdrawn, and it is recoverable in both.
+
+This is the same rule the family check states, at the other end of the Record's life. A `groupId` naming a Record outside the `_group` family confers nothing because it was never a roster; one naming a tombstone confers nothing because it has stopped being one. Neither is refused at the write — a grantee is resolved on the permission path, never asserted on a write — so both simply deny.
+
+**Management is the exception, and it is what makes the withdrawal recoverable.** The admin rule above reads the roster off the `_group` Record the request already named, rather than resolving it from elsewhere, so an `admin` still manages a Group they have deleted and can `undelete()` it. Were that not so, a Group would be recoverable only by the stack owner, and an admin deleting one would be discarding it rather than withdrawing it.
+
+A **hard** delete needs no rule of its own: it destroys the Record, so there is nothing left to resolve.
+
 **Taken together the three rules close the invariant by construction**: every `_group` Record holds an `admin` from its first version, no write moves the roster to zero, and no restore moves the roster at all. An admin-less roster is therefore not a state the API can reach — only a direct adapter write, which is [full trust](./access-control.md#the-write-bit-a-recoverability-trust-model) and outside every invariant, can manufacture one. Because the check reads the post-state it still does the right thing if one ever appears — a roster-replacing write naming an incoming `admin` is permitted, one that leaves it admin-less is refused — but that is a property falling out of the framing, not a repair path the rules promise.
 
 What this does **not** promise: that an `admin` is _reachable_. An admin who loses their key, or leaves, strands a Group as thoroughly as an empty roster would — the invariant closes an accidental write, not the general problem of custody. An `admin` may also demote every other `admin`; concentrating the role is a management decision the roster is there to express, not a violation.
