@@ -1,5 +1,141 @@
 # @haverstack/conformance-fixtures
 
+## 0.28.0
+
+### Minor Changes
+
+- [#304](https://github.com/haverstack/core/pull/304) [`1d3d8b9`](https://github.com/haverstack/core/commit/1d3d8b998bd52ac0f0b88707a7116007779a226a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Move `parentId` and `unlisted` off the version tier
+
+  A move and a listing transition no longer bump `version`, take a snapshot, or
+  read `ifVersion`. Both join `associations` in the journal tier, whose entry
+  already records them in full: a `reparent` carries `previousParentId`, and
+  `unlist`/`list` is its own inverse.
+
+  `RecordVersion` and `WireVersion` lose `parentId`, and the SQLite `versions`
+  table loses its `parent_id` column. `restoreVersion()` correspondingly settles
+  `content` and `typeId` alone — it leaves a record in whatever container it is
+  in now, which removes the ancestor-cycle walk, the reference gate on the
+  snapshot's container, and the second-container routing a restore used to get
+  on the change feed.
+
+  `version` is now documented as the ordinal of a record's snapshot history
+  rather than a count of its changes; the journal's `seq` is what counts every
+  change.
+
+- [#306](https://github.com/haverstack/core/pull/306) [`b4b21db`](https://github.com/haverstack/core/commit/b4b21dbc208937817f26602fd53751601e6d43a0) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Store record permissions as associations, behind a partitioned API surface
+
+  A permission entry has element identity, so the delta the association tier
+  already computes describes it exactly. `Permission` is replaced by two
+  association kinds — `permission`, whose bit is its label and whose grantee
+  carries a required `role`, and `anyone`, which spells reach to the world
+  affirmatively — and the whole-list snapshot goes with it. `RecordVersion` and
+  `WireVersion` lose `permissions`, the SQLite `versions` and `records` tables
+  lose their `permissions` columns, and `restoreVersion()` loses its
+  never-restores-permissions carve-out: it falls out of a restore never touching
+  associations.
+
+  Storage unifies; the API does not. `StackRecord.associations` and
+  `StackRecord.permissions` are projections over one table partitioned by kind,
+  and each change-set key replaces only within its own domain, so an app editing
+  tags is never handed the ACL and cannot drop it. A kind named in the wrong key
+  is a `StackQueryError`, `associate()`/`dissociate()` refuse authority kinds,
+  and record-level ACL changes get their own verbs — `grantAccess()` and
+  `revokeAccess()`, mirroring the type-level `grant()`/`revoke()`, with
+  `POST /records/:id/permissions[/delete]` on the wire.
+
+  The reshare gate reads the computed delta rather than the incoming list, so a
+  wholesale replacement that drops every element — which names nothing at all —
+  still needs reshare authority, while a set restated is not a reshare. _Write
+  implies read_ becomes a cross-element invariant over the set a write would
+  produce, which is what makes revoking a `read` refusable while its `write`
+  stands, and an `anyone` element satisfies it for every grantee — a
+  world-readable record leaves no writer blind. The rule it enforces is that no
+  write lands in a set whose grantee cannot read it, whichever verb or key
+  produced the set: withdrawing an `anyone` while a write it covered stands is
+  refused, while `permissions: []` and a key naming the writer's own `read` in
+  its place are ordinary one-call writes. A permission change is a no-bump write: it
+  leaves `version` and `updatedAt` where they stand and appends one journal entry
+  carrying `previous` per element it moved.
+
+  The journal is therefore where a record's sharing history lives, and reading it
+  is gated in two tiers: the mutate surface for the entry, reshare authority for
+  its authority half. A write-holder who is neither owner nor creator gets the
+  `permissions` op without the grantees beneath it, asked of both identities so
+  delegation is no route to it either. Entries are never dropped, so `seq` stays
+  dense and a mixed write still reports its content half.
+  `getVersions()`/`getVersion()` serve the same `RecordVersion` rows to every
+  requester who passes their gate, since a snapshot now carries nothing to
+  project.
+
+  An association naming no known kind — `null`, `{}`, or a kind outside the five
+  — is a `StackValidationError` at every surface that takes one, rather than a
+  `TypeError` from the first field read off it.
+
+- [#307](https://github.com/haverstack/core/pull/307) [`93111dc`](https://github.com/haverstack/core/commit/93111dcb4989a35c5c5160eb46b418fd829ed50e) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Spell a Grant's reach affirmatively, in a required `grantee`
+
+  `GrantContent.granteeEntityId`/`granteeGroupId` are replaced by one required
+  `grantee` discriminated on `kind`: `{ kind: 'entity', entityId }`,
+  `{ kind: 'group', groupId, role }`, or `{ kind: 'authenticated' }` for any
+  authenticated entity. The tier is read off the discriminant, so no dropped
+  field widens a grant's reach — a `_grant` Record arriving without a grantee
+  fails schema validation instead of becoming a grant to everyone, and one
+  carrying an unknown `kind` or an empty `entityId`/`groupId` confers nothing
+  however it reached storage. Mutual exclusivity is a property of the type
+  rather than a documented convention.
+
+  `role` is required on the group arm, matching the record-permission side:
+  `role: 'member'` is the wider set — an admin satisfies it — and
+  `role: 'admin'` the narrower.
+
+  The two "everyone" tiers reach different audiences and now share no word. A
+  Grant's `{ kind: 'authenticated' }` reaches any entity holding a DID; a
+  Record permission's `{ kind: 'anyone' }` reaches anonymous requesters too.
+
+  Each arm's own fields are required on every write, not only at the helper.
+  `create()`, `patchContent()`, `restoreVersion()` and `commitMigration()`
+  refuse a `_grant` whose `entity` arm carries no `entityId`, whose `group` arm
+  carries no `groupId` or role, or whose grantee names an unknown `kind`, with
+  `StackValidationError`. A closed `object` field holds one `properties` set,
+  so the schema can only require `kind`; without this an arm missing its own
+  field would store, answer 200, and deny forever.
+
+  `GrantTarget` is the same union, so the target passed to
+  `grant()`/`revoke()`/`listGrants()` is the grantee the record carries, and
+  `null` no longer does double duty as "default grant" and "default-only
+  listing". A group target matches whole, role included, so a revoke aimed at a
+  group's admins leaves its members' grant standing.
+
+  `listGrants()` takes a `GrantQuery` — the same union, widened by a
+  listing-only `role: 'any'` that returns every grant naming a group whichever
+  role it carries. `'any'` is not a role an entity can hold and never reaches
+  storage; `grant()` and `revoke()` reject it. Every arm but `entity` answers
+  identity — what `grant()` would have written with the same argument — while
+  the `entity` arm answers coverage, so its result is not a preview of what
+  `revoke()` would withdraw.
+
+  `revoke()` returns the grants it withdrew, as they stood, instead of `void`.
+  Matching nothing stays a no-op rather than an error — re-running a revocation
+  is safe — but the empty array now says so, where the silence did not.
+
+### Patch Changes
+
+- [#310](https://github.com/haverstack/core/pull/310) [`70075a2`](https://github.com/haverstack/core/commit/70075a268a8fbae909dfb5fe9dae04a53f13f2e9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Point spec citations at the document that now carries the rule
+
+  The 404-over-403 rule moved out of `docs/spec/access-control.md` into its own
+  `docs/spec/disclosure.md`. JSDoc on `ScopedStack` and one conformance
+  fixture's description cited the old section, and both ship — the comments in
+  `.d.ts`, the description in the fixture data. No behavior changes.
+
+- [#309](https://github.com/haverstack/core/pull/309) [`eb03eb5`](https://github.com/haverstack/core/commit/eb03eb524b8ba6982474cc461069829d1c7c4dee) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Point the journal read-gate fixture at the section that states the rule
+
+  `error-permission-denied-journal-read-only` cited
+  `docs/spec/versioning.md § Reading it`, which is not a section. The
+  mutate-surface gate on `GET /records/:id/journal` is stated in
+  `docs/spec/journal.md § Reading it`.
+
+- Updated dependencies [[`1d3d8b9`](https://github.com/haverstack/core/commit/1d3d8b998bd52ac0f0b88707a7116007779a226a), [`b4b21db`](https://github.com/haverstack/core/commit/b4b21dbc208937817f26602fd53751601e6d43a0)]:
+  - @haverstack/wire-types@0.34.0
+
 ## 0.27.0
 
 ### Minor Changes
