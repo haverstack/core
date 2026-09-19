@@ -59,7 +59,7 @@ A `repoint` and a `remove` invert identically — putting an element back whethe
 
 Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
 
-A permission element's delta rides in that same list, on the same terms as a tag's: `previous` in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where a Record's sharing history lives, and [reading it](#reading-it) is gated accordingly: the mutate surface for the entry, reshare authority for its authority half.
+A permission element's delta rides in that same list, on the same terms as a tag's: `previous` in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where every **movement** of a Record's ACL is recorded, and [reading it](#reading-it) is gated accordingly: the mutate surface for the entry, reshare authority for its authority half. The set a Record was created holding is not among them: a `created` entry carries no association edits, because nothing was displaced and the set is readable off the Record itself. What the journal uniquely keeps is prior state, and a create has none.
 
 ## The entry set is the event set
 

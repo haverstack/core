@@ -57,7 +57,7 @@ const meta = records[0]?.content; // the record that establishes the mimeType
 
 **The candidate set is family-wide and includes soft-deleted and unlisted records.** Every record whose `baseId` is `_attachment` counts, not only `_attachment@1`: a record migrated to a later version of the family still describes the file, and uniqueness, immutability, and reference rules are all enforced across the family. Soft-deleted and unlisted records count too, for the reason they count as references — an unlisted record is hidden from enumeration, not from reach, and a soft-deleted one must find its attachments intact on `undelete()`.
 
-The result is sorted in the [first-recorded total order](#the-attachment-record-type), so `records[0]` is the record that establishes the `mimeType` and a caller composing with `firstRecordedAttachment()` never re-sorts. A caller narrowing the set first — the download route preferring the requester's own `filename`, for instance — passes what's left to `firstRecordedAttachment()` and gets the same rule applied to the narrower set.
+The result is sorted in the [first-recorded total order](#the-_attachment-record-type), so `records[0]` is the record that establishes the `mimeType` and a caller composing with `firstRecordedAttachment()` never re-sorts. A caller narrowing the set first — the download route preferring the requester's own `filename`, for instance — passes what's left to `firstRecordedAttachment()` and gets the same rule applied to the narrower set.
 
 **The lookup is unscoped, and lives on `Stack` rather than `StackClient` for that reason.** By the time a download reads this metadata, `ScopedStack.getAttachment()` has already granted or denied the bytes; what remains is presentation for a decision that is over. A requester who reached the bytes through a grant on a record referencing the file may not be able to read the `_attachment` record itself, so scoping the lookup would impose a second, different permission check and silently drop the filename and mime type they are entitled to. That is a wrong answer that looks like a narrower correct one, which is why the scoped form does not exist to be reached by autocomplete.
 
@@ -78,7 +78,7 @@ An attachment Association may therefore carry an optional second pointer:
 **Resolution order**, applied by `resolveReferencedAttachment()` (exported from `@haverstack/core/wire`) over the records `getAttachmentRecords()` returns:
 
 1. The record `attachmentRecordId` names, if it is still among them.
-2. The requester's own `_attachment` record, matched by `entityId`, [first-recorded](#the-attachment-record-type) if they have several.
+2. The requester's own `_attachment` record, matched by `entityId`, [first-recorded](#the-_attachment-record-type) if they have several.
 3. The first-recorded record overall.
 
 A `GET /attachments/:fileId` download resolves only steps 2 and 3 — it names a `fileId`, with no reference to carry a pointer — so a client that holds the association resolves step 1 itself and passes the result as `?filename`, which overrides everything ([Wire format § Download](./wire-format.md#download)).
