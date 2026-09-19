@@ -115,6 +115,7 @@ export type {
   GroupContent,
   GrantAction,
   GrantContent,
+  GrantGrantee,
   ConfigContent,
 } from './types.js';
 

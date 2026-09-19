@@ -1,6 +1,6 @@
 # Identity
 
-Everywhere the system means "who" — `Permission`, `GrantContent.granteeEntityId`, group membership associations, `StackTokenStore`, `record.entityId`, `_config.entityId` — the value is a **DID** ([Decentralized Identifier](https://www.w3.org/TR/did-core/)) string, e.g. `did:key:z6Mk...`.
+Everywhere the system means "who" — `Permission`, `GrantContent.grantee`, group membership associations, `StackTokenStore`, `record.entityId`, `_config.entityId` — the value is a **DID** ([Decentralized Identifier](https://www.w3.org/TR/did-core/)) string, e.g. `did:key:z6Mk...`.
 
 **Why DIDs, why no provider.** Stacks are for individuals and small groups with cohesive identity, not a global directory of principals. Identity must be _verifiable without a provider_, but doesn't need global discovery infrastructure. Once central providers are ruled out and a domain is undesirable as a hard requirement (a domain is rented identity with a renewal-date failure mode), one primitive remains: cryptographic self-certification. An identity is a keypair; claims are signatures; anyone can verify without asking anyone.
 

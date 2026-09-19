@@ -18,6 +18,7 @@ import type {
   EntityId,
   GrantAction,
   GrantContent,
+  GrantGrantee,
   QueryResult,
   RecordId,
   StackQuery,
@@ -62,56 +63,73 @@ export function grantConveys(actions: readonly string[], action: GrantAction): b
 }
 
 /**
- * Who a grant() / revoke() / listGrants() call targets: a specific entity
- * (DID), a `_group` Record's roster (by ID), or `null` for the default
- * grant / default-only listing. See docs/spec/access-control.md § Type-level
- * grants.
+ * Who a grant() / revoke() / listGrants() call targets — the same union a
+ * stored grant carries, so a target is the grantee it writes.
+ * `{ kind: 'authenticated' }` is the default grant, and the default-only
+ * listing. See docs/spec/access-control.md § Type-level grants.
  */
-export type GrantTarget = EntityId | { groupId: RecordId } | null;
+export type GrantTarget = GrantGrantee;
 
-/** Direct (non-roster) match between a stored _grant's content and a GrantTarget. */
+/**
+ * Direct (non-roster) match between a stored _grant's content and a
+ * GrantTarget: the whole grantee, `role` included. A target is the identity
+ * grant() wrote, so a revoke aimed at the admins of a group leaves the
+ * members' grant standing rather than sweeping the wider tier with it.
+ */
 export function matchesGrantTarget(content: GrantContent, target: GrantTarget): boolean {
-  if (target !== null && typeof target === 'object') {
-    // Guarded so an absent groupId can't match the absent granteeGroupId on
-    // every entity-targeted and default grant — `undefined === undefined`
-    // would otherwise sweep them all into a revoke aimed at one group.
-    if (!target.groupId) return false;
-    return content.granteeGroupId === target.groupId;
+  const g = content.grantee;
+  if (!g || g.kind !== target.kind) return false;
+  if (g.kind === 'entity') return g.entityId === (target as { entityId: EntityId }).entityId;
+  if (g.kind === 'group') {
+    const t = target as { groupId: RecordId; role: string };
+    return g.groupId === t.groupId && g.role === t.role;
   }
-  if (target === null) {
-    return !content.granteeEntityId && !content.granteeGroupId;
-  }
-  return content.granteeEntityId === target;
+  return g.kind === 'authenticated';
 }
 
 /**
- * Reject a grant target that names nobody. An empty groupId or entityId is
- * falsy, so a stored record carrying one reads as a *default* grant — every
- * authenticated entity — instead of the target the caller meant. `null` is
- * the only way to say "default".
+ * Reject a grant target that names no tier, or whose tier names nobody. An
+ * empty groupId or entityId reaches no one, so storing it would leave a
+ * grant that can only ever deny while looking like a share that worked.
+ * Runtime shapes are checked, not only types: a target crossing a wire
+ * arrives as data.
  */
 export function validateGrantTarget(target: GrantTarget): void {
-  if (target === null) return;
-  if (typeof target === 'string') {
-    if (target.length === 0) {
+  // Read as data, not as the type: a target reaching Stack from a request
+  // body or an import has whatever shape it arrived with.
+  const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  switch (t?.kind) {
+    case 'authenticated':
+      return;
+    case 'entity':
+      if (typeof t.entityId !== 'string' || t.entityId.length === 0) {
+        throw new StackQueryError('An entity grant target requires a non-empty entityId.');
+      }
+      return;
+    case 'group':
+      if (typeof t.groupId !== 'string' || t.groupId.length === 0) {
+        throw new StackQueryError('A group grant target requires a non-empty groupId.');
+      }
+      if (t.role !== 'member' && t.role !== 'admin') {
+        throw new StackQueryError("A group grant target requires role 'member' or 'admin'.");
+      }
+      // Not a format check: groupId is a reference to an existing Record,
+      // like parentId or an association's recordId, and none of those are
+      // parsed either. One that resolves to nothing simply denies.
+      return;
+    default:
       throw new StackQueryError(
-        'A grant target entityId cannot be empty. Pass null for a default grant.',
+        "A grant target must name its tier: { kind: 'entity' }, { kind: 'group' } or { kind: 'authenticated' }.",
       );
-    }
-    return;
   }
-  if (typeof target.groupId !== 'string' || target.groupId.length === 0) {
-    throw new StackQueryError('A group grant target requires a non-empty groupId.');
-  }
-  // Not a format check: granteeGroupId is a reference to an existing
-  // Record, like parentId or an association's recordId, and none of those
-  // are parsed either. One that resolves to nothing simply denies.
 }
 
 /**
  * Whether a stored _grant covers `grantee`: a direct DID match, roster
- * membership when `allowGroup`, or a default when `allowDefault`. Presence
- * decides the tier, never truthiness — an empty grantee field names nobody.
+ * membership when `allowGroup`, or the authenticated tier when
+ * `allowDefault`. The grantee's own `kind` decides which question is asked,
+ * so a grant that arrived carrying nothing recognizable confers nothing —
+ * every tier is affirmative, and none is reachable by omission.
  * Module-level so the access checks and listGrants() cannot drift apart.
  * See docs/spec/access-control.md § Type-level grants.
  */
@@ -125,22 +143,28 @@ export async function grantCoversGrantee(
     resolveRecord: (id: RecordId) => Promise<StackRecord | null>;
   },
 ): Promise<boolean> {
-  const namesEntity = c.granteeEntityId !== undefined;
-  const namesGroup = c.granteeGroupId !== undefined;
-  if (!namesEntity && !namesGroup) return opts.allowDefault;
-  if (namesEntity && c.granteeEntityId !== grantee) return false;
-  if (namesGroup) {
-    if (!opts.allowGroup) return false;
-    if (!c.granteeGroupId) return false;
-    const role = await resolveGroupRoleMemoized(
-      c.granteeGroupId,
-      grantee,
-      opts.groupRoles,
-      opts.resolveRecord,
-    );
-    if (role === null) return false;
+  const g = c.grantee;
+  if (!g || typeof g !== 'object') return false;
+  switch (g.kind) {
+    case 'authenticated':
+      return opts.allowDefault;
+    case 'entity':
+      return !!g.entityId && g.entityId === grantee;
+    case 'group': {
+      if (!opts.allowGroup) return false;
+      if (!g.groupId) return false;
+      if (g.role !== 'member' && g.role !== 'admin') return false;
+      const role = await resolveGroupRoleMemoized(
+        g.groupId,
+        grantee,
+        opts.groupRoles,
+        opts.resolveRecord,
+      );
+      return g.role === 'admin' ? role === 'admin' : role !== null;
+    }
+    default:
+      return false;
   }
-  return true;
 }
 
 /**

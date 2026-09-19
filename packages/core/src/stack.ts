@@ -2526,9 +2526,10 @@ export class Stack implements StackClient {
 
   /**
    * Create _grant records authorizing entities to act on records of
-   * specific types; null target writes a default grant (any authenticated
-   * entity); `{ groupId }` targets a `_group` Record's roster instead of a
-   * single entity.
+   * specific types. The target is the grantee the record carries:
+   * `{ kind: 'entity' }` for one DID, `{ kind: 'group' }` for a `_group`
+   * Record's roster at a role, `{ kind: 'authenticated' }` for any
+   * authenticated entity.
    *
    * Granting an **app** a `-own` action does not contain it the way the
    * suffix suggests: when that app acts for someone, `-own` is read as the
@@ -2538,9 +2539,8 @@ export class Stack implements StackClient {
    * needs, not the suffix that looks narrowest. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
-   * The grantee lives in content.granteeEntityId / content.granteeGroupId,
-   * not record.entityId. See docs/spec/access-control.md § Type-level
-   * grants.
+   * The grantee lives in content.grantee, not record.entityId. See
+   * docs/spec/access-control.md § Type-level grants.
    */
   async grant(
     target: GrantTarget,
@@ -2555,8 +2555,7 @@ export class Stack implements StackClient {
         await this.create(`${SYSTEM_TYPES.GRANT}@1`, {
           typeId: g.typeId,
           actions: g.actions,
-          ...(typeof target === 'string' && { granteeEntityId: target }),
-          ...(target !== null && typeof target === 'object' && { granteeGroupId: target.groupId }),
+          grantee: target,
         }),
       );
     }
@@ -2564,29 +2563,30 @@ export class Stack implements StackClient {
   }
 
   /**
-   * List _grant records. Omit `target` for all grants; pass null for only
-   * default grants; pass `{ groupId }` for grants naming that exact group;
-   * pass a specific entityId for the grants that currently apply to that
-   * entity (ones naming them, ones naming a group they belong to, plus
-   * every default grant) — the same resolution hasGrant() uses.
+   * List _grant records. Omit `target` for all grants;
+   * `{ kind: 'authenticated' }` for only default grants;
+   * `{ kind: 'group' }` for grants naming that exact group and role;
+   * `{ kind: 'entity' }` for the grants that currently apply to that entity
+   * (ones naming them, ones naming a group they belong to at a role they
+   * hold, plus every default grant) — the same resolution hasGrant() uses.
    */
   async listGrants(target?: GrantTarget): Promise<StackRecord[]> {
     this.assertOpen();
     if (target !== undefined) validateGrantTarget(target);
     const all = await loadGrantRecords((q) => this.query(q));
     if (target === undefined) return all;
-    if (target === null || typeof target === 'object') {
+    if (target.kind !== 'entity') {
       return all.filter((r) => matchesGrantTarget(r.content as GrantContent, target));
     }
 
-    // target is an EntityId: resolve group rosters, since a grant naming a
-    // group the entity belongs to also currently applies to them. Shares
+    // An entity target resolves group rosters, since a grant naming a group
+    // the entity belongs to also currently applies to them. Shares
     // grantCoversGrantee() with the access checks, so a listing can't
     // disagree with them about who a grant covers.
     const groupRoles = new Map<string, GroupRole | null>();
     const result: StackRecord[] = [];
     for (const r of all) {
-      const covers = await grantCoversGrantee(r.content as GrantContent, target, {
+      const covers = await grantCoversGrantee(r.content as GrantContent, target.entityId, {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
@@ -2599,9 +2599,9 @@ export class Stack implements StackClient {
 
   /**
    * The inverse of grant(): soft-deletes _grant records matching `target`
-   * (null for default grants) and each `{ typeId, actions }` pair, at the
-   * same granularity grant() writes. A soft delete like any other — the
-   * owner can undelete a revocation.
+   * and each `{ typeId, actions }` pair, at the same granularity grant()
+   * writes — the grantee is matched whole, role included. A soft delete
+   * like any other — the owner can undelete a revocation.
    */
   async revoke(
     target: GrantTarget,
@@ -2704,8 +2704,22 @@ export class Stack implements StackClient {
     await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
       typeId: { kind: 'string', required: true },
       actions: { kind: 'array', items: { kind: 'string' }, required: true },
-      granteeEntityId: { kind: 'string' },
-      granteeGroupId: { kind: 'string' },
+      // Required, and closed: a Grant's reach is spelled by its `grantee`,
+      // so a record arriving without one is refused here rather than read
+      // as a grant to every authenticated entity. The arms differ in which
+      // fields they carry, which a schema cannot express — evaluation reads
+      // the `kind` and confers nothing on one it does not recognize.
+      // See docs/spec/access-control.md § Type-level grants.
+      grantee: {
+        kind: 'object',
+        required: true,
+        properties: {
+          kind: { kind: 'string', required: true },
+          entityId: { kind: 'string' },
+          groupId: { kind: 'string' },
+          role: { kind: 'string' },
+        },
+      },
     });
     await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
       // Deliberately `string`, not `file-ref`: attachmentFileId matching
