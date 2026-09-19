@@ -2242,6 +2242,290 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-grant-entity-grantee-without-entity-id',
+    description:
+      'POST /records creating a _grant@1 record whose grantee names the `entity` tier but ' +
+      'carries no `entityId` returns 422 with code "validation" — the `entity` arm\'s half of ' +
+      'the rule error-validation-grant-group-grantee-without-role pins for the `group` arm. The ' +
+      'schema cannot ask it, so the write does: a closed `object` field holds one properties ' +
+      'set, which can only require `kind`. Stored instead, the grant would name nobody and deny ' +
+      'forever while reading as a share that worked. ' +
+      'See docs/spec/access-control.md § Who a grant reaches.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06010',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'entity' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'grantee.entityId',
+            message: 'An entity grantee requires a non-empty entityId',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-entity-grantee-with-empty-entity-id',
+    description:
+      'POST /records creating a _grant@1 record whose `entityId` is the empty string returns ' +
+      '422 with code "validation", and the same detail an absent one earns. Empty is a ' +
+      'separate input class from absent, and the distinction is where a presence check and a ' +
+      'truthiness check stop agreeing: a grantee that is present but names nobody reaches no ' +
+      'one, so it is refused on the same grounds rather than stored. An empty `groupId` is ' +
+      'refused the same way. See docs/spec/access-control.md § Who a grant reaches.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06011',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: '' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'grantee.entityId',
+            message: 'An entity grantee requires a non-empty entityId',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-group-grantee-without-group-id',
+    description:
+      'POST /records creating a _grant@1 record whose grantee names the `group` tier and a ' +
+      'role but no `groupId` returns 422 with code "validation". A role with no roster to read ' +
+      'it from names nobody, so the arm is incomplete in the same way one carrying a groupId ' +
+      'and no role is. See docs/spec/access-control.md § Who a grant reaches.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06012',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'group', role: 'member' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          { path: 'grantee.groupId', message: 'A group grantee requires a non-empty groupId' },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-group-grantee-with-listing-only-role',
+    description:
+      "POST /records creating a _grant@1 record whose group grantee carries role 'any' returns " +
+      '422 with code "validation". `any` is a widening a *query* can ask for — ' +
+      "listGrants({ kind: 'group', groupId, role: 'any' }) returns every grant naming that " +
+      'group, whichever role — and it is not a role an entity can hold, so it can never reach ' +
+      'storage. A stored grant carrying it would match a roster question nobody can answer. ' +
+      'This is the one grantee value that is well-formed in one API and refused in the other, ' +
+      'which is why it is pinned separately from an unrecognized role. ' +
+      'See docs/spec/access-control.md § Listing and revoking.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06013',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: '1hk153x05001', role: 'any' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-grantee-with-unknown-kind',
+    description:
+      'POST /records creating a _grant@1 record whose grantee names a `kind` outside the three ' +
+      'tiers returns 422 with code "validation". There is no wider tier to fall back to: the ' +
+      'refusal is what keeps an unrecognized grantee from being read as the nearest thing that ' +
+      'does resolve. Evaluation takes the same posture toward one already stored, reading it as ' +
+      'conferring nothing. See docs/spec/access-control.md § Who a grant reaches.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06014',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'everyone' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'grantee.kind',
+            message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-null-grantee',
+    description:
+      'POST /records creating a _grant@1 record whose `grantee` is JSON `null` returns 422 with ' +
+      'code "validation", reported as the missing required field it is. `null` is not read as ' +
+      'absent-then-defaulted, which is the reading that would turn a serializer emitting nulls ' +
+      'for unset fields into a grant to every authenticated entity. ' +
+      'See docs/spec/access-control.md § Type-level grants.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06015',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: null,
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [{ path: 'grantee', message: 'Required field is missing' }],
+      },
+    },
+  },
+  {
+    name: 'error-validation-anyone-element-labelled-write',
+    description:
+      'POST /records/:id/permissions with an `anyone` element labelled anything but `read` ' +
+      'returns 422 with code "validation". `read` is the whole of what the tier can say — ' +
+      'world-writability is not in the model — so the label is not a bit to widen. Refusing it ' +
+      'at the write matters beyond the element itself: a stored `anyone` element carrying ' +
+      '`write` would otherwise be read as world read *and* satisfy the `read` a `write` element ' +
+      'needs beside it, so one malformed element would silence the ' +
+      'write-implies-read invariant for every grantee on the record. Evaluation reads it as ' +
+      'naming no reach for the same reason. ' +
+      'See docs/spec/access-control.md § Record-level permissions.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: { kind: 'anyone', label: 'write' },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          { path: 'permission.label', message: 'An `anyone` association carries only `read`.' },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-permission-grant-on-an-ungrantable-family-confers-nothing',
+    description:
+      'A grant cannot be written for `_grant`, `_config` or `_app`, and one that reached ' +
+      'storage some other way confers nothing at evaluation. Assumes a stored _grant@1 Record ' +
+      "naming `_app@1` with actions ['create', 'read-any'] and this requester as its entity " +
+      'grantee — reachable because a server mapping a request body, an import and a foreign ' +
+      "server's response all produce grant Records that grant() never vetted. The create below " +
+      'MUST still return 403 with code "permission". Each of the three families hands the ' +
+      'grantee the machinery the model rests on; `_app` is the sharpest, since an app card ' +
+      'claiming a DID that is not its own is what verified attribution rests on. ' +
+      'See docs/spec/access-control.md § Refused at the write, and again at evaluation.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06016',
+      typeId: '_app@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        name: 'Claimed app',
+        did: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      },
+      version: 1,
+    },
+    responseStatus: 403,
+    responseBody: { error: { code: 'permission', message: 'Permission denied' } },
+  },
+  {
+    name: 'error-not-found-mutate-grant-with-no-read-companion',
+    description:
+      'A mutate verb needs a read verb of matching scope in the same grant, or it conveys ' +
+      'nothing. Assumes a stored _grant@1 Record naming com.example/note@1 with actions ' +
+      "['create', 'update-any'] and this requester as its entity grantee, plus a record of " +
+      'that type authored by someone else at "1hk153x00001". The PATCH MUST return 404 with ' +
+      'code "not_found", not 403: the grant conveys neither the update nor a read, and a ' +
+      'requester who cannot read the record is told nothing about its existence. The companion ' +
+      'has to sit in the same Record because a grant is revoked whole — satisfying the rule ' +
+      'across two would let revoking the read one leave a mutate-without-read grant standing. ' +
+      '`create` is the exception and needs no companion: writing a record you cannot read is ' +
+      'the drop-box, and it discloses nothing. ' +
+      'See docs/spec/access-control.md § Write implies read.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { contentPatch: { title: 'Seized' } },
+    responseStatus: 404,
+    responseBody: { error: { code: 'not_found', message: 'Record not found' } },
+  },
+  {
     name: 'error-query-permission-kind-in-associations-key',
     description:
       'A `permission` named in the `associations` key returns 400 with code "query". ' +
