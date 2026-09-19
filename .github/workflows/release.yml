@@ -16,6 +16,9 @@ jobs:
       pull-requests: write
       # npm trusted publishing: the OIDC token stands in for a stored NPM_TOKEN.
       id-token: write
+    # Read by `publish-missing`'s `if:` below.
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +57,7 @@ jobs:
       # the version PR is authored by a user and its `pull_request` CI runs
       # without an "Allow and Run" click.
       - uses: changesets/action@v2
+        id: changesets
         with:
           github-token: ${{ secrets.RELEASE_TOKEN }}
           version-script: pnpm run version:packages
@@ -79,9 +83,18 @@ jobs:
   #
   # Every trusted publisher matches on the workflow *filename*, so this job
   # authenticates exactly as the one above; a second file would not.
+  #
+  # Skipped when `release` already published: the registry read this job's
+  # own check relies on (`npm view`) trails a publish by seconds, so running
+  # unconditionally right after `release` published something races that
+  # publish's own registry write. Losing that race reads the just-published
+  # version as missing and republishes it, which npm then refuses with
+  # "Cannot publish over previously staged version" — a hard failure over a
+  # release that had already gone out fine. `release` only leaves anything
+  # for this job to heal when its own publish-script didn't run.
   publish-missing:
     needs: release
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.release.outputs.published != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
