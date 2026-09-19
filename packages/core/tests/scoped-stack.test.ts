@@ -3181,6 +3181,60 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     });
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
   });
+
+  // The gate and the write read the record separately, so a key carried
+  // past a gate that read it as inert would replace the ACL against a set
+  // the requester never saw. Dropping it is what keeps the write bit off
+  // the ACL under concurrency as well as at rest.
+  test('a restated permissions key never writes the ACL a write-holder could not move', async () => {
+    const record = await shared();
+
+    // The gate's own read, and the only one ScopedStack makes — Stack
+    // reaches the adapter directly, so this lands between the two.
+    const read = stack.get.bind(stack);
+    let interleaved = false;
+    vi.spyOn(stack, 'get').mockImplementation(async (id, opts) => {
+      const found = await read(id, opts);
+      if (!interleaved) {
+        interleaved = true;
+        await stack.grantAccess(record.id, readFor(STRANGER));
+      }
+      return found;
+    });
+
+    await stack.asEntity(MEMBER).mutate(record.id, {
+      contentPatch: { text: 'edited' },
+      permissions: [readFor(MEMBER), writeFor(MEMBER)],
+    });
+
+    expect((await stack.get(record.id))?.permissions).toContainEqual(readFor(STRANGER));
+  });
+
+  // The drop is scoped to the requester the gate needed it for. A resharer
+  // keeps the replacing semantics the key is defined to have — which is
+  // why grantAccess() is the spelling that survives two admins at once.
+  // See docs/spec/access-control.md § Record-level permissions.
+  test('a resharer restating the set still replaces it', async () => {
+    const record = await shared();
+
+    const read = stack.get.bind(stack);
+    let interleaved = false;
+    vi.spyOn(stack, 'get').mockImplementation(async (id, opts) => {
+      const found = await read(id, opts);
+      if (!interleaved) {
+        interleaved = true;
+        await stack.grantAccess(record.id, readFor(STRANGER));
+      }
+      return found;
+    });
+
+    await stack.asEntity(OWNER).mutate(record.id, {
+      contentPatch: { text: 'edited' },
+      permissions: [readFor(MEMBER), writeFor(MEMBER)],
+    });
+
+    expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
+  });
 });
 
 // -------------------------------------------------------

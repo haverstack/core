@@ -988,8 +988,21 @@ export class ScopedStack implements StackClient {
     // carrying only those must not be held to the write gate it doesn't
     // need. One read either way.
     const record = writes ? await this.requireUpdatable(id) : await this.requireReshareable(id);
-    if (writes && (unlists || this.permissionsMove(record, changes))) {
-      await this.requireReshareOf(record);
+    // Narrowed to what the gate below actually authorized. A key the gate
+    // read as inert is dropped rather than forwarded: `Stack` recomputes
+    // the delta against its own read of the record, so a key left standing
+    // on the strength of one read would write the ACL on the strength of
+    // another — and the set that reaches it is the one this requester saw,
+    // which is by then stale. See docs/spec/access-control.md
+    // § Storage unifies; the API does not.
+    let authorized = changes;
+    if (writes) {
+      const moves = this.permissionsMove(record, changes);
+      if (unlists || moves) await this.requireReshareOf(record);
+      if (changes.permissions !== undefined && !moves && !this.canReshare(record)) {
+        const { permissions: _inert, ...rest } = changes;
+        authorized = rest;
+      }
     }
 
     if (changes.contentPatch) {
@@ -1023,7 +1036,7 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError();
     }
 
-    return this.stack.mutate(id, changes, { ...opts, ...this.actor });
+    return this.stack.mutate(id, authorized, { ...opts, ...this.actor });
   }
 
   async patchContent(
