@@ -1,5 +1,23 @@
 # @haverstack/adapter-local
 
+## 0.35.1
+
+### Patch Changes
+
+- [#315](https://github.com/haverstack/core/pull/315) [`1f6dc32`](https://github.com/haverstack/core/commit/1f6dc32b87c1ae067e7bfe7a8ff76eb6434cad30) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Carry a write's journal entry through `LocalAdapter`
+
+  `createRecord()`, `associate()` and `dissociate()` took the options object
+  the record adapter beneath them expects and dropped it on the way through,
+  so `opts.journal` never reached storage. Every other mutating method
+  forwarded it.
+
+  A stack on this adapter therefore recorded no journal entry for a create or
+  for either association verb — the two the tier exists for. `getJournal()`
+  answered an empty log, which means _nothing changed_ unconditionally, so a
+  caller reconstructing an association's history was told there was none
+  rather than being refused. An `attachmentRecordId` a re-point overwrote was
+  retained nowhere, which is the one thing no other tier keeps.
+
 ## 0.35.0
 
 ### Minor Changes
