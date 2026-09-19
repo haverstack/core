@@ -16,10 +16,11 @@ pnpm install
 
 ## Before you push
 
-Run all five, in this order:
+Run all six, in this order:
 
 ```sh
 pnpm run format:check   # or: pnpm run format, to fix in place
+pnpm run check:refs
 pnpm run lint
 pnpm test
 pnpm run build
@@ -27,6 +28,8 @@ pnpm run typecheck      # must come after build — see below
 ```
 
 These mirror `.github/workflows/ci.yml` exactly, so a clean local run means a green PR.
+
+**`pnpm run check:refs` checks that every spec reference resolves.** Section names are load-bearing in both directions — prose links to them as `](./file.md#anchor)`, code comments cite them as `docs/spec/<file>.md § Section` — and a renamed heading breaks both without breaking a build. The script reports every inbound reference a rename stranded, so the fix is to update them in the same change rather than to discover one later by following a dead link.
 
 **`pnpm run typecheck` requires `pnpm run build` first.** Packages import each other through their published entry points (`@haverstack/core`, `@haverstack/sqlite-shared`, …), which resolve to `dist/*.d.ts`. Without a build, those imports fail with `TS2307: Cannot find module '@haverstack/core'`, and every type that came through them degrades to `unknown` — producing a cascade of unrelated-looking errors (`TS18046: 'err' is of type 'unknown'`) in code that is perfectly fine. CI encodes this: its `typecheck` job declares `needs: build`. If you see a wall of `unknown` errors, check whether the _first_ error in the list is a missing module, and build before doing anything else.
 

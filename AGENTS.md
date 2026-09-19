@@ -22,10 +22,11 @@ Every type from that import then degrades to `unknown`, so you get a wall of `TS
 
 ## Before you push
 
-Run all five. They mirror `.github/workflows/ci.yml`, so a clean local run means a green PR.
+Run all six. They mirror `.github/workflows/ci.yml`, so a clean local run means a green PR.
 
 ```sh
 pnpm run format:check   # pnpm run format to fix in place
+pnpm run check:refs
 pnpm run lint
 pnpm test
 pnpm run build
@@ -50,7 +51,7 @@ These rules are enforced in review. Applying them to code you touch is expected;
 Design lives in [`docs/spec.md`](./docs/spec.md) and [`docs/spec/`](./docs/spec/): data model, identity, access control, unlisted records, versioning, attachments, change events, adapters, wire format, change feed.
 
 - A change to observable behavior (API contract, permission rule, wire shape, error mapping) **updates the spec in the same change**.
-- Section names are load-bearing — code comments reference them as `docs/spec/<file>.md § Section`. Verify a section exists before linking to it, and update inbound references when renaming a heading.
+- Section names are load-bearing — code comments reference them as `docs/spec/<file>.md § Section`. Verify a section exists before linking to it, and update inbound references when renaming a heading. `pnpm run check:refs` enforces both directions, so a rename that strands a reference fails CI rather than rotting quietly.
 - Needing a long comment to explain a rule that isn't in the spec means the spec is missing a section. Add it.
 - **Spec prose states the system as it is, never how it got there.** The no-previous-implementations rule above applies to prose: "is in core now", "this used to be flat", "when #16 lands" date the document and describe a system the reader can't see. Say which layer carries what instead. This covers `docs/commons/` too — a design guide, not a changelog.
 

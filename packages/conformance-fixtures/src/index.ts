@@ -1807,7 +1807,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'apply, for the same reason. A log of who changed what, gated on current read access, ' +
       "would make a record's past as reachable as its present: gaining read access today is " +
       'not an entitlement to the trail of every tag it has ever carried. ' +
-      'See docs/spec/versioning.md § Reading it.',
+      'See docs/spec/journal.md § Reading it.',
     method: 'GET',
     path: '/records/1hk153x00001/journal',
     responseStatus: 403,

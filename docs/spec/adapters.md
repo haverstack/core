@@ -10,11 +10,13 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **Every mutating record method is atomic, whatever it touches.** A record write is rarely one statement — a create alone writes the record row, its associations, the full-text index, the content index and a [journal entry](./journal.md) — and an adapter must apply the whole set or none of it. Partial application is worse than failure: the method raises, so the caller takes the write as lost, while what survives contradicts that and can outlive the retry. The [snapshot's atomicity rule](./versioning.md#snapshot-atomicity) is one instance of this, not a separate one.
 
-**Associations are keyed by identity.** Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+**`getJournal()` refuses a record that isn't there.** `StackNotFoundError` — never an empty log, which means _nothing changed_ unconditionally and is the one answer that must stay unambiguous. A purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
+
+### Associations are keyed by identity
+
+Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
 
 **`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
-
-**`getJournal()` refuses a record that isn't there.** `StackNotFoundError` — never an empty log, which means _nothing changed_ unconditionally and is the one answer that must stay unambiguous. A purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
 
 **`StackBlobAdapter` error contract:** `getAttachment(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackQueryError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
 
@@ -90,6 +92,12 @@ SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON
 **File compatibility:** the adapter produces a standard SQLite file with an FTS5 `records_fts` index. Any adapter reading it needs FTS5, not merely SQLite.
 
 `records_fts` is an external-content index (`content='records'`) declared `columnsize=0`. It carries no copy of the indexed text and no per-row token counts, so it answers `MATCH` — which is all `filter.search` asks of it — but a foreign reader cannot rank against it: `bm25()` and `columnsize()` have no column sizes to read. Ordering a search is a records-column sort here, never a relevance sort. A reader wanting relevance has to build its own index over `records.content` rather than borrow this one.
+
+### The search index is unindexed before the row moves
+
+An external-content index carries no copy of the text it indexes, so removing an entry means handing FTS5 the **old** content: the `('delete', rowid, content)` command, not a plain `DELETE`, which leaves a stale entry still matching. The old content is only readable while the row still holds it, so the unindex step must run **before** the record's content changes or its row is deleted — an adapter that writes the row first leaves the record searchable under content it no longer holds.
+
+This is why a SQLite-backed adapter's write is unindex, write, re-index rather than write-then-reindex, and it applies to every write that can move `content` or `typeId`. `@haverstack/adapter-conformance` pins it from the outside: after a content patch, the record is searchable under its new wording and not under its old.
 
 **Two of this adapter's tables are indexes and two are sources of truth.** `content_index` and `records_fts` are derived from `records.content` and can be dropped and rebuilt; `versions` and `journal` cannot, so they carry their own erasure and permission rules. See [Change journal § Why this is not more duplication](./journal.md#why-this-is-not-more-duplication).
 
