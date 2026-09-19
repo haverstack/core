@@ -75,6 +75,7 @@ import {
 import {
   grantConveys,
   grantCoversGrantee,
+  grantReach,
   loadGrantRecords,
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
@@ -266,6 +267,17 @@ export class ScopedStack implements StackClient {
   }
 
   /**
+   * Whether any grant could name this request — the one question every
+   * prefetch asks before scanning the `_grant` family, since an anonymous
+   * requester is reached by none. Both identities are read: `asEntity()`
+   * refuses an anonymous principal acting for a subject, so they are null
+   * together, and saying so costs nothing.
+   */
+  private get identified(): boolean {
+    return this.principalEntityId !== null || this.subjectEntityId !== null;
+  }
+
+  /**
    * Who this request is, for stamping onto whatever it mutates. Attribution
    * follows record-level authorship: the subject is the actor, and the
    * principal is named beside it only when the two differ.
@@ -380,7 +392,8 @@ export class ScopedStack implements StackClient {
 
     for (const r of grantRecords) {
       const c = r.content as GrantContent;
-      if (baseIdOf(c.typeId) !== familyId) continue;
+      const reach = grantReach(c);
+      if (!reach || reach.familyId !== familyId) continue;
       const covers = await grantCoversGrantee(c, grantee, {
         allowDefault,
         allowGroup,
@@ -389,7 +402,7 @@ export class ScopedStack implements StackClient {
       });
       if (!covers) continue;
       const matches = actions.some((action) => {
-        if (!grantConveys(c.actions as string[], action)) return false;
+        if (!grantConveys(reach.actions, action)) return false;
         if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
         return true;
       });
@@ -467,8 +480,7 @@ export class ScopedStack implements StackClient {
     // carried by a record-level permission settles without reading a grant
     // at all, and that path must not pay for this one. Both halves of
     // canRead share the one scan.
-    const grants =
-      this.principalEntityId || this.subjectEntityId ? await this.loadGrants() : undefined;
+    const grants = this.identified ? await this.loadGrants() : undefined;
     if (await this.canRead(record, grants)) return new StackPermissionError(message);
     return new StackNotFoundError(`Record not found: "${record.id}"`);
   }
@@ -615,7 +627,7 @@ export class ScopedStack implements StackClient {
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
-    const prefetchedGrants = this.subjectEntityId ? await this.loadGrants() : undefined;
+    const prefetchedGrants = this.identified ? await this.loadGrants() : undefined;
     const groupRoles = new Map<string, GroupRole | null>();
 
     const match = await findFirstMatch(
@@ -655,6 +667,9 @@ export class ScopedStack implements StackClient {
 
     if (this.subjectEntityId === this.stack.ownerEntityId) return true;
 
+    // `includeUnlisted`, as hasReadableReference() above: withholding a
+    // record from enumeration decides nothing about what it conveys, and
+    // the uploader clause does not lapse. See docs/spec/unlisted.md.
     return filtersContent(this.stack.features)
       ? (
           await this.stack.query({
@@ -662,13 +677,18 @@ export class ScopedStack implements StackClient {
               typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
               entityId: this.subjectEntityId,
               content: { fileId },
+              includeUnlisted: true,
             },
             limit: 1,
           })
         ).records.length > 0
       : (
           await queryAllPages((q) => this.stack.query(q), {
-            filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, entityId: this.subjectEntityId },
+            filter: {
+              typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+              entityId: this.subjectEntityId,
+              includeUnlisted: true,
+            },
           })
         ).some((r) => (r.content as AttachmentContent).fileId === fileId);
   }
@@ -881,7 +901,7 @@ export class ScopedStack implements StackClient {
     const maxFetched = limit * 10;
     let totalFetched = 0;
 
-    const prefetchedGrants = this.principalEntityId ? await this.loadGrants() : undefined;
+    const prefetchedGrants = this.identified ? await this.loadGrants() : undefined;
     // Scoped to this query, like prefetchedGrants beside it: every
     // candidate Record shares one roster resolution per group, and nothing
     // is carried into the next operation.
@@ -1414,7 +1434,7 @@ export class ScopedStack implements StackClient {
    * the stack makes.
    */
   private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.principalEntityId ? await cache.grants(() => this.loadGrants()) : undefined;
+    const grants = this.identified ? await cache.grants(() => this.loadGrants()) : undefined;
     return this.canRead(record, grants, cache.roles);
   }
 }

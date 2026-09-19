@@ -9,6 +9,7 @@ import type {
   RecordChanges,
   FileId,
   TypeId,
+  SubscribeChangesOptions,
 } from '../src/types.js';
 
 const purgedRecord: StackRecord = {
@@ -279,6 +280,30 @@ describe('combineAdapters', () => {
         blob: makeBlobAdapter(),
       });
       expect(adapter.listFiles).toBeUndefined();
+    });
+
+    test('subscribeChanges is present when the record adapter implements it', async () => {
+      let received: SubscribeChangesOptions | undefined;
+      const stop = () => {};
+      const adapter = combineAdapters({
+        record: makeRecordAdapter({
+          subscribeChanges: async (opts: SubscribeChangesOptions) => {
+            received = opts;
+            return stop;
+          },
+        }),
+        blob: makeBlobAdapter(),
+      });
+      expect(await adapter.subscribeChanges!({ since: 'AA3f1Q' }, () => {})).toBe(stop);
+      expect(received).toEqual({ since: 'AA3f1Q' });
+    });
+
+    test('subscribeChanges is absent when the record adapter does not implement it', () => {
+      const adapter = combineAdapters({
+        record: makeRecordAdapter(),
+        blob: makeBlobAdapter(),
+      });
+      expect(adapter.subscribeChanges).toBeUndefined();
     });
   });
 

@@ -55,11 +55,35 @@ export const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> =
  * sit in the same `_grant` Record: a grant is revoked whole, so a rule
  * satisfied across two records would let revoking the read one leave a
  * mutate-without-read grant standing.
+ *
+ * Takes the list grantReach() produced, never a stored field: `includes()`
+ * over a string is substring matching, so one would answer for every verb
+ * spelled inside it.
  */
-export function grantConveys(actions: readonly string[], action: GrantAction): boolean {
+export function grantConveys(actions: readonly GrantAction[], action: GrantAction): boolean {
   if (!actions.includes(action)) return false;
   const companions = READ_COMPANIONS.get(action);
   return !companions || companions.some((c) => actions.includes(c));
+}
+
+/**
+ * What a stored `_grant` reaches, or null where it names nothing the
+ * evaluator recognizes. Read as data, like the grantee beside it: a grant
+ * Record can arrive from an import, a direct adapter write or a foreign
+ * server, where no schema saw it, so both fields are asked for their shape
+ * rather than taken from the type. An unknown action is dropped from the
+ * list, on the same terms an unknown grantee `kind` confers nothing.
+ * See docs/spec/access-control.md § Refused at the write, and again at evaluation.
+ */
+export function grantReach(content: unknown): { familyId: string; actions: GrantAction[] } | null {
+  const c = content as { typeId?: unknown; actions?: unknown } | null;
+  if (!c || typeof c !== 'object') return null;
+  if (typeof c.typeId !== 'string' || c.typeId.length === 0) return null;
+  if (!Array.isArray(c.actions)) return null;
+  return {
+    familyId: baseIdOf(c.typeId),
+    actions: c.actions.filter((a): a is GrantAction => GRANT_ACTION_SET.has(a as GrantAction)),
+  };
 }
 
 /**

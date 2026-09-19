@@ -102,6 +102,7 @@ import {
   GRANT_ACTION_SET,
   READ_COMPANIONS,
   grantConveys,
+  grantReach,
   matchesGrantTarget,
   validateGrantTarget,
   validateGrantee,
@@ -2550,7 +2551,12 @@ export class Stack implements StackClient {
       const actionSet = new Set(g.actions);
       const matches = all.filter((r) => {
         const c = r.content as GrantContent;
-        if (baseIdOf(c.typeId) !== familyId) return false;
+        // Establishes the family and that `actions` is a list, so the exact
+        // match below reads a real one. Matched against the stored list
+        // rather than the reach, so a grant carrying an action this
+        // vocabulary drops is not withdrawn by a target that omits it.
+        const reach = grantReach(c);
+        if (!reach || reach.familyId !== familyId) return false;
         if (!matchesGrantTarget(c, target)) return false;
         return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
       });
