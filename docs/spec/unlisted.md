@@ -20,21 +20,21 @@ type RecordFilter = {
 
 > Unlisted withholds a Record from enumeration and announcement. It never withholds the Record. A requester who may read it and holds its ID gets it. A requester without the ID has no supported way to discover it.
 
-**Nor does it withhold what a Record _confers_.** A `_grant` Record is read with unlisted Records included, so unlisting one changes nothing about the authority it carries — and `listGrants()` and `revoke()` read the same set, so it stays visible to the owner who wants to withdraw it. Withdrawing a grant is `revoke()`, which soft-deletes it; that is the whole of the vocabulary, and a listing flag is not a second spelling of it. See [Access control § Type-level grants](./access-control.md#type-level-grants).
+**Nor does it withhold what a Record _confers_.** A `_grant` Record is read with unlisted Records included, so unlisting one is not a second spelling of `revoke()` — see [Access control § Listing and revoking](./access-control.md#listing-and-revoking).
 
-That sits inside the same threat model as [record IDs being guessable](./access-control.md#errors-and-information-exposure) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
+That sits inside the same threat model as [record IDs being guessable](./disclosure.md#why-the-distinction-is-earned) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
 
 ## Three tiers, not two
 
 The reach question access control usually asks is binary — enforced or not — but enumeration has a real middle tier, and `unlistedAt` occupies it rather than inventing a softer word for "advisory":
 
-|               | Behavior                                   | Occupants                            |
-| ------------- | ------------------------------------------ | ------------------------------------ |
-| **Enforced**  | Refused regardless of what the caller asks | `permissions`, grants                |
-| **Defaulted** | Refused unless the caller asks             | `deletedAt`, `unlistedAt`, `_config` |
-| **Advisory**  | Always returned; the consumer decides      | A tag convention                     |
+|               | Behavior                                   | Occupants                 |
+| ------------- | ------------------------------------------ | ------------------------- |
+| **Enforced**  | Refused regardless of what the caller asks | `permissions`, grants     |
+| **Defaulted** | Refused unless the caller asks             | `deletedAt`, `unlistedAt` |
+| **Advisory**  | Always returned; the consumer decides      | A tag convention          |
 
-A consumer that has never heard of `unlistedAt` gets correct behavior by default — an unfiltered `query()` excludes it, the same posture as `deletedAt` and `_config`. That default is what makes the field real rather than a documentation-only convention: nothing about it depends on every consumer choosing to respect it.
+A consumer that has never heard of `unlistedAt` gets correct behavior by default — an unfiltered `query()` excludes it, the same posture as `deletedAt`. That default is what makes the field real rather than a documentation-only convention: nothing about it depends on every consumer choosing to respect it.
 
 ## Setting it
 
@@ -59,7 +59,7 @@ Enumeration standing rests on nothing but ownership. A grant conveys reach over 
 
 ## The feed matches `query()`
 
-An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. The one wrinkle is the transition itself: marking a Record unlisted must still reach a subscriber who already knows it, so it can drop its copy, even though the Record's new state would otherwise fail that same exclusion. See [Change events § The unlisted transition](./events.md#the-unlisted-transition) for the full transition table and the `list`/`unlist` change ops.
+An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. Which transitions still have to reach a default subscriber, and why, is [Change events § The unlisted transition](./events.md#the-unlisted-transition).
 
 ## What this is not
 

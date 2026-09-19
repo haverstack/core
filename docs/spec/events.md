@@ -8,7 +8,7 @@ This section is the model and the local API. Its wire encoding — discovery, `G
 
 Two things follow immediately:
 
-- **The event set is closed.** These writes emit and no others: create, hard delete, the association endpoints, and every endpoint that bumps `version` — the same set [Wire format § Versions](./wire-format.md#versions) spells out endpoint by endpoint. A server has nothing to decide for itself about which verbs are reportable.
+- **The event set is closed.** These writes emit and no others: create, hard delete, the association and permission endpoints, every endpoint that bumps `version`, and a change set naming any [no-bump key](./versioning.md#version-history). A server has nothing to decide for itself about which verbs are reportable.
 - **A no-op mutation emits nothing.** What decides is `ops`, not `version`. Re-adding an association the record already holds, setting a deep-equal permission set, or deleting an already-deleted record produces no `ops` at all, and no `ops` means no event. A subscriber never sees a phantom change.
 
 ## What a feed is not

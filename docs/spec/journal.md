@@ -6,7 +6,7 @@ This document is the model and the local API. Its wire encoding — `GET /record
 
 ## Why the tier exists
 
-[These aspects are invertible](./versioning.md#version-history) — the inverse of an `associate()` is a `dissociate()` of the same shape, of an `unlist` a `list`, of a move a move back — but invertibility is not recoverability: an inverse exists, and deriving _which_ inverse takes the prior state. That is what an entry carries, and why it is the whole recovery story for all three: a move's `previousParentId` lives nowhere else. A subscriber watching the [change feed](./events.md) at the moment of the write sees the delta go past; the journal is where anyone who was not listening reads it afterwards. A feed is a notification, not a store — widening it into one is [the wrong answer](./events.md#what-a-feed-is-not) to this question, because a replayable feed would have to re-decide readability long after the record it describes has moved on, and would keep naming records a hard delete destroyed.
+[These aspects are invertible](./versioning.md#version-history) — the inverse of an `associate()` is a `dissociate()` of the same shape, of an `unlist` a `list`, of a move a move back — but invertibility is not recoverability: an inverse exists, and deriving _which_ inverse takes the prior state. That is what an entry carries, and why it is the whole recovery story for all three: a move's `previousParentId` lives nowhere else. A subscriber watching the [change feed](./events.md) at the moment of the write sees the delta go past; the journal is where anyone who was not listening reads it afterwards. Widening the feed into a store instead is [the wrong answer](./events.md#what-a-feed-is-not) to this question.
 
 ## The entry
 
@@ -93,7 +93,7 @@ A purged record's id is therefore a pointer to nothing, wherever it survives —
 
 - `stack.getJournal(recordId, { sinceSeq?, limit? })` — the log, oldest first.
 
-**A record that does not exist is `StackNotFoundError`, never an empty log.** A purged record is gone, so it is the same refusal. An empty log means "nothing changed" unconditionally — that is the whole argument for the mandatory endpoint below — and it cannot also mean "no such record" without taking the one reading a caller reconstructing an association's history depends on.
+**A record that does not exist is `StackNotFoundError`, never an empty log.** A purged record is gone, so it is the same refusal.
 
 `sinceSeq` and `limit` are each a non-negative integer or absent; anything else is refused with `StackQueryError` before an adapter sees it. The window is checked rather than coerced because the two coercions available disagree: a negative `limit` read as a JavaScript slice drops the newest entry, and read as a SQL `LIMIT` removes the ceiling altogether. **Omitting `limit` reads the whole log, and no ceiling is imposed when it is omitted** — unlike a query, where a default page size is a kindness, a truncated journal is a wrong answer to the one caller who needs it, the one reconstructing an association's full history.
 
@@ -109,17 +109,8 @@ The projection drops elements from an entry, never the entry: `seq` stays [dense
 
 ## Why this is not more duplication
 
-The stack materializes a record's data in four places, and they divide cleanly in two:
+A stack materializes a record's data in more places than `records`, and they divide cleanly in two. An index — a content index, a full-text index — can be dropped and regenerated; it costs disk and write amplification and nothing else, and it is never what a recovery path reads. A source of truth cannot be regenerated, so it owes the full treatment: an erasure path that reaches it, a permission gate of its own, and a retention story. `versions` and the journal are the two that cannot.
 
-| Store           | Rebuildable from `records`? | What it is        |
-| --------------- | :-------------------------: | ----------------- |
-| `content_index` |             Yes             | An index          |
-| `records_fts`   |             Yes             | An index          |
-| `versions`      |             No              | A source of truth |
-| `journal`       |             No              | A source of truth |
+The journal is the cheaper of the two to carry, because it is **envelope-level**: `content` lives on a snapshot, and copying it here would make the journal the larger of the two stores for a recovery nobody asked for. A record's snapshot holds a full copy of its content per version, which is where a stack's history bytes actually are; an entry holds a verb, an actor and a delta.
 
-An index can be dropped and regenerated; it costs disk and write amplification and nothing else, and it is never what a recovery path reads. A source of truth cannot be regenerated, so it owes the full treatment: an erasure path that reaches it, a permission gate of its own, and a retention story.
-
-The journal is the cheapest of the four to carry, because it is **envelope-level**: `content` lives on a snapshot, and copying it here would make the journal the larger of the two stores for a recovery nobody asked for. A record's snapshot holds a full copy of its content per version, which is where a stack's history bytes actually are; an entry holds a verb, an actor and a delta.
-
-Both untracked stores grow with write volume and neither prunes itself. That is a policy question this spec does not answer for `versions`, and does not answer here either.
+Both grow with write volume and neither prunes itself. That is a policy question this spec does not answer for `versions`, and does not answer here either.

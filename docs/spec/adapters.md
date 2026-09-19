@@ -10,7 +10,7 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **Every mutating record method is atomic, whatever it touches.** A record write is rarely one statement — a create alone writes the record row, its associations, the full-text index, the content index and a [journal entry](./journal.md) — and an adapter must apply the whole set or none of it. Partial application is worse than failure: the method raises, so the caller takes the write as lost, while what survives contradicts that and can outlive the retry. The [snapshot's atomicity rule](./versioning.md#snapshot-atomicity) is one instance of this, not a separate one.
 
-**`getJournal()` refuses a record that isn't there.** `StackNotFoundError` — never an empty log, which means _nothing changed_ unconditionally and is the one answer that must stay unambiguous. A purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
+**`getJournal()` refuses a record that isn't there.** `StackNotFoundError`, never an empty log — a purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
 
 ### Associations are keyed by identity
 
