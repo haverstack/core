@@ -1,5 +1,19 @@
 # @haverstack/adapter-local
 
+## 0.34.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/blob-adapter-disk`, `@haverstack/core`, `@haverstack/record-adapter-sqlite`.
+
+### Patch Changes
+
+- [#311](https://github.com/haverstack/core/pull/311) [`4368d1b`](https://github.com/haverstack/core/commit/4368d1bd990721f91e5e70f833417aded60ecd8b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Comments only: give each rule one home and link to it from the sites that depend on it, rather than re-arguing it at each. No behavior change.
+- Updated dependencies [[`227ddf8`](https://github.com/haverstack/core/commit/227ddf8eede5c1ea5a88f2336f33c8bde6280070), [`4368d1b`](https://github.com/haverstack/core/commit/4368d1bd990721f91e5e70f833417aded60ecd8b), [`1d3d8b9`](https://github.com/haverstack/core/commit/1d3d8b998bd52ac0f0b88707a7116007779a226a), [`ea2b328`](https://github.com/haverstack/core/commit/ea2b328b59ae4e4f2fcb8743b0359e49b7a79deb), [`70075a2`](https://github.com/haverstack/core/commit/70075a268a8fbae909dfb5fe9dae04a53f13f2e9), [`b4b21db`](https://github.com/haverstack/core/commit/b4b21dbc208937817f26602fd53751601e6d43a0), [`93111dc`](https://github.com/haverstack/core/commit/93111dcb4989a35c5c5160eb46b418fd829ed50e)]:
+  - @haverstack/core@0.35.0
+  - @haverstack/record-adapter-sqlite@0.27.0
+  - @haverstack/blob-adapter-disk@0.33.0
+
 ## 0.33.0
 
 ### Minor Changes

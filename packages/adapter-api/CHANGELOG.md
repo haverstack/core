@@ -1,5 +1,82 @@
 # @haverstack/adapter-api
 
+## 0.34.0
+
+### Minor Changes
+
+- [#304](https://github.com/haverstack/core/pull/304) [`1d3d8b9`](https://github.com/haverstack/core/commit/1d3d8b998bd52ac0f0b88707a7116007779a226a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Move `parentId` and `unlisted` off the version tier
+
+  A move and a listing transition no longer bump `version`, take a snapshot, or
+  read `ifVersion`. Both join `associations` in the journal tier, whose entry
+  already records them in full: a `reparent` carries `previousParentId`, and
+  `unlist`/`list` is its own inverse.
+
+  `RecordVersion` and `WireVersion` lose `parentId`, and the SQLite `versions`
+  table loses its `parent_id` column. `restoreVersion()` correspondingly settles
+  `content` and `typeId` alone — it leaves a record in whatever container it is
+  in now, which removes the ancestor-cycle walk, the reference gate on the
+  snapshot's container, and the second-container routing a restore used to get
+  on the change feed.
+
+  `version` is now documented as the ordinal of a record's snapshot history
+  rather than a count of its changes; the journal's `seq` is what counts every
+  change.
+
+- [#306](https://github.com/haverstack/core/pull/306) [`b4b21db`](https://github.com/haverstack/core/commit/b4b21dbc208937817f26602fd53751601e6d43a0) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Store record permissions as associations, behind a partitioned API surface
+
+  A permission entry has element identity, so the delta the association tier
+  already computes describes it exactly. `Permission` is replaced by two
+  association kinds — `permission`, whose bit is its label and whose grantee
+  carries a required `role`, and `anyone`, which spells reach to the world
+  affirmatively — and the whole-list snapshot goes with it. `RecordVersion` and
+  `WireVersion` lose `permissions`, the SQLite `versions` and `records` tables
+  lose their `permissions` columns, and `restoreVersion()` loses its
+  never-restores-permissions carve-out: it falls out of a restore never touching
+  associations.
+
+  Storage unifies; the API does not. `StackRecord.associations` and
+  `StackRecord.permissions` are projections over one table partitioned by kind,
+  and each change-set key replaces only within its own domain, so an app editing
+  tags is never handed the ACL and cannot drop it. A kind named in the wrong key
+  is a `StackQueryError`, `associate()`/`dissociate()` refuse authority kinds,
+  and record-level ACL changes get their own verbs — `grantAccess()` and
+  `revokeAccess()`, mirroring the type-level `grant()`/`revoke()`, with
+  `POST /records/:id/permissions[/delete]` on the wire.
+
+  The reshare gate reads the computed delta rather than the incoming list, so a
+  wholesale replacement that drops every element — which names nothing at all —
+  still needs reshare authority, while a set restated is not a reshare. _Write
+  implies read_ becomes a cross-element invariant over the set a write would
+  produce, which is what makes revoking a `read` refusable while its `write`
+  stands, and an `anyone` element satisfies it for every grantee — a
+  world-readable record leaves no writer blind. The rule it enforces is that no
+  write lands in a set whose grantee cannot read it, whichever verb or key
+  produced the set: withdrawing an `anyone` while a write it covered stands is
+  refused, while `permissions: []` and a key naming the writer's own `read` in
+  its place are ordinary one-call writes. A permission change is a no-bump write: it
+  leaves `version` and `updatedAt` where they stand and appends one journal entry
+  carrying `previous` per element it moved.
+
+  The journal is therefore where a record's sharing history lives, and reading it
+  is gated in two tiers: the mutate surface for the entry, reshare authority for
+  its authority half. A write-holder who is neither owner nor creator gets the
+  `permissions` op without the grantees beneath it, asked of both identities so
+  delegation is no route to it either. Entries are never dropped, so `seq` stays
+  dense and a mixed write still reports its content half.
+  `getVersions()`/`getVersion()` serve the same `RecordVersion` rows to every
+  requester who passes their gate, since a snapshot now carries nothing to
+  project.
+
+  An association naming no known kind — `null`, `{}`, or a kind outside the five
+  — is a `StackValidationError` at every surface that takes one, rather than a
+  `TypeError` from the first field read off it.
+
+### Patch Changes
+
+- Updated dependencies [[`227ddf8`](https://github.com/haverstack/core/commit/227ddf8eede5c1ea5a88f2336f33c8bde6280070), [`4368d1b`](https://github.com/haverstack/core/commit/4368d1bd990721f91e5e70f833417aded60ecd8b), [`1d3d8b9`](https://github.com/haverstack/core/commit/1d3d8b998bd52ac0f0b88707a7116007779a226a), [`ea2b328`](https://github.com/haverstack/core/commit/ea2b328b59ae4e4f2fcb8743b0359e49b7a79deb), [`70075a2`](https://github.com/haverstack/core/commit/70075a268a8fbae909dfb5fe9dae04a53f13f2e9), [`b4b21db`](https://github.com/haverstack/core/commit/b4b21dbc208937817f26602fd53751601e6d43a0), [`93111dc`](https://github.com/haverstack/core/commit/93111dcb4989a35c5c5160eb46b418fd829ed50e)]:
+  - @haverstack/core@0.35.0
+  - @haverstack/wire-types@0.34.0
+
 ## 0.33.0
 
 ### Minor Changes
