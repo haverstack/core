@@ -301,13 +301,15 @@ If-Match: "5"
 }
 ```
 
-| Key            | Type           | Meaning                                                             |
-| -------------- | -------------- | ------------------------------------------------------------------- |
-| `contentPatch` | object         | merges at the **top level**: omitted keeps, `null` removes          |
-| `parentId`     | string \| null | move into a container, or to the root; never bumps `version`        |
-| `permissions`  | array          | replaces the authority half; `[]` is private; never bumps `version` |
-| `associations` | array          | replaces the data half; never bumps `version`                       |
-| `unlisted`     | boolean        | withhold from enumeration, or relist; never bumps `version`         |
+| Key            | Type           | Meaning                                                    |
+| -------------- | -------------- | ---------------------------------------------------------- |
+| `contentPatch` | object         | merges at the **top level**: omitted keeps, `null` removes |
+| `parentId`     | string \| null | move into a container, or to the root                      |
+| `permissions`  | array          | replaces the authority half; `[]` is private               |
+| `associations` | array          | replaces the data half                                     |
+| `unlisted`     | boolean        | withhold from enumeration, or relist                       |
+
+Only `contentPatch` bumps `version`; an envelope naming none of it is a [no-bump write](./versioning.md#version-history).
 
 **Keys are read for presence.** `"unlisted": false` and `"parentId": null` name aspects and are applied; an absent key is untouched. `null` is the root sentinel for `parentId` — the JSON spelling of the `parentId=null` that `GET /records` takes on a query string — and is **not** a removal spelling anywhere else in the envelope: a `null` value for any other key is refused with **422**, since the key that removes things already has one meaning for it.
 
@@ -352,7 +354,7 @@ Both query endpoints return:
 }
 ```
 
-**The envelope carries no count of the whole match.** Every request a server serves is authenticated as some requester, so every response it produces has passed a permission boundary, and a count that ignores pagination would report how many Records exist beyond what that requester may read. A server MUST NOT send one. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
+**The envelope carries no count of the whole match**, and a server MUST NOT send one. Every request a server serves has passed a permission boundary, so there is no response on which the number would be safe — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
 
 **An empty `records` array with a non-null `cursor` is a valid response, and does not mean the result set is exhausted.** `cursor: null` is the only end-of-results signal; a client that stops paging on an empty page silently truncates its own results. See [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination) for why the case is reachable rather than theoretical.
 
@@ -388,7 +390,7 @@ POST /records/:id/permissions/delete  — revoke one element (by body)
 
 `GET` uses the envelope `{ "permissions": [...] }` as its response body. The two `POST`s are `grantAccess()`/`revokeAccess()`: each takes one permission element as its body, amends the set, and answers `200` with the updated Record. They mirror the association endpoints in shape — including the `/delete` sub-path, for the reason given [there](#associations) — and carry the reshare gate rather than the write bit, so a write-holder who is neither owner nor creator gets `403`.
 
-**The `permissions` key on `PATCH /records/:id` is the declarative spelling**, replacing the whole set — `[]` makes the record private. The endpoints amend it, which is what survives two admins sharing one record at once. Neither spelling bumps `version`: permission elements are associations, and their prior state is kept by the journal.
+**The `permissions` key on `PATCH /records/:id` is the declarative spelling**, replacing the whole set — `[]` makes the record private. The endpoints amend it, which is what survives two admins sharing one record at once.
 
 **A permission element named in the `associations` key — or an `association` element in `permissions`, or through the wrong pair of endpoints — is `400` (code `bad_request`).** Authority and data share storage and never share a call; the refusal says the caller named the wrong surface rather than sent a malformed value. See [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
 
@@ -412,7 +414,7 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id` (when its change set names `contentPatch`), `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). A change set that bumps produces one version and therefore one snapshot, however many aspects it moved. The association and permission endpoints, and a `PATCH` naming only `associations`, `permissions`, `parentId` and/or `unlisted`, are the deliberate exception: none of them bumps `version`, so none snapshots either — see [Versioning § Version history](./versioning.md#version-history). `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id` (when its change set names `contentPatch`), `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). A change set that bumps produces one version and therefore one snapshot, however many aspects it moved. The association and permission endpoints, and a `PATCH` naming only `associations`, `permissions`, `parentId` and/or `unlisted`, are the deliberate exception: none of them bumps `version`, so none snapshots either. `saveVersion()` is a deliberate no-op over `APIAdapter` — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
@@ -422,7 +424,7 @@ POST /records/:id/restore/:version    — restore a version (creates new version
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Every requester who passes that gate gets the same body. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-**A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`.** No version has ever captured any of the four — none of them bumps `version`, so there is no moment at which a snapshot is taken of them — and a restore correspondingly leaves a record's associations, ACL, container and listing state exactly where they stand, whatever the snapshot it puts back. `WireVersion` has no such field, so a server that emits one is writing a key every client drops. See [Versioning § Version history](./versioning.md#version-history).
+**A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`** — no version has ever captured any of the four (see [Versioning § Version history](./versioning.md#version-history)). `WireVersion` has no such field, so a server that emits one is writing a key every client drops.
 
 The second durable tier a mutation writes is [the change journal](./journal.md), served by [the endpoint below](#journal) — the record of what each change moved, which is where an association's prior state is recovered from, since no snapshot holds one.
 
@@ -508,9 +510,9 @@ POST   /records/:id/associations/delete        — remove an association (by bod
 
 Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
 
-Neither endpoint reads `If-Match`, and one sent to either is ignored rather than refused — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had: neither endpoint ever bumps `version`, snapshots, or produces a new entry in `GET .../versions` — see [Versioning § Version history](./versioning.md#version-history).
+Neither endpoint reads `If-Match`, and one sent to either is ignored rather than refused — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had, and produces no new entry in `GET .../versions`.
 
-**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. Neither spelling bumps `version` on its own; a `PATCH` only bumps when its change set names `contentPatch` alongside `associations`. See [Data model § Mutations](./data-model.md#mutations).
+**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. See [Data model § Mutations](./data-model.md#mutations).
 
 `GET .../associations` response shape is consistent regardless of kind:
 

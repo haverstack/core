@@ -38,7 +38,7 @@ Response: `200 text/event-stream`, a stream of frames.
 
 `@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — filter, `include` and `includeUnlisted` in one object, since a server needs the last of those before the stream opens to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
 
-**Filtering is exact, not advisory**, exactly as it is [locally](./events.md#subscribing): a filtered connection never receives an event outside its filter. `typeId` is matched by `baseId`, as [grants are](./access-control.md#type-level-grants), so a type version bump never silently orphans a subscription. `entityId` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
+**Filtering is [exact, not advisory](./events.md#subscribing)**, and `typeId` is matched by `baseId`. `entityId` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
 
 ## Frames
 
@@ -76,7 +76,7 @@ data: {"reason":"cursor_expired"}
 
 - **`ready` is sent first, always.** It carries the head cursor, and it is what makes subscribe-then-query gap-free: a client that awaits it before querying knows every later change is in one or the other. A server that mints no cursors sends it with no `seq`.
 - **`record`** carries one change. `ops` is every aspect the change moved and is never empty — a list, because [one mutation can move several aspects](./data-model.md#mutations); `updatedAt` is an ISO string; `record`, when included, is a `WireRecord`. The envelope describes the change and carries no record provenance — `actor` is who performed it, never who authored the record. See [Change events § Attribution](./events.md#attribution).
-- **`associationsAdded`/`associationsRemoved`** ride the same frame, present exactly when `ops` names `associate`/`dissociate`. An association change never bumps `version` or moves `updatedAt`, so the frame's `version` and `updatedAt` are exactly what they were before the call and these two lists are the frame's only account of what moved. `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried, which [the journal](./journal.md#the-entry) keeps instead. See [Change events § The event shape](./events.md#the-event-shape) for both fields' full contract. A subscriber that missed the frame recovers the delta from [the change journal](./journal.md), served by [`GET /records/:id/journal`](./wire-format.md#journal) — per record, so a reconnect still reconciles **which** records moved by query, and reads what moved on each from there.
+- **`associationsAdded`/`associationsRemoved`** ride the same frame, present exactly when `ops` names `associate`/`dissociate`, and carry what [Change events § The event shape](./events.md#the-event-shape) says they carry. The frame's `version` and `updatedAt` are whatever they were before the call, so these two lists are its only account of what moved. A subscriber that missed the frame recovers the delta from [the change journal](./journal.md), served by [`GET /records/:id/journal`](./wire-format.md#journal) — per record, so a reconnect still reconciles **which** records moved by query, and reads what moved on each from there.
 - **`reset`** means _your cursor cannot be honored; resynchronize by query_. A server with no buffer at all sends it on every connection and is fully conformant. `reason` is informational (`cursor_expired`, `not_supported`, `overflow`) — the client's repair is the same for all three.
 - **`: keepalive` comments** SHOULD be sent on an idle interval, so intermediaries do not reap the connection and a client can detect a dead one.
 
@@ -98,10 +98,7 @@ data: {"reason":"cursor_expired"}
 
 **A connection delivers the events its token's session may read, and nothing else** — the `canRead`-per-event rule the [local feed](./events.md#permission-scoping) defines, including its refusal to emit anything at all about a record the requester cannot read. A server subscribes **unscoped** at the storage owner and fans out per connection, filtering each through the `ScopedStack` its token's session names via `Stack.forSession()`, taking the `(principalId, subjectId)` pair whole. Delegated authority is then the ordinary [intersection](./access-control.md#delegation-principal-and-subject), inherited rather than reimplemented.
 
-Two consequences are easy to discover too late:
-
-- **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. A subscription opened through `ScopedStack.subscribe()` already carries that cache and expires it from the stream itself, so a server that opens one per connection inherits both and has nothing to build — see [Change events § Permission scoping](./events.md#permission-scoping). The cost is a real one to weigh only where a server scopes the feed some other way.
-- **A purged record cannot be permission-checked after the fact.** Readability must be evaluated at mutation time, on the record as it stood, because after the write there is nothing left to check.
+One consequence is easy to discover too late: **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. A subscription opened through `ScopedStack.subscribe()` already carries that cache and expires it from the stream itself, so a server that opens one per connection inherits both and has nothing to build — see [Change events § Permission scoping](./events.md#permission-scoping). The cost is a real one to weigh only where a server scopes the feed some other way.
 
 ## Auth, and what a stream does not renew
 
@@ -121,7 +118,7 @@ As with [the auth checklist](./wire-format.md#server-implementation-checklist), 
 - **Close on buffer overflow; never drop a frame silently.**
 - **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
 - **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
-- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, hard delete and the two [association endpoints](./wire-format.md#associations) — which report `associate`/`dissociate` while bumping no `version`, so a server that emits off its snapshot path alone silently serves no association events at all.
+- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, hard delete, the [association](./wire-format.md#associations) and [permission](./wire-format.md#permissions) endpoints, and a `PATCH` naming only no-bump keys. None of that second group bumps `version`, so a server that emits off its snapshot path alone silently serves no association, permission, move or listing events at all.
 
 ## Why SSE, and why not `EventSource`
 
