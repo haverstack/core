@@ -1,5 +1,50 @@
 # @haverstack/core
 
+## 0.36.0
+
+### Minor Changes
+
+- [#312](https://github.com/haverstack/core/pull/312) [`2465107`](https://github.com/haverstack/core/commit/2465107a242b1a77ec16f6cbd16c6c4e85ffc1e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Keep listing state out of what a record conveys about a file
+
+  Both reads behind `getAttachment()`'s access rule ask what a record
+  conveys, not which records exist, so neither is narrowed by `unlistedAt`.
+  The reference scan already said so; the uploader clause did not, on either
+  the content-filtered path or the in-memory fallback an adapter reaching no
+  content takes. Unlisting your own `_attachment@1` record therefore took
+  away access to bytes you had uploaded yourself — a withdrawal spelled by a
+  flag defined not to withhold the record, let alone what it confers.
+
+  `combineAdapters()` now forwards `StackRecordAdapter.subscribeChanges()`,
+  on the same terms as every other optional method. Dropping it left a
+  combined stack quietly emitting only its own writes while a remote record
+  backend's feed went unread, and `Stack.relaysChanges` reading false meant a
+  scoped subscription stopped refusing a feed it cannot narrow.
+
+- [#312](https://github.com/haverstack/core/pull/312) [`2465107`](https://github.com/haverstack/core/commit/2465107a242b1a77ec16f6cbd16c6c4e85ffc1e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Read a `_grant`'s `typeId` and `actions` as data at evaluation
+
+  A `_grant` Record reaching storage without passing `grant()` — an import, a
+  direct adapter write, a foreign server's response — carries whatever shape
+  it arrived with. Evaluation already read the grantee that way, asking for
+  its `kind` and refusing an empty `entityId`/`groupId`; it now asks the same
+  of the two fields beside it.
+
+  A `typeId` that is not a non-empty string names no family, and an `actions`
+  that is not a list names no verbs — the Record confers nothing rather than
+  conferring what a looser reading would produce. `actions` is the sharp one:
+  membership in a string is substring matching, so an `actions` of
+  `'delete-any read-any'` previously conveyed `delete-any` **and** found its
+  required read companion spelled in the same string. An entry the action
+  vocabulary does not hold is now dropped from a list that otherwise stands.
+
+  A grant naming no `typeId` also took every scoped read down with it rather
+  than conferring nothing: `query()` raised a `TypeError` out of the family
+  comparison for every requester, and a scoped subscription dropped events.
+
+  `revoke()` reads the stored list rather than the recognized one, so a grant
+  carrying an unrecognized action is not withdrawn by a target that omits it.
+  A malformed grant confers nothing and stays visible to `listGrants()`,
+  which is how an owner takes away something `grant()` never wrote.
+
 ## 0.35.0
 
 ### Minor Changes
