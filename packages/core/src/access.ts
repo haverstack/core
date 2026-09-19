@@ -61,8 +61,11 @@ export async function checkAccess(
   if (!perms || perms.length === 0) return false;
 
   for (const p of perms) {
+    // `read` is the whole of what an `anyone` can say, so an element
+    // labelled anything else names no reach — the same reading the
+    // `permission` arm below takes of a grantee it doesn't recognize.
     if (p?.kind === 'anyone') {
-      if (mode === 'read') return true;
+      if (mode === 'read' && isWorldRead(p)) return true;
       continue;
     }
     // Anything that is not a well-formed permission confers nothing. The
@@ -97,9 +100,20 @@ export async function checkAccess(
 function holdsRead(permissions: AuthorityAssociation[], grantee: PermissionGrantee): boolean {
   return permissions.some((p) =>
     p?.kind === 'anyone'
-      ? true
+      ? isWorldRead(p)
       : p?.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
   );
+}
+
+/**
+ * Whether an `anyone` element reaches the world. `read` is the only bit it
+ * can carry, so one labelled otherwise is malformed and names no reach —
+ * refused at the write by validateAssociation() and read as nothing here,
+ * since the set can also arrive from an import or a foreign server.
+ * See docs/spec/access-control.md § Record-level permissions.
+ */
+function isWorldRead(association: AuthorityAssociation): boolean {
+  return association.label === 'read';
 }
 
 /**
@@ -147,11 +161,13 @@ export function validatePermissions(
 
 /**
  * Resolve a role from the `_group` Record a permission's `groupId` names.
- * Only a real `_group` Record carries a roster: without the family check
- * any Record's relationship associations would serve as one, so an app
- * modelling its own `member` links would silently turn every record it
- * points a permission at into an ACL. The same rule the grant path applies
- * (see resolveGroupRoleMemoized in stack.ts). See
+ * Only a live `_group` Record carries a roster, on two counts. The family
+ * check: without it any Record's relationship associations would serve as
+ * one, so an app modelling its own `member` links would silently turn
+ * every record it points a permission at into an ACL. And the tombstone
+ * check: deleting a Group is how a Group is withdrawn, so a deleted one
+ * confers nothing until it is undeleted. The same rule the grant path
+ * applies (see resolveGroupRoleMemoized in grants.ts). See
  * docs/spec/access-control.md § Record-level permissions.
  */
 async function resolveGroupRole(
@@ -160,8 +176,18 @@ async function resolveGroupRole(
   resolveRecord: RecordResolver,
 ): Promise<GroupRole | null> {
   const group = await resolveRecord(groupRecordId);
-  if (!group || baseIdOf(group.typeId) !== SYSTEM_TYPES.GROUP) return null;
+  if (!group || !carriesRoster(group)) return null;
   return groupRoleFromAssociations(group.associations, entityId);
+}
+
+/**
+ * Whether a Record is a roster anything may resolve against: in the
+ * `_group` family and not a tombstone. Shared with the grant path, so the
+ * two layers cannot disagree about which Groups still reach anyone.
+ * See docs/spec/identity.md § Group.
+ */
+export function carriesRoster(record: StackRecord): boolean {
+  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP && !record.deletedAt;
 }
 
 /**

@@ -3381,6 +3381,144 @@ describe('Permission — group role restriction', () => {
 });
 
 // -------------------------------------------------------
+// A Group reaches nobody once it is deleted
+// -------------------------------------------------------
+//
+// Deleting a Group is how a Group is withdrawn, so a tombstone carries no
+// roster — through a record-level grantee or a group-targeted grant alike.
+// Management is the exception that makes it recoverable: an admin still
+// holds the deleted Group, which is what lets them undelete it.
+// See docs/spec/identity.md § Group.
+
+describe('_group — a deleted Group carries no roster', () => {
+  const ADMIN = 'group-admin-4';
+
+  const rosteredGroup = async () =>
+    adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
+
+  test('a record-level group grantee stops resolving, and resolves again on undelete', async () => {
+    const group = await rosteredGroup();
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
+      }),
+    );
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+
+    await stack.delete(group.id);
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+
+    await stack.undelete(group.id);
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+  });
+
+  test('a group-targeted grant stops resolving', async () => {
+    const group = await rosteredGroup();
+    await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
+    const record = await stack.create(NOTE, { text: 'note' });
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+
+    await stack.delete(group.id);
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+  });
+
+  // listGrants() shares grantCoversGrantee() with the access checks, so a
+  // coverage listing answers what currently applies and nothing more.
+  test('coverage listing drops a grant reaching through a deleted Group', async () => {
+    const group = await rosteredGroup();
+    await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
+    expect(await stack.listGrants({ kind: 'entity', entityId: MEMBER })).toHaveLength(1);
+
+    await stack.delete(group.id);
+    expect(await stack.listGrants({ kind: 'entity', entityId: MEMBER })).toHaveLength(0);
+  });
+
+  // Management reads the roster off the record in hand rather than
+  // resolving it, so the admin who deleted a Group can still recover it.
+  test('an admin still manages the Group it deleted', async () => {
+    const group = await rosteredGroup();
+    await stack.asEntity(ADMIN).delete(group.id);
+    const restored = await stack.asEntity(ADMIN).undelete(group.id);
+    expect(restored.deletedAt).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// A grant confers what it confers, listed or not
+// -------------------------------------------------------
+
+describe('_grant — enumeration does not decide authority', () => {
+  test('an unlisted grant still confers, and stays visible to the owner', async () => {
+    const [granted] = await stack.grant({ kind: 'entity', entityId: MEMBER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
+    const record = await stack.create(NOTE, { text: 'note' });
+    await stack.mutate(granted.id, { unlisted: true });
+
+    expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
+    expect(await stack.listGrants({ kind: 'entity', entityId: MEMBER })).toHaveLength(1);
+
+    // ...and the owner can still take it away, which is what keeps the
+    // listing and the revocation honest about the same set.
+    expect(
+      await stack.revoke({ kind: 'entity', entityId: MEMBER }, [
+        { actions: ['read-any'], typeId: NOTE },
+      ]),
+    ).toHaveLength(1);
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+  });
+});
+
+// -------------------------------------------------------
+// `anyone` carries `read` and nothing else
+// -------------------------------------------------------
+
+describe('Permission — an anyone element labelled otherwise reaches nobody', () => {
+  const malformed = { kind: 'anyone', label: 'write' } as unknown as AuthorityAssociation;
+
+  test('it confers no read, and satisfies no write beside it', async () => {
+    const worldWrite = await adapter.createRecord(makeRecord({ permissions: [malformed] }));
+    expect(await stack.asEntity(STRANGER).get(worldWrite.id)).toBeNull();
+
+    // And it is no stand-in for the `read` a write element needs: the
+    // write is inert without one, so the set confers nothing either way.
+    const withWrite = await adapter.createRecord(
+      makeRecord({
+        permissions: [
+          malformed,
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: STRANGER },
+          },
+        ],
+      }),
+    );
+    await expect(
+      stack.asEntity(STRANGER).patchContent(withWrite.id, { text: 'edited' }),
+    ).rejects.toThrow(StackNotFoundError);
+  });
+});
+
+// -------------------------------------------------------
 // ScopedStack.create()/associate() — reference-creation gating
 // -------------------------------------------------------
 //
