@@ -105,6 +105,10 @@ node scripts/expand-changesets.mjs --dry-run
 
 A release is one reviewable PR, and merging it is the act of publishing. Whoever can merge to `main` can publish, which is why `main` is protected.
 
+Then a second job, `publish-missing`, publishes anything `main` carries that the registry lacks — usually nothing. It exists because that first question is asked of `main` as it stands, not of the PR being merged: a changeset landing while the version PR is open reads as "pending" for the push that merges it, so the versions that merge just committed are passed over and the run goes green having published nothing. `scripts/unpublished-packages.mjs` compares each publishable package against the registry and lists what is absent; the job publishes and tags it, so the skipped release goes out on the next push to `main` rather than waiting for someone to notice the registry is a version behind. It pushes tags but does not cut GitHub releases — those are `changesets/action`'s, and a release healed this way goes out untagged there.
+
+A version skipped this way is gone for good: the next version PR bumps from what `main` says, so `0.35.0` never published means consumers go `0.34.0` → `0.36.0` with a `0.35.0` heading in the CHANGELOG and no tag. That is harmless — nobody could install it — and not worth hand-publishing to repair.
+
 ### How the publish authenticates
 
 [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/): a short-lived OIDC token, no `NPM_TOKEN` secret anywhere. Each published package carries a trusted publisher on npmjs.com:
@@ -124,7 +128,7 @@ Four things in `release.yml` are load-bearing:
 - **pnpm 11** — `changeset publish` shells out to `pnpm publish`, and the OIDC exchange is an 11.x feature.
 - **`changesets/action@v2`** — it reads which packages published from the `CHANGESETS_OUTPUT` file the CLI writes, and pairs with Changesets CLI v3. It is what pushes the git tags and cuts the GitHub releases after a publish.
 
-Renaming the workflow file breaks every trusted publisher at once; each matches on the filename.
+Renaming the workflow file breaks every trusted publisher at once; each matches on the filename — which is also why `publish-missing` is a second job in `release.yml` rather than a workflow of its own.
 
 Under **Settings → Actions → General**, _Allow GitHub Actions to create and approve pull requests_ must stay on, or the version PR is never opened.
 

@@ -60,3 +60,73 @@ jobs:
           publish-script: pnpm run release
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'
+
+  # The step above publishes only when no changesets are pending, and a
+  # changeset landing on `main` while the version PR is open makes that read
+  # "pending" for the very push that merges the PR: the versions that merge
+  # just committed are passed over, and the run goes green having published
+  # nothing. So ask the registry rather than the action — anything `main`
+  # carries that the registry lacks is published here, which also heals a
+  # release the previous push skipped.
+  #
+  # A separate job for two reasons. `changesets/action` leaves its checkout on
+  # the version branch it just built, so the versions in the tree at the end
+  # of that job are the next release's, not this commit's; a fresh checkout is
+  # the pushed commit and nothing else. And it runs when `release` fails —
+  # losing a race with the merge of its own version PR fails that job at the
+  # pull request it can no longer update, which says nothing about whether
+  # something needs publishing.
+  #
+  # Every trusted publisher matches on the workflow *filename*, so this job
+  # authenticates exactly as the one above; a second file would not.
+  publish-missing:
+    needs: release
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      # Same npm as the release job: `verify:pack` runs here too. See above.
+      - run: npm install -g npm@12
+      - run: pnpm install --frozen-lockfile
+
+      - name: Publish what the registry is missing
+        run: |
+          set -euo pipefail
+          missing="$(node scripts/unpublished-packages.mjs)"
+          if [ -z "$missing" ]; then
+            echo "The registry is level with \`main\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "Publishing versions the registry was missing:"
+            echo
+            echo "$missing" | sed 's/^/- `/; s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # `changeset publish` tags each release it makes, and tagging wants
+          # an identity even when nothing is committed.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # `changeset publish` publishes and tags package by package, so a
+          # failure partway through leaves earlier packages published. Push
+          # whatever tags it did make before reporting the failure, rather
+          # than leaving those releases untagged.
+          status=0
+          pnpm run release || status=$?
+          git push origin --tags
+          exit "$status"
