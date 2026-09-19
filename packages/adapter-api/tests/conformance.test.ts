@@ -763,6 +763,12 @@ describe('error response fixtures', () => {
             createdAt: new Date(createdAt as string),
           });
         }
+        // An `anyone`/`permission` element travels on the permissions
+        // endpoint, which associate() selects from the element's own kind —
+        // see APIAdapter.associationPath().
+        if (fixture.method === 'POST' && fixture.path.endsWith('/permissions')) {
+          return adapter.associate(idFromPath(fixture.path), fixture.requestBody as Association);
+        }
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
           const version = Number(fixture.path.split('/').pop());
           return adapter.restoreVersion(idFromPath(fixture.path), version);
