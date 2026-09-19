@@ -3074,6 +3074,61 @@ describe('delete', () => {
   });
 });
 
+describe('deleteAndReturn', () => {
+  test('a hard delete reports the record as it stood at destruction, associations included', async () => {
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+
+    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id, { hard: true });
+    expect(record?.id).toBe(note.id);
+    expect(record?.associations).toEqual([{ kind: 'attachment', label: 'cover', fileId }]);
+    expect(referencedFileIds).toEqual([fileId]);
+    expect(await adapter.getRecord(note.id)).toBeNull();
+  });
+
+  // The property the issue this closes is about: nothing reads the record
+  // ahead of the destroy, so nothing landing between a read and a destroy
+  // can be missed by the response. A separate pre-read is the bug, not an
+  // implementation detail of it — asserting it never happens is what turns
+  // this from a fixture that happens to pass into one that would fail if
+  // the race were reintroduced.
+  test('never reads the record separately before a hard delete — nothing can slip in between', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const getRecordSpy = vi.spyOn(adapter, 'getRecord');
+
+    await stack.deleteAndReturn(note.id, { hard: true });
+
+    expect(getRecordSpy).not.toHaveBeenCalled();
+  });
+
+  test('a soft delete reports the resulting tombstone', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id);
+    expect(record?.deletedAt).toBeInstanceOf(Date);
+    expect(record?.version).toBe(2);
+    expect(referencedFileIds).toEqual([]);
+  });
+
+  test('a hard delete of a record that is not there reports a null record', async () => {
+    await expect(
+      stack.deleteAndReturn('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true }),
+    ).resolves.toEqual({ record: null, referencedFileIds: [] });
+  });
+
+  test('delete() is deleteAndReturn() minus the record', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const full = await stack.deleteAndReturn(note.id, { hard: true });
+
+    const other = await stack.create(NOTE_V1, { text: 'hello again' });
+    const stripped = await stack.delete(other.id, { hard: true });
+
+    expect(stripped).toEqual({ referencedFileIds: full.referencedFileIds });
+  });
+});
+
 // -------------------------------------------------------
 // _config protections
 // -------------------------------------------------------

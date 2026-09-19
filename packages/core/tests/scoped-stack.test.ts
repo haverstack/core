@@ -415,6 +415,42 @@ describe('ScopedStack — write access', () => {
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
+  test('deleteAndReturn() reports the record it hard-deleted, atomically', async () => {
+    const record = await adapter.createRecord(makeRecord());
+    const { record: deleted, referencedFileIds } = await stack
+      .asEntity(OWNER)
+      .deleteAndReturn(record.id, { hard: true });
+    expect(deleted?.id).toBe(record.id);
+    expect(referencedFileIds).toEqual([]);
+    expect(await adapter.getRecord(record.id)).toBeNull();
+  });
+
+  // Same disclosure rule as delete(): a stranger who cannot even see the
+  // record gets 404, never the 403 a visible-but-unauthorized record would
+  // get, and that check still runs ahead of the atomic destroy — folded
+  // into deleteAndReturn()'s gate, not skipped by it.
+  test('deleteAndReturn() reports 404, not 403, for a record the requester cannot reach', async () => {
+    const record = await adapter.createRecord(makeRecord());
+    await expect(stack.asEntity(STRANGER).deleteAndReturn(record.id)).rejects.toThrow(
+      StackNotFoundError,
+    );
+  });
+
+  test('deleteAndReturn() hard delete is owner-only, like delete()', async () => {
+    const record = await adapter.createRecord(
+      makeRecord({
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
+    await expect(stack.asEntity(MEMBER).deleteAndReturn(record.id, { hard: true })).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect(await adapter.getRecord(record.id)).not.toBeNull();
+  });
+
   test('undelete enforces write access', async () => {
     const record = await adapter.createRecord(makeRecord({ deletedAt: new Date() }));
     await expect(stack.asEntity(STRANGER).undelete(record.id)).rejects.toThrow(StackNotFoundError);

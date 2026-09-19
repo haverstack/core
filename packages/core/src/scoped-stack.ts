@@ -105,6 +105,7 @@ import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
+  DeleteAndReturnResult,
   DeleteRecordOptions,
   DeleteResult,
   GetRecordOptions,
@@ -1215,11 +1216,26 @@ export class ScopedStack implements StackClient {
    * limited to soft delete.
    */
   async delete(id: string, opts: DeleteRecordOptions = {}): Promise<DeleteResult> {
+    const { referencedFileIds } = await this.deleteAndReturn(id, opts);
+    return { referencedFileIds };
+  }
+
+  /**
+   * delete(), plus the record it acted on. Gated identically — the
+   * existence/visibility check that produces a 404 ahead of the 403
+   * permission gate still runs via requireDeletable() before either kind
+   * of delete, so this changes what a successful call reports, not the
+   * disclosure ordering a refused one follows.
+   */
+  async deleteAndReturn(
+    id: string,
+    opts: DeleteRecordOptions = {},
+  ): Promise<DeleteAndReturnResult> {
     await this.requireDeletable(id);
     if (opts.hard && !this.ownerActingAlone) {
       throw new StackPermissionError('Hard delete is owner-only');
     }
-    return this.stack.delete(id, { ...opts, ...this.actor });
+    return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
   }
 
   /**

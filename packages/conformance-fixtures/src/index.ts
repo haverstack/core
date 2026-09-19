@@ -901,6 +901,102 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
   },
 ];
 
+/**
+ * A single request/response pair pins the shape of a hard delete's body,
+ * but not that the body was produced by reading and destroying the record
+ * as one operation rather than by a read taken earlier and a destroy that
+ * followed it — the gap a server bridging the two with two separate calls
+ * (or a cached read) can leave open, and the one true concurrency would
+ * exploit: a write landing in that gap gets destroyed by the purge without
+ * ever being reported. See docs/spec/wire-format.md § Records and
+ * docs/spec/attachments.md § A purge strands the bytes it referenced.
+ */
+export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'hard-delete-under-concurrent-write',
+    description:
+      'A write lands on a record — here, an association with no If-Match to fence it, the kind ' +
+      "a concurrent request makes — immediately before that record is hard-deleted. The purge's " +
+      'response MUST carry that association: a server whose hard delete reads the record and ' +
+      'destroys it in two separate steps would satisfy the single delete-record-hard fixture ' +
+      'while still losing this write whenever it lands between the two — read early, land late, ' +
+      'destroyed unreported. Nothing about the request sequence below is itself concurrent; what ' +
+      "it pins is that the purge's response reflects the record as stored at the moment of " +
+      'destruction, current as of whatever the last write before it was, not a snapshot taken ' +
+      'earlier in the request. Assumes a record readable and hard-deletable by this requester at ' +
+      '"1hk153x0000c", already carrying one attachment association: {"kind": "attachment", ' +
+      '"label": "cover", "fileId": ' +
+      '"933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d"}.',
+    steps: [
+      {
+        name: 'hard-delete-under-concurrent-write-late-association',
+        description:
+          'The write that must not be lost: a second attachment association added to the ' +
+          'record the very next step hard-deletes. Ordinary POST /records/:id/associations ' +
+          'semantics apply — no version bump, no If-Match read.',
+        method: 'POST',
+        path: '/records/1hk153x0000c/associations',
+        requestBody: {
+          kind: 'attachment',
+          label: 'late-arrival',
+          fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+        },
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x0000c',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Hello', body: 'World' },
+          version: 1,
+          associations: [
+            {
+              kind: 'attachment',
+              label: 'cover',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            },
+            {
+              kind: 'attachment',
+              label: 'late-arrival',
+              fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+            },
+          ],
+        },
+      },
+      {
+        name: 'hard-delete-under-concurrent-write-purge-reports-both',
+        description:
+          "The purge that follows: its response's associations MUST name both files — the " +
+          'original and the one the previous step just added — proving the body came from ' +
+          'reading the record at destruction time rather than from a copy read before that step.',
+        method: 'DELETE',
+        path: '/records/1hk153x0000c?hard=true',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x0000c',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Hello', body: 'World' },
+          version: 1,
+          associations: [
+            {
+              kind: 'attachment',
+              label: 'cover',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            },
+            {
+              kind: 'attachment',
+              label: 'late-arrival',
+              fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+            },
+          ],
+        },
+      },
+    ],
+  },
+];
+
 export const undeleteRecordFixtures: ConformanceFixture<undefined, WireRecord>[] = [
   {
     name: 'undelete-record',
@@ -4055,9 +4151,10 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
  * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
- * authSequenceFixtures, changeFeedFixtures and changeFeedSequenceFixtures —
- * each a different shape (binary body, header-focused, or an ordered series
- * rather than a plain JSON request/response pair), imported separately.
+ * authSequenceFixtures, deleteRecordSequenceFixtures, changeFeedFixtures and
+ * changeFeedSequenceFixtures — each a different shape (binary body,
+ * header-focused, or an ordered series rather than a plain JSON
+ * request/response pair), imported separately.
  *
  * The auth fixtures are the one group here sent with no bearer token, since
  * they are how a token is earned.
