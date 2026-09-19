@@ -445,9 +445,9 @@ describe('ScopedStack — write access', () => {
         ],
       }),
     );
-    await expect(
-      stack.asEntity(MEMBER).deleteAndReturn(record.id, { hard: true }),
-    ).rejects.toThrow(StackPermissionError);
+    await expect(stack.asEntity(MEMBER).deleteAndReturn(record.id, { hard: true })).rejects.toThrow(
+      StackPermissionError,
+    );
     expect(await adapter.getRecord(record.id)).not.toBeNull();
   });
 

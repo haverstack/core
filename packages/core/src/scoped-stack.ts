@@ -1227,7 +1227,10 @@ export class ScopedStack implements StackClient {
    * of delete, so this changes what a successful call reports, not the
    * disclosure ordering a refused one follows.
    */
-  async deleteAndReturn(id: string, opts: DeleteRecordOptions = {}): Promise<DeleteAndReturnResult> {
+  async deleteAndReturn(
+    id: string,
+    opts: DeleteRecordOptions = {},
+  ): Promise<DeleteAndReturnResult> {
     await this.requireDeletable(id);
     if (opts.hard && !this.ownerActingAlone) {
       throw new StackPermissionError('Hard delete is owner-only');

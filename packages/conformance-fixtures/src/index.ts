@@ -915,7 +915,7 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
   {
     name: 'hard-delete-under-concurrent-write',
     description:
-      "A write lands on a record — here, an association with no If-Match to fence it, the kind " +
+      'A write lands on a record — here, an association with no If-Match to fence it, the kind ' +
       "a concurrent request makes — immediately before that record is hard-deleted. The purge's " +
       'response MUST carry that association: a server whose hard delete reads the record and ' +
       'destroys it in two separate steps would satisfy the single delete-record-hard fixture ' +
@@ -932,7 +932,7 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         name: 'hard-delete-under-concurrent-write-late-association',
         description:
           'The write that must not be lost: a second attachment association added to the ' +
-          "record the very next step hard-deletes. Ordinary POST /records/:id/associations " +
+          'record the very next step hard-deletes. Ordinary POST /records/:id/associations ' +
           'semantics apply — no version bump, no If-Match read.',
         method: 'POST',
         path: '/records/1hk153x0000c/associations',
@@ -967,7 +967,7 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         name: 'hard-delete-under-concurrent-write-purge-reports-both',
         description:
           "The purge that follows: its response's associations MUST name both files — the " +
-          "original and the one the previous step just added — proving the body came from " +
+          'original and the one the previous step just added — proving the body came from ' +
           'reading the record at destruction time rather than from a copy read before that step.',
         method: 'DELETE',
         path: '/records/1hk153x0000c?hard=true',
