@@ -22,7 +22,7 @@ type RecordFilter = {
 
 **Nor does it withhold what a Record _confers_.** A `_grant` Record is read with unlisted Records included, so unlisting one is not a second spelling of `revoke()` — see [Access control § Listing and revoking](./access-control.md#listing-and-revoking).
 
-That sits inside the same threat model as [record IDs being guessable](./access-control.md#errors-and-information-exposure) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
+That sits inside the same threat model as [record IDs being guessable](./disclosure.md#why-the-distinction-is-earned) — "refuse to confirm a candidate" is the existing posture, and unlisted is that posture applied to discovery rather than to a single ID.
 
 ## Three tiers, not two
 

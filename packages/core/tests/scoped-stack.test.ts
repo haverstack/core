@@ -592,7 +592,7 @@ describe('ScopedStack mutators return the record they produced', () => {
 
 // A refusal never confirms an ID to someone a read would not have
 // confirmed it to, so guessed and derived IDs stay unconfirmable.
-// See docs/spec/access-control.md § Errors and information exposure.
+// See docs/spec/disclosure.md § Which refusal a Record answers with.
 describe('ScopedStack — record-existence disclosure', () => {
   const tag: DataAssociation = { kind: 'tag', label: 'starred' };
   const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];

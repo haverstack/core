@@ -144,7 +144,7 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 
 A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent()`, `associate()`, `dissociate()` and `restoreVersion()` throw `StackConflictError` (`409`) under `ScopedStack` — a change set is refused whole, whichever of its keys would otherwise have applied. `undelete()` is the way back, and it is deliberately not gated this way.
 
-The refusal is asked **after** the authority decision, never before. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./access-control.md#errors-and-information-exposure) that governs every other refusal.
+The refusal is asked **after** the authority decision, never before. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
 
 `commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see `migrateAll()` below), and it is owner-acting-alone only.
 

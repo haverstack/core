@@ -14,6 +14,7 @@ The spec is split into focused documents:
 | [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                   |
 | [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement       |
 | [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it         |
+| [Refusals & disclosure](./spec/disclosure.md) | Which refusal a Record answers with, and what a refusal is allowed to reveal |
 | [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft/hard delete           |
 | [Change journal](./spec/journal.md)           | The durable log of what each change moved, and the deltas nothing else keeps |
 | [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection       |

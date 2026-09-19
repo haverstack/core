@@ -229,7 +229,7 @@ class ScopedSubscription extends Subscription {
  * cannot read answers exactly as a missing one does — null on reads,
  * StackNotFoundError on the verbs that name one — so only a requester who
  * could have read it is told a refusal was about access.
- * See docs/spec/access-control.md § Errors and information exposure.
+ * See docs/spec/disclosure.md § Which refusal a Record answers with.
  *
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Grant lookup and the privilege-bearing gates that
@@ -480,7 +480,7 @@ export class ScopedStack implements StackClient {
    * everyone else is told what a missing ID is told, so no one learns an ID
    * is live who could not have learned it by reading. `message` therefore
    * only ever reaches someone holding the record already.
-   * See docs/spec/access-control.md § Errors and information exposure.
+   * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
   private async denialFor(record: StackRecord, message?: string): Promise<StackError> {
     // Prefetched here rather than threaded down from the gate: a write
@@ -869,7 +869,7 @@ export class ScopedStack implements StackClient {
    * A record this request may read, or null. Never throws
    * StackPermissionError: an unreadable record answers exactly as a missing
    * one does, so a caller learns only what it may read.
-   * See docs/spec/access-control.md § Errors and information exposure.
+   * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
   async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);

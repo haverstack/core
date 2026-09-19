@@ -1924,7 +1924,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'Record ids encode their creation millisecond and increment within it, so 403 here would ' +
       'confirm a guessed or derived id. 403 is reserved for a requester who can read the record ' +
       '(error-permission-denied). Assumes "1hk153x00001" exists and the requester holds no read ' +
-      'access to it. See docs/spec/access-control.md § Errors and information exposure.',
+      'access to it. See docs/spec/disclosure.md § Which refusal a Record answers with.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { contentPatch: { title: 'New title' } },
