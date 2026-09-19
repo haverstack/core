@@ -35,7 +35,7 @@ await stack.create('_app@1', {
   did: notesAppDid, // the keypair the app generated at install
 });
 
-await stack.grant(notesAppDid, [
+await stack.grant({ kind: 'entity', entityId: notesAppDid }, [
   {
     typeId: 'com.example.myapp/note@1',
     actions: ['create', 'read-own', 'update-own', 'delete-own'],

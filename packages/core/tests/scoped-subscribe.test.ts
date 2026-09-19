@@ -140,7 +140,9 @@ describe('a record the subscriber cannot read produces no event', () => {
 
 describe('type-level grants reach the feed exactly as they reach query()', () => {
   test('a read grant delivers records the subject does not own', async () => {
-    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
@@ -151,7 +153,9 @@ describe('type-level grants reach the feed exactly as they reach query()', () =>
   });
 
   test('a delegated session sees the intersection, not either half', async () => {
-    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     const delegated = collector();
     // The app holds no grant on this type, so the intersection is empty
     // however much the subject may read.
@@ -172,7 +176,9 @@ describe('type-level grants reach the feed exactly as they reach query()', () =>
 
 describe('a revocation takes effect on the next event, not the next subscription', () => {
   test('revoking a grant stops delivery', async () => {
-    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
@@ -180,7 +186,9 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.revoke(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.revoke({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     await stack.create(NOTE, { text: 'after revocation' });
     await settle();
 
@@ -197,7 +205,9 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toEqual([]);
 
-    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     await stack.create(NOTE, { text: 'after grant' });
     await settle();
 
@@ -216,7 +226,9 @@ describe('a revocation takes effect on the next event, not the next subscription
     );
     // A grant naming the group, not the entity: reachability now depends on
     // the roster, which is the lookup a subscription caches.
-    await stack.grant({ groupId: group.id }, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     const note = await stack.create(NOTE, { text: 'team note' });
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
@@ -237,7 +249,9 @@ describe('a revocation takes effect on the next event, not the next subscription
   });
 
   test('a revocation that lands mid-prefetch still expires the cached grants', async () => {
-    await stack.grant(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
@@ -259,7 +273,9 @@ describe('a revocation takes effect on the next event, not the next subscription
 
     await stack.create(NOTE, { text: 'starts the prefetch' });
     await settle();
-    await stack.revoke(READER, [{ actions: ['read-any'], typeId: NOTE }]);
+    await stack.revoke({ kind: 'entity', entityId: READER }, [
+      { actions: ['read-any'], typeId: NOTE },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const delivered = reader.seen.length;
@@ -425,7 +441,9 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
   });
 
   test('a scoped subscriber sees its own writes', async () => {
-    await stack.grant(READER, [{ actions: ['create', 'read-any'], typeId: NOTE }]);
+    await stack.grant({ kind: 'entity', entityId: READER }, [
+      { actions: ['create', 'read-any'], typeId: NOTE },
+    ]);
     const scoped = stack.asEntity(READER);
     const reader = collector();
     await scoped.subscribe(reader.handler, { filter: { typeId: NOTE }, includeRecords: true });

@@ -426,25 +426,34 @@ export const GRANT_ACTIONS = [
 
 export type GrantAction = (typeof GRANT_ACTIONS)[number];
 
+/**
+ * Who a Grant reaches, spelled affirmatively. Each tier names itself, so
+ * no dropped field turns one into another: a `_grant` Record that lost its
+ * grantee names nobody rather than everybody.
+ *
+ * `{ kind: 'authenticated' }` reaches any authenticated entity — narrower
+ * than a Record permission's `{ kind: 'anyone' }`, which reaches anonymous
+ * requesters too. The two tiers deliberately share no word.
+ *
+ * `role` is required on the group arm — `member` is the wider set, `admin`
+ * the narrower, matching the roster labels where admin implies member (see
+ * docs/spec/identity.md § Group). A group grantee never satisfies the
+ * principal half of a delegated request.
+ * See docs/spec/access-control.md § Type-level grants.
+ */
+export type GrantGrantee =
+  | { kind: 'entity'; entityId: EntityId }
+  | { kind: 'group'; groupId: RecordId; role: 'member' | 'admin' }
+  | { kind: 'authenticated' };
+
 /** Content for _grant records */
 export type GrantContent = {
   /** Which record type the grant applies to. */
   typeId: TypeId;
   /** Which actions are permitted. */
   actions: GrantAction[];
-  /**
-   * Who the grant applies to — a DID. Mutually exclusive with
-   * granteeGroupId. Both absent = default grant, applies to any
-   * authenticated entity.
-   */
-  granteeEntityId?: EntityId;
-  /**
-   * A `_group` Record ID whose roster the grant applies to — any member or
-   * admin qualifies. Mutually exclusive with granteeEntityId, and never
-   * satisfies the principal half of a delegated request.
-   * See docs/spec/access-control.md § Type-level grants.
-   */
-  granteeGroupId?: RecordId;
+  /** Who the grant reaches. Required — see GrantGrantee. */
+  grantee: GrantGrantee;
 };
 
 /** Content for _attachment records — one per upload, tracks file metadata. */

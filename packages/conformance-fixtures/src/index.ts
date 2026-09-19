@@ -308,6 +308,45 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     },
   },
   {
+    name: 'create-grant-record-group-grantee',
+    description:
+      'A _grant@1 record names its grantee affirmatively, in one of three tiers: ' +
+      "`{ kind: 'entity', entityId }`, `{ kind: 'group', groupId, role }` where `member` is the " +
+      "wider set and `admin` the narrower, or `{ kind: 'authenticated' }` for any authenticated " +
+      'entity — never an anonymous requester, which is what separates it from a record ' +
+      "permission's `{ kind: 'anyone' }`. The field is required, so no tier is reachable by " +
+      'omission (see error-validation-grant-without-grantee). Owner-only: a grant is what ' +
+      'decides who may write, so nothing a grant confers reaches back to writing one. ' +
+      'See docs/spec/access-control.md § Type-level grants.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0000h',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['create', 'read-any'],
+        grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
+      },
+      version: 1,
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x0000h',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['create', 'read-any'],
+        grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
+      },
+      version: 1,
+    },
+  },
+  {
     name: 'create-record-ignores-client-supplied-entity-and-principal',
     description:
       'entityId and principalId are assigned by the server from the authenticated session, so a ' +
@@ -2037,6 +2076,71 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
             message:
               'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
           },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-without-grantee',
+    description:
+      'POST /records creating a _grant@1 record whose content carries no `grantee` returns 422 ' +
+      "with code \"validation\". A Grant's reach is spelled by its grantee: `{ kind: 'entity' }`, " +
+      "`{ kind: 'group' }` with a member/admin role, or `{ kind: 'authenticated' }` for any " +
+      'authenticated entity. None of them is reachable by omission, so a body that lost the ' +
+      'field — mapped from a request, imported, migrated — is refused rather than stored as a ' +
+      'grant to every authenticated entity. A grantee naming an unknown `kind`, or carrying an ' +
+      'empty entityId or groupId, is refused the same way and confers nothing wherever one is ' +
+      'already stored. See docs/spec/access-control.md § Type-level grants.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06008',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { typeId: 'com.example/comment@1', actions: ['read-any'] },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [{ path: 'grantee', message: 'Required field is missing' }],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-group-grantee-without-role',
+    description:
+      'POST /records creating a _grant@1 record whose grantee names the `group` tier but ' +
+      'carries no `role` returns 422 with code "validation". A closed `object` field holds one ' +
+      "properties set, so the schema can only require `kind`; each arm's own fields are " +
+      'required on the write instead. Without that a grant missing one stores, answers 200, ' +
+      'and denies forever at evaluation — a share that reads as though it worked and never ' +
+      'did. An `entity` grantee with no `entityId`, and a grantee naming an unknown `kind`, ' +
+      'are refused the same way. See docs/spec/access-control.md § Type-level grants.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x06009',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        typeId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: '1hk153x05001' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
         ],
       },
     },
