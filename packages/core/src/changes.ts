@@ -92,15 +92,10 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
 
 /**
  * Whether an emission passes the unlisted-enumeration boundary for one
- * subscription. Unlisted records are excluded from the feed by default,
- * exactly as they are from an unfiltered `query()` — with one exception:
- * the `unlist` transition itself must still reach a subscriber lacking
- * `includeUnlisted`, despite its post-change record (`unlistedAt` now set)
- * otherwise failing this very check. Without that exception a subscriber
- * who already knows the record would never be told to drop it. Every other
- * transition (create-unlisted, an edit while already unlisted, a purge of
- * a record that was never listed, the `list` transition itself) needs no
- * special-casing: it falls out of checking the record's current state.
+ * subscription. The `unlist` transition is the one exception to the
+ * default exclusion: without it a subscriber who already knows the record
+ * would never be told to drop it. Every other transition falls out of
+ * checking the record's current state.
  * See docs/spec/events.md § The unlisted transition.
  */
 export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
@@ -118,9 +113,7 @@ export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?:
  * nothing.
  *
  * The record rides by reference, shared across every frame projected from
- * one emission: handlers are contractually read-only over it, and copying
- * per subscriber would charge every consumer for a defect none of them
- * have. See docs/spec/events.md § The event shape.
+ * one emission: handlers are contractually read-only over it.
  */
 export function emitted(emission: EmittedChange, includeRecords: boolean): RecordChange {
   const { change, record } = emission;
@@ -153,12 +146,7 @@ export abstract class Subscription {
     this.closed = true;
   }
 
-  /**
-   * Hand a frame to the handler. A handler that throws cannot fail the
-   * write it is being told about — the write is already durable — so the
-   * error goes to onError, or is rethrown asynchronously so that it
-   * surfaces as an unhandled error rather than vanishing.
-   */
+  /** Hand a frame to the handler; anything it throws goes to reportError(). */
   protected deliver(emission: EmittedChange): void {
     if (this.closed) return;
     try {
@@ -174,18 +162,18 @@ export abstract class Subscription {
 }
 
 /**
- * Where a handler's error goes. Without an onError it is rethrown
- * asynchronously so that it surfaces as an unhandled error rather than
- * vanishing — never into the call stack of the mutation that produced the
- * event, which is already durable. See docs/spec/events.md § Handlers.
+ * Where a handler's error goes. Never into the call stack of the mutation
+ * that produced the event — that write is already durable, so a handler
+ * cannot fail it. Without an onError the error is rethrown asynchronously,
+ * surfacing as an unhandled error rather than vanishing.
+ * See docs/spec/events.md § Handlers.
  */
 function reportError(err: unknown, opts: SubscribeOptions): void {
   if (opts.onError) {
     try {
       opts.onError(err);
     } catch {
-      // An onError that throws has nowhere left to report to. Losing it is
-      // better than letting it escape into a mutation's call stack.
+      // An onError that throws has nowhere left to report to.
     }
     return;
   }
@@ -308,16 +296,12 @@ export class PendingChange {
    * The live half, built from the record the write produced — for a purge,
    * from the record as it stood immediately before destruction.
    *
-   * The actor is read off the record for every version-bumping op, because
-   * `updatedBy`/`updatedVia` were stamped by that same write and so agree
-   * with what was persisted by construction. `associate`/`dissociate`
-   * don't bump, so they stamp nothing and the requester travels here
-   * instead — reading the record would report whoever's last
-   * version-bumping write this is, not who just changed the association.
-   * Hard delete leaves nothing to read at all, and its frame also drops
-   * `parentId` and the create-time `appId`: it says that a record of some
-   * type was destroyed and nothing further about whose it was. See
-   * docs/spec/events.md § Purged records carry nothing.
+   * The actor is read off the record for every version-bumping op, so it
+   * agrees with what was persisted by construction. A no-bump op stamps
+   * nothing, so the requester travels here instead — reading the record
+   * would report whoever's last version-bumping write this is. A purged
+   * frame drops `parentId` and the create-time `appId` too: it says a
+   * record of some type was destroyed and nothing about whose it was.
    */
   emission(record: StackRecord, at?: Date): EmittedChange {
     if (this.kind === 'purged') {
@@ -425,16 +409,13 @@ export class ChangeEmitter {
   }
 }
 
-/** The kind each op produces. See docs/spec/events.md § The event shape. */
 /**
  * The kind a set of ops resolves to: the most conservative entry wins.
  * `unlist` beats everything a change set can carry beside it, because a
- * subscriber holding the record still has to drop it — announcing an
- * edit bundled with an unlist as an upsert would leave a stale copy
- * behind. Nothing else competes: `created` and `purged` name whole-record
- * transitions that are always emitted alone, so a multi-op set is always
- * `changed` unless it unlists.
- * See docs/spec/events.md § The event shape.
+ * subscriber holding the record still has to drop it — announcing an edit
+ * bundled with an unlist as an upsert would leave a stale copy behind.
+ * Nothing else competes: `created` and `purged` name whole-record
+ * transitions that are always emitted alone.
  */
 function resolveKind(ops: ChangeOp[]): ChangeKind {
   if (ops.includes('unlist')) return 'deleted';
@@ -442,6 +423,7 @@ function resolveKind(ops: ChangeOp[]): ChangeKind {
   return 'changed';
 }
 
+/** The kind each op produces. See docs/spec/events.md § The event shape. */
 export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   create: 'created',
   patch: 'changed',
@@ -473,11 +455,10 @@ const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
  * caller believe it resumed when it did not, so a stack that cannot honor
  * `since` refuses it rather than ignoring it.
  *
- * Its shape is checked here rather than left to the adapter, so that a
- * malformed cursor is the same error whoever is underneath — the posture
- * query() already takes with a filter no adapter declared. The value stays
- * opaque: this asks whether it is framable, never what it means. See
- * docs/spec/events.md § Subscribing.
+ * Its shape is checked here rather than left to the adapter, so a malformed
+ * cursor is the same error whoever is underneath. The value stays opaque:
+ * this asks whether it is framable, never what it means.
+ * See docs/spec/events.md § Subscribing.
  */
 export function assertSinceUsable(since: string | undefined, relaysChanges: boolean): void {
   if (since === undefined) return;

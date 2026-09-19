@@ -29,9 +29,9 @@ import { queryAllPages } from './stack-reads.js';
 import type { ValidationError } from './validate.js';
 
 /**
- * Valid GrantAction values, for runtime validation in Stack.grant().
- * Built from GRANT_ACTIONS (types.ts), the source of truth GrantAction is
- * itself derived from — so this can't drift from the type.
+ * Valid GrantAction values, for runtime validation in Stack.grant(). Built
+ * from GRANT_ACTIONS, which GrantAction itself derives from, so the set and
+ * the type cannot drift.
  */
 export const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
@@ -52,11 +52,9 @@ export const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> =
 
 /**
  * Whether one grant's action list conveys `action`. The companion has to
- * sit in the same `_grant` Record, not merely somewhere in the grantee's
- * set: a grant is revoked whole, so a rule satisfied across two records
- * would let revoking the read one leave a mutate-without-read grant
- * standing — the configuration this rule exists to refuse, arrived at
- * without anyone writing it.
+ * sit in the same `_grant` Record: a grant is revoked whole, so a rule
+ * satisfied across two records would let revoking the read one leave a
+ * mutate-without-read grant standing.
  */
 export function grantConveys(actions: readonly string[], action: GrantAction): boolean {
   if (!actions.includes(action)) return false;
@@ -68,16 +66,14 @@ export function grantConveys(actions: readonly string[], action: GrantAction): b
  * Who a grant() / revoke() / listGrants() call targets — the same union a
  * stored grant carries, so a target is the grantee it writes.
  * `{ kind: 'authenticated' }` is the default grant, and the default-only
- * listing. See docs/spec/access-control.md § Type-level grants.
+ * listing.
  */
 export type GrantTarget = GrantGrantee;
 
 /**
  * What listGrants() accepts: a GrantTarget, widened so a group listing can
  * ask for every role at once. `role: 'any'` is not a role an entity can
- * hold and never reaches storage — a query can say it, a grantee cannot,
- * so the two can't be confused for one another.
- * See docs/spec/access-control.md § Type-level grants.
+ * hold and never reaches storage — a query can say it, a grantee cannot.
  */
 export type GrantQuery =
   | { kind: 'entity'; entityId: EntityId }
@@ -88,8 +84,7 @@ export type GrantQuery =
  * Direct (non-roster) match between a stored _grant's content and a target:
  * the whole grantee, `role` included. A target is the identity grant()
  * wrote, so a revoke aimed at a group's admins leaves the members' grant
- * standing, and a listing returns what the same argument would have
- * written. A query's `role: 'any'` is the one widening, and it is spelled.
+ * standing. A query's `role: 'any'` is the one widening, and it is spelled.
  */
 export function matchesGrantTarget(content: GrantContent, target: GrantQuery): boolean {
   const g = content.grantee;
@@ -106,13 +101,11 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
  * Reject a grant target that names no tier, or whose tier names nobody. An
  * empty groupId or entityId reaches no one, so storing it would leave a
  * grant that can only ever deny while looking like a share that worked.
- * Runtime shapes are checked, not only types: a target crossing a wire
- * arrives as data. `allowAny` admits the listing-only `role: 'any'`, which
- * grant() and revoke() refuse because no grant can be written with it.
+ * Read as data, not as the type: a target reaching Stack from a request
+ * body or an import has whatever shape it arrived with. `allowAny` admits
+ * the listing-only `role: 'any'`, which grant() and revoke() refuse.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
-  // Read as data, not as the type: a target reaching Stack from a request
-  // body or an import has whatever shape it arrived with.
   const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
   switch (t?.kind) {
     case 'authenticated':
@@ -133,9 +126,8 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
             : "A group grant target requires role 'member' or 'admin'.",
         );
       }
-      // Not a format check: groupId is a reference to an existing Record,
-      // like parentId or an association's recordId, and none of those are
-      // parsed either. One that resolves to nothing simply denies.
+      // No format check: groupId is a reference, like parentId or an
+      // association's recordId. One that resolves to nothing simply denies.
       return;
     default:
       throw new StackQueryError(
@@ -149,7 +141,6 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
  * every write. The schema cannot ask it — a closed `object` field holds one
  * `properties` set, so only `kind` is required there — and an arm missing
  * its own field would otherwise store, answer 200, then deny forever.
- * See docs/spec/access-control.md § Type-level grants.
  */
 export function validateGrantee(typeId: TypeId, content: unknown): ValidationError[] {
   if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
@@ -198,11 +189,9 @@ export function validateGrantee(typeId: TypeId, content: unknown): ValidationErr
 /**
  * Whether a stored _grant covers `grantee`: a direct DID match, roster
  * membership when `allowGroup`, or the authenticated tier when
- * `allowDefault`. The grantee's own `kind` decides which question is asked,
- * so a grant that arrived carrying nothing recognizable confers nothing —
- * every tier is affirmative, and none is reachable by omission.
- * Module-level so the access checks and listGrants() cannot drift apart.
- * See docs/spec/access-control.md § Type-level grants.
+ * `allowDefault`. The grantee's own `kind` decides which question is asked
+ * — every tier is affirmative, and none is reachable by omission, so a
+ * grant carrying nothing recognizable confers nothing.
  */
 export async function grantCoversGrantee(
   c: GrantContent,
@@ -240,10 +229,9 @@ export async function grantCoversGrantee(
 
 /**
  * An entity's role on a `_group` roster, memoized in the caller's
- * `groupRoles` map. That map is built per operation and threaded alongside
- * `prefetchedGrants`, so no resolved role outlives the operation that
- * resolved it — removal from a group must never go stale.
- * See docs/spec/access-control.md § Type-level grants.
+ * `groupRoles` map. That map is built per operation, so no resolved role
+ * outlives the operation that resolved it — removal from a group must never
+ * go stale.
  */
 async function resolveGroupRoleMemoized(
   groupId: RecordId,
@@ -255,11 +243,6 @@ async function resolveGroupRoleMemoized(
   const cached = groupRoles.get(key);
   if (cached !== undefined) return cached;
   const group = await resolveRecord(groupId);
-  // Only a live `_group` Record carries a roster. Without the family check
-  // any Record's relationship associations would serve as one, and a group
-  // migrated out of the family would keep resolving after it had stopped
-  // being a group; without the tombstone check a deleted Group would keep
-  // granting what it was deleted to withdraw.
   const role =
     group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
   groupRoles.set(key, role);
@@ -269,9 +252,8 @@ async function resolveGroupRoleMemoized(
 /**
  * System type families grant() refuses to target: a grant on any of them
  * would let the grantee mint their own grants, touch stack config, or
- * register an app card claiming a DID that isn't theirs — the last of
- * which is what verified app attribution rests on. See
- * docs/spec/access-control.md § Type-level grants.
+ * register an app card claiming a DID that isn't theirs — the last of which
+ * is what verified app attribution rests on.
  */
 export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.GRANT,
@@ -282,19 +264,12 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
 /**
  * Every `_grant` Record, cursor-walked. Read through an unscoped query at
  * every call site: a grant is what decides who may read, so it can never
- * itself sit behind a read check. No content prefilter — a stored grant's
- * typeId may be a bare baseId or versioned, so exact matching would wrongly
- * exclude family versions.
+ * itself sit behind a read check.
  *
  * `includeUnlisted`, because withholding a Record from enumeration decides
- * nothing about what it confers: a listing flag that silently disarmed a
- * grant would revoke by a spelling that is defined not to. Deleted grants
- * are excluded on the opposite grounds — a soft delete is exactly how
- * revoke() withdraws one. The flag reaches listGrants() and revoke()
- * through this too, which is what keeps an unlisted grant visible to the
- * owner who wants to withdraw it.
- * See docs/spec/unlisted.md and docs/spec/access-control.md
- * § Type-level grants.
+ * nothing about what it confers. Deleted grants are excluded on the
+ * opposite grounds — a soft delete is how revoke() withdraws one.
+ * See docs/spec/unlisted.md.
  */
 export function loadGrantRecords(
   query: (q: StackQuery) => Promise<QueryResult>,

@@ -231,8 +231,8 @@ describe('ScopedStack — read access', () => {
   });
 
   // Membership names an identity, not a record. A roster entry pointing at
-  // a record whose id happens to equal the DID confers nothing — the arms
-  // are what keep the two apart now that both hold plain strings.
+  // a record whose id happens to equal the DID confers nothing — the target
+  // arms are what keep the two apart, since both hold plain strings.
   test('a record-scoped roster entry does not confer membership', async () => {
     const group = await adapter.createRecord(
       makeRecord({

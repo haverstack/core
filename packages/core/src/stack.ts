@@ -204,16 +204,11 @@ export type CreateRecordOptions = {
 };
 /**
  * CreateRecordOptions extended with createdAt/updatedAt, for backdating a
- * record's clock fields on import (e.g. migrating an existing archive with
- * its original dates). Accepted unconditionally by unscoped Stack.create().
- * ScopedStack.create() accepts the same two fields, but only from the
- * stack owner acting alone (undelegated, authenticated as themselves) — a
- * grantee, or a delegated app acting for the owner, is refused, since
- * either could otherwise forge a sort position the same way a raw `id`
- * could. A server built on ScopedStack inherits this automatically: an
- * owner-authenticated `POST /records` may carry both fields; anyone else's
- * request has them ignored, as before. See docs/spec/data-model.md §
- * Record IDs and docs/spec/wire-format.md § Records.
+ * record's clock fields on import. Unscoped Stack.create() accepts them
+ * unconditionally; ScopedStack.create() only from the stack owner acting
+ * alone, since a grantee or a delegated app could otherwise forge a sort
+ * position the same way a raw `id` could.
+ * See docs/spec/data-model.md § Record IDs.
  */
 export type BackdatableCreateRecordOptions = CreateRecordOptions & {
   /**
@@ -369,18 +364,16 @@ export interface StackClient {
   ): Promise<StackRecord>;
   /**
    * Add an association. Never bumps `version`/`updatedAt` and takes no
-   * `ifVersion` — a set-add composes correctly regardless of write order,
-   * so it needs no OCC precondition. See docs/spec/versioning.md § Version
-   * history.
+   * `ifVersion` — a set-add composes regardless of write order.
+   * See docs/spec/versioning.md § Version history.
    */
   associate(id: string, association: DataAssociation): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
   dissociate(id: string, association: DataAssociation): Promise<StackRecord>;
   /**
-   * Extend who reaches a record by one element — the record-level mirror
-   * of the type-level `grant()`, and the amending spelling of the
-   * `permissions` key, which replaces the whole set. Never bumps
-   * `version`/`updatedAt` and takes no `ifVersion`, on the same terms as
+   * Extend who reaches a record by one element — the record-level mirror of
+   * the type-level `grant()`, and the amending spelling of the
+   * `permissions` key, which replaces the whole set. No-bump, like
    * associate(). See docs/spec/access-control.md § Record-level permissions.
    */
   grantAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
@@ -863,20 +856,13 @@ export class Stack implements StackClient {
       throw new StackQueryError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
-    // updatedAt defaults to createdAt, not to the actual current time, so a
-    // plain import doesn't fabricate a fake edit.
-    //
-    // Copied, never aliased: the caller keeps its own reference to any Date
-    // it passed, and an import loop that reuses one Date across rows
-    // (`d.setTime(...)` per record — the obvious way to write one) would
-    // otherwise retro-edit every record it had already written, with no
-    // version bump and no change event. createdAt drives updatedAt and
-    // unlistedAt below, so one copy taken here covers all three.
-    // `instanceof Date`, not `!== undefined`: this runs before the error
-    // block below, so a non-Date reaching here off the wire would throw a
-    // raw TypeError out of .getTime() before validateClockField() could
-    // report it. Falling back keeps this line total; the error it recorded
-    // still throws below, so the fallback value is never actually stored.
+    // Copied, never aliased: an import loop that reuses one Date across rows
+    // (`d.setTime(...)` per record) would otherwise retro-edit every record
+    // it had already written, with no version bump and no change event.
+    // `instanceof Date`, not `!== undefined`, because this runs ahead of the
+    // error block below and .getTime() on a non-Date off the wire would
+    // throw before validateClockField() could report it; the fallback value
+    // never reaches storage, since that recorded error still throws.
     const createdAt =
       opts.createdAt instanceof Date ? new Date(opts.createdAt.getTime()) : new Date();
     const updatedAt =
@@ -922,8 +908,8 @@ export class Stack implements StackClient {
 
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
-      // Only when both are explicit: an `id` alone (no createdAt) stays a
-      // pure position choice, exactly as before this option existed.
+      // Only when both are explicit: an `id` alone is a pure position
+      // choice, with no second timestamp to agree with.
       if (opts.createdAt !== undefined) {
         validateIdTimestampSkew(
           opts.id,
@@ -945,15 +931,11 @@ export class Stack implements StackClient {
         ? stampGroupAdmin(opts.associations, opts.entityId ?? this.ownerEntityId)
         : opts.associations;
 
-    // createdAt (hoisted above, alongside its validation) drives the ID
-    // when the caller doesn't supply one, so the two agree by construction
-    // rather than by coincidence — the same relationship an explicit `id`
-    // is checked against above.
-    // An explicit createdAt mints via generateIdForTimestamp(), which never
-    // clamps to "now" — generateId()'s monotonic floor would otherwise
-    // silently pull a deliberately historical id forward once this process
-    // has minted any live id past it. The no-createdAt path keeps
-    // generateId(), unaffected and still monotonic-safe.
+    // createdAt drives the id, so the two agree by construction rather than
+    // by coincidence. An explicit one mints via generateIdForTimestamp(),
+    // which never clamps to "now": generateId()'s monotonic floor would
+    // otherwise pull a deliberately historical id forward once this process
+    // has minted any live id past it.
     const id =
       opts.id ??
       (opts.createdAt !== undefined
@@ -961,9 +943,8 @@ export class Stack implements StackClient {
         : generateId(createdAt.getTime()));
 
     // An id field a caller supplies is a value or it is absent — never the
-    // empty string, which names nobody. Refused rather than dropped: an
-    // ignored field is the silent-normalization this mapper family was just
-    // fixed for, one layer up.
+    // empty string, which names nobody. Refused rather than dropped, so the
+    // caller is never silently ignored.
     for (const field of ['entityId', 'appId', 'principalId'] as const) {
       if (opts[field] === '') {
         throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
@@ -971,8 +952,7 @@ export class Stack implements StackClient {
     }
 
     // Every create naming a parent owes the reference check, whether or not
-    // it supplied an id: a destination a caller names has to be one that
-    // exists. This is the read an ordinary create used to skip.
+    // it supplied an id: a destination a caller names has to exist.
     if (opts.parentId !== undefined) await this.assertParentExists(id, opts.parentId);
 
     const record: StackRecord = {
@@ -982,10 +962,8 @@ export class Stack implements StackClient {
       updatedAt,
       content,
       version: 1,
-      // Read for presence, not truthiness — every one of these is checked
-      // above, so '' never reaches here and absence is the only thing a
-      // falsy value could mean. Presence says that outright instead of
-      // relying on it.
+      // Presence, not truthiness: '' is refused above, so absence is the
+      // only thing a falsy value could mean here.
       ...(opts.parentId !== undefined && { parentId: opts.parentId }),
       ...(opts.entityId !== undefined && { entityId: opts.entityId }),
       ...(opts.appId !== undefined && { appId: opts.appId }),
@@ -1054,21 +1032,14 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply a change set — content patch, `parentId`, `permissions`,
-   * `associations`, `unlisted`, in any combination — as one atomic write.
-   * Atomicity is what it is for: a publish is one act, so nothing it names
-   * may half-land. Keys are read for presence, so `unlisted: false` and
-   * `parentId: null` are changes.
+   * Apply a change set as one atomic write — see the StackClient
+   * declaration above for what it accepts. Atomicity is what it is for: a
+   * publish is one act, so nothing it names may half-land.
    *
-   * Every key present is checked against the record as it stands, and a
-   * change set already satisfied in all of them writes nothing and returns
-   * the record unchanged. The ops the change event carries are derived
-   * from that same comparison, so naming an aspect without moving it is
-   * never reported as moving it.
-   *
-   * Content is validated against the record's *current* stored type and
-   * `typeId` never changes (see docs/spec/data-model.md § Type
-   * migrations). See docs/spec/data-model.md § Mutations.
+   * Every key present is checked against the record as it stands, and a set
+   * already satisfied in all of them writes nothing. Content is validated
+   * against the record's *current* stored type; `typeId` never changes here.
+   * See docs/spec/data-model.md § Mutations.
    */
   async mutate(
     id: string,
@@ -1250,22 +1221,15 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Refuse a write that would leave a `_group` Record with no `admin` on
-   * its roster. Asked of the roster the write would *produce* — the one
-   * place a change-set check reads the post-state rather than the
-   * pre-state, because the rule is about what is left behind rather than
-   * what the caller named.
+   * Refuse a write that would leave a `_group` Record with no `admin` on its
+   * roster. Asked of the roster the write would *produce*, which is the
+   * whole of the self-removal question: an admin removing themselves passes
+   * while another remains and is refused when they are the last, without
+   * either case naming who is going.
    *
-   * That framing is the whole of the self-removal question: an `admin`
-   * removing themselves passes while another remains and is refused when
-   * they are the last, and neither case needs to know whose entry went.
-   *
-   * Lives here rather than in `ScopedStack` deliberately. Who may write a
-   * `_group` is a permission question and belongs to the gate up there;
-   * this is an integrity constraint on the Record, so it binds every
-   * requester — the stack owner included, who would otherwise be the hole
-   * that stops anything downstream relying on the invariant.
-   * See docs/spec/identity.md § Group.
+   * An integrity constraint on the Record, not a permission question, so it
+   * lives here rather than in `ScopedStack` and binds every requester — the
+   * stack owner included. See docs/spec/identity.md § Group.
    */
   private assertGroupAdminRemains(record: StackRecord, next: DataAssociation[]): void {
     if (!isGroupRecord(record)) return;
@@ -1277,22 +1241,15 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add an association to a record. Never bumps `version`/`updatedAt` and
-   * never snapshots — a set-add composes correctly regardless of write
-   * order, so it needs neither the OCC `ifVersion` guards content,
-   * `parentId` and `permissions`, nor the rollback history that guards.
-   * See docs/spec/versioning.md § Version history.
+   * Add an association to a record — no-bump and no snapshot, per the
+   * StackClient declaration above.
    *
    * An association the record already holds, saying the same thing, is a
    * no-op; one matching an existing association's identity but naming a
    * different `attachmentRecordId` — or none, which clears the one stored —
-   * re-points that association in place, rather than adding a second
-   * reference to the same file. The emitted event's `associationsAdded`
-   * carries the association as it now stands either way; what a re-point
-   * overwrote is kept only by the journal, on that entry's `repoint`. See
-   * docs/spec/events.md § The event shape and docs/spec/journal.md
-   * § The entry. Returns the record as it now stands — unchanged on a
-   * no-op.
+   * re-points it in place rather than adding a second reference to the same
+   * file. What a re-point overwrote is kept only by the journal, on that
+   * entry's `repoint`. See docs/spec/journal.md § The entry.
    */
   async associate(
     id: string,
@@ -1327,13 +1284,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Remove an association from a record. Never bumps `version`/`updatedAt`
-   * — see associate(). Matched by kind, label, and payload. No-op if not
-   * found. The emitted event's `associationsRemoved` names the association
-   * by identity only — an attachment's `attachmentRecordId` is not
-   * repeated there, since it no longer describes anything current, and the
-   * journal is where it survives. See docs/spec/events.md § The event
-   * shape. Returns the record as it now stands — unchanged on a no-op.
+   * Remove an association from a record — see associate(). Matched by kind,
+   * label and payload; a no-op if not found. The emitted event names the
+   * association by identity only, since an attachment's
+   * `attachmentRecordId` describes nothing current once it is gone; the
+   * journal is where it survives.
    */
   async dissociate(
     id: string,
@@ -1376,15 +1331,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Extend who reaches a record by one element. The amending spelling of
-   * the `permissions` key, and the one that survives two admins sharing a
-   * record at once: a key write replaces the whole set, so the later of
-   * two concurrent ones drops what the earlier granted.
-   * See docs/spec/access-control.md § Record-level permissions.
-   *
-   * Never bumps `version`/`updatedAt` and takes no `ifVersion`, on the
-   * same terms as associate(). An element the record already carries is a
-   * no-op. Returns the record as it now stands.
+   * Extend who reaches a record by one element. The spelling that survives
+   * two admins sharing a record at once: a `permissions` key write replaces
+   * the whole set, so the later of two concurrent ones drops what the
+   * earlier granted. No-bump, like associate(); an element the record
+   * already carries is a no-op.
    */
   async grantAccess(
     id: string,
@@ -1439,11 +1390,8 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Hold a permission set to the cross-element invariant, asked of the set
-   * the write would *produce* — the same post-state reading the `_group`
-   * at-least-one-admin check takes, and for the same reason: revoking a
-   * `read` is what leaves a `write` standing alone, and no element-wise
-   * check can see it. See docs/spec/access-control.md § Write implies read.
+   * Hold a permission set to the cross-element invariant — see
+   * validatePermissions() in access.ts for why it reads the post-state.
    */
   private assertPermissionSet(next: AuthorityAssociation[]): void {
     const errors = validatePermissions(next);
@@ -1480,24 +1428,18 @@ export class Stack implements StackClient {
 
   /**
    * Refuse an edge that would make a record its own ancestor — asked at
-   * every site that adds one: a change set naming `parentId`, a restore
-   * putting a container back, and a create naming both its own id and a parent. Nothing
-   * downstream (a generator deriving a page path, a folder view) is
-   * written to survive a cycle.
+   * every site that adds one. Nothing downstream (a generator deriving a
+   * page path, a folder view) is written to survive a cycle.
    *
-   * Walks with the unscoped adapter deliberately: a walk that skipped the
-   * links a requester cannot read would let a cycle be assembled through
-   * them and break the invariant for every reader. The walk is bounded
-   * because a chain long enough to exhaust it is already pathological.
+   * Walks with the unscoped adapter: a walk that skipped the links a
+   * requester cannot read would let a cycle be assembled through them and
+   * break the invariant for every reader.
    *
    * Read-then-write, so two moves racing on opposite ends of one chain can
-   * both pass — closing that means the invariant lives in the adapter,
-   * where the write is atomic, which puts a graph constraint in the
-   * storage contract every adapter then implements. Same deferral as
-   * checkBindingUnique() above. Consumers that walk `parentId` should
-   * carry a visited set rather than trust this alone; MAX_PARENT_DEPTH is
-   * the same posture applied here.
-   * See docs/spec/data-model.md § Reparenting.
+   * both pass — the same deferral as checkBindingUnique() above, since
+   * closing it would put a graph constraint in the storage contract.
+   * Consumers walking `parentId` should carry a visited set rather than
+   * trust this alone. See docs/spec/data-model.md § Reparenting.
    */
   private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
     let cursor: string | undefined = parentId;
@@ -1681,18 +1623,12 @@ export class Stack implements StackClient {
   }
 
   /**
-   * A record's change journal, oldest first — what moved, who moved it,
-   * and the association deltas nothing else retains. The mutation
-   * surface's read, on the same footing as getVersions(): a log of who
-   * changed what, gated on current read access, would make a record's past
-   * exactly as reachable as its present. `ScopedStack` applies that gate;
-   * this layer is unscoped and trusted by definition.
+   * A record's change journal, oldest first — what moved, who moved it, and
+   * the association deltas nothing else retains. `ScopedStack` applies the
+   * mutate-surface gate; this layer is unscoped and trusted by definition.
    *
-   * An adapter with no journal to read refuses rather than answering an
-   * empty log — "nothing changed" and "this stack does not remember" are
-   * not the same answer, and a caller reconstructing an association's
-   * history cannot tell them apart. A record that isn't there is
-   * StackNotFoundError for the same reason, a purged one included.
+   * A record that isn't there is StackNotFoundError, a purged one included:
+   * a destroyed log and an empty one are not the same answer.
    * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
@@ -1709,11 +1645,8 @@ export class Stack implements StackClient {
   /**
    * Restore a record to a previous version by creating a new version —
    * never rewrites history. The snapshot is validated against its own
-   * stored typeId (not the record's current type), and puts back `content`
-   * and `typeId` alone: containment, listing and associations — authority
-   * ones among them — are all left exactly where they stand, because a
-   * snapshot carries none of them. See docs/spec/versioning.md
-   * § Restore semantics.
+   * stored typeId, and puts back `content` and `typeId` alone: a snapshot
+   * carries nothing else. See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
     id: string,
@@ -1753,10 +1686,10 @@ export class Stack implements StackClient {
     }
 
     // Restoring is a write like any other, so it owes the same immutability
-    // check a content patch pays — a snapshot taken before a card claimed its DID
-    // would otherwise move the binding by rolling content back. Uniqueness
-    // needs no separate check here: a restore can only put back a value this
-    // same card already held, which immutability already refuses to change.
+    // check a content patch pays: a snapshot taken before a card claimed
+    // its DID would otherwise move the binding by rolling content back.
+    // Uniqueness needs none — a restore can only put back a value this same
+    // card already held.
     for (const field of bindingFieldsOf(baseIdOf(target.typeId))) {
       this.checkBindingImmutable(
         baseIdOf(target.typeId),
@@ -1768,9 +1701,7 @@ export class Stack implements StackClient {
 
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
-    // gate. Containment and associations alike are kept by the journal,
-    // which reconstructs either without a snapshot.
-    // See docs/spec/versioning.md § Restore semantics.
+    // gate. See docs/spec/versioning.md § Restore semantics.
     const change = new PendingChange('restore', { actor: Stack.actorFrom(opts) });
     const restored = await this.adapter.restoreVersion(id, version, {
       ...this.writeOptions(existing, opts),
@@ -1781,23 +1712,15 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration: replace `content` and `typeId` together
-   * in one step, validated against `toTypeId`'s schema exactly as
-   * create()/mutate() validate against a type's schema. The single-record
-   * counterpart to migrateAll() — content here is supplied by the caller
-   * (computed client-side by the type's owning app, per
-   * docs/spec/wire-format.md § Migration commit) rather than a registered
-   * Migration function. Snapshots the prior state to version history, same
-   * as mutate()/restoreVersion(), and takes the same optional `ifVersion`
-   * precondition every version-bumping mutation takes — checked atomically
-   * at the adapter, not here (see docs/spec/versioning.md § Optimistic
-   * concurrency).
+   * Commit a per-record migration — the single-record counterpart to
+   * migrateAll(), with `content` supplied by the caller rather than by a
+   * registered Migration function. See docs/spec/wire-format.md § Migration
+   * commit.
    *
    * Because `content` is a full replacement written under a new `typeId`,
    * this is create-shaped at the destination *and* update-shaped over the
-   * record as it stands, so it owes both sets of integrity checks — the
-   * binding rules, the attachment rules, and `_config`'s. Missing either
-   * half would make migrate a second, unguarded write path to the same
+   * record as it stands, so it owes both sets of integrity checks. Missing
+   * either half would make migrate a second, unguarded write path to a
    * state create()/mutate() refuse to reach.
    */
   async commitMigration(
@@ -1941,18 +1864,14 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Bindings across a migration. `content` is a full replacement rather
-   * than a patch, so there is no "field absent from the patch" case to
-   * exempt: every binding field either keeps its value, moves to a new
-   * one, or is shed by omission — and immutability refuses the last two
-   * whichever family they happen in. Asked across the union of the two
-   * families' binding fields, so a card can neither shed its DID by
-   * migrating out of `_entity`/`_app` nor pick one up on the way in.
+   * Bindings across a migration. `content` is a full replacement, so every
+   * binding field either keeps its value, moves to a new one, or is shed by
+   * omission — and immutability refuses the last two. Asked across the
+   * union of both families' binding fields, so a card can neither shed its
+   * DID by migrating out of `_entity`/`_app` nor pick one up on the way in.
    *
-   * Uniqueness is asked only of the destination family, which is where the
-   * record's claim lives once the write lands, and excludes the record
-   * itself — re-sending the value it already holds claims nothing.
-   * See docs/spec/identity.md § DID bindings.
+   * Uniqueness is asked only of the destination family, excluding the
+   * record itself. See docs/spec/identity.md § DID bindings.
    */
   private async checkBindingsOnMigrate(
     fromTypeId: TypeId,
@@ -1984,16 +1903,10 @@ export class Stack implements StackClient {
    * claiming one value would leave that lookup without a single answer, and
    * ambiguity is all an impersonating card needs. Enforced here rather than
    * by schema, since uniqueness is a property of the set, not of the value.
-   * Called by the paths that can introduce a binding: create and update.
    *
-   * Short-circuits on the first clash rather than materialising the family,
-   * so a stack whose `_entity` family is larger than a single scan settles
-   * the common case — the value is already taken — without walking the rest.
-   *
-   * Read-then-write, so two creates racing on one value can both pass.
-   * Closing that properly means a unique index over a JSON field, which
-   * each adapter would enforce separately — a decision about where
-   * uniqueness lives, not a local fix.
+   * Read-then-write, so two creates racing on one value can both pass:
+   * closing that means a unique index over a JSON field, which is a
+   * decision about where uniqueness lives rather than a local fix.
    * See docs/spec/identity.md § DID bindings.
    */
   private async checkBindingUnique(

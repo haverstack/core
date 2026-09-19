@@ -93,7 +93,6 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
       ...(attachmentRecordId && { attachmentRecordId }),
     };
   }
-  // relationship
   return {
     kind: 'relationship',
     label: row.label as string,
