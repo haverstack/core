@@ -41,9 +41,8 @@ import type {
  * are two elements. See docs/spec/data-model.md § Associations.
  */
 export function associationEqual(a: Association, b: Association): boolean {
-  // Identity is undecidable for a value that is not an association. Two
-  // of them are not "the same one"; validateAssociation() is what names
-  // them, and this must reach that point without throwing first.
+  // Never "the same one": naming a malformed association is
+  // validateAssociation()'s job, which this must reach without throwing.
   if (!a || !b) return false;
   if (a.kind !== b.kind || a.label !== b.label) return false;
   if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
@@ -58,9 +57,7 @@ export function associationEqual(a: Association, b: Association): boolean {
 
 /**
  * Structural equality per grantee arm. `role` is required, so there is no
- * absent-means-any spelling to normalize: two group grantees differing
- * only by role are two grantees.
- * See docs/spec/access-control.md § Record-level permissions.
+ * absent-means-any spelling to normalize.
  */
 export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolean {
   if (!a || !b) return false;
@@ -73,9 +70,9 @@ export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolea
 }
 
 /**
- * Whether an association carries authority rather than data — the
- * partition `StackRecord.permissions` and `StackRecord.associations`
- * project, and the line `associate()`/`dissociate()` refuse to cross.
+ * Whether an association carries authority rather than data — the partition
+ * `StackRecord.permissions` and `StackRecord.associations` project, and the
+ * line `associate()`/`dissociate()` refuse to cross.
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function isAuthorityAssociation(a: Association): a is AuthorityAssociation {
@@ -83,9 +80,8 @@ export function isAuthorityAssociation(a: Association): a is AuthorityAssociatio
 }
 
 /**
- * One stored association set split into the two the record presents. An
- * app editing tags never sees the authority half, so it cannot drop it.
- * See docs/spec/access-control.md § Record-level permissions.
+ * One stored association set split into the two the record presents. An app
+ * editing tags never sees the authority half, so it cannot drop it.
  */
 export function partitionAssociations(associations: Association[]): {
   associations: DataAssociation[];
@@ -127,15 +123,13 @@ export function stripAssociationAnnotation(association: Association): Associatio
 
 /**
  * What a `changes.associations` list moves against a record's current
- * associations, one tagged edit per association — the same comparison
- * `changeSetOps` decides `associate`/`dissociate` from, so which ops fired
- * and what these report can never disagree.
+ * associations, one tagged edit per association.
  *
- * An entry that matches something already there by identity displaced it
- * rather than joining it, which is a `repoint`: the association is still
- * on the record and only its annotation moved, so no `remove` can describe
- * it. `previous` is the prior association in full, annotation included —
- * the only place an overwritten or removed `attachmentRecordId` survives.
+ * An entry matching something already there by identity displaced it rather
+ * than joining it, which is a `repoint`: the association is still on the
+ * record and only its annotation moved, so no `remove` can describe it.
+ * `previous` is the prior association in full, annotation included — the
+ * only place an overwritten or removed `attachmentRecordId` survives.
  * See docs/spec/journal.md § The entry.
  */
 export function associationDelta(before: Association[], after: Association[]): AssociationChange[] {
@@ -155,11 +149,10 @@ export function associationDelta(before: Association[], after: Association[]): A
 }
 
 /**
- * The two flat lists a change frame carries, derived from the tagged
- * list. The feed reports what is true now, so a `repoint` appears only
- * under its new value and a `remove` by identity alone — the prior state
- * the journal keeps has no place on a notification.
- * See docs/spec/events.md § The event shape.
+ * The two flat lists a change frame carries, derived from the tagged list.
+ * The feed reports what is true now, so a `repoint` appears only under its
+ * new value and a `remove` by identity alone — the prior state the journal
+ * keeps has no place on a notification.
  */
 export function feedAssociationDelta(changes: AssociationChange[]): {
   added: Association[];
@@ -193,8 +186,7 @@ export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boole
  */
 export function assertNonEmptyChangeSet(changes: RecordChanges): void {
   // Presence, not truthiness: `unlisted: false` and `parentId: null` are
-  // aspects this call names, and reading them as absent would drop a
-  // change the caller asked for.
+  // aspects this call names.
   if (RECORD_CHANGE_KEYS.some((key) => changes[key] !== undefined)) return;
   throw new StackQueryError(
     'A change set names at least one of: ' + RECORD_CHANGE_KEYS.join(', ') + '.',
@@ -203,13 +195,9 @@ export function assertNonEmptyChangeSet(changes: RecordChanges): void {
 
 /**
  * Which aspects a change set actually moves, against the record as it
- * stands — the no-op decision and the change event's `ops` are the same
- * comparison, so they can never disagree. A key naming the value a record
- * already holds contributes nothing.
- *
- * `merged` is the content the patch produces, computed once by the
+ * stands. A key naming the value a record already holds contributes
+ * nothing. `merged` is the content the patch produces, computed once by the
  * caller that had to validate it anyway.
- * See docs/spec/events.md § The event shape.
  */
 export function changeSetOps(
   existing: StackRecord,
@@ -246,11 +234,8 @@ export function changeSetOps(
 
 /**
  * The ops whose prior state the journal already carries in full, so a
- * snapshot would preserve nothing a restore could not otherwise reach:
- * an association delta — authority elements included — a
- * `previousParentId`, and a listing transition whose inverse is the op's
- * own opposite. A change set naming only these is a no-bump write, same
- * as calling associate()/dissociate() directly.
+ * snapshot would preserve nothing a restore could not otherwise reach. A
+ * change set naming only these is a no-bump write.
  * See docs/spec/versioning.md § Version history.
  */
 const NO_BUMP_OPS: ReadonlySet<ChangeOp> = new Set<ChangeOp>([
@@ -263,9 +248,8 @@ const NO_BUMP_OPS: ReadonlySet<ChangeOp> = new Set<ChangeOp>([
 ]);
 
 /**
- * Whether a change set's ops advance `version`/`updatedAt` at all. After
- * the no-bump set above, this is `patch` and the whole-record verbs.
- * See docs/spec/versioning.md § Version history.
+ * Whether a change set's ops advance `version`/`updatedAt` at all. After the
+ * no-bump set above, this is `patch` and the whole-record verbs.
  */
 export function bumpsVersion(ops: ChangeOp[]): boolean {
   return ops.some((op) => !NO_BUMP_OPS.has(op));
@@ -274,9 +258,7 @@ export function bumpsVersion(ops: ChangeOp[]): boolean {
 /**
  * The keys that guard nothing, because none of them moves `version` — a
  * precondition on it would fence a write that the number it names cannot
- * describe. They compose regardless of write order, the same reason
- * associate()/dissociate() take no precondition at all.
- * See docs/spec/versioning.md § Optimistic concurrency.
+ * describe. See docs/spec/versioning.md § Optimistic concurrency.
  */
 const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = new Set([
   'associations',
@@ -288,12 +270,9 @@ const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = n
 /**
  * Whether `ifVersion` applies to a change set. A set naming only keys from
  * the no-precondition list above carries none; any other aspect named
- * restores the guard over the whole call.
- *
- * Read off the keys the caller wrote rather than the ops the set turns out
- * to move, so a stale caller is told its version is stale whatever its
- * patch says — including when the patch restates what the record already
- * holds. See docs/spec/versioning.md § Optimistic concurrency.
+ * restores the guard over the whole call. Read off the keys the caller
+ * wrote rather than the ops the set turns out to move, so a stale caller is
+ * told its version is stale whatever its patch says.
  */
 export function takesIfVersion(changes: RecordChanges): boolean {
   return RECORD_CHANGE_KEYS.some(
@@ -302,12 +281,11 @@ export function takesIfVersion(changes: RecordChanges): boolean {
 }
 
 /**
- * The change set narrowed to the aspects that actually moved. An adapter
- * is handed this rather than what the caller wrote, so restating an aspect
+ * The change set narrowed to the aspects that actually moved. An adapter is
+ * handed this rather than what the caller wrote, so restating an aspect
  * cannot rewrite it: `unlisted: true` on an already-unlisted record would
- * otherwise drag `unlistedAt` forward, moving the record's publish moment
- * with no op reporting it. It also keeps the adapter contract honest —
- * every key an adapter receives is one it must write.
+ * otherwise drag `unlistedAt` forward with no op reporting it. Every key an
+ * adapter receives is one it must write.
  */
 export function effectiveChanges(changes: RecordChanges, ops: ChangeOp[]): RecordChanges {
   const effective: RecordChanges = {};
@@ -323,22 +301,17 @@ export function effectiveChanges(changes: RecordChanges, ops: ChangeOp[]): Recor
 
 /**
  * Whether a merge patch produced the content the record already held.
- * Compared by serialization: content is JSON by construction — it round
- * trips through storage that way — and a patch preserves key order for
- * every field it does not name, so the encoding of an unchanged record is
- * stable. A reordering patch that changes nothing else is the one case
- * this reports as a change, which costs an empty version rather than a
- * wrong answer.
+ * Compared by serialization: content is JSON by construction and a patch
+ * preserves key order for every field it does not name, so an unchanged
+ * record encodes stably. A reordering patch that changes nothing else is
+ * the one case this reports as a change, costing an empty version rather
+ * than a wrong answer.
  */
 export function contentEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/**
- * Ensures `creator` carries an `admin` relationship association, adding one
- * if it's not already present. Used to bootstrap a `_group` record's first
- * admin at create time.
- */
+/** Bootstraps a `_group` record's first admin at create time. */
 export function stampGroupAdmin(
   associations: DataAssociation[] | undefined,
   creator: EntityId,

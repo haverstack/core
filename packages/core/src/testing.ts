@@ -375,9 +375,8 @@ export class MemoryAdapter implements StackAdapter {
 
   /**
    * Stringified offset into insertion order, paired with the sort it was
-   * minted under — mirroring the real adapters' cursor stability guarantee
-   * (docs/spec/data-model.md § Sorting and pagination) rather than the
-   * bare, sort-blind offset this used to be.
+   * minted under — mirroring the real adapters' cursor stability guarantee.
+   * See docs/spec/data-model.md § Sorting and pagination.
    */
   private encodeCursor(sort: QuerySort | undefined, offset: number): string {
     const json = JSON.stringify({ d: this.sortDescriptor(sort), o: offset });
@@ -462,11 +461,7 @@ export class MemoryAdapter implements StackAdapter {
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
-  /**
-   * Never bumps `version`/`updatedAt` — a set-add composes correctly
-   * regardless of write order, so it needs neither OCC nor a snapshot.
-   * See docs/spec/versioning.md § Version history.
-   */
+  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.associate(). */
   async associate(id: string, association: Association, opts: JournalOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);

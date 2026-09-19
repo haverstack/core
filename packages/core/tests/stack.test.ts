@@ -1437,15 +1437,15 @@ describe('Stack.mutate — the `parentId` key', () => {
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const minted = idWithTimestamp(Date.now());
     // Straight to the adapter: it holds no opinion on references, so this
-    // plants the dangling parent Stack.a change set's `parentId` would now refuse.
+    // plants the dangling parent a change set's `parentId` would refuse.
     await adapter.mutateRecord(a.id, { parentId: minted });
     await expect(
       stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
     ).rejects.toThrow(StackConflictError);
   });
 
-  // The forward-reference route is closed: a parent has to exist when it is
-  // named, so two creates can no longer point at each other's minted ids.
+  // A parent has to exist when it is named, so two creates cannot point at
+  // each other's minted ids.
   test('a create naming a not-yet-created parent is refused', async () => {
     const first = idWithTimestamp(Date.now());
     const second = idWithTimestamp(Date.now() + 60_000);
@@ -2420,11 +2420,9 @@ describe('_group — at least one admin', () => {
     });
   });
 
-  // A Group's roster is authority, not data — but that is no longer a
-  // _group-specific carve-out: no record's associations are ever restored,
-  // because a snapshot never captures them in the first place. A restore
-  // rolls back content and containment and leaves the current roster (or
-  // any other record's current associations) exactly where they stand.
+  // No record's associations are ever restored, because a snapshot never
+  // captures them: a restore rolls back content and leaves the current
+  // roster — like any other record's associations — where it stands.
   // See docs/spec/versioning.md § Restore semantics.
   describe('restoreVersion does not roll back the roster', () => {
     test('content rolls back to what it was, while the current roster stays exactly where it stands', async () => {

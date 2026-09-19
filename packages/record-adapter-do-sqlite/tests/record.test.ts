@@ -218,10 +218,9 @@ describe('expectedVersion / transactional rollback', () => {
    * into exec.transaction(), where snapshotBeforeMutation() writes a real
    * row into `versions` and versionedUpdate()'s CAS then fails on the
    * stale expectedVersion and throws — both inside the same transaction
-   * callback. (associate()/dissociate() can no longer stand in for this:
-   * they never bump and never snapshot, so they touch neither `versions`
-   * nor the CAS path at all — see docs/spec/versioning.md § Version
-   * history.) If transactionSync() did not roll back, that orphan version
+   * callback. (associate()/dissociate() cannot stand in for this: they
+   * never bump and never snapshot, so they touch neither `versions` nor the
+   * CAS path — see docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
    * row would survive a mutation that reported failure.
    */
   test('a mid-transaction failure rolls back writes already made in the same transaction', async () => {

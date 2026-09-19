@@ -366,5 +366,4 @@ export class LocalAdapter implements StackAdapter {
   }
 }
 
-// Also export combineAdapters for users who want to compose their own adapters
 export { combineAdapters } from '@haverstack/core/adapter';

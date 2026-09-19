@@ -229,7 +229,7 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     clauses.map((c) => ` AND ${c}`).join('') +
     `)`;
 
-  // Tag filter — record must have ALL specified tags
+  // Conjunctive: a record must carry every tag named.
   if (f.tags?.length) {
     for (const tag of f.tags) {
       conditions.push(hasAssociation('tag', ['a.label = ?']));
@@ -237,7 +237,6 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     }
   }
 
-  // Attachment label filter
   if (f.hasAttachment) {
     conditions.push(hasAssociation('attachment', ['a.label = ?']));
     params.push(f.hasAttachment);

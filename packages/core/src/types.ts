@@ -973,27 +973,22 @@ export type RecordChange = {
   actor?: ChangeActor;
   /**
    * Associations now present that weren't before — current annotation
-   * included, so a re-point appears here under its new `attachmentRecordId`
-   * — present whenever `ops` includes `associate`, absent otherwise. Same
-   * "as of this change" convention as every other field on this type;
-   * never what an association held before this write. See
-   * docs/spec/events.md § The event shape.
+   * included, so a re-point appears here under its new
+   * `attachmentRecordId`. Present whenever `ops` includes `associate`, on
+   * the same "as of this change" convention as every other field here.
    */
   associationsAdded?: Association[];
   /**
    * Associations no longer present, identity only — kind and label, plus
    * `fileId` for an attachment — present whenever `ops` includes
-   * `dissociate`. Reports what's now absent, not what it used to carry: an
-   * attachment's `attachmentRecordId` is never repeated here, the same way
-   * a `purged` frame never carries the content it destroyed.
+   * `dissociate`. An attachment's `attachmentRecordId` is never repeated
+   * here, the same way a `purged` frame never carries what it destroyed.
    */
   associationsRemoved?: Association[];
   /**
    * The record as of this change — present only when asked for and
-   * available, never required for correctness, and never on `purged`.
-   * Shared with every other subscriber on this emission, so a handler that
-   * needs to alter it copies first. See docs/spec/events.md § The event
-   * shape.
+   * available, never on `purged`. Shared with every other subscriber on
+   * this emission, so a handler that needs to alter it copies first.
    */
   record?: StackRecord;
   /**
@@ -1167,10 +1162,8 @@ export interface StackRecordAdapter {
   // Associations
   /**
    * Add an association. Never bumps `version`/`updatedAt` and never
-   * snapshots — a set-add composes correctly regardless of write order, so
-   * it needs neither the OCC `ifVersion` guards content, nor the rollback
-   * history that guards. See
-   * docs/spec/versioning.md § Version history and § Optimistic concurrency.
+   * snapshots — a set-add composes regardless of write order.
+   * See docs/spec/versioning.md § Version history.
    */
   associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
@@ -1188,22 +1181,18 @@ export interface StackRecordAdapter {
 
   /**
    * Read a record's change journal, oldest first — required, on the same
-   * footing as getVersions(). A recovery mechanism an app cannot rely on
-   * is most of the way to no mechanism at all, so an adapter with no
-   * journal to read refuses the call rather than declining to have the
-   * method: a foreign server that offers none says so through its own
-   * capability error, which can name why. See docs/spec/journal.md
-   * § Reading it.
+   * footing as getVersions(). A recovery mechanism an app cannot rely on is
+   * most of the way to no mechanism at all, so an adapter with no journal
+   * refuses the call rather than declining to have the method.
+   * See docs/spec/journal.md § Reading it.
    */
   getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
    * Restore a record to a previous version's `content` and `typeId` —
-   * everything a snapshot carries. Containment, listing and associations,
-   * authority ones included, are left where they stand; a snapshot carries
-   * none of them, so there is nothing an adapter could restore them
-   * *from*. Bumps
-   * version internally. Throws StackNotFoundError if the version doesn't
-   * exist.
+   * everything a snapshot carries. Containment, listing and associations
+   * are left where they stand, there being nothing to restore them *from*.
+   * Bumps version internally; throws StackNotFoundError if the version
+   * doesn't exist.
    */
   restoreVersion(
     id: RecordId,

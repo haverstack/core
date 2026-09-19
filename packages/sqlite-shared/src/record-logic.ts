@@ -843,11 +843,9 @@ export class SharedSqlRecordLogic {
   // -------------------------------------------------------
 
   /**
-   * Never bumps `version`/`updatedAt` and never snapshots — a set-add
-   * composes correctly regardless of write order, so it needs neither OCC
-   * nor rollback history. The records row is untouched entirely; only the
-   * associations table changes. See docs/spec/versioning.md § Version
-   * history.
+   * Never bumps `version`/`updatedAt` and never snapshots — see
+   * StackRecordAdapter.associate(). The records row is untouched entirely;
+   * only the associations table changes.
    */
   async associate(
     recordId: string,

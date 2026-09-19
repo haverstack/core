@@ -520,10 +520,9 @@ describe('the journal is gated on the mutate surface, like version history', () 
 // -------------------------------------------------------
 
 describe('JournalQuery is validated at the surface', () => {
-  // A negative limit used to diverge rather than fail: slice(0, -1) drops
-  // the newest entry, while SQLite reads a negative LIMIT as "no ceiling"
-  // and returns the whole log. Neither answers the call, and the
-  // disagreement only shows up when a stack changes adapters.
+  // Refused at the surface rather than left to each adapter: slice(0, -1)
+  // drops the newest entry where SQLite reads a negative LIMIT as "no
+  // ceiling", and neither answers the call.
   test.each([
     ['limit', { limit: -1 }],
     ['limit', { limit: 1.5 }],

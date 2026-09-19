@@ -90,7 +90,6 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // unterminated string; none of them can match an indexed token anyway.
   let clean = query.replace(/[\p{Cc}\p{Cf}]/gu, ' ');
 
-  // Remove wildcards
   clean = clean.replace(/\*/g, '');
 
   // Replace NEAR(terms, distance) with just its terms — see note above.
@@ -104,10 +103,10 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // through. The captured space is collapsed with all the rest on the way
   // out.
   //
-  // And neither run crosses a `(`, which bounds where the failure is
-  // found: `NEAR(NEAR(NEAR(` used to re-scan to the end of the string once
-  // per occurrence. A NEAR's terms are words and phrases and its distance
-  // is a number, so neither holds a paren in any input FTS5 would accept.
+  // And neither run crosses a `(`, which bounds where a failed match gives
+  // up: without it, `NEAR(NEAR(NEAR(` re-scans to the end of the string
+  // once per occurrence. A NEAR's terms are words and phrases and its
+  // distance a number, so neither holds a paren FTS5 would accept anyway.
   clean = clean.replace(/\bNEAR\s*\(([^,()]*)(?:,[^()]*)?\)/gi, '$1');
 
   // A NEAR( with no closing paren isn't the function-call form the rule
@@ -160,7 +159,6 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // outside the phrase rather than becoming a literal character in it.
   if (inPhrase) result += '"';
 
-  // Auto-close any unclosed parens
   if (currentDepth > 0) result += ')'.repeat(currentDepth);
 
   // Remove empty paren pairs left behind by NEAR/NOT stripping, and drop

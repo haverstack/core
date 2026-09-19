@@ -92,7 +92,6 @@ const validateField = (
     return;
   }
 
-  // Scalar validation
   if (def.kind === 'date') {
     if (
       typeof value !== 'string' ||
@@ -166,7 +165,6 @@ export const validateContent = (
     });
   }
 
-  // Check all schema fields
   for (const [key, def] of Object.entries(schema)) {
     const path = prefix ? `${prefix}.${key}` : key;
     const value = content[key];

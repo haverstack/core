@@ -154,17 +154,11 @@ class FeedAuthorityCache {
  * lookups it needs cached for the life of the subscription and dropped the
  * moment anything that feeds them changes.
  *
- * Two properties do the work, and neither is optional:
- *
- * **Deliveries are serialized.** The permission decision is asynchronous,
- * so without a queue two changes to one record could resolve out of order
- * and be delivered newest-first — breaking the one ordering guarantee the
- * feed makes. Every emission is appended to a chain instead.
- *
- * **The filter fails closed.** A permission check that throws drops the
- * event and reports the error; it never delivers on the assumption that a
- * failed check would have passed.
- *
+ * Two properties do the work, and neither is optional. **Deliveries are
+ * serialized**, because the permission decision is asynchronous and two
+ * changes to one record could otherwise resolve out of order, breaking the
+ * feed's one ordering guarantee. And **the filter fails closed**: a check
+ * that throws drops the event and reports the error.
  * See docs/spec/events.md § Permission scoping.
  */
 class ScopedSubscription extends Subscription {
@@ -231,19 +225,14 @@ class ScopedSubscription extends Subscription {
  * could have read it is told a refusal was about access.
  * See docs/spec/disclosure.md § Which refusal a Record answers with.
  *
- * Two identities, one rule: **the principal governs authority, the subject
- * governs attribution.** Grant lookup and the privilege-bearing gates that
- * no grant reaches (resharing, group management, hard delete, widening
- * access at create time) key on `principalEntityId`; authorship, `-own`
- * matching, record-level permission resolution, and "files I uploaded"
- * lookups key on `subjectEntityId`.
- *
- * Unconditional owner access follows that same split rather than one
- * identity: it answers *what data is reachable* for the subject (an owner
- * subject resolves past every permission check) and *who may exercise a
- * privileged verb* for the principal (an owner app is not bounded by
- * grants). Under delegation both halves apply, and a mistake on the
- * authority side is an escalation rather than a preference.
+ * Which identity each gate keys on follows the module comment's rule.
+ * Grant lookup and the privilege-bearing gates no grant reaches
+ * (resharing, group management, hard delete, widening access at create
+ * time) key on `principalEntityId`; authorship, `-own` matching,
+ * record-level permission resolution and "files I uploaded" lookups key on
+ * `subjectEntityId`. Unconditional owner access splits the same way: an
+ * owner subject resolves past every permission check, an owner principal
+ * is not bounded by grants, and under delegation both halves apply.
  */
 export class ScopedStack implements StackClient {
   constructor(
@@ -307,11 +296,7 @@ export class ScopedStack implements StackClient {
     );
   }
 
-  /**
-   * Refuse anything but the owner acting as itself. The verbs resting on
-   * this tier are irreversible or disclose the sharing graph, so delegation
-   * never carries one to a subject — see ownerActingAlone.
-   */
+  /** Refuse anything but the owner acting as itself — see ownerActingAlone. */
   private requireOwnerActingAlone(message: string): void {
     if (!this.ownerActingAlone) throw new StackPermissionError(message);
   }
@@ -341,13 +326,12 @@ export class ScopedStack implements StackClient {
    * type's family (grants match by baseId, so a version bump never orphans
    * one). -own actions additionally require record.entityId === grantee,
    * unless `matchOwn` is false — on the principal side of a delegated
-   * request the suffix is read as the bare verb, since which records are
+   * request the suffix reads as the bare verb, since which records are
    * reachable is the subject's business. `allowDefault` decides whether a
-   * grant naming nobody counts. Anonymous grantees always return false.
+   * grant naming nobody counts.
    *
    * Reached only through subjectAllows()/principalAllows(), which fix those
-   * two flags per side of the intersection. Call one of those instead.
-   * See docs/spec/access-control.md § Type-level grants.
+   * two flags per side. Call one of those instead.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -422,15 +406,11 @@ export class ScopedStack implements StackClient {
    * Vacuously true when there's no delegation, where the principal and
    * subject checks would be the same question asked twice.
    *
-   * Default grants don't count here. "Any authenticated entity" is about
-   * people who turn up, not software the owner installed — an app reaches
-   * only the types named to it, which is the whole of what containment
-   * promises.
-   *
-   * Group-targeted grants don't count here either, one step removed: a
-   * roster is editable by any of the group's admins, so authority reaching
-   * a principal through one would let someone other than the owner name an
-   * app to a type. See docs/spec/access-control.md § Type-level grants.
+   * Neither default nor group-targeted grants count here. "Any
+   * authenticated entity" is about people who turn up, not software the
+   * owner installed; and a roster is editable by any of the group's admins,
+   * so authority reaching a principal through one would let someone other
+   * than the owner name an app to a type.
    */
   private principalAllows(
     typeId: TypeId,
@@ -613,13 +593,10 @@ export class ScopedStack implements StackClient {
    * relationship target). Missing and unreadable both return false —
    * indistinguishable, so this can't probe for a record's existence.
    *
-   * The owner acting alone passes without the lookup, which costs nothing:
-   * there is no record in their own stack they may not read, so the gate
-   * could only ever refuse them for absence — and absence is `Stack`'s to
-   * answer, with the conflict that names the problem rather than a
-   * refusal standing in for it. The anti-oracle property is unchanged for
-   * every other requester.
-   * See docs/spec/access-control.md § Reference-creation gating.
+   * The owner acting alone passes without the lookup: there is no record in
+   * their own stack they may not read, so the gate could only refuse them
+   * for absence — which is `Stack`'s to answer, with a conflict that names
+   * the problem. See docs/spec/access-control.md § Reference-creation gating.
    */
   private async canReadReferent(recordId: string): Promise<boolean> {
     if (this.ownerActingAlone) return true;
@@ -631,14 +608,10 @@ export class ScopedStack implements StackClient {
   /**
    * Whether this request can read some record referencing `fileId` —
    * shared by canAccessFile() and the non-owner _attachment@1 create()
-   * carve-out, which deliberately excludes the uploader clause. Walks
-   * every referencing record, short-circuiting on the first readable one.
-   * `_attachment@1` records are excluded from matching outright: the
-   * carve-out must be satisfied by some *other* record referencing the
-   * file, never by the requester's own prior metadata record for it —
-   * allowing that would let one successful guess unlock unlimited further
-   * metadata records for the same fileId, reintroducing the circularity
-   * the carve-out's uploader-clause exclusion closes.
+   * carve-out, which deliberately excludes the uploader clause.
+   * `_attachment@1` records never match: the carve-out has to be satisfied
+   * by some *other* record referencing the file, or one successful guess
+   * would unlock unlimited further metadata records for the same fileId.
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   private async hasReadableReference(fileId: string): Promise<boolean> {
@@ -760,8 +733,9 @@ export class ScopedStack implements StackClient {
    * creation refused save one carve-out. A scoped create always stamps
    * authorship — an absent entityId means an unscoped `Stack` wrote it.
    * `createdAt`/`updatedAt` are refused to everyone but the owner acting
-   * alone — see the guard below and docs/spec/data-model.md § Record IDs.
-   * See also docs/spec/access-control.md and docs/spec/attachments.md.
+   * alone, rather than dropped, so an app never believes it published
+   * something it didn't. See docs/spec/access-control.md and
+   * docs/spec/data-model.md § Record IDs.
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
@@ -770,19 +744,11 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord & { content: T }> {
     const principal = this.principalEntityId;
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
-    // createdAt/updatedAt let a caller backdate a record's clock fields —
-    // and, without `id` also supplied, its sort position too. Refused to
-    // everyone but the owner acting alone (undelegated, authenticated as
-    // themselves): a grantee is exactly the untrusted actor the `id`
-    // skew check below already exists to stop from forging a sort
-    // position, and a delegated app acting for the owner inherits none of
-    // the owner's extra trust — same reasoning as mayGrantAccess() below.
-    // Refused rather than silently dropped, so an app never believes it
-    // published something it didn't — asked value-wise, since an
+    // A grantee is exactly the untrusted actor the `id` skew check below
+    // exists to stop from forging a sort position, and a delegated app
+    // acting for the owner inherits none of the owner's extra trust — same
+    // reasoning as mayGrantAccess() below. Asked value-wise, since an
     // `undefined` carries no date and Stack.create() reads it as absent.
-    // This is also the enforcement a server built on ScopedStack inherits
-    // for `POST /records`: an owner-authenticated request may carry both
-    // fields, anyone else's has them ignored.
     if ((opts.createdAt !== undefined || opts.updatedAt !== undefined) && !this.ownerActingAlone) {
       throw new StackPermissionError(
         'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
@@ -1091,10 +1057,8 @@ export class ScopedStack implements StackClient {
    * A `_group` asks management, not authorship: a creator later demoted
    * from the admin roster shouldn't retain a side door to reassign who can
    * read or write the group record. Everything else is intersected like
-   * every other authority here — the principal must hold it, and the
-   * subject must be able to reach this record, without which an owner
-   * principal would carry its subject to records the subject cannot touch.
-   * create() withholds the same reach via mayGrantAccess().
+   * every other authority here, or an owner principal would carry its
+   * subject to records the subject cannot touch.
    */
   private canReshare(record: StackRecord): boolean {
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) return this.isGroupManager(record);
@@ -1105,22 +1069,15 @@ export class ScopedStack implements StackClient {
   /**
    * Naming the software behind a key is the trust decision the `_app`
    * registry exists to record, so both halves of that binding — `did` and
-   * `appId` — belong to the owner alone. Same reasoning that makes `_app`
-   * ungrantable, applied to the fields a lookup reads. Registering a card
-   * is already owner-only; without this, record-level `write` shared on a
-   * card would be a second way in: a card carrying no DID yet could be
-   * pointed at a write-holder's own key while keeping the name the owner
-   * gave it, or relabelled to claim another app's `appId`. `name` and
-   * `version` stay writable — they are display, not lookup.
+   * `appId` — belong to the owner alone. Without this, record-level `write`
+   * on a card would be a second way in: one carrying no DID yet could be
+   * pointed at a write-holder's own key, or relabelled to claim another
+   * app's `appId`. `name` and `version` stay writable — display, not lookup.
    *
-   * Owner *acting alone*, in both directions: a delegated app never holds
-   * it, and an owner principal doesn't lend it to a subject holding
-   * record-level `write` on a card — which would reopen the same route
-   * from the other side.
-   *
-   * `_entity` deliberately does not get this rule: naming people is what a
-   * contacts app does, so its cards stay writable by grant. Uniqueness and
-   * immutability still bind them. See docs/spec/identity.md § DID bindings.
+   * Owner *acting alone*, in both directions, or the same route reopens
+   * from the subject's side. `_entity` deliberately does not get this rule:
+   * naming people is what a contacts app does, so its cards stay writable
+   * by grant. See docs/spec/identity.md § DID bindings.
    */
   private requireOwnerForAppIdentity(
     typeId: TypeId,
@@ -1133,13 +1090,11 @@ export class ScopedStack implements StackClient {
 
   /**
    * A self-reported `appId` must agree with the `_app` card naming the
-   * principal's DID, where the owner registered one. `principalId` is
+   * principal's DID, where the owner registered one: `principalId` is
    * verified, so letting the pair disagree would leave a verified principal
-   * claiming a name the owner gave different software — the cross-check the
-   * registry exists for, refused at the write instead of left to each reader.
-   * A principal with no card keeps `appId` as the bare self-report it is for
-   * every undelegated writer.
-   * See docs/spec/identity.md § Attribution and what can be trusted.
+   * claiming a name the owner gave different software. A principal with no
+   * card keeps `appId` as the bare self-report it is for every undelegated
+   * writer. See docs/spec/identity.md § Attribution and what can be trusted.
    */
   private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
     if (appId === undefined || !this.delegated) return;
@@ -1259,13 +1214,10 @@ export class ScopedStack implements StackClient {
 
   /**
    * History is the mutation/recovery surface, not a read surface — gated
-   * like patchContent(). A snapshot carries content and the typeId it is
-   * read under, so every requester who passes that gate sees the same
-   * rows. Reading history changes nothing, so it is the one path the
-   * `_grant` write fence leaves alone: seeing how a Record you can already
-   * read got that way is not the escalation that fence exists to stop, and
-   * losing it would leave a write-holder unable to audit the Record they
-   * hold. See docs/spec/versioning.md § History access.
+   * like patchContent(). Reading it changes nothing, so it is the one path
+   * the `_grant` write fence leaves alone: seeing how a Record you can
+   * already read got that way is not the escalation that fence exists to
+   * stop. See docs/spec/versioning.md § History access.
    */
   async getVersions(id: string): Promise<RecordVersion[]> {
     await this.requireUpdatable(id, { mutating: false });
@@ -1328,31 +1280,18 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration — **the owner acting alone, only**.
+   * Commit a per-record migration — **the owner acting alone, only**, the
+   * same restriction the bulk `migrateAll()` carries by living on `Stack`.
    *
-   * Migration is owner-driven by design: `migrateAll()`, the bulk path,
-   * lives on `Stack` and is deliberately absent from `StackClient`, the
-   * same way `grant()`/`revoke()` are. This is its per-record counterpart
-   * and carries the same restriction, rather than inventing a grant model
-   * that the bulk path deliberately doesn't have.
-   *
-   * The restriction is what makes the verb safe to expose at all. Migrate
-   * replaces `content` and `typeId` wholesale, so a grant-based version
-   * would have to re-derive every gate `create()` applies at the
+   * Migrate replaces `content` and `typeId` wholesale, so a grant-based
+   * version would have to re-derive every gate `create()` applies at the
    * destination *and* every gate `mutate()` applies over the existing
-   * content, and would reopen each one it missed. The sharpest is the
-   * non-owner `_attachment@1` refusal create() carries: without it, a
-   * requester holding a create grant on `_attachment@1` and write access
-   * to any record they authored could migrate that record into the family
-   * naming any `fileId`, then read the bytes through canAccessFile()'s
-   * uploader clause — the exact escalation that carve-out exists to refuse
-   * (see docs/spec/attachments.md § Creating `_attachment@1` records
-   * directly). Ordinary write access to a record is not consent to move it
-   * between families.
-   *
-   * A server implementing `POST /records/:id/migrate` therefore serves it
-   * to the stack owner and answers 403 otherwise. See
-   * docs/spec/data-model.md § Type migrations.
+   * content, reopening each one it missed. The sharpest is create()'s
+   * non-owner `_attachment@1` refusal: without it, a requester could
+   * migrate a record they authored into the family naming any `fileId` and
+   * read the bytes through canAccessFile()'s uploader clause. Ordinary
+   * write access to a record is not consent to move it between families.
+   * See docs/spec/data-model.md § Type migrations.
    */
   async commitMigration(
     id: string,
