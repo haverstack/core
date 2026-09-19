@@ -26,6 +26,7 @@ export type {
   GetRecordOptions,
   DeleteRecordOptions,
   DeleteResult,
+  DeleteAndReturnResult,
   IfVersionOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,

@@ -314,6 +314,22 @@ export type DeleteResult = {
   referencedFileIds: FileId[];
 };
 
+/**
+ * What deleteAndReturn() reports back — DeleteResult plus the record itself,
+ * captured inside the same atomic operation as the destroy rather than a
+ * read beforehand. See Stack.deleteAndReturn().
+ */
+export type DeleteAndReturnResult = DeleteResult & {
+  /**
+   * The record as it stood at the moment of deletion: immediately before
+   * destruction for a hard delete, or the resulting tombstone for a soft
+   * delete. Null only for the hard-delete no-op — there was nothing to
+   * delete, and nothing to report; every other outcome throws instead of
+   * returning null (see Stack.delete()'s own no-op cases).
+   */
+  record: StackRecord | null;
+};
+
 export type DefineTypeOptions = {
   migratesFrom?: TypeId;
 };
@@ -381,6 +397,13 @@ export interface StackClient {
   /** Withdraw one element of who reaches a record — see grantAccess(). */
   revokeAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
   delete(id: string, opts?: DeleteRecordOptions): Promise<DeleteResult>;
+  /**
+   * delete(), plus the record it acted on — read and destroyed as one
+   * atomic operation, so a caller that needs the record for its own
+   * response (e.g. a server building a hard delete's body) never opens a
+   * gap between reading it and destroying it. See Stack.deleteAndReturn().
+   */
+  deleteAndReturn(id: string, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
   undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: string): Promise<RecordVersion[]>;
   getVersion(id: string, version: number): Promise<RecordVersion | null>;
@@ -1472,8 +1495,30 @@ export class Stack implements StackClient {
    * destroys the only rows naming them, so a caller who means to erase the
    * bytes too has nowhere else to read the argument from afterwards. See
    * docs/spec/attachments.md § A purge strands the bytes it referenced.
+   *
+   * deleteAndReturn() is this plus the record itself; reach for that
+   * instead when the caller needs the record too — building a response
+   * body from a separate read beforehand is exactly the race and the extra
+   * round trip it exists to remove.
    */
   async delete(id: string, opts: DeleteRecordOptions & ActorOptions = {}): Promise<DeleteResult> {
+    const { referencedFileIds } = await this.deleteAndReturn(id, opts);
+    return { referencedFileIds };
+  }
+
+  /**
+   * delete(), reporting the record it acted on alongside the files it
+   * stranded: as it stood immediately before destruction for a hard
+   * delete, or as the resulting tombstone for a soft delete. Both are
+   * captured inside the same write that destroys or tombstones the record,
+   * never a read beforehand — a read-then-delete would leave a window
+   * where a concurrent write can land, get destroyed or overwritten by
+   * this call, and never appear in the record this returns.
+   */
+  async deleteAndReturn(
+    id: string,
+    opts: DeleteRecordOptions & ActorOptions = {},
+  ): Promise<DeleteAndReturnResult> {
     this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
       throw new StackConflictError(
@@ -1491,9 +1536,9 @@ export class Stack implements StackClient {
         expectedVersion: opts.ifVersion,
         journal: change.journal,
       });
-      if (!purged) return { referencedFileIds: [] };
+      if (!purged) return { record: null, referencedFileIds: [] };
       this.announce(change, purged);
-      return { referencedFileIds: await this.referencedFileIds(purged) };
+      return { record: purged, referencedFileIds: await this.referencedFileIds(purged) };
     }
 
     const existing = await this.adapter.getRecord(id);
@@ -1503,7 +1548,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     // A tombstone's references stand — undelete() must find its
     // attachments intact — so nothing is stranded and nothing is reported.
-    if (existing.deletedAt) return { referencedFileIds: [] };
+    if (existing.deletedAt) return { record: existing, referencedFileIds: [] };
 
     const change = new PendingChange('delete', { actor: Stack.actorFrom(opts) });
     const deleted = await this.adapter.deleteRecord(id, {
@@ -1511,7 +1556,7 @@ export class Stack implements StackClient {
       journal: change.journal,
     });
     if (deleted) this.announce(change, deleted);
-    return { referencedFileIds: [] };
+    return { record: deleted ?? existing, referencedFileIds: [] };
   }
 
   /**

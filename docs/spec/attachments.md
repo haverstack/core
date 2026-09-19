@@ -132,7 +132,18 @@ for (const fileId of referencedFileIds) await stack.deleteAttachment(fileId);
 
 **The report is information, not action.** `referencedFileIds` names the purged record's attachment associations and its top-level `file-ref` content fields, deduplicated — the same reference definition `deleteAttachment()` and the sweep use, which is why an `_attachment` record's own `fileId` (a plain `string` by design) is not among them. Nothing is deleted by being named, nothing is orphaned by being reported — "orphaned" is a reference query, which a purge has no business running — and `deleteAttachment()` applies its usual refusal, so a file another record still references is refused there rather than silently kept here. A soft delete reports nothing: a tombstone is recoverable and must find its attachments intact, so its references stand.
 
-**Until that second call, the bytes remain reachable** to anyone who can name the hash — the [uploader](#stack-vs-scopedstack-methods) in particular, whose access does not lapse. That is what makes the second step part of the erasure rather than tidying after it.
+**Reading and destroying are one atomic operation, never two.** `delete()`'s `hard: true` path does not read the record and then destroy it in a second step — the adapter captures the record, and everything it referenced, as part of the same write that removes it. A write that races the purge — an `associate()` landing with no `ifVersion` to fence it, say — either lands before the destroy and is captured in `referencedFileIds`, or never lands at all because the record is already gone by the time it arrives. There is no window where such a write can succeed and then be silently destroyed by the purge without ever being reported — which is exactly the window a caller reopens by reading the record itself before calling `delete()`, since anything that changes the record between that read and the destroy is invisible to the stale copy the caller is holding.
+
+A caller that also needs the record's own body — a server assembling a hard delete's response, in particular — should reach for `deleteAndReturn()` instead of pairing a separate read with `delete()`:
+
+```ts
+const { record, referencedFileIds } = await stack.deleteAndReturn(recordId, { hard: true });
+for (const fileId of referencedFileIds) await stack.deleteAttachment(fileId);
+```
+
+`record` is the purged record exactly as it stood at the moment of destruction — `null` only when there was nothing at `recordId` to delete. `delete()` is this call with `record` dropped; the two never disagree about `referencedFileIds`, since both are backed by the same atomic read-and-destroy. See [Wire format § Records](./wire-format.md#records) for the server obligation this places on `DELETE /records/:id?hard=true`.
+
+**Until the follow-up `deleteAttachment()` call, the bytes remain reachable** to anyone who can name the hash — the [uploader](#stack-vs-scopedstack-methods) in particular, whose access does not lapse. That is what makes the second step part of the erasure rather than tidying after it.
 
 ## Garbage collection
 
