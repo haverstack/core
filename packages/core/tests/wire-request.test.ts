@@ -85,7 +85,7 @@ describe('parseQueryParams', () => {
   });
 
   describe('relatedTo', () => {
-    test('the three target scopes are mutually exclusive', () => {
+    test('the three target kinds are mutually exclusive', () => {
       expect(() => parseQueryParams(url('?relatedTo=r1&relatedToEntity=did:key:z'))).toThrow(
         StackQueryError,
       );
@@ -107,11 +107,11 @@ describe('parseQueryParams', () => {
     test('an empty qualifier passes through raw rather than as absent', () => {
       const target = parseQueryParams(url('?relatedTo=r1&relatedToStack=')).filter?.relatedTo
         ?.target;
-      expect(target).toEqual({ scope: 'record', recordId: 'r1', stackUrl: '' });
+      expect(target).toEqual({ kind: 'record', recordId: 'r1', stackUrl: '' });
 
       const external = parseQueryParams(url('?relatedToNs=isbn&relatedToId=')).filter?.relatedTo
         ?.target;
-      expect(external).toEqual({ scope: 'external', ns: 'isbn', id: '' });
+      expect(external).toEqual({ kind: 'external', ns: 'isbn', id: '' });
     });
 
     test('a label alone is a valid filter', () => {
@@ -158,10 +158,10 @@ describe('parseQueryBody', () => {
     expect(parseQueryBody({ limit: 5000 }).limit).toBe(5000);
   });
 
-  test('an unrecognized relatedTo target scope is refused', () => {
-    expect(() =>
-      parseQueryBody({ filter: { relatedTo: { target: { scope: 'galaxy' } } } }),
-    ).toThrow(StackQueryError);
+  test('an unrecognized relatedTo target kind is refused', () => {
+    expect(() => parseQueryBody({ filter: { relatedTo: { target: { kind: 'galaxy' } } } })).toThrow(
+      StackQueryError,
+    );
   });
 
   test('filter.contentPresent travels as an array of paths', () => {

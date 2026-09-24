@@ -80,12 +80,12 @@ describe('ScopedStack — a group keeps at least one admin', () => {
   const admin = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'admin',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
   const member = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'member',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
 
   // Creating the group as MEMBER is what makes them its first admin, which
@@ -212,7 +212,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -238,7 +238,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'record', recordId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'record', recordId: MEMBER } },
         ],
       }),
     );
@@ -264,7 +264,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: 'com.example.app/project@1',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -287,7 +287,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group@2',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -310,7 +310,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -835,8 +835,8 @@ describe('ScopedStack — versions', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1528,7 +1528,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1544,7 +1544,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1560,7 +1560,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1576,7 +1576,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1594,7 +1594,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1618,7 +1618,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1647,7 +1647,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: APP } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: APP } },
         ],
       }),
     );
@@ -1692,7 +1692,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1718,7 +1718,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(notAGroup.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: notAGroup.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1797,7 +1797,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'admin' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1812,7 +1812,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1827,7 +1827,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'admin' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1846,7 +1846,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1859,7 +1859,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(await view.get(record.id)).toBeNull();
   });
@@ -2032,7 +2032,7 @@ describe('ScopedStack — write implies read', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     const record = await recordWithHistory([
       {
@@ -2925,8 +2925,8 @@ describe('ScopedStack — group role gating', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
         ...overrides,
       }),
@@ -2945,7 +2945,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
       StackNotFoundError,
@@ -2953,7 +2953,7 @@ describe('ScopedStack — group role gating', () => {
     const existingMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     };
     await expect(stack.asEntity(MEMBER).dissociate(group.id, existingMember)).rejects.toThrow(
       StackNotFoundError,
@@ -2974,7 +2974,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await stack.asEntity(ADMIN).associate(group.id, newMember);
     expect((await adapter.getRecord(group.id))?.associations).toContainEqual(newMember);
@@ -3016,7 +3016,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await expect(stack.asEntity(STRANGER).associate(group.id, newMember)).rejects.toThrow(
       StackPermissionError,
@@ -3052,7 +3052,7 @@ describe('ScopedStack — group role gating', () => {
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
 
     const updated = await stack.asEntity(MEMBER).patchContent(group.id, { name: 'renamed' });
@@ -3068,7 +3068,7 @@ describe('ScopedStack — group role gating', () => {
       { name: 'New Group' },
       {
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -3076,7 +3076,7 @@ describe('ScopedStack — group role gating', () => {
       (a) =>
         a.kind === 'relationship' &&
         a.label === 'admin' &&
-        a.target.scope === 'entity' &&
+        a.target.kind === 'entity' &&
         a.target.entityId === MEMBER,
     );
     expect(adminAssociations).toHaveLength(1);
@@ -3091,7 +3091,7 @@ describe('ScopedStack — group role gating', () => {
       (a) =>
         a.kind === 'relationship' &&
         a.label === 'admin' &&
-        a.target.scope === 'entity' &&
+        a.target.kind === 'entity' &&
         a.target.entityId === OWNER,
     );
     expect(adminAssociations).toHaveLength(1);
@@ -3414,9 +3414,9 @@ describe('Permission — group role restriction', () => {
           {
             kind: 'relationship',
             label: 'admin',
-            target: { scope: 'entity', entityId: 'group-admin-2' },
+            target: { kind: 'entity', entityId: 'group-admin-2' },
           },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -3441,8 +3441,8 @@ describe('Permission — group role restriction', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: admin } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: admin } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -3480,8 +3480,8 @@ describe('_group — a deleted Group carries no roster', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4004,7 +4004,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id },
+              target: { kind: 'record', recordId: unreadableNote.id },
             },
           ],
         },
@@ -4025,7 +4025,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id, stackUrl: '' },
+              target: { kind: 'record', recordId: unreadableNote.id, stackUrl: '' },
             },
           ],
         },
@@ -4046,7 +4046,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             kind: 'relationship',
             label: 'reply-to',
             target: {
-              scope: 'record',
+              kind: 'record',
               recordId: unreadableNote.id,
               stackUrl: 'https://alice.example/stack',
             },
@@ -4066,7 +4066,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'author',
-            target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+            target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
           },
         ],
       },
@@ -4084,7 +4084,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             kind: 'relationship',
             label: 'syndicated-to',
             target: {
-              scope: 'external',
+              kind: 'external',
               ns: 'atproto',
               id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
             },
@@ -4104,7 +4104,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: readableNote.id },
+            target: { kind: 'record', recordId: readableNote.id },
           },
         ],
       },
@@ -4112,7 +4112,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(record.associations).toContainEqual({
       kind: 'relationship',
       label: 'related',
-      target: { scope: 'record', recordId: readableNote.id },
+      target: { kind: 'record', recordId: readableNote.id },
     });
   });
 
@@ -4128,7 +4128,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: 'nonexistent-record' },
+              target: { kind: 'record', recordId: 'nonexistent-record' },
             },
           ],
         },
@@ -4145,7 +4145,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id },
+              target: { kind: 'record', recordId: unreadableNote.id },
             },
           ],
         },
@@ -4167,7 +4167,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
   });
 
@@ -4192,7 +4192,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: unreadableNote.id },
+            target: { kind: 'record', recordId: unreadableNote.id },
           },
         ],
       },
@@ -4221,7 +4221,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: MISSING_ID },
+            target: { kind: 'record', recordId: MISSING_ID },
           },
         ],
       },
@@ -4229,7 +4229,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(record.associations).toContainEqual({
       kind: 'relationship',
       label: 'related',
-      target: { scope: 'record', recordId: MISSING_ID },
+      target: { kind: 'record', recordId: MISSING_ID },
     });
   });
 
@@ -4435,7 +4435,7 @@ describe('ScopedStack.associate — reference-creation gating', () => {
       stack.asEntity(MEMBER).associate(ownedRecord.id, {
         kind: 'relationship',
         label: 'related',
-        target: { scope: 'record', recordId: unreadableNote.id },
+        target: { kind: 'record', recordId: unreadableNote.id },
       }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -4844,7 +4844,7 @@ describe('ScopedStack — delegation', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(await stack.asEntity(MEMBER).patchContent(group.id, { name: 'Renamed' })).toBeTruthy();
     await expect(
@@ -4903,7 +4903,7 @@ describe('ScopedStack — delegation', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(
       await stack

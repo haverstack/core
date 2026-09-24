@@ -179,11 +179,7 @@ export function groupRoleFromAssociations(
 ): GroupRole | null {
   let role: GroupRole | null = null;
   for (const a of associations ?? []) {
-    if (
-      a.kind === 'relationship' &&
-      a.target.scope === 'entity' &&
-      a.target.entityId === entityId
-    ) {
+    if (a.kind === 'relationship' && a.target.kind === 'entity' && a.target.entityId === entityId) {
       if (a.label === 'admin') return 'admin';
       if (a.label === 'member') role = 'member';
     }
@@ -205,7 +201,7 @@ export function hasGroupAdmin(associations: DataAssociation[] | undefined): bool
 }
 
 /**
- * Whether one association is an `admin` roster entry. The `entity` scope is
+ * Whether one association is an `admin` roster entry. The `entity` target is
  * what makes it one — a `record` target carrying the same label confers
  * nothing, so it must not count toward the invariant either.
  * See docs/spec/data-model.md § Relationship targets.
@@ -214,7 +210,7 @@ export function isGroupAdminAssociation(association: Association): boolean {
   return (
     association.kind === 'relationship' &&
     association.label === 'admin' &&
-    association.target.scope === 'entity'
+    association.target.kind === 'entity'
   );
 }
 

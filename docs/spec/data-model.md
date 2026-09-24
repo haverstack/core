@@ -148,15 +148,15 @@ type AuthorityAssociation = PermissionAssociation | AnyoneAssociation;
 type Association = DataAssociation | AuthorityAssociation;
 
 type RelationshipTarget =
-  | { scope: 'record'; recordId: string; stackUrl?: string }
-  | { scope: 'entity'; entityId: string }
-  | { scope: 'external'; ns: string; id: string };
+  | { kind: 'record'; recordId: string; stackUrl?: string }
+  | { kind: 'entity'; entityId: string }
+  | { kind: 'external'; ns: string; id: string };
 ```
 
 **Examples:**
 
 - A `contact` type uses `{ kind: "attachment", label: "avatar", fileId: "..." }` as a profile picture.
-- A `tweet` type uses `{ kind: "relationship", label: "reply-to", target: { scope: "record", recordId: "..." } }` to reference another tweet.
+- A `tweet` type uses `{ kind: "relationship", label: "reply-to", target: { kind: "record", recordId: "..." } }` to reference another tweet.
 - Any record can use `{ kind: "tag", label: "starred" }` for user-defined labels.
 
 `parentId` is a separate native field (not an Association) because hierarchical containment is fundamental enough to warrant indexing at the library level. Associations are for metadata and cross-references.
@@ -191,15 +191,15 @@ So acyclicity is **a guardrail against the common accident — moving a containe
 
 ### Relationship targets
 
-A relationship's `scope` names **which identifier space its value belongs to**. The three are not interchangeable: the same string can be a Record ID in one and a DID in another, and matching across them would make a group roster look like a record reference.
+A relationship target's `kind` names **which identifier space its value belongs to**. The three are not interchangeable: the same string can be a Record ID in one and a DID in another, and matching across them would make a group roster look like a record reference.
 
 - **`record`** — a Record. `recordId` is unique within one stack only, so a reference to a Record in a _different_ stack carries that stack's `stackUrl` alongside it. An absent `stackUrl` means this stack; it is not a wildcard, and a filter that omits it does not match a target that carries one.
 - **`entity`** — a "who", as a DID. This is what [group rosters](./identity.md#group) are made of: membership names identities, which mean the same thing in every stack, rather than the local Records that happen to describe them.
 - **`external`** — something outside the stack entirely. `ns` names the scheme that interprets `id` — `"atproto"`, `"activitypub"`, `"email"`, `"url"`, anything — and is part of the association's identity, so the same `id` under two namespaces is two associations. Haverstack expresses the reference; the app or adapter interprets it. No protocol is privileged, and nothing in core dereferences one.
 
-**A target names exactly one thing, exactly one way.** Every part of a target that names something must be a non-empty string, and a target whose `scope` is outside these three is rejected with `StackValidationError` — a discriminated union is a compile-time promise, and a Record arriving from a request body or a foreign server has made no such promise. Where absence is meaningful it is the only way to say so: this stack is named by omitting `stackUrl`, never by sending an empty one, and a whole namespace by omitting an external `id`. An empty string would claim a name while carrying none, and be stored and matched as though it were absent.
+**A target names exactly one thing, exactly one way.** Every part of a target that names something must be a non-empty string, and a target whose `kind` is outside these three is rejected with `StackValidationError` — a discriminated union is a compile-time promise, and a Record arriving from a request body or a foreign server has made no such promise. Where absence is meaningful it is the only way to say so: this stack is named by omitting `stackUrl`, never by sending an empty one, and a whole namespace by omitting an external `id`. An empty string would claim a name while carrying none, and be stored and matched as though it were absent.
 
-**Targets discriminate on `scope`, grantees on `kind`.** An `entity` target and an `entity` [grantee](./access-control.md#record-level-permissions) carry the same `entityId`, but they answer different questions — what an edge points at, and who an authority element reaches — so the key is what keeps one from type-checking as the other. `scope` names an identifier space; `kind` names a variant of a thing, as it does on the association itself.
+**Targets and [grantees](./access-control.md#record-level-permissions) share one discriminant, `kind`, and stay distinct by shape.** An `entity` target and an `entity` grantee are the same value — a DID — so one parsed identifier serves a link, a permission and a grant alike. The other arms keep them apart: a target has `record` and `external`, a grantee has `group` with a required `role`, and neither union accepts the other's.
 
 The whole target is part of [the association's identity](#associations), so two relationships differing in any target field are two associations, and `dissociate()` removes only the one it names exactly.
 
@@ -436,7 +436,7 @@ type DateRange = {
 };
 ```
 
-**`relatedTo` names a label, a target, or both — never neither**, and a filter naming neither is rejected with `StackQueryError` rather than widening to every Record carrying a relationship. Its target follows the same naming rules as a stored one (above), checked the same way. A `RelationshipTargetPattern` is the association's own target shape with the parts a query may leave open. Each half is a pattern: a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a scope and never across scopes.
+**`relatedTo` names a label, a target, or both — never neither**, and a filter naming neither is rejected with `StackQueryError` rather than widening to every Record carrying a relationship. Its target follows the same naming rules as a stored one (above), checked the same way. A `RelationshipTargetPattern` is the association's own target shape with the parts a query may leave open. Each half is a pattern: a bare `label` matches every target under it; an `external` target with no `id` matches the whole namespace, which is how a syndication tool asks what it has already published. A `record` target with no `stackUrl` matches only local targets — absence names this stack rather than acting as a wildcard, so a Record referenced in someone else's stack is reachable only by naming that stack. Matching is exact within a target kind and never across kinds.
 
 **"Carries any relationship at all" is deliberately not expressible.** `tags` and `hasAttachment` have no match-any form either, so a relationship one would be the odd exception rather than a missing convenience — and a filter that can encode to nothing is a filter that can silently widen a query when it crosses the wire. The type refuses the empty filter rather than defining it, and `Stack.query()` refuses it again at runtime, where a filter decoded from query parameters is a plain object the type never saw.
 

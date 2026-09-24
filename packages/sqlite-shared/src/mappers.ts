@@ -119,8 +119,8 @@ export const associationKeyColumns = (
   }
   if (a.kind !== 'relationship') return ['', '', '', '', '', ''];
   const t = a.target;
-  if (t.scope === 'entity') return ['', 'entity', t.entityId, '', '', ''];
-  if (t.scope === 'external') return ['', 'external', t.id, t.ns, '', ''];
+  if (t.kind === 'entity') return ['', 'entity', t.entityId, '', '', ''];
+  if (t.kind === 'external') return ['', 'external', t.id, t.ns, '', ''];
   return ['', 'record', t.recordId, '', t.stackUrl ?? '', ''];
 };
 
@@ -141,12 +141,12 @@ const rowToGrantee = (row: Record<string, unknown>): PermissionGrantee =>
 
 const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
   const id = row.related_id as string;
-  if (row.related_scope === 'entity') return { scope: 'entity', entityId: id };
+  if (row.related_scope === 'entity') return { kind: 'entity', entityId: id };
   if (row.related_scope === 'external') {
-    return { scope: 'external', ns: row.related_ns as string, id };
+    return { kind: 'external', ns: row.related_ns as string, id };
   }
   const stackUrl = row.related_stack as string;
-  return { scope: 'record', recordId: id, ...(stackUrl && { stackUrl }) };
+  return { kind: 'record', recordId: id, ...(stackUrl && { stackUrl }) };
 };
 
 export const rowToType = (row: Record<string, unknown>): StackType => {

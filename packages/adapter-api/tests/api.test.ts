@@ -1027,7 +1027,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
-      filter: { relatedTo: { label: 'author', target: { scope: 'record', recordId: 'rec-1' } } },
+      filter: { relatedTo: { label: 'author', target: { kind: 'record', recordId: 'rec-1' } } },
     });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('relatedTo=rec-1');
@@ -1038,7 +1038,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1' } } },
+      filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1' } } },
     });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('relatedTo=rec-1');
@@ -1060,7 +1060,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter();
     await expect(
       adapter.queryRecords({
-        filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-1', stackUrl: '' } } },
+        filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
       }),
     ).rejects.toThrow(StackQueryError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
@@ -1291,7 +1291,7 @@ describe('a mutation that bumps a version must answer with a Record', () => {
   const ASSOC: DataAssociation = {
     kind: 'relationship',
     label: 'author',
-    target: { scope: 'record', recordId: 'rec-other' },
+    target: { kind: 'record', recordId: 'rec-other' },
   };
 
   test('associate reports an empty body as a protocol error', async () => {

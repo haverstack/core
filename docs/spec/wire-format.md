@@ -256,10 +256,10 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?tag=                (repeatable: ?tag=starred&tag=important)
 ?hasAttachment=
 ?attachmentFileId=
-?relatedTo=          (a Record id — the `record` scope)
+?relatedTo=          (a Record id — the `record` target)
 ?relatedToStack=     (only alongside ?relatedTo; that Record's stack URL)
-?relatedToEntity=    (a DID — the `entity` scope)
-?relatedToNs=        (a namespace — the `external` scope)
+?relatedToEntity=    (a DID — the `entity` target)
+?relatedToNs=        (a namespace — the `external` target)
 ?relatedToId=        (only alongside ?relatedToNs; omit to match the whole namespace)
 ?relatedToLabel=     (narrows any of the above to one label; valid alone)
 ?search=
@@ -272,7 +272,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?includeUnlisted=    (owner-only — see Unlisted)
 ```
 
-**The relationship filter's scope is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. At least one of these parameters is always present when the filter is used — [`relatedTo` names a label, a target, or both](./data-model.md#filter), never neither — so the filter cannot encode to an empty query string and silently widen the query. Omitting `relatedToStack` means the target has no `stackUrl`; the server MUST NOT treat it as a wildcard matching targets that carry one. `relatedToStack` MUST be omitted rather than sent empty — this stack is named one way — and a server MUST reject an empty one with `400` rather than reading it as either a local target or a wildcard. The same holds for `relatedToId`: omit it to match a whole namespace.
+**The relationship filter's target kind is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. At least one of these parameters is always present when the filter is used — [`relatedTo` names a label, a target, or both](./data-model.md#filter), never neither — so the filter cannot encode to an empty query string and silently widen the query. Omitting `relatedToStack` means the target has no `stackUrl`; the server MUST NOT treat it as a wildcard matching targets that carry one. `relatedToStack` MUST be omitted rather than sent empty — this stack is named one way — and a server MUST reject an empty one with `400` rather than reading it as either a local target or a wildcard. The same holds for `relatedToId`: omit it to match a whole namespace.
 
 **`filter.contentPresent` travels in the `POST /records/query` body only**, like `filter.content` itself — there is no `GET /records` spelling, since a server exposing that endpoint alone declares `filter.content: "none"` and offers neither. A server declaring `filter.contentPresent: false` MUST refuse the filter with `400` rather than answer without it.
 
@@ -532,18 +532,18 @@ Neither endpoint reads `If-Match`, and one sent to either is ignored rather than
     {
       "kind": "relationship",
       "label": "reply-to",
-      "target": { "scope": "record", "recordId": "xyz789" }
+      "target": { "kind": "record", "recordId": "xyz789" }
     },
     {
       "kind": "relationship",
       "label": "author",
-      "target": { "scope": "entity", "entityId": "did:key:z6Mk..." }
+      "target": { "kind": "entity", "entityId": "did:key:z6Mk..." }
     },
     {
       "kind": "relationship",
       "label": "syndicated-to",
       "target": {
-        "scope": "external",
+        "kind": "external",
         "ns": "atproto",
         "id": "at://did:plc:abc/app.bsky.feed.post/3k4"
       }

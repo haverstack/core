@@ -118,7 +118,7 @@ four mechanical reasons, not just taxonomy:
    trust domain, one indexed query. A post's conversation is inherently cross-stack:
    a reply lives in the replier's stack, referencing a record in someone else's, which
    `parentId` cannot express and a relationship's `target` union
-   (`{ scope: 'record', recordId, stackUrl }` / `{ scope: 'external', ns, id }`)
+   (`{ kind: 'record', recordId, stackUrl }` / `{ kind: 'external', ns, id }`)
    exists to express. Posts-as-messages would hand board apps threads whose parents
    they structurally cannot traverse.
 3. **Different deletion physics.** Inside a stack, recoverability is real: "anything a

@@ -46,7 +46,7 @@ await stack.defineType('org.haverstack/site@1', 'Site', {
   exactly one path, so a single-valued native field is correct, same reasoning
   `page.md` already applies to hierarchy.
 - **Membership: the `site` cross-type convention.**
-  `{ kind: 'relationship', label: 'site', target: { scope: 'record', recordId: <site> } }`
+  `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
   on an `article`, `photo`, `bookmark`, or `post` means that record is published on that
   site. Multi-valued — two associations means the record appears on both sites, the
   cross-posting case `parentId` can't express. This is a publication relationship: the
@@ -60,7 +60,7 @@ await stack.defineType('org.haverstack/site@1', 'Site', {
   {
     typeId: 'org.haverstack/article@1',
     tags: ['travel'],
-    relatedTo: { target: { scope: 'record', recordId: siteId }, label: 'site' },
+    relatedTo: { target: { kind: 'record', recordId: siteId }, label: 'site' },
   }
   ```
   Storing the site on the collection instead would denormalize a fact the tree already

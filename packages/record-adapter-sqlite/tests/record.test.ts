@@ -1457,10 +1457,10 @@ describe('associations', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     const targets = [
-      { scope: 'record' as const, recordId: 'rec-other' },
-      { scope: 'record' as const, recordId: 'rec-other', stackUrl: 'https://alice.example/stack' },
-      { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' },
-      { scope: 'external' as const, ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+      { kind: 'record' as const, recordId: 'rec-other' },
+      { kind: 'record' as const, recordId: 'rec-other', stackUrl: 'https://alice.example/stack' },
+      { kind: 'entity' as const, entityId: 'did:key:z6MkAlice' },
+      { kind: 'external' as const, ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     ];
     for (const target of targets) {
       await adapter.associate(record.id, { kind: 'relationship', label: 'ref', target });
@@ -1483,12 +1483,12 @@ describe('associations', () => {
     await adapter.associate(record.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
     await adapter.associate(record.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
     });
 
     const retrieved = await adapter.getRecord(record.id);
@@ -1502,17 +1502,17 @@ describe('associations', () => {
     await adapter.associate(record.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
     await adapter.associate(record.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
     });
     await adapter.dissociate(record.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
 
     const retrieved = await adapter.getRecord(record.id);
@@ -1520,7 +1520,7 @@ describe('associations', () => {
       {
         kind: 'relationship',
         label: 'syndicated-to',
-        target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
       },
     ]);
   });
@@ -1540,17 +1540,17 @@ describe('records — relatedTo filter', () => {
     await adapter.associate(series.id, {
       kind: 'relationship',
       label: 'series',
-      target: { scope: 'record', recordId: 'rec-subject' },
+      target: { kind: 'record', recordId: 'rec-subject' },
     });
     await adapter.associate(syndicated.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     });
     await adapter.associate(authored.id, {
       kind: 'relationship',
       label: 'author',
-      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
     });
   };
 
@@ -1560,7 +1560,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-subject' } } },
+      filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-subject' } } },
     });
     expect(ids(result)).toEqual(['rec-series']);
   });
@@ -1569,7 +1569,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'entity', entityId: 'did:key:z6MkAlice' } } },
+      filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:z6MkAlice' } } },
     });
     expect(ids(result)).toEqual(['rec-authored']);
   });
@@ -1578,7 +1578,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto' } } },
+      filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } },
     });
     expect(ids(result)).toEqual(['rec-syndicated']);
   });
@@ -1596,7 +1596,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'record', recordId: 'did:key:z6MkAlice' } } },
+      filter: { relatedTo: { target: { kind: 'record', recordId: 'did:key:z6MkAlice' } } },
     });
     expect(result.records).toHaveLength(0);
   });
@@ -1611,14 +1611,14 @@ describe('records — relatedTo filter', () => {
       kind: 'relationship',
       label: 'reply-to',
       target: {
-        scope: 'record',
+        kind: 'record',
         recordId: 'rec-elsewhere',
         stackUrl: 'https://alice.example/stack',
       },
     });
 
     const local = await adapter.queryRecords({
-      filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-elsewhere' } } },
+      filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-elsewhere' } } },
     });
     expect(local.records).toHaveLength(0);
 
@@ -1626,7 +1626,7 @@ describe('records — relatedTo filter', () => {
       filter: {
         relatedTo: {
           target: {
-            scope: 'record',
+            kind: 'record',
             recordId: 'rec-elsewhere',
             stackUrl: 'https://alice.example/stack',
           },

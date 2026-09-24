@@ -536,17 +536,17 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
   if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
   if (f.relatedTo) {
-    // The scope is implied by which qualifier appears, and the type
+    // The target kind is implied by which qualifier appears, and the type
     // guarantees at least one of these branches sets something — so the
     // filter can never encode to nothing and silently widen the query.
-    // The server rejects a mix of scopes.
+    // The server rejects a mix of kinds.
     const t = f.relatedTo.target;
-    if (t?.scope === 'record') {
+    if (t?.kind === 'record') {
       p.set('relatedTo', t.recordId);
       if (t.stackUrl !== undefined) p.set('relatedToStack', t.stackUrl);
-    } else if (t?.scope === 'entity') {
+    } else if (t?.kind === 'entity') {
       p.set('relatedToEntity', t.entityId);
-    } else if (t?.scope === 'external') {
+    } else if (t?.kind === 'external') {
       p.set('relatedToNs', t.ns);
       if (t.id !== undefined) p.set('relatedToId', t.id);
     }
@@ -556,7 +556,7 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.includeDeleted) p.set('includeDeleted', 'true');
   if (f.includeUnlisted) p.set('includeUnlisted', 'true');
   // Which parameter carries the name is what says whether it names a
-  // native column or a content field — the same "scope implied by the
+  // native column or a content field — the same "kind implied by the
   // parameter" shape the relationship filter uses above.
   if (query.sort?.contentField) p.set('sortContent', query.sort.contentField);
   if (query.sort?.field) p.set('sort', query.sort.field);

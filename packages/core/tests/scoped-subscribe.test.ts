@@ -220,7 +220,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       { name: 'Team' },
       {
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -240,7 +240,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: READER },
+      target: { kind: 'entity', entityId: READER },
     });
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
@@ -291,7 +291,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       { name: 'Team' },
       {
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -318,7 +318,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: READER },
+      target: { kind: 'entity', entityId: READER },
     });
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();

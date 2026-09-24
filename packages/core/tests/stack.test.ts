@@ -503,14 +503,14 @@ describe('create — _group admin bootstrap', () => {
   test('owner-created group via plain Stack.create stamps the owner as first admin', async () => {
     const group = await stack.create('_group@1', { name: 'New Group' });
     expect(group.associations).toEqual([
-      { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: 'owner-123' } },
+      { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: 'owner-123' } },
     ]);
   });
 
   test('stamps the supplied entityId, not the owner, when one is provided', async () => {
     const group = await stack.create('_group@1', { name: 'New Group' }, { entityId: 'other-456' });
     expect(group.associations).toEqual([
-      { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: 'other-456' } },
+      { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: 'other-456' } },
     ]);
   });
 
@@ -523,7 +523,7 @@ describe('create — _group admin bootstrap', () => {
           {
             kind: 'relationship',
             label: 'admin',
-            target: { scope: 'entity', entityId: 'owner-123' },
+            target: { kind: 'entity', entityId: 'owner-123' },
           },
         ],
       },
@@ -532,7 +532,7 @@ describe('create — _group admin bootstrap', () => {
       (a) =>
         a.kind === 'relationship' &&
         a.label === 'admin' &&
-        a.target.scope === 'entity' &&
+        a.target.kind === 'entity' &&
         a.target.entityId === 'owner-123',
     );
     expect(adminAssociations).toHaveLength(1);
@@ -2243,12 +2243,12 @@ describe('_group — at least one admin', () => {
   const admin = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'admin',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
   const member = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'member',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
 
   // The roster the write would produce is what is measured, so every case
@@ -2340,7 +2340,7 @@ describe('_group — at least one admin', () => {
             {
               kind: 'relationship',
               label: 'admin',
-              target: { scope: 'record', recordId: note.id },
+              target: { kind: 'record', recordId: note.id },
             },
           ],
         }),
@@ -3849,7 +3849,7 @@ describe('listGrants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: 'entity-abc' },
+      target: { kind: 'entity', entityId: 'entity-abc' },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: NOTE_V1 },
@@ -3872,7 +3872,7 @@ describe('listGrants', () => {
     await stack.associate(notAGroup.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: 'entity-abc' },
+      target: { kind: 'entity', entityId: 'entity-abc' },
     });
     await stack.grant({ kind: 'group', groupId: notAGroup.id, role: 'member' }, [
       { actions: ['read-any'], typeId: NOTE_V1 },
@@ -3937,7 +3937,7 @@ describe('listGrants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: 'entity-xyz' },
+      target: { kind: 'entity', entityId: 'entity-xyz' },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: NOTE_V1 },
@@ -6927,18 +6927,18 @@ describe('relationship targets', () => {
       stack.associate(note.id, {
         kind: 'relationship',
         label: 'series',
-        target: { scope: 'record', recordId: 'somerecordid', stackUrl: '' },
+        target: { kind: 'record', recordId: 'somerecordid', stackUrl: '' },
       }),
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('a target outside the three scopes is refused', async () => {
+  test('a target outside the three kinds is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
       stack.associate(note.id, {
         kind: 'relationship',
         label: 'series',
-        target: { scope: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+        target: { kind: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
       }),
     ).rejects.toThrow(StackValidationError);
   });
@@ -6973,7 +6973,7 @@ describe('relationship targets', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('a target outside the three scopes is refused at create too', async () => {
+  test('a target outside the three kinds is refused at create too', async () => {
     await expect(
       stack.create(
         NOTE_V1,
@@ -6984,7 +6984,7 @@ describe('relationship targets', () => {
               kind: 'relationship',
               label: 'series',
               target: {
-                scope: 'Record',
+                kind: 'Record',
                 recordId: 'somerecordid',
               } as unknown as RelationshipTarget,
             },
@@ -6995,10 +6995,10 @@ describe('relationship targets', () => {
   });
 
   test.each([
-    ['a record target', { scope: 'record', recordId: '' }],
-    ['an entity target', { scope: 'entity', entityId: '' }],
-    ['an external target namespace', { scope: 'external', ns: '', id: 'x' }],
-    ['an external target id', { scope: 'external', ns: 'atproto', id: '' }],
+    ['a record target', { kind: 'record', recordId: '' }],
+    ['an entity target', { kind: 'entity', entityId: '' }],
+    ['an external target namespace', { kind: 'external', ns: '', id: 'x' }],
+    ['an external target id', { kind: 'external', ns: 'atproto', id: '' }],
   ])('%s requires a non-empty identifier', async (_name, target) => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
@@ -7015,12 +7015,12 @@ describe('relationship targets', () => {
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
     });
 
     const stored = await stack.get(note.id);
@@ -7032,17 +7032,17 @@ describe('relationship targets', () => {
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
     });
     await stack.dissociate(note.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'copy-1' },
+      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
     });
 
     const stored = await stack.get(note.id);
@@ -7050,7 +7050,7 @@ describe('relationship targets', () => {
       {
         kind: 'relationship',
         label: 'syndicated-to',
-        target: { scope: 'external', ns: 'activitypub', id: 'copy-1' },
+        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
       },
     ]);
   });
@@ -7062,12 +7062,12 @@ describe('relationship targets', () => {
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'about',
-      target: { scope: 'record', recordId: 'did:key:z6MkAlice' },
+      target: { kind: 'record', recordId: 'did:key:z6MkAlice' },
     });
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'about',
-      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
     });
 
     const stored = await stack.get(note.id);
@@ -7079,14 +7079,14 @@ describe('relationship targets', () => {
     await stack.associate(note.id, {
       kind: 'relationship',
       label: 'reply-to',
-      target: { scope: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+      target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
     });
 
     const stored = await stack.get(note.id);
     expect(stored?.associations?.[0]).toEqual({
       kind: 'relationship',
       label: 'reply-to',
-      target: { scope: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+      target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
     });
   });
 });
@@ -7104,19 +7104,19 @@ describe('query — relatedTo filter', () => {
     await stack.associate(withSeries.id, {
       kind: 'relationship',
       label: 'series',
-      target: { scope: 'record', recordId: subject.id },
+      target: { kind: 'record', recordId: subject.id },
     });
     const syndicated = await stack.create(NOTE_V1, { text: 'crossposted' });
     await stack.associate(syndicated.id, {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     });
     const authored = await stack.create(NOTE_V1, { text: 'by someone' });
     await stack.associate(authored.id, {
       kind: 'relationship',
       label: 'author',
-      target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
     });
     await stack.create(NOTE_V1, { text: 'unrelated' });
   });
@@ -7140,12 +7140,12 @@ describe('query — relatedTo filter', () => {
     ).rejects.toThrow(StackQueryError);
   });
 
-  test('a filter target outside the three scopes is refused', async () => {
+  test('a filter target outside the three kinds is refused', async () => {
     await expect(
       stack.query({
         filter: {
           relatedTo: {
-            target: { scope: 'Record', recordId: subject.id } as unknown as NonNullable<
+            target: { kind: 'Record', recordId: subject.id } as unknown as NonNullable<
               NonNullable<RecordFilter['relatedTo']>['target']
             >,
           },
@@ -7157,35 +7157,35 @@ describe('query — relatedTo filter', () => {
   test('a filter naming this stack omits stackUrl rather than emptying it', async () => {
     await expect(
       stack.query({
-        filter: { relatedTo: { target: { scope: 'record', recordId: subject.id, stackUrl: '' } } },
+        filter: { relatedTo: { target: { kind: 'record', recordId: subject.id, stackUrl: '' } } },
       }),
     ).rejects.toThrow(StackQueryError);
   });
 
   test('matches a record target', async () => {
     const { records } = await stack.query({
-      filter: { relatedTo: { target: { scope: 'record', recordId: subject.id } } },
+      filter: { relatedTo: { target: { kind: 'record', recordId: subject.id } } },
     });
     expect(records.map((r) => r.content.text)).toEqual(['in a series']);
   });
 
   test('matches an entity target', async () => {
     const { records } = await stack.query({
-      filter: { relatedTo: { target: { scope: 'entity', entityId: 'did:key:z6MkAlice' } } },
+      filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:z6MkAlice' } } },
     });
     expect(records.map((r) => r.content.text)).toEqual(['by someone']);
   });
 
   test('an external target without an id matches the whole namespace', async () => {
     const { records } = await stack.query({
-      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto' } } },
+      filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } },
     });
     expect(records.map((r) => r.content.text)).toEqual(['crossposted']);
   });
 
   test('an external target with an id matches exactly', async () => {
     const miss = await stack.query({
-      filter: { relatedTo: { target: { scope: 'external', ns: 'atproto', id: 'other' } } },
+      filter: { relatedTo: { target: { kind: 'external', ns: 'atproto', id: 'other' } } },
     });
     expect(miss.records).toHaveLength(0);
   });
@@ -7201,12 +7201,12 @@ describe('query — relatedTo filter', () => {
     await stack.associate(remote.id, {
       kind: 'relationship',
       label: 'reply-to',
-      target: { scope: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
+      target: { kind: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
     });
 
     const local = await stack.query({
       filter: {
-        relatedTo: { label: 'reply-to', target: { scope: 'record', recordId: subject.id } },
+        relatedTo: { label: 'reply-to', target: { kind: 'record', recordId: subject.id } },
       },
     });
     expect(local.records).toHaveLength(0);
@@ -7215,7 +7215,7 @@ describe('query — relatedTo filter', () => {
       filter: {
         relatedTo: {
           target: {
-            scope: 'record',
+            kind: 'record',
             recordId: subject.id,
             stackUrl: 'https://alice.example/stack',
           },

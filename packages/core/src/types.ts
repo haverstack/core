@@ -67,7 +67,7 @@ export type AttachmentAssociation = {
  * stack. See docs/spec/data-model.md § Associations.
  */
 export type RecordTarget = {
-  scope: 'record';
+  kind: 'record';
   recordId: RecordId;
   stackUrl?: string;
 };
@@ -78,7 +78,7 @@ export type RecordTarget = {
  * See docs/spec/identity.md § Group.
  */
 export type EntityTarget = {
-  scope: 'entity';
+  kind: 'entity';
   entityId: EntityId;
 };
 
@@ -89,7 +89,7 @@ export type EntityTarget = {
  * See docs/spec/data-model.md § Relationship targets.
  */
 export type ExternalTarget = {
-  scope: 'external';
+  kind: 'external';
   ns: string;
   id: string;
 };
@@ -108,7 +108,7 @@ export type RelationshipAssociation = {
  * granting and revoking are a plain add and remove and the element's
  * identity carries its whole meaning. Its grantee shape is its own rather
  * than a `RelationshipTarget`: a target names no role and has no group
- * scope. See docs/spec/access-control.md § Record-level permissions.
+ * arm. See docs/spec/access-control.md § Record-level permissions.
  */
 export type PermissionAssociation = {
   kind: 'permission';
@@ -510,9 +510,9 @@ export const SYSTEM_TYPES = {
  * matches its whole namespace.
  */
 export type RelationshipTargetPattern =
-  | { scope: 'record'; recordId: RecordId; stackUrl?: string }
-  | { scope: 'entity'; entityId: EntityId }
-  | { scope: 'external'; ns: string; id?: string };
+  | { kind: 'record'; recordId: RecordId; stackUrl?: string }
+  | { kind: 'entity'; entityId: EntityId }
+  | { kind: 'external'; ns: string; id?: string };
 
 /**
  * A relationship query names a label, a target, or both — never neither.

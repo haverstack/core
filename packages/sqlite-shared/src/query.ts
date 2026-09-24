@@ -256,10 +256,10 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   // label matches every target under it and an external target with no
   // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
   //
-  // A record- or entity-scoped target always stores '' in related_ns
-  // (see associationKeyColumns). Saying so turns idx_assoc_related's
-  // (scope, ns, id) prefix into a contiguous equality run for those
-  // scopes instead of leaving the planner to seek on scope alone.
+  // A record or entity target always stores '' in related_ns (see
+  // associationKeyColumns). Saying so turns idx_assoc_related's
+  // (related_scope, related_ns, related_id) prefix into a contiguous
+  // equality run for those kinds instead of a seek on related_scope alone.
   if (f.relatedTo) {
     const clauses: string[] = [];
     const target = f.relatedTo.target;
@@ -269,11 +269,11 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     }
     if (target) {
       clauses.push('a.related_scope = ?');
-      params.push(target.scope);
-      if (target.scope === 'record') {
+      params.push(target.kind);
+      if (target.kind === 'record') {
         clauses.push('a.related_ns = ?', 'a.related_id = ?', 'a.related_stack = ?');
         params.push('', target.recordId, target.stackUrl ?? '');
-      } else if (target.scope === 'entity') {
+      } else if (target.kind === 'entity') {
         clauses.push('a.related_ns = ?', 'a.related_id = ?');
         params.push('', target.entityId);
       } else {
