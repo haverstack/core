@@ -27,7 +27,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   JournalQuery,
-  PermissionGrantee,
+  Grantee,
   QuerySort,
   RecordFilter,
   RelationshipTarget,
@@ -319,7 +319,7 @@ const PERMISSION_LABELS = new Set(['read', 'write']);
  * § Record-level permissions.
  */
 function granteeErrors(
-  association: { label: string; grantee: PermissionGrantee },
+  association: { label: string; grantee: Grantee },
   path: string,
 ): ValidationError[] {
   const fail = (message: string): ValidationError[] => [{ path, message }];

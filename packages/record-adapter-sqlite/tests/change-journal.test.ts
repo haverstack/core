@@ -5,7 +5,8 @@ import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
 import { StackNotFoundError } from '@haverstack/core';
-import type { StackRecord, JournalEntryInput } from '@haverstack/core';
+import type { StackRecord } from '@haverstack/core';
+import type { JournalEntryInput } from '@haverstack/core/adapter';
 
 let testDir: string;
 let dbPath: string;

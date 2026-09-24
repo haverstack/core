@@ -9,7 +9,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   GroupRole,
-  PermissionGrantee,
+  Grantee,
   RecordJournalEntry,
   StackRecord,
   StackType,
@@ -143,7 +143,7 @@ export const associationKeyColumns = (
  * `member` is the wider one. See docs/spec/access-control.md
  * § Record-level permissions.
  */
-const rowToGrantee = (row: Record<string, unknown>): PermissionGrantee =>
+const rowToGrantee = (row: Record<string, unknown>): Grantee =>
   row.related_scope === 'group'
     ? {
         kind: 'group',

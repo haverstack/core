@@ -287,6 +287,8 @@ Two rules sit across both columns rather than in either. **Resharing and `_group
 
 Omitting `principalId`, or giving it equal to `subjectId`, makes the two the same entity — the undelegated case, where the second check asks the same question of the same identity. `asEntity(did)` is shorthand for `asActor({ subjectId: did })`. An Actor always names a subject, so an anonymous principal has no way to act on behalf of anyone.
 
+A `ScopedStack` reports the pair it acts as through read-only `principalId` and `subjectId`, named after the Actor fields `asActor()` took, so code handed a view needn't carry its identity separately. Both are `null` for an anonymous view, and `principalId` equals `subjectId` when undelegated. `asEntity()` and `asActor()` are the only way to obtain one: the class is exported for `instanceof` checks, but its constructor refuses any caller but `Stack`.
+
 **A server at its request boundary passes the session a token names straight through**, since a `TokenSession` is an Actor:
 
 ```ts

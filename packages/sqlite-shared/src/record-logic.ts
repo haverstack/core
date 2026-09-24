@@ -17,8 +17,6 @@ import {
 } from '@haverstack/core';
 import type {
   RecordJournalEntry,
-  JournalEntryInput,
-  JournalOptions,
   JournalQuery,
   StackRecord,
   StackType,
@@ -30,8 +28,12 @@ import type {
   QueryResult,
   Association,
   ActorOptions,
-  ExpectedVersionOptions,
 } from '@haverstack/core';
+import type {
+  JournalEntryInput,
+  JournalOptions,
+  ExpectedVersionOptions,
+} from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';

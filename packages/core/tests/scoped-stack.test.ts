@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
+import { ScopedStack } from '../src/scoped-stack.js';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -71,6 +72,39 @@ const COMMENT = 'com.example.test/comment@1';
 // Well-formed and naming nothing: the destination checks answer for absence,
 // not for shape.
 const MISSING_ID = '1hk153xffffz';
+
+// -------------------------------------------------------
+// Identity and construction
+// -------------------------------------------------------
+
+describe('ScopedStack — identity it acts as', () => {
+  test('asEntity() reports one DID as both principal and subject', () => {
+    const scoped = stack.asEntity(MEMBER);
+    expect(scoped.principalId).toBe(MEMBER);
+    expect(scoped.subjectId).toBe(MEMBER);
+  });
+
+  test('asActor() reports each identity of a delegated pair', () => {
+    const scoped = stack.asActor({ principalId: MEMBER, subjectId: OWNER });
+    expect(scoped.principalId).toBe(MEMBER);
+    expect(scoped.subjectId).toBe(OWNER);
+  });
+
+  test('an anonymous view reports null for both', () => {
+    const scoped = stack.asEntity(null);
+    expect(scoped.principalId).toBeNull();
+    expect(scoped.subjectId).toBeNull();
+  });
+
+  test('a view is an instance of the exported class', () => {
+    expect(stack.asEntity(MEMBER)).toBeInstanceOf(ScopedStack);
+  });
+
+  test('the constructor refuses any caller but Stack', () => {
+    const Ctor = ScopedStack as unknown as new (...args: unknown[]) => ScopedStack;
+    expect(() => new Ctor(Symbol('ScopedStack'), {})).toThrow(TypeError);
+  });
+});
 
 // -------------------------------------------------------
 // _group — the invariant through the permission layer
@@ -1334,7 +1368,7 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
   });
 
   test('rejects createdAt from a principal delegated to act for the owner (not owner acting alone)', async () => {
-    // subjectEntityId === OWNER satisfies checkCreateGrant()'s owner-subject
+    // subjectId === OWNER satisfies checkCreateGrant()'s owner-subject
     // carve-out, so this exercises the createdAt/updatedAt gate itself
     // rather than getting stopped earlier by a missing create grant.
     await expect(
