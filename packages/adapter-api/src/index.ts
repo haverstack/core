@@ -32,6 +32,7 @@ import type {
   Actor,
   ChangeActor,
   StackRecord,
+  PutAttachmentOptions,
   StackType,
   TypeSchema,
   TypeId,
@@ -1353,7 +1354,7 @@ export class APIAdapter implements StackAdapter {
   async putAttachment(_data: Uint8Array): Promise<FileId> {
     throw new APIAdapterError(
       'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
-        'an _attachment@1 record. Use Stack.putAttachment(data, mimeType, filename?).',
+        'an _attachment@1 record. Use Stack.putAttachment(data, { mimeType, filename? }).',
     );
   }
 
@@ -1366,10 +1367,9 @@ export class APIAdapter implements StackAdapter {
    */
   async putAttachmentWithMetadata(
     data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: string,
+    opts: PutAttachmentOptions,
   ): Promise<StackRecord> {
+    const { mimeType, filename, appId } = opts;
     const raw = await this.uploadBinary('/attachments', data, mimeType, filename, appId);
     return requireRecordBody(raw, 'POST /attachments');
   }

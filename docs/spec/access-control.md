@@ -167,23 +167,26 @@ type GrantAction =
 
 The grantee lives in `content.grantee`, not `record.entityId`. `entityId` means "author" on every other Record in the system, and a `_grant` Record is always authored by the stack owner (the only caller of `grant()`) — never by the entity or group it names. A grant Record therefore carries no `entityId` of its own, and "everything this entity authored" queries (`filter: { entityId }`) don't pick up grants that merely name that entity.
 
-`Stack.grant()` is the owner-facing helper for creating grant records; `Stack.listGrants(query?)` and `Stack.revoke(target, grants)` are the read/undo counterparts. A `target` is a `GrantGrantee` — the same union a stored grant carries, so a target _is_ the grantee it writes. A `query` is a `GrantQuery`: the same union, widened by one listing-only value described below.
+`Stack.grant(typeId, { actions, grantee })` is the owner-facing helper for creating a grant record; `Stack.listGrants(query?)` and `Stack.revoke(typeId, { actions, grantee })` are the read/undo counterparts. The shape mirrors the record-level verbs: `grantAccess(id, permission)` names the subject first and carries the grantee inside the element, and so does `grant()` — the type is the subject. A `grantee` is a `GrantGrantee` — the same union a stored grant carries, so the argument _is_ the grantee it writes. A `query` is a `GrantQuery`: the same union, widened by one listing-only value described below.
 
 ```ts
 // Grant a specific entity permission to create comments and manage their own
-await stack.grant({ kind: 'entity', entityId: 'bob-entity-id' }, [
-  { typeId: 'com.example/comment@1', actions: ['create', 'read-own', 'update-own', 'delete-own'] },
-]);
+await stack.grant('com.example/comment@1', {
+  actions: ['create', 'read-own', 'update-own', 'delete-own'],
+  grantee: { kind: 'entity', entityId: 'bob-entity-id' },
+});
 
 // Grant a _group Record's roster — `member` reaches members and admins alike
-await stack.grant({ kind: 'group', groupId: 'editors-group-id', role: 'member' }, [
-  { typeId: 'com.example/comment@1', actions: ['create', 'read-any'] },
-]);
+await stack.grant('com.example/comment@1', {
+  actions: ['create', 'read-any'],
+  grantee: { kind: 'group', groupId: 'editors-group-id', role: 'member' },
+});
 
 // Default grant — applies to any authenticated entity, and to no anonymous requester
-await stack.grant({ kind: 'authenticated' }, [
-  { typeId: 'com.example/comment@1', actions: ['create', 'read-own'] },
-]);
+await stack.grant('com.example/comment@1', {
+  actions: ['create', 'read-own'],
+  grantee: { kind: 'authenticated' },
+});
 
 await stack.listGrants(); // every grant record, any grantee
 await stack.listGrants({ kind: 'authenticated' }); // only default grants
@@ -191,18 +194,19 @@ await stack.listGrants({ kind: 'entity', entityId: 'bob-entity-id' }); // grants
 await stack.listGrants({ kind: 'group', groupId: 'editors-group-id', role: 'member' }); // grants naming that exact group and role
 await stack.listGrants({ kind: 'group', groupId: 'editors-group-id', role: 'any' }); // every grant naming that group, whichever role
 
-// The inverse of grant(): soft-deletes the _grant record(s) matching target
-// and each { typeId, actions } pair, matched by typeId baseId and action
-// set — the same granularity grant() writes at. The grantee is matched
-// whole, role included.
+// The inverse of grant(): soft-deletes the _grant record(s) matched by
+// typeId baseId, action set and grantee — the same granularity grant()
+// writes at. The grantee is matched whole, role included.
 // Returns the grants it withdrew, as they stood. An empty array means
 // nothing matched — a grant already withdrawn, or never written.
-const withdrawn = await stack.revoke({ kind: 'entity', entityId: 'bob-entity-id' }, [
-  { typeId: 'com.example/comment@1', actions: ['create'] },
-]);
-await stack.revoke({ kind: 'group', groupId: 'editors-group-id', role: 'member' }, [
-  { typeId: 'com.example/comment@1', actions: ['create'] },
-]);
+const withdrawn = await stack.revoke('com.example/comment@1', {
+  actions: ['create'],
+  grantee: { kind: 'entity', entityId: 'bob-entity-id' },
+});
+await stack.revoke('com.example/comment@1', {
+  actions: ['create'],
+  grantee: { kind: 'group', groupId: 'editors-group-id', role: 'member' },
+});
 ```
 
 ### What a grant covers

@@ -535,7 +535,7 @@ describe('re-authentication', () => {
     mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
 
-    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'text/plain');
+    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), { mimeType: 'text/plain' });
     expect(authHeader(6)).toBe('Bearer renewed-token');
   });
 
@@ -1830,7 +1830,10 @@ describe('putAttachmentWithMetadata', () => {
       ),
     );
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const record = await adapter.putAttachmentWithMetadata(data, 'image/png', 'photo.png');
+    const record = await adapter.putAttachmentWithMetadata(data, {
+      mimeType: 'image/png',
+      filename: 'photo.png',
+    });
 
     expect(record.id).toBe('rec-attachment-1');
     expect(record.content).toMatchObject({ fileId: 'file-xyz', mimeType: 'image/png' });
@@ -1849,7 +1852,7 @@ describe('putAttachmentWithMetadata', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(emptyOk());
     const thrown = await adapter
-      .putAttachmentWithMetadata(new Uint8Array([1]), 'image/png')
+      .putAttachmentWithMetadata(new Uint8Array([1]), { mimeType: 'image/png' })
       .catch((err: unknown) => err);
     expect(thrown).toBeInstanceOf(APIAdapterError);
     expect((thrown as Error).message).toContain('POST /attachments');
@@ -1859,14 +1862,16 @@ describe('putAttachmentWithMetadata', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(nonJsonResponse());
     await expect(
-      adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'image/png'),
+      adapter.putAttachmentWithMetadata(new Uint8Array([1]), { mimeType: 'image/png' }),
     ).rejects.toThrow(APIAdapterError);
   });
 
   test('omits Content-Disposition when no filename is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
-    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), 'application/octet-stream');
+    await adapter.putAttachmentWithMetadata(new Uint8Array([1]), {
+      mimeType: 'application/octet-stream',
+    });
 
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['Content-Disposition']).toBeUndefined();
@@ -2043,7 +2048,7 @@ describe('error taxonomy reconstruction', () => {
       ),
     );
     await expect(
-      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), 'image/png'),
+      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
     ).rejects.toThrow(StackPayloadTooLargeError);
   });
 
@@ -2055,7 +2060,7 @@ describe('error taxonomy reconstruction', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response('too large', { status: 413 }));
     await expect(
-      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), 'image/png'),
+      adapter.putAttachmentWithMetadata(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
     ).rejects.toThrow(StackPayloadTooLargeError);
   });
 

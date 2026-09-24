@@ -35,6 +35,7 @@ import type {
   ActorOptions,
   AppContent,
   AppId,
+  PutAttachmentOptions,
   Association,
   AttachmentContent,
   AuthorityAssociation,
@@ -1350,10 +1351,9 @@ export class ScopedStack implements StackClient {
    */
   async putAttachment(
     data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: AppId,
+    opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }> {
+    const { mimeType, filename, appId } = opts;
     // The one ScopedStack path that reaches the adapter without going
     // through Stack first — without this, a closed stack would still write
     // bytes before the delegated create() refused.

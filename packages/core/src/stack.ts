@@ -56,7 +56,8 @@ import type {
   StackFeatures,
   GrantAction,
   GrantContent,
-  GrantGrantee,
+  TypeGrant,
+  PutAttachmentOptions,
   GroupRole,
   AttachmentContent,
   FileId,
@@ -444,9 +445,7 @@ export interface StackClient {
   getAttachment(fileId: string): Promise<Uint8Array>;
   putAttachment(
     data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: AppId,
+    opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }>;
   deleteAttachment(fileId: string): Promise<void>;
   collectAttachmentGarbage(
@@ -2125,16 +2124,15 @@ export class Stack implements StackClient {
    */
   async putAttachment(
     data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: AppId,
+    opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }> {
+    const { mimeType, filename, appId } = opts;
     this.assertOpen();
     assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       // The metadata record is written inside the adapter, so create()
       // never sees it and this is the only place it can be announced.
-      const record = await this.adapter.putAttachmentWithMetadata(data, mimeType, filename, appId);
+      const record = await this.adapter.putAttachmentWithMetadata(data, opts);
       // The one emission with no journal half of its own: the far side
       // wrote the record, so it appended the entry in that same write —
       // the same division saveVersion() follows over this adapter. See
@@ -2472,11 +2470,11 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Create _grant records authorizing entities to act on records of
-   * specific types. The target is the grantee the record carries:
-   * `{ kind: 'entity' }` for one DID, `{ kind: 'group' }` for a `_group`
-   * Record's roster at a role, `{ kind: 'authenticated' }` for any
-   * authenticated entity.
+   * Create a _grant record authorizing `grantee` to take `actions` on
+   * records of `typeId`: `{ kind: 'entity' }` for one DID, `{ kind: 'group' }`
+   * for a `_group` Record's roster at a role, `{ kind: 'authenticated' }` for
+   * any authenticated entity. The type-level mirror of grantAccess() —
+   * subject first, grantee inside the element.
    *
    * Granting an **app** a `-own` action does not contain it the way the
    * suffix suggests: when that app acts for someone, `-own` is read as the
@@ -2489,24 +2487,15 @@ export class Stack implements StackClient {
    * The grantee lives in content.grantee, not record.entityId. See
    * docs/spec/access-control.md § Type-level grants.
    */
-  async grant(
-    target: GrantGrantee,
-    grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
-  ): Promise<StackRecord[]> {
+  async grant(typeId: TypeId, grant: TypeGrant): Promise<StackRecord> {
     this.assertOpen();
-    validateGrantTarget(target);
-    this.checkGrantsValid(grants);
-    const records: StackRecord[] = [];
-    for (const g of grants) {
-      records.push(
-        await this.create(`${SYSTEM_TYPES.GRANT}@1`, {
-          typeId: g.typeId,
-          actions: g.actions,
-          grantee: target,
-        }),
-      );
-    }
-    return records;
+    validateGrantTarget(grant.grantee);
+    this.checkGrantValid(typeId, grant.actions);
+    return this.create(`${SYSTEM_TYPES.GRANT}@1`, {
+      typeId,
+      actions: grant.actions,
+      grantee: grant.grantee,
+    });
   }
 
   /**
@@ -2551,10 +2540,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The inverse of grant(): soft-deletes _grant records matching `target`
-   * and each `{ typeId, actions }` pair, at the same granularity grant()
-   * writes — the grantee is matched whole, role included. A soft delete
-   * like any other — the owner can undelete a revocation.
+   * The inverse of grant(): soft-deletes the _grant records on `typeId`'s
+   * family matching `grant`, at the same granularity grant() writes — the
+   * grantee is matched whole, role included, and the actions exactly. A
+   * soft delete like any other — the owner can undelete a revocation.
    *
    * Returns the grants it withdrew, as they stood, so a revocation that
    * matched nothing says so rather than passing in silence. An empty result
@@ -2562,34 +2551,25 @@ export class Stack implements StackClient {
    * ordinary case, and re-running a revocation has to stay safe.
    * See docs/spec/access-control.md § Type-level grants.
    */
-  async revoke(
-    target: GrantGrantee,
-    grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
-  ): Promise<StackRecord[]> {
+  async revoke(typeId: TypeId, grant: TypeGrant): Promise<StackRecord[]> {
     this.assertOpen();
-    validateGrantTarget(target);
-    const revoked: StackRecord[] = [];
+    validateGrantTarget(grant.grantee);
+    const familyId = baseIdOf(typeId);
+    const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
-    for (const g of grants) {
-      const familyId = baseIdOf(g.typeId);
-      const actionSet = new Set(g.actions);
-      const matches = all.filter((r) => {
-        const c = r.content as GrantContent;
-        // Establishes the family and that `actions` is a list, so the exact
-        // match below reads a real one. Matched against the stored list
-        // rather than the reach, so a grant carrying an action this
-        // vocabulary drops is not withdrawn by a target that omits it.
-        const reach = grantReach(c);
-        if (!reach || reach.familyId !== familyId) return false;
-        if (!matchesGrantTarget(c, target)) return false;
-        return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
-      });
-      for (const match of matches) {
-        await this.delete(match.id);
-        revoked.push(match);
-      }
-    }
-    return revoked;
+    const matches = all.filter((r) => {
+      const c = r.content as GrantContent;
+      // Establishes the family and that `actions` is a list, so the exact
+      // match below reads a real one. Matched against the stored list
+      // rather than the reach, so a grant carrying an action this
+      // vocabulary drops is not withdrawn by a target that omits it.
+      const reach = grantReach(c);
+      if (!reach || reach.familyId !== familyId) return false;
+      if (!matchesGrantTarget(c, grant.grantee)) return false;
+      return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
+    });
+    for (const match of matches) await this.delete(match.id);
+    return matches;
   }
 
   // -------------------------------------------------------
@@ -2597,48 +2577,38 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Validates the whole grant batch before any record is created, so a bad
-   * entry fails clean rather than leaving a partial set written. Actions
-   * must be known GrantAction values, typeIds must be well-formed, and the
-   * _grant/_config families are refused — see docs/spec/access-control.md
-   * § Type-level grants.
+   * Actions must be known GrantAction values, typeIds must be well-formed,
+   * and the _grant/_config families are refused — see
+   * docs/spec/access-control.md § Type-level grants.
    */
-  private checkGrantsValid(grants: Array<{ actions: GrantAction[]; typeId: TypeId }>): void {
+  private checkGrantValid(typeId: TypeId, actions: GrantAction[]): void {
     const errors: ValidationError[] = [];
-    grants.forEach((g, i) => {
-      g.actions.forEach((action, j) => {
-        if (!GRANT_ACTION_SET.has(action)) {
-          errors.push({
-            path: `grants[${i}].actions[${j}]`,
-            message: `Unknown grant action "${action}"`,
-          });
-        }
+    actions.forEach((action, j) => {
+      if (!GRANT_ACTION_SET.has(action)) {
+        errors.push({ path: `actions[${j}]`, message: `Unknown grant action "${action}"` });
+      }
+    });
+
+    if (!isWellFormedTypeId(typeId)) {
+      errors.push({
+        path: 'typeId',
+        message: `"${typeId}" is not a well-formed baseId or versioned TypeId (expected "baseId" or "baseId@version")`,
       });
+    } else if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(typeId))) {
+      const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
+      errors.push({
+        path: 'typeId',
+        message: `Cannot grant on "${baseIdOf(typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
+      });
+    }
 
-      if (!isWellFormedTypeId(g.typeId)) {
-        errors.push({
-          path: `grants[${i}].typeId`,
-          message: `"${g.typeId}" is not a well-formed baseId or versioned TypeId (expected "baseId" or "baseId@version")`,
-        });
-        return;
-      }
-
-      if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(g.typeId))) {
-        const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
-        errors.push({
-          path: `grants[${i}].typeId`,
-          message: `Cannot grant on "${baseIdOf(g.typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
-        });
-      }
-
-      g.actions.forEach((action, j) => {
-        if (grantConveys(g.actions, action)) return;
-        const companions = READ_COMPANIONS.get(action);
-        if (!companions) return;
-        errors.push({
-          path: `grants[${i}].actions[${j}]`,
-          message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read`,
-        });
+    actions.forEach((action, j) => {
+      if (grantConveys(actions, action)) return;
+      const companions = READ_COMPANIONS.get(action);
+      if (!companions) return;
+      errors.push({
+        path: `actions[${j}]`,
+        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read`,
       });
     });
     if (errors.length > 0) {
