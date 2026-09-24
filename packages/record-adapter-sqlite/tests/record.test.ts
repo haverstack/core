@@ -1682,12 +1682,12 @@ describe('mutateRecord — the `permissions` key', () => {
       {
         kind: 'permission',
         label: 'read',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
       },
       {
         kind: 'permission',
         label: 'read',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
       },
     ];
     await adapter.mutateRecord(record.id, { permissions });
@@ -1709,7 +1709,7 @@ describe('mutateRecord — the `permissions` key', () => {
     const grant: AuthorityAssociation = {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
     };
     const granted = await adapter.associate(record.id, grant);
     expect(granted.permissions).toEqual([grant]);

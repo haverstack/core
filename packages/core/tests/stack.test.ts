@@ -4216,7 +4216,7 @@ describe('Stack — authority and data never share a call', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
 
   /**
@@ -4278,12 +4278,12 @@ describe('Stack.grantAccess/revokeAccess', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
   const writeFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'write',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
 
   test('amends the set rather than replacing it, and never bumps', async () => {
@@ -4385,7 +4385,7 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('re-ordering the set is a no-op: no journal entry, no event', async () => {
     const seen: RecordChange[] = [];
-    const entity = { scope: 'entity', entityId: 'entity-abc' } as const;
+    const entity = { kind: 'entity', entityId: 'entity-abc' } as const;
     const record = await stack.create(
       NOTE_V1,
       { text: 'hello' },
@@ -4421,8 +4421,8 @@ describe('Stack.mutate — the `permissions` key', () => {
   // The delta is what the journal keeps, so an element that went is
   // recoverable from it — the whole reason a snapshot owes nothing here.
   test('appends one entry carrying `previous` per element the write removed', async () => {
-    const entityA = { scope: 'entity', entityId: 'entity-a' } as const;
-    const entityB = { scope: 'entity', entityId: 'entity-b' } as const;
+    const entityA = { kind: 'entity', entityId: 'entity-a' } as const;
+    const entityB = { kind: 'entity', entityId: 'entity-b' } as const;
     const record = await stack.create(
       NOTE_V1,
       { text: 'hello' },
@@ -4460,7 +4460,7 @@ describe('Stack.mutate — the `permissions` key', () => {
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: 'entity-abc' },
+            grantee: { kind: 'entity', entityId: 'entity-abc' },
           },
         ],
       }),
@@ -4471,7 +4471,7 @@ describe('Stack.mutate — the `permissions` key', () => {
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'group', groupId: 'group-abc', role: 'member' },
+            grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
           },
         ],
       }),
@@ -4489,7 +4489,7 @@ describe('Stack.mutate — the `permissions` key', () => {
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: 'entity-abc' },
+              grantee: { kind: 'entity', entityId: 'entity-abc' },
             },
           ],
         },
@@ -4510,12 +4510,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
         },
       ],
     });
@@ -4524,12 +4524,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
       ],
     });
@@ -4539,12 +4539,12 @@ describe('Stack.mutate — the `permissions` key', () => {
       {
         kind: 'permission',
         label: 'read',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
       },
       {
         kind: 'permission',
         label: 'write',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
       },
     ]);
   });
@@ -4556,12 +4556,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
       ],
     });
@@ -4570,12 +4570,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
         },
       ],
     });
@@ -4585,12 +4585,12 @@ describe('Stack.mutate — the `permissions` key', () => {
       {
         kind: 'permission',
         label: 'read',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
       },
       {
         kind: 'permission',
         label: 'write',
-        grantee: { scope: 'group', groupId: 'group-1', role: 'member' },
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
       },
     ]);
   });
@@ -4602,12 +4602,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
       ],
     });
@@ -4616,12 +4616,12 @@ describe('Stack.mutate — the `permissions` key', () => {
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'group', groupId: 'group-1', role: 'admin' },
+          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
         },
       ],
     });

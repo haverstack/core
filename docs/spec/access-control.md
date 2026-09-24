@@ -22,13 +22,18 @@ All Records are **private by default** — readable only by the stack owner. The
 **A permission is an association.** It has element identity, so granting and revoking are a plain add and remove, and the same delta the association tier already computes describes it exactly. That is what lets a permission change be journalled like any other edge rather than snapshotted as a whole list — see [Journal § The entry](./journal.md#the-entry).
 
 ```ts
+type GroupRole = 'member' | 'admin';
+
+// The arms both layers share — a type-level grant's grantee widens this.
+type Grantee =
+  | { kind: 'entity'; entityId: string } // a DID
+  | { kind: 'group'; groupId: string; role: GroupRole };
+
 // Absence of permissions (empty or undefined) = private, owner only.
 type PermissionAssociation = {
   kind: 'permission';
   label: 'read' | 'write';
-  grantee:
-    | { scope: 'entity'; entityId: string } // a DID
-    | { scope: 'group'; groupId: string; role: 'member' | 'admin' };
+  grantee: Grantee;
 };
 
 type AnyoneAssociation = {
@@ -40,7 +45,7 @@ type AnyoneAssociation = {
 - **Bits are labels.** A grantee reaching a Record for reading and writing carries two elements, not one element with two booleans, so the element's identity carries its whole meaning and there is no "revoke by writing `false`" spelling.
 - **`anyone` is its own kind.** It names no grantee and carries no bit beyond `read`, so it cannot be spelled as a `permission` whose grantee went missing. Reach to the world is affirmatively written; no dropped field produces it. `read` is correspondingly the whole of what the element can say: one labelled anything else is refused at the write, and **read as naming no reach** at evaluation — it conveys no read of its own, and does not stand in for the `read` a `write` element [needs beside it](#write-implies-read). Same posture the `permission` arm takes toward a grantee it does not recognize, [and for the same reason](#refused-at-the-write-and-again-at-evaluation).
 - **`role` is required.** There is no "any member" default: `role: 'member'` is the wider set and `role: 'admin'` the narrower, matching the roster labels where admin implies member (see [Group](./identity.md#group)).
-- **A permission's grantee is its own shape**, not a [`RelationshipTarget`](./data-model.md#relationship-targets), which has no role and no group scope.
+- **A permission's grantee is its own shape**, not a [`RelationshipTarget`](./data-model.md#relationship-targets), which has no role and no group scope. It is the same `Grantee` a [type-level grant](#type-level-grants) names, so one value reaches either layer.
 
 Group permissions reference a `_group` Record by ID. The group may be a simple permission group or a collaborative group with its own stack — the permission model is the same either way.
 
@@ -143,9 +148,12 @@ type GrantContent = {
 };
 
 type GrantGrantee =
-  | { kind: 'entity'; entityId: string } // One DID
-  | { kind: 'group'; groupId: string; role: 'member' | 'admin' } // A `_group` Record's roster at a role; never satisfies a delegated principal
+  | Grantee // One DID, or a `_group` Record's roster at a role; a group never satisfies a delegated principal
   | { kind: 'authenticated' }; // Any authenticated entity
+
+type GrantQuery = // What listGrants() accepts
+  | Exclude<GrantGrantee, { kind: 'group' }>
+  | { kind: 'group'; groupId: string; role: GroupRole | 'any' };
 
 type GrantAction =
   | 'create' // Create new records of this type

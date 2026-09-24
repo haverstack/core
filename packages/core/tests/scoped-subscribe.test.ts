@@ -66,7 +66,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -83,7 +83,7 @@ describe('a record the subscriber cannot read produces no event', () => {
 
     await stack.mutate(note.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
       ],
     });
     await settle();
@@ -97,7 +97,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -117,7 +117,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -303,7 +303,7 @@ describe('a revocation takes effect on the next event, not the next subscription
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       },

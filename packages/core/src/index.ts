@@ -87,6 +87,8 @@ export type {
   AttachmentAssociation,
   RelationshipAssociation,
   PermissionAssociation,
+  Grantee,
+  GroupRole,
   PermissionGrantee,
   AnyoneAssociation,
   AuthorityAssociation,

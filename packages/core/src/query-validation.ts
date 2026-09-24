@@ -288,7 +288,7 @@ export function validateAssociation(
 function granteeSuffix(association: Association): string {
   if (association.kind !== 'permission') return '';
   const g = association.grantee;
-  return g.scope === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
+  return g.kind === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
 }
 
 /** The kinds an association may name — the closed set every surface reads. */
@@ -333,17 +333,17 @@ function granteeErrors(
   }
   const grantee = association.grantee;
   if (!grantee || typeof grantee !== 'object') return fail('A permission requires a grantee.');
-  if (grantee.scope === 'entity') {
+  if (grantee.kind === 'entity') {
     return grantee.entityId ? [] : fail('An entity grantee requires a non-empty entityId.');
   }
-  if (grantee.scope === 'group') {
+  if (grantee.kind === 'group') {
     if (!grantee.groupId) return fail('A group grantee requires a non-empty groupId.');
     return grantee.role === 'member' || grantee.role === 'admin'
       ? []
       : fail('A group grantee requires a role of "member" or "admin".');
   }
   return fail(
-    `Unknown permission grantee scope "${String((grantee as { scope?: unknown }).scope)}": expected "entity" or "group".`,
+    `Unknown permission grantee kind "${String((grantee as { kind?: unknown }).kind)}": expected "entity" or "group".`,
   );
 }
 

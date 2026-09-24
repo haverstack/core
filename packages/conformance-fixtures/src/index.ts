@@ -1181,7 +1181,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     requestBody: {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
     },
     responseStatus: 200,
     responseBody: {
@@ -1195,7 +1195,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },
@@ -1211,7 +1211,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     requestBody: {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+      grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
     },
     responseStatus: 200,
     responseBody: {
@@ -1225,7 +1225,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+          grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
         },
       ],
     },
@@ -2157,7 +2157,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },
@@ -2540,7 +2540,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },

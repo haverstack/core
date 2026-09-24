@@ -19,6 +19,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   EntityId,
+  GroupRole,
   PermissionGrantee,
   RecordId,
   StackRecord,
@@ -28,9 +29,6 @@ import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
 export type AccessMode = 'read' | 'write';
-
-/** An entity's standing within a `_group` Record's roster. `admin` implies `member` for ACL purposes. */
-export type GroupRole = 'member' | 'admin';
 
 /**
  * Resolves a Record by ID. Used to walk a `_group` Record's associations for
@@ -114,7 +112,7 @@ async function granteeCovers(
   resolveRecord: RecordResolver,
 ): Promise<boolean> {
   if (!subjectEntityId) return false;
-  if (grantee.scope === 'entity') return grantee.entityId === subjectEntityId;
+  if (grantee.kind === 'entity') return grantee.entityId === subjectEntityId;
   const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord);
   return grantee.role === 'admin' ? role === 'admin' : role !== null;
 }

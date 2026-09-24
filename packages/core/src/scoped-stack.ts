@@ -21,7 +21,6 @@
 import { baseIdOf } from './schema.js';
 import { validatePatchValues } from './validate.js';
 import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from './access.js';
-import type { GroupRole } from './access.js';
 import {
   ChangeEmitter,
   Subscription,
@@ -42,6 +41,7 @@ import type {
   EntityId,
   GrantAction,
   GrantContent,
+  GroupRole,
   QueryResult,
   RecordChange,
   RecordVersion,

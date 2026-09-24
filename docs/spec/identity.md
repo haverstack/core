@@ -160,7 +160,7 @@ The `entity` scope is what makes a roster a roster: membership names an identity
 
 This gives roles for free via association labels, and membership is queryable like any other Record data. There is no role hierarchy beyond this single distinction — matching the scale a Group actually serves (a small, cohesive set of Entities), not a general-purpose permissions system:
 
-- **`member`** — counted by group ACLs (a permission element whose grantee is `{ scope: 'group', groupId, role: 'member' }`).
+- **`member`** — counted by group ACLs (a permission element whose grantee is `{ kind: 'group', groupId, role: 'member' }`).
 - **`admin`** — everything `member` gets, plus may manage the Group Record itself: update its content, add or remove roster (`member`/`admin`) associations, and delete it. An `admin` association implies `member` for every purpose, which is why `role: 'member'` on a grantee is the wider set and `role: 'admin'` the narrower.
 
 **A roster entry and a permission element are the same kind of edge.** Both are associations on the Record they govern, journalled and delta'd identically — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). What separates them is the call surface: a roster moves through `associate()`/`dissociate()` under the Group's admin rule, an ACL through `grantAccess()`/`revokeAccess()` under the reshare rule.

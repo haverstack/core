@@ -7,6 +7,7 @@
 import type {
   AuthorityAssociation,
   DataAssociation,
+  GroupRole,
   PermissionGrantee,
   RecordJournalEntry,
   StackRecord,
@@ -112,7 +113,7 @@ export const associationKeyColumns = (
   if (a.kind === 'attachment') return [a.fileId, '', '', '', '', ''];
   if (a.kind === 'permission') {
     const g = a.grantee;
-    return g.scope === 'entity'
+    return g.kind === 'entity'
       ? ['', 'entity', g.entityId, '', '', '']
       : ['', 'group', g.groupId, '', '', g.role];
   }
@@ -132,11 +133,11 @@ export const associationKeyColumns = (
 const rowToGrantee = (row: Record<string, unknown>): PermissionGrantee =>
   row.related_scope === 'group'
     ? {
-        scope: 'group',
+        kind: 'group',
         groupId: row.related_id as string,
-        role: row.related_role as 'member' | 'admin',
+        role: row.related_role as GroupRole,
       }
-    : { scope: 'entity', entityId: row.related_id as string };
+    : { kind: 'entity', entityId: row.related_id as string };
 
 const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
   const id = row.related_id as string;

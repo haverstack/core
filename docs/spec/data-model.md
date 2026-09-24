@@ -199,6 +199,8 @@ A relationship's `scope` names **which identifier space its value belongs to**. 
 
 **A target names exactly one thing, exactly one way.** Every part of a target that names something must be a non-empty string, and a target whose `scope` is outside these three is rejected with `StackValidationError` — a discriminated union is a compile-time promise, and a Record arriving from a request body or a foreign server has made no such promise. Where absence is meaningful it is the only way to say so: this stack is named by omitting `stackUrl`, never by sending an empty one, and a whole namespace by omitting an external `id`. An empty string would claim a name while carrying none, and be stored and matched as though it were absent.
 
+**Targets discriminate on `scope`, grantees on `kind`.** An `entity` target and an `entity` [grantee](./access-control.md#record-level-permissions) carry the same `entityId`, but they answer different questions — what an edge points at, and who an authority element reaches — so the key is what keeps one from type-checking as the other. `scope` names an identifier space; `kind` names a variant of a thing, as it does on the association itself.
+
 The whole target is part of [the association's identity](#associations), so two relationships differing in any target field are two associations, and `dissociate()` removes only the one it names exactly.
 
 Which arms a `ScopedStack` gates on creation, and why the rest are ungated rather than overlooked, is [Reference-creation gating](./access-control.md#reference-creation-gating).

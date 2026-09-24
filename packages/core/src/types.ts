@@ -116,14 +116,21 @@ export type PermissionAssociation = {
   grantee: PermissionGrantee;
 };
 
+/** An entity's standing within a `_group` Record's roster. `admin` implies `member` for ACL purposes. */
+export type GroupRole = 'member' | 'admin';
+
 /**
- * Who a permission reaches. `role` is required — `member` is the wider
- * set, `admin` the narrower, matching the roster labels where admin
- * implies member. See docs/spec/identity.md § Group.
+ * The grantee arms both permission layers share, spelled identically so a
+ * value built for one is valid for the other. `role` is required — `member`
+ * is the wider set, `admin` the narrower, matching the roster labels where
+ * admin implies member. See docs/spec/access-control.md § Who a grant reaches.
  */
-export type PermissionGrantee =
-  | { scope: 'entity'; entityId: EntityId }
-  | { scope: 'group'; groupId: RecordId; role: 'member' | 'admin' };
+export type Grantee =
+  | { kind: 'entity'; entityId: EntityId }
+  | { kind: 'group'; groupId: RecordId; role: GroupRole };
+
+/** Who a permission reaches — the shared arms, and nothing wider. */
+export type PermissionGrantee = Grantee;
 
 /**
  * Reach to the world, spelled affirmatively: it names no grantee and
@@ -441,10 +448,7 @@ export type GrantAction = (typeof GRANT_ACTIONS)[number];
  * principal half of a delegated request.
  * See docs/spec/access-control.md § Type-level grants.
  */
-export type GrantGrantee =
-  | { kind: 'entity'; entityId: EntityId }
-  | { kind: 'group'; groupId: RecordId; role: 'member' | 'admin' }
-  | { kind: 'authenticated' };
+export type GrantGrantee = Grantee | { kind: 'authenticated' };
 
 /** Content for _grant records */
 export type GrantContent = {

@@ -61,9 +61,9 @@ export function associationEqual(a: Association, b: Association): boolean {
  */
 export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolean {
   if (!a || !b) return false;
-  if (a.scope !== b.scope) return false;
-  if (a.scope === 'entity' && b.scope === 'entity') return a.entityId === b.entityId;
-  if (a.scope === 'group' && b.scope === 'group') {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'entity' && b.kind === 'entity') return a.entityId === b.entityId;
+  if (a.kind === 'group' && b.kind === 'group') {
     return a.groupId === b.groupId && a.role === b.role;
   }
   return false;
