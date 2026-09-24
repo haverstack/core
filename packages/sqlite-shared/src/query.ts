@@ -204,8 +204,8 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   }
 
   inFilter('app_id', f.appId);
-  inFilter('entity_id', f.entityId);
-  inFilter('principal_id', f.principalId);
+  inFilter('entity_id', f.createdBy?.subjectId);
+  inFilter('principal_id', f.createdBy?.principalId);
 
   rangeFilter('created_at', f.createdAt);
   rangeFilter('updated_at', f.updatedAt);

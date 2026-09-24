@@ -64,6 +64,7 @@ export type {
   JournalEntryInput,
   JournalOptions,
   JournalQuery,
+  Actor,
   ActorOptions,
   ChangeKind,
   ChangeOp,

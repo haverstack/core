@@ -59,7 +59,7 @@ const baseIdOf = (typeId: string): string => typeId.split('@')[0]!;
 
 /**
  * Whether an emission matches a subscription's filter. Reads the record
- * for the fields the envelope deliberately omits, so `entityId` filters on
+ * for the fields the envelope deliberately omits, so `createdBy` filters on
  * the author and `purged` frames stay filterable without carrying either.
  */
 export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): boolean {
@@ -85,7 +85,12 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
     if (parentId !== filter.parentId && origin !== filter.parentId) return false;
   }
 
-  if (filter.entityId !== undefined && record.entityId !== filter.entityId) return false;
+  if (
+    filter.createdBy !== undefined &&
+    record.createdBy?.subjectId !== filter.createdBy.subjectId
+  ) {
+    return false;
+  }
 
   return true;
 }
@@ -249,8 +254,8 @@ export class PendingChange {
     private readonly moved: {
       /**
        * The requester behind a write that stamps nothing on the record
-       * itself. A version-bumping write stamps `updatedBy`/`updatedVia`,
-       * so its emission reads them back instead — see emission() below.
+       * itself. A version-bumping write stamps `updatedBy`, so its
+       * emission reads it back instead — see emission() below.
        */
       actor?: ChangeActor;
       previousParentId?: string | null;
@@ -368,8 +373,7 @@ export class PendingChange {
 function actorOf(record: StackRecord, kind: ChangeKind): ChangeActor | undefined {
   if (!record.updatedBy) return undefined;
   return {
-    entityId: record.updatedBy,
-    ...(record.updatedVia !== undefined && { principalId: record.updatedVia }),
+    ...record.updatedBy,
     ...(kind === 'created' && record.appId !== undefined && { appId: record.appId }),
   };
 }

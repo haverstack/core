@@ -21,7 +21,7 @@ const record = (overrides: Partial<StackRecord> = {}): StackRecord => ({
   updatedAt: new Date('2024-01-02T00:00:00.000Z'),
   content: { title: 'Hello' },
   version: 2,
-  entityId: AUTHOR,
+  createdBy: { subjectId: AUTHOR },
   ...overrides,
 });
 
@@ -69,17 +69,17 @@ describe('serializeChange', () => {
   });
 
   it('carries the actor, and omits the principal on an undelegated write', () => {
-    const w = serializeChange(change({ actor: { entityId: EDITOR } }));
-    expect(w.actor).toEqual({ entityId: EDITOR });
+    const w = serializeChange(change({ actor: { subjectId: EDITOR } }));
+    expect(w.actor).toEqual({ subjectId: EDITOR });
     expect(w.actor).not.toHaveProperty('principalId');
   });
 
   it('carries the principal and the app when a delegated app acted', () => {
     const w = serializeChange(
-      change({ actor: { entityId: EDITOR, principalId: APP, appId: 'com.example.app' } }),
+      change({ actor: { subjectId: EDITOR, principalId: APP, appId: 'com.example.app' } }),
     );
     expect(w.actor).toEqual({
-      entityId: EDITOR,
+      subjectId: EDITOR,
       principalId: APP,
       appId: 'com.example.app',
     });
@@ -96,7 +96,11 @@ describe('serializeChange', () => {
 
   it('carries the record when the frame includes one', () => {
     const w = serializeChange(change({ record: record() }));
-    expect(w.record).toMatchObject({ id: '1hk153x00001', entityId: AUTHOR, version: 2 });
+    expect(w.record).toMatchObject({
+      id: '1hk153x00001',
+      createdBy: { subjectId: AUTHOR },
+      version: 2,
+    });
   });
 
   it('carries parentId for a record that has one', () => {
@@ -131,7 +135,7 @@ describe('serializeChange on a purge', () => {
       kind: 'purged',
       ops: ['hard-delete'],
       version: 4,
-      actor: { entityId: OWNER },
+      actor: { subjectId: OWNER },
       ...overrides,
     });
 
@@ -168,7 +172,7 @@ describe('serializeChange on a purge', () => {
       typeId: 'com.example/note@1',
       version: 4,
       updatedAt: '2024-01-02T00:00:00.000Z',
-      actor: { entityId: OWNER },
+      actor: { subjectId: OWNER },
     });
   });
 });

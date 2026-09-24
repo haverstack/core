@@ -108,10 +108,16 @@ describe('GET /records round trip', () => {
     ['root records', { filter: { parentId: null } }],
     ['single appId', { filter: { appId: 'com.example.app' } }],
     ['appId array', { filter: { appId: ['com.example.a', 'com.example.b'] } }],
-    ['single entityId', { filter: { entityId: 'did:key:zAlice' } }],
-    ['entityId array', { filter: { entityId: ['did:key:zAlice', 'did:key:zBob'] } }],
-    ['single principalId', { filter: { principalId: 'did:key:zApp' } }],
-    ['principalId array', { filter: { principalId: ['did:key:zApp', 'did:key:zOther'] } }],
+    ['single createdBy.subjectId', { filter: { createdBy: { subjectId: 'did:key:zAlice' } } }],
+    [
+      'createdBy.subjectId array',
+      { filter: { createdBy: { subjectId: ['did:key:zAlice', 'did:key:zBob'] } } },
+    ],
+    ['single createdBy.principalId', { filter: { createdBy: { principalId: 'did:key:zApp' } } }],
+    [
+      'createdBy.principalId array',
+      { filter: { createdBy: { principalId: ['did:key:zApp', 'did:key:zOther'] } } },
+    ],
     [
       'createdAt before',
       { filter: { createdAt: { before: new Date('2024-06-15T12:00:00.000Z') } } },
@@ -189,8 +195,7 @@ describe('GET /records round trip', () => {
           typeId: ['com.example/note@1', 'com.example/note@2'],
           parentId: 'rec-parent1',
           appId: 'com.example.app',
-          entityId: 'did:key:zAlice',
-          principalId: 'did:key:zApp',
+          createdBy: { subjectId: 'did:key:zAlice', principalId: 'did:key:zApp' },
           createdAt: { after: new Date('2024-01-01T00:00:00.000Z') },
           updatedAt: { before: new Date('2024-12-31T00:00:00.000Z') },
           tags: ['starred'],
@@ -265,7 +270,7 @@ describe('GET /changes round trip', () => {
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],
     ['parentId', { filter: { parentId: 'rec-parent1' } }],
     ['root records', { filter: { parentId: null } }],
-    ['entityId', { filter: { entityId: 'did:key:zAlice' } }],
+    ['entityId', { filter: { createdBy: { subjectId: 'did:key:zAlice' } } }],
     ['kinds', { filter: { kinds: ['created', 'deleted'] } }],
     ['includeRecords', { includeRecords: true }],
     ['includeUnlisted', { includeUnlisted: true }],
@@ -275,7 +280,7 @@ describe('GET /changes round trip', () => {
         filter: {
           typeId: 'com.example/note@1',
           parentId: null,
-          entityId: 'did:key:zAlice',
+          createdBy: { subjectId: 'did:key:zAlice' },
           kinds: ['created', 'changed', 'deleted', 'purged'],
         },
         includeRecords: true,
@@ -356,11 +361,10 @@ describe('POST /records round trip', () => {
   // receives rather than a hostile one.
   test('the identity fields the client serializes do not survive the trip', async () => {
     const { options } = await roundTripCreate(
-      recordToCreate({ entityId: GRANTEE, principalId: 'did:key:zApp' }),
+      recordToCreate({ createdBy: { subjectId: GRANTEE, principalId: 'did:key:zApp' } }),
       { principalId: OWNER, subjectId: OWNER },
     );
-    expect('entityId' in options).toBe(false);
-    expect('principalId' in options).toBe(false);
+    expect('createdBy' in options).toBe(false);
   });
 
   test('an unlisted record travels as unlistedAt and arrives as unlisted', async () => {

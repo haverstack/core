@@ -74,6 +74,7 @@ export const RECORD_SCHEMA_SQL = `
     content     TEXT NOT NULL CHECK (json_valid(content)),
     updated_at  INTEGER NOT NULL,
     entity_id   TEXT,
+    principal_id TEXT,
     updated_by  TEXT,
     updated_via TEXT,
     PRIMARY KEY (record_id, version)

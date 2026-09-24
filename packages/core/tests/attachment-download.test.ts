@@ -242,10 +242,10 @@ describe('firstRecordedAttachment', () => {
 // -------------------------------------------------------
 
 describe('resolveReferencedAttachment', () => {
-  const rec = (id: string, createdAt: string, entityId?: string) => ({
+  const rec = (id: string, createdAt: string, subjectId?: string) => ({
     id,
     createdAt: new Date(createdAt),
-    ...(entityId && { entityId }),
+    ...(subjectId && { createdBy: { subjectId } }),
   });
 
   const uploads = [
@@ -276,7 +276,7 @@ describe('resolveReferencedAttachment', () => {
   });
 
   // The pointer is best-effort: the record it names can be deleted, and an
-  // unscoped upload has no entityId to match either.
+  // unscoped upload has no author to match either.
   test('a pointer at a record that is gone falls back', () => {
     expect(
       resolveReferencedAttachment(uploads, {

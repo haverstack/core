@@ -170,7 +170,7 @@ export function compareRecordedAttachments<T extends { id: string; createdAt: Da
  * filtered out by the caller.
  */
 export function resolveReferencedAttachment<
-  T extends { id: string; createdAt: Date; entityId?: string },
+  T extends { id: string; createdAt: Date; createdBy?: { subjectId: string } },
 >(
   records: readonly T[],
   opts: { attachmentRecordId?: string; requesterEntityId?: string } = {},
@@ -180,7 +180,7 @@ export function resolveReferencedAttachment<
     if (named) return named;
   }
   if (opts.requesterEntityId) {
-    const own = records.filter((record) => record.entityId === opts.requesterEntityId);
+    const own = records.filter((record) => record.createdBy?.subjectId === opts.requesterEntityId);
     if (own.length > 0) return firstRecordedAttachment(own);
   }
   return firstRecordedAttachment(records);

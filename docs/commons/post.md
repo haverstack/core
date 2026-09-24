@@ -37,7 +37,7 @@ await stack.defineType('org.haverstack/post@1', 'Post', {
 | `format` | `string` | no       | Same vocabulary and defaults as `note`: `"markdown"` (default when absent), `"plain"`; unknown values render as plain.                                                                                        |
 | `url`    | `string` | no       | Canonical location. POSSE's premise is that the canonical copy lives on your own site; the publishing app stamps it at first publish, same convention as `article.url`. Syndicated copies never overwrite it. |
 
-The author is `entityId` — set natively by `Stack.create()`/`ScopedStack.create()`. No
+The author is `createdBy` — set natively by `Stack.create()`/`ScopedStack.create()`. No
 `author` string: unlike `article`, a post is never a captured work carrying someone
 else's byline.
 
@@ -81,7 +81,7 @@ direction.
   relationship with an external target on the canonical record; see
   [Cross-type conventions](./README.md#cross-type-conventions). The canonical copy is
   this record; syndicated copies never own `url`.
-- **Authorship**: `entityId`. Deletion inside the stack is recoverable as usual; once a
+- **Authorship**: `createdBy`. Deletion inside the stack is recoverable as usual; once a
   post has been syndicated, deletion of the broadcast copy is a request to the network,
   not a guarantee — a caveat of syndication, not of this type.
 
@@ -106,7 +106,7 @@ honor it.
   above.
 - `tags: string[]` — tag associations exist.
 - `author` string — a post is never a captured work with someone else's byline;
-  `entityId` is the author.
+  `createdBy` is the author.
 - `to`/`cc` addressing, reply-count, like-count and similar network-derived fields —
   bridge/adapter territory, not properties of the utterance itself.
 - `lexiconId` mapping, content addressing, tombstone semantics — bridge machinery

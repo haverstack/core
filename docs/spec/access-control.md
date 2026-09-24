@@ -130,7 +130,7 @@ What this buys is an invariant the mutate gate already assumed: **anything that 
 
 **Blind write is offered, and it is `create`.** Contribute-without-reading — a tip box, a contact form, comments held for moderation, an app filing telemetry — is a `create` grant with no read action, and that combination is deliberately left alone: writing a Record you cannot read back discloses nothing. The contributor can neither re-read their own submission nor enumerate the type; `query()` returns nothing to them and the owner sees everything in the box. `putAttachment()` follows the same gate, so a drop box can take files. Three edges are worth knowing before building one:
 
-- **Anonymous requesters are always refused**, default grant or not, so a contributor needs a DID — cheap to mint client-side, and it becomes the Record's `entityId`. An open box (a default `create` grant) is an unauthenticated-adjacent surface in every way that matters for abuse; rate limiting is the server's business, not the permission model's.
+- **Anonymous requesters are always refused**, default grant or not, so a contributor needs a DID — cheap to mint client-side, and it becomes the Record's author. An open box (a default `create` grant) is an unauthenticated-adjacent surface in every way that matters for abuse; rate limiting is the server's business, not the permission model's.
 - **Parenting into a container needs read on the container** — `parentId` is a reference, gated like any other, at creation and on a later move alike (see [Reference-creation gating](#reference-creation-gating)). Share the container Record with a `read` element and no `write` (it holds no submissions; each is its own private Record), or use no parent and correlate through a content field or tag.
 - **The contributor keeps no sent copy.** That's the federated shape — a sender who wants one writes it to their own stack — not something the box can hand back.
 
@@ -157,11 +157,11 @@ type GrantQuery = // What listGrants() accepts
 
 type GrantAction =
   | 'create' // Create new records of this type
-  | 'read-own' // Read records where record.entityId === requester
+  | 'read-own' // Read records where record.createdBy.subjectId === requester
   | 'read-any' // Read all records of this type
-  | 'update-own' // Update records where record.entityId === requester
+  | 'update-own' // Update records where record.createdBy.subjectId === requester
   | 'update-any' // Update all records of this type
-  | 'delete-own' // Delete records where record.entityId === requester
+  | 'delete-own' // Delete records where record.createdBy.subjectId === requester
   | 'delete-any'; // Delete all records of this type
 ```
 
@@ -218,7 +218,7 @@ await stack.revoke({ kind: 'group', groupId: 'editors-group-id', role: 'member' 
 
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment@1` also covers `com.example/comment@2` — matching is by `baseId`, derived from whichever form the grant's `typeId` was given in. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revoke()` matches at the same granularity.
 - **Actions are independent, with one dependency**: `'create'` does not imply `'read-own'`, and so on — each action must be listed explicitly. `['create', 'read-own', 'update-own', 'delete-own']` is the common bundle for contributor access. The dependency is that a mutate action needs a read action of matching scope in the same grant, or it conveys nothing; `'create'` alone stays valid and is the [blind-write](#write-implies-read) shape.
-- **`-own` scope**: `-own` actions apply only to Records where `record.entityId` equals the requester. Records with no `entityId` (written by an unscoped `Stack`) do not satisfy any `-own` check.
+- **`-own` scope**: `-own` actions apply only to Records whose author — `record.createdBy.subjectId` — is the requester. Records with no `createdBy` (written by an unscoped `Stack`) do not satisfy any `-own` check.
 - **`typeId` and `actions` are read as data at evaluation, exactly as the grantee is.** A `_grant` Record reaching storage [any other way](#refused-at-the-write-and-again-at-evaluation) carries whatever shape it arrived with, so evaluation asks for both rather than taking them from the type: a `typeId` that is not a non-empty string names no family, an `actions` that is not a list names no verbs, and an entry the action vocabulary does not hold is dropped from the list rather than read. The Record then confers nothing, instead of conferring what a looser reading of the field would produce. `actions` is the sharpest of the three, because the loose reading is not a hypothetical: membership in a string is substring matching, so one naming several verbs would answer for each of them, and a mutate verb would find its [required read companion](#write-implies-read) spelled in the same string. `revoke()` reads the stored list rather than the recognized one, so a grant carrying an action the vocabulary drops is not withdrawn by a target that omits it — a malformed grant confers nothing and is withdrawn by deleting the Record, which `listGrants()` still returns.
 
 ### Who a grant reaches
@@ -229,7 +229,7 @@ await stack.revoke({ kind: 'group', groupId: 'editors-group-id', role: 'member' 
 - **Group-targeted grants do not count on the principal's side** of a delegated request, for the same reason default grants don't (see [Delegation](#delegation-principal-and-subject)) — one step removed. A `_group` roster is editable by any of its admins, not only by the stack owner, so a grant reaching a principal through a roster would let someone other than the owner name an app to a type the owner never named it to. The rule is about **how the authority arrived, not who holds it**, which is what makes it enforceable: a roster entry is an opaque DID and an `_app` Record's `did` is optional, so nothing can reliably tell an app's DID from a person's. An owner who means to grant an app names it directly, one grant at a time — the same shape as any other capability system that has to name software. Group grants still apply to the **subject** under delegation; only the principal half refuses them.
 - **Every tier is spelled, and a target must name one.** `grant()`, `revoke()` and `listGrants()` reject a target naming no `kind`, an empty `entityId`, an empty `groupId`, or a group target without a role, with `StackQueryError`. The `_grant` schema requires `grantee`, so a Record arriving [any other way](#refused-at-the-write-and-again-at-evaluation) is refused at validation rather than stored. A schema cannot say which fields each arm carries, since a closed `object` field holds one `properties` set, so **the arm's own fields are required on every write instead**: `create()`, `patchContent()`, `restoreVersion()` and `commitMigration()` refuse a `_grant` whose grantee names an unknown `kind`, or whose `entity` arm carries no `entityId`, or whose `group` arm carries no `groupId` or no `member`/`admin` role, with `StackValidationError`. And evaluation reads the tier off `kind` again: a grantee that is absent, names an unknown `kind`, or carries an empty `entityId` or `groupId` confers nothing.
 - **The two "everyone" tiers reach different audiences, and share no word.** A Grant's `{ kind: 'authenticated' }` reaches any entity that turned up with a DID; a Record permission's [`{ kind: 'anyone' }`](#record-level-permissions) reaches every requester, anonymous included. An anonymous requester is denied under every grant, so the wider tier exists only on the record layer, where world-readability is the thing being asked for. Naming them apart is what keeps "a default grant makes this public" from being a reasonable reading.
-- **Group roster resolution is memoized per operation.** Resolving a `group` grantee re-fetches the `_group` Record the same way a record-level permission's `group` grantee does (walking `relationship` associations), so it costs the same per-group lookup. The resolved roles are cached for the lifetime of one operation and threaded alongside `prefetchedGrants` — exactly the lifetime that has — so a `query()` examining many Records resolves a given roster once instead of once per candidate. Deliberately **not** cached for the life of a `ScopedStack`: `asEntity()`/`forSession()` return an object a caller may hold for as long as it likes, and a cache outliving the operation would let removal from a group go unnoticed by that instance. Revocation is the direction an authorization cache must never fail in.
+- **Group roster resolution is memoized per operation.** Resolving a `group` grantee re-fetches the `_group` Record the same way a record-level permission's `group` grantee does (walking `relationship` associations), so it costs the same per-group lookup. The resolved roles are cached for the lifetime of one operation and threaded alongside `prefetchedGrants` — exactly the lifetime that has — so a `query()` examining many Records resolves a given roster once instead of once per candidate. Deliberately **not** cached for the life of a `ScopedStack`: `asEntity()`/`asActor()` return an object a caller may hold for as long as it likes, and a cache outliving the operation would let removal from a group go unnoticed by that instance. Revocation is the direction an authorization cache must never fail in.
 
 **Granting a group grants everyone its admins ever add.** A `_group` roster is managed by the stack owner _and_ by any entity holding an `admin` association on it, and an admin may appoint further admins. So a group-targeted grant is a standing delegation, not a fixed list: whoever holds `admin` on that group decides, from then on, who the grant reaches. This is what delegating group management means, and it is bounded in two ways — the owner outranks the roster, so ownership can never be locked out of a group and pruning is always available; and roster-derived authority stops at the principal boundary (above), so it can never reach an app acting for someone. An owner who wants a roster only they can change appoints no other admins: a group begins with exactly one admin, its creator, and plain members hold no roster authority at all. Where one group would need two levels of trust, use two groups.
 
@@ -257,15 +257,15 @@ Use `asEntity()` when one `Stack` instance serves requests from multiple, possib
 
 **Resolution may be cached for the lifetime of a single request.** A scoped query cursor-walks the `_grant@1` family and resolves Group rosters per candidate Record — correct, and cheap at the scale a personal Stack has, but repeated work when one request examines many Records. A server MAY resolve the requester's grants and Group memberships once and reuse that snapshot for every check within the same request without deviating from this spec; `ScopedStack.query()` already does exactly this with its prefetched grants. Caching **across** requests is out of scope here: a grant revoked between two requests must take effect on the second, so any longer-lived cache needs an invalidation story this spec does not define.
 
-**`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `entityId` is always set to the subject, so `-own` grants apply to it immediately — a scoped write always names its author, so an absent `entityId` means an unscoped `Stack` wrote the Record.
+**`ScopedStack.create()`** additionally checks `_grant` records for a `'create'` action on the target type before allowing the Record to be written. Anonymous requesters are always denied. The owner always passes. The created Record's `createdBy` is always set to the requester, so `-own` grants apply to it immediately — a scoped write always names its author, so an absent `createdBy` means an unscoped `Stack` wrote the Record.
 
 ### Delegation: principal and subject
 
-An app that holds its own key may act _on behalf of_ a person (see [App](./identity.md#app)). `asEntity()` takes that second identity:
+An app that holds its own key may act _on behalf of_ a person (see [App](./identity.md#app)). `asActor()` takes both identities as one [Actor](./data-model.md#actor):
 
 ```ts
 // The app authenticated; the comment is Bob's.
-const scoped = stack.asEntity(appDid, { onBehalfOf: bobDid });
+const scoped = stack.asActor({ subjectId: bobDid, principalId: appDid });
 ```
 
 Two identities are then in play, and one rule separates them:
@@ -274,23 +274,23 @@ Two identities are then in play, and one rule separates them:
 
 | Governed by the **principal** (who authenticated) | Governed by the **subject** (who it's for) |
 | ------------------------------------------------- | ------------------------------------------ |
-| Grant lookup for the app's own reach              | `record.entityId` on writes                |
+| Grant lookup for the app's own reach              | `createdBy.subjectId` on writes            |
 | Setting `permissions` at create time              | `-own` matching                            |
 |                                                   | Record-level `permissions` resolution      |
 |                                                   | The `getAttachment()` uploader clause      |
 
 Two rules sit across both columns rather than in either. **Resharing and `_group` management are asked of both identities**: each is a privileged capability, so the principal must hold it, and each acts on a named Record, so the subject must be able to reach that Record. Both identities must independently satisfy the rule — owner-or-creator to reshare, owner-or-admin for a Group. Requiring only the principal would let an owner principal — software the owner trusts unconditionally — carry its subject to Records the subject could not otherwise touch, which is the reach `create()` already withholds.
 
-Omitting `onBehalfOf` makes the two the same entity, which is the undelegated case and behaves exactly as it always has: the second check asks the same question of the same identity. An anonymous principal cannot act on behalf of anyone — `asEntity(null, { onBehalfOf })` throws.
+Omitting `principalId`, or giving it equal to `subjectId`, makes the two the same entity — the undelegated case, where the second check asks the same question of the same identity. `asEntity(did)` is shorthand for `asActor({ subjectId: did })`. An Actor always names a subject, so an anonymous principal has no way to act on behalf of anyone.
 
-**A server at its request boundary should use `forSession()` instead**, which takes the pair a token names whole:
+**A server at its request boundary passes the session a token names straight through**, since a `TokenSession` is an Actor:
 
 ```ts
-const session = await tokens.lookupToken(bearer); // { principalId, subjectId }
-const scoped = stack.forSession(session);
+const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
+const scoped = stack.asActor(session);
 ```
 
-Both identities are DIDs, so passing them positionally to `asEntity()` leaves nothing to catch a swap — and a swapped pair is undetectable in the undelegated case, where the two are equal. It would surface only once delegation is in use, as authority no longer fenced by the app's grants and every write attributed to the app rather than the person it acted for. `forSession()` removes the order to get wrong; `asEntity()` remains the direct form for callers that genuinely have one identity in hand.
+Both identities are DIDs, so a positional pair would leave nothing to catch a swap — and a swapped pair is undetectable in the undelegated case, where the two are equal. It would surface only once delegation is in use, as authority no longer fenced by the app's grants and every write attributed to the app rather than the person it acted for. Naming both fields removes the order to get wrong.
 
 **Unconditional owner access splits across both identities**, rather than belonging to one. It answers _what data is reachable_ against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_ against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot hard delete, manage a group, or decide who else sees a Record.
 

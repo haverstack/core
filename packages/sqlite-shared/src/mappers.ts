@@ -5,6 +5,7 @@
  */
 
 import type {
+  Actor,
   AuthorityAssociation,
   DataAssociation,
   GroupRole,
@@ -18,6 +19,18 @@ import type {
 } from '@haverstack/core';
 
 export const toMs = (d: Date): number => d.getTime();
+
+/**
+ * An Actor from its two columns. A principal with no subject beside it
+ * names nobody to attribute to, so it reads as absent like the subject.
+ */
+const actorFromColumns = (subject: unknown, principal: unknown): Actor | undefined =>
+  subject == null
+    ? undefined
+    : {
+        subjectId: subject as string,
+        ...(principal != null && { principalId: principal as string }),
+      };
 export const fromMs = (ms: number): Date => new Date(ms);
 
 /**
@@ -55,11 +68,11 @@ export const rowToRecord = (
   // disagreed would let a record answer one way to get() and another to
   // the filter that should have found it.
   if (row.parent_id != null) record.parentId = row.parent_id as string;
-  if (row.entity_id != null) record.entityId = row.entity_id as string;
   if (row.app_id != null) record.appId = row.app_id as string;
-  if (row.principal_id != null) record.principalId = row.principal_id as string;
-  if (row.updated_by != null) record.updatedBy = row.updated_by as string;
-  if (row.updated_via != null) record.updatedVia = row.updated_via as string;
+  const createdBy = actorFromColumns(row.entity_id, row.principal_id);
+  if (createdBy) record.createdBy = createdBy;
+  const updatedBy = actorFromColumns(row.updated_by, row.updated_via);
+  if (updatedBy) record.updatedBy = updatedBy;
   if (row.deleted_at != null) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.unlisted_at != null) record.unlistedAt = fromMs(row.unlisted_at as number);
   const partitioned = partitionAssociations(associations);
@@ -170,9 +183,10 @@ export const rowToVersion = (row: Record<string, unknown>): RecordVersion => {
     content: JSON.parse(row.content as string),
     updatedAt: fromMs(row.updated_at as number),
   };
-  if (row.entity_id != null) v.entityId = row.entity_id as string;
-  if (row.updated_by != null) v.updatedBy = row.updated_by as string;
-  if (row.updated_via != null) v.updatedVia = row.updated_via as string;
+  const createdBy = actorFromColumns(row.entity_id, row.principal_id);
+  if (createdBy) v.createdBy = createdBy;
+  const updatedBy = actorFromColumns(row.updated_by, row.updated_via);
+  if (updatedBy) v.updatedBy = updatedBy;
   return v;
 };
 

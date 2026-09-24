@@ -26,7 +26,8 @@ export type FileId = string;
 /**
  * Reverse-DNS identifier for the software that wrote a Record, e.g.
  * "com.example.myapp" — not a RecordId. Self-reported and never a
- * permission input; `StackRecord.principalId` is the verified counterpart.
+ * permission input; `StackRecord.createdBy.principalId` is the verified
+ * counterpart.
  * See docs/spec/identity.md § App.
  */
 export type AppId = string;
@@ -38,6 +39,18 @@ export type AppId = string;
  * See docs/spec/identity.md.
  */
 export type EntityId = string;
+
+/**
+ * Who did something, and through which principal. `subjectId` is who the
+ * act is attributed to; `principalId` is who authenticated, present only
+ * when it differs — a delegated app acting for its user. `Stack` stores
+ * a `principalId` equal to `subjectId` as absent, so the two spellings of
+ * "acted as itself" never diverge. See docs/spec/data-model.md § Actor.
+ */
+export type Actor = {
+  subjectId: EntityId;
+  principalId?: EntityId;
+};
 
 // -------------------------------------------------------
 // Associations
@@ -221,29 +234,21 @@ export type StackRecord = {
 
   // Optional native fields
   parentId?: RecordId; // Parent record (hierarchy/folders)
-  entityId?: EntityId; // Author entity, if different from stack owner
   appId?: AppId; // App that created this record — self-reported, see AppId
   /**
-   * The authenticated principal behind the write, when it isn't the author
-   * itself — a delegated app's own DID. Absent means the writer
-   * authenticated as the author, so `appId` is an unverifiable self-report;
-   * present means `appId` can be checked against the `_app` record naming
-   * this DID. See docs/spec/identity.md § App.
-   */
-  principalId?: EntityId;
-  /**
-   * The subject that performed the mutation this version records — unlike
-   * `entityId`, it moves with every write. Absent means an unscoped `Stack`
-   * wrote it, which names no requester.
+   * The record's author, stamped once by the create. A `principalId` here
+   * is what lets `appId` be checked against the `_app` record naming that
+   * DID; without one, `appId` is an unverifiable self-report.
    * See docs/spec/data-model.md § Authorship and attribution.
    */
-  updatedBy?: EntityId;
+  createdBy?: Actor;
   /**
-   * The authenticated principal behind that mutation, when it isn't the
-   * subject — `principalId` is the same fact about the create.
+   * Who performed the mutation this version records — unlike `createdBy`,
+   * it moves with every write. Absent means an unscoped `Stack` wrote it,
+   * which names no requester.
    * See docs/spec/data-model.md § Authorship and attribution.
    */
-  updatedVia?: EntityId;
+  updatedBy?: Actor;
   deletedAt?: Date; // Present if soft-deleted
   /**
    * Present when the record is withheld from enumeration — absent from
@@ -275,15 +280,13 @@ export type RecordVersion = {
   content: Record<string, unknown>;
   updatedAt: Date;
   /**
-   * The record's author, carried through from `record.entityId` — not the
-   * entity that performed the change this version records.
+   * The record's author, carried through from `record.createdBy` — not the
+   * actor of the change this version records.
    * See docs/spec/versioning.md § Version history.
    */
-  entityId?: EntityId;
+  createdBy?: Actor;
   /** Who performed the mutation that produced this version. */
-  updatedBy?: EntityId;
-  /** The principal behind that mutation, when it isn't `updatedBy`. */
-  updatedVia?: EntityId;
+  updatedBy?: Actor;
 };
 
 // -------------------------------------------------------
@@ -361,7 +364,7 @@ export type StackType = {
 export type EntityContent = {
   /**
    * The identity this profile is about. e.g. "did:key:z6Mk...". A binding,
-   * not a value — a Record's `entityId` resolves through it to the name
+   * not a value — an Actor's `subjectId` resolves through it to the name
    * this card carries, so it is unique per stack and immutable once set.
    * See docs/spec/identity.md § DID bindings.
    */
@@ -392,7 +395,7 @@ export type AppContent = {
   version?: string;
   /**
    * The DID this app authenticates with, when it holds a key of its own.
-   * Lets an attribution UI resolve a record's `principalId` to this card,
+   * Lets an attribution UI resolve an Actor's `principalId` to this card,
    * and a server check a self-reported `appId` against the principal that
    * wrote it. Absent for apps that ride their user's identity. Unique per
    * stack and immutable once set, like `appId` above — see
@@ -542,8 +545,11 @@ export type RecordFilter = {
   baseId?: string | string[];
   parentId?: RecordId | null; // null = root records only
   appId?: AppId | AppId[];
-  entityId?: EntityId | EntityId[];
-  principalId?: EntityId | EntityId[];
+  /** Matches the record's author — never the latest actor, which isn't filterable. */
+  createdBy?: {
+    subjectId?: EntityId | EntityId[];
+    principalId?: EntityId | EntityId[];
+  };
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
@@ -803,8 +809,7 @@ export type BumpVersionOptions = {
  * See docs/spec/data-model.md § Authorship and attribution.
  */
 export type ActorOptions = {
-  updatedBy?: EntityId;
-  updatedVia?: EntityId;
+  actor?: Actor;
 };
 
 /**
@@ -932,11 +937,7 @@ export type ChangeOp =
  * `Stack`: absence is a fact of its own and never stands in for the
  * author. See docs/spec/events.md § Attribution.
  */
-export type ChangeActor = {
-  /** The subject the change is attributed to. */
-  entityId: EntityId;
-  /** The principal behind it, when a delegated app acted for the subject. */
-  principalId?: EntityId;
+export type ChangeActor = Actor & {
   /** Self-reported at create, never a trust input. See AppId. */
   appId?: AppId;
 };
@@ -1012,8 +1013,8 @@ export type ChangeFilter = {
   /** Matched by baseId, as grants are, so a version bump orphans nothing. */
   typeId?: TypeId | TypeId[];
   parentId?: RecordId | null;
-  /** The record's author. Not the actor — see ChangeActor. */
-  entityId?: EntityId;
+  /** Matches the record's author, as `RecordFilter.createdBy` does. */
+  createdBy?: { subjectId: EntityId };
   kinds?: ChangeKind[];
 };
 
@@ -1309,19 +1310,13 @@ export type StackAdapter = StackRecordAdapter &
   };
 
 /**
- * The two identities a token establishes. Both are always populated: on an
- * undelegated token they are the same DID, and spelling that out is what
- * keeps the mapping onto asEntity() mechanical.
- *
- *     stack.asEntity(session.principalId, { onBehalfOf: session.subjectId })
- *
- * See docs/spec/access-control.md § Delegation: principal and subject.
+ * The two identities a token establishes — an Actor whose `principalId` is
+ * always populated, equal to `subjectId` on an undelegated token, so a
+ * server reading one never has to default it. Passes to `Stack.asActor()`
+ * as is. See docs/spec/access-control.md § Delegation: principal and subject.
  */
-export type TokenSession = {
-  /** Who authenticated — the DID that proved key possession. Governs authority. */
+export type TokenSession = Actor & {
   principalId: EntityId;
-  /** Who the principal acts for. Governs attribution. Equal to principalId unless delegated. */
-  subjectId: EntityId;
 };
 
 export type TokenInfo = TokenSession & {
@@ -1338,15 +1333,15 @@ export type TokenInfo = TokenSession & {
  * handshake. Tokens SHOULD be stored outside the portable stack file.
  * See docs/spec/wire-format.md § Authentication.
  *
- * `onBehalfOf` is the delegation binding, and no handshake can establish
- * it — proving key possession proves the principal and nothing about whom
- * it may act for. It is asserted by the owner out of band, which is safe
+ * The actor's `subjectId`, where it differs from `principalId`, is the
+ * delegation binding, and no handshake can establish it — proving key
+ * possession proves the principal and nothing about whom it may act for. It is asserted by the owner out of band, which is safe
  * because effective authority is the intersection of both parties' grants.
  */
 export interface StackTokenStore {
   createToken(
-    principalId: EntityId,
-    opts?: { onBehalfOf?: EntityId; label?: string; expiresAt?: Date },
+    actor: Actor,
+    opts?: { label?: string; expiresAt?: Date },
   ): Promise<{
     id: string;
     token: string;

@@ -12,6 +12,7 @@ import type {
   SchemaDriftViolation,
   StackErrorCode,
   ChangeKind,
+  Actor,
   ChangeActor,
   ChangeOp,
   RecordChange,
@@ -32,6 +33,19 @@ import {
   StackTimeoutError,
 } from '@haverstack/core';
 
+/** An Actor on the wire — the same two fields, spelled the same way. */
+export type WireActor = {
+  subjectId: string;
+  principalId?: string;
+};
+
+/** Copied field by field, so a response never aliases a stored record's object. */
+function serializeActor(a: Actor): WireActor {
+  const w: WireActor = { subjectId: a.subjectId };
+  if (a.principalId !== undefined) w.principalId = a.principalId;
+  return w;
+}
+
 export type WireRecord = {
   id: string;
   typeId: string;
@@ -40,11 +54,9 @@ export type WireRecord = {
   content: Record<string, unknown>;
   version: number;
   parentId?: string;
-  entityId?: string;
   appId?: string;
-  principalId?: string;
-  updatedBy?: string;
-  updatedVia?: string;
+  createdBy?: WireActor;
+  updatedBy?: WireActor;
   deletedAt?: string;
   unlistedAt?: string;
   permissions?: AuthorityAssociation[];
@@ -93,9 +105,8 @@ export type WireVersion = {
   typeId: string;
   content: Record<string, unknown>;
   updatedAt: string;
-  entityId?: string;
-  updatedBy?: string;
-  updatedVia?: string;
+  createdBy?: WireActor;
+  updatedBy?: WireActor;
 };
 
 export function serializeRecord(r: StackRecord): WireRecord {
@@ -108,11 +119,9 @@ export function serializeRecord(r: StackRecord): WireRecord {
     version: r.version,
   };
   if (r.parentId !== undefined) w.parentId = r.parentId;
-  if (r.entityId !== undefined) w.entityId = r.entityId;
   if (r.appId !== undefined) w.appId = r.appId;
-  if (r.principalId !== undefined) w.principalId = r.principalId;
-  if (r.updatedBy !== undefined) w.updatedBy = r.updatedBy;
-  if (r.updatedVia !== undefined) w.updatedVia = r.updatedVia;
+  if (r.createdBy !== undefined) w.createdBy = serializeActor(r.createdBy);
+  if (r.updatedBy !== undefined) w.updatedBy = serializeActor(r.updatedBy);
   if (r.deletedAt !== undefined) w.deletedAt = r.deletedAt.toISOString();
   if (r.unlistedAt !== undefined) w.unlistedAt = r.unlistedAt.toISOString();
   if (r.permissions !== undefined) w.permissions = r.permissions;
@@ -141,9 +150,8 @@ export function serializeVersion(v: RecordVersion): WireVersion {
     content: v.content,
     updatedAt: v.updatedAt.toISOString(),
   };
-  if (v.entityId !== undefined) w.entityId = v.entityId;
-  if (v.updatedBy !== undefined) w.updatedBy = v.updatedBy;
-  if (v.updatedVia !== undefined) w.updatedVia = v.updatedVia;
+  if (v.createdBy !== undefined) w.createdBy = serializeActor(v.createdBy);
+  if (v.updatedBy !== undefined) w.updatedBy = serializeActor(v.updatedBy);
   return w;
 }
 
@@ -656,16 +664,13 @@ export type WireRecordChange = {
 };
 
 /** Who performed a change. Never who authored the record. */
-export type WireChangeActor = {
-  entityId: string;
-  principalId?: string;
+export type WireChangeActor = WireActor & {
   appId?: string;
 };
 
 /** Shared by a change frame and a journal entry — one actor encoding, not two. */
 export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
-  const w: WireChangeActor = { entityId: actor.entityId };
-  if (actor.principalId !== undefined) w.principalId = actor.principalId;
+  const w: WireChangeActor = serializeActor(actor);
   if (actor.appId !== undefined) w.appId = actor.appId;
   return w;
 }

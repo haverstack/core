@@ -65,8 +65,8 @@ A plaintext `http://` URL to anything but loopback is refused: the token, the ha
 Server-side, a token resolves to two identities, and when an app acts for a person rather than for itself the server names them both — authority becomes the intersection of what the app may do and what that person may do, while authorship stays with the person:
 
 ```ts
-const session = await tokens.lookupToken(bearer); // { principalId, subjectId }
-const scoped = stack.forSession(session);
+const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
+const scoped = stack.asActor(session);
 ```
 
 The delegation itself — "this app acts for Bob" — is asserted by you when the token is issued, not by the app: proving key possession proves who the app _is_ and nothing about whom it may speak for. An app that could name its own subject would be choosing its own authority.
@@ -175,11 +175,11 @@ The fundamental unit of data. Every record has:
 - A **Crockford base-32 ID** — time-sortable, human-readable, URL-safe
 - A **type** — defined by the app that created it
 - **Content** — a JSON object validated against the type's schema
-- Optional: `parentId`, `entityId`, `appId`, `principalId`, `permissions`, `associations`
+- Optional: `parentId`, `createdBy`, `appId`, `permissions`, `associations`
 
 ### Identity
 
-`entityId` — on records, permissions, grants, group membership, the stack owner — is a [DID](https://www.w3.org/TR/did-core/) string, e.g. `did:key:z6Mk...`. An identity is a keypair; there's no provider, directory, or domain to trust. `did:key` (a public key, encoded — nothing else) is the mandatory floor; `generateDidKeypair()` mints one. Other DID methods (`did:web`, `did:plc`, ...) are valid `entityId` values too.
+Every identity — a record's author, permissions, grants, group membership, the stack owner — is a [DID](https://www.w3.org/TR/did-core/) string, e.g. `did:key:z6Mk...`. An identity is a keypair; there's no provider, directory, or domain to trust. `did:key` (a public key, encoded — nothing else) is the mandatory floor; `generateDidKeypair()` mints one. Other DID methods (`did:web`, `did:plc`, ...) are valid `entityId` values too.
 
 The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.create(adapter, { ownerProfile })` creates the owner's own card on first run.
 

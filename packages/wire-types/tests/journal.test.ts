@@ -54,10 +54,10 @@ describe('serializeJournalEntry', () => {
 
   it('carries the actor whole, principal and app included', () => {
     const w = serializeJournalEntry(
-      entry({ actor: { entityId: ACTOR, principalId: PRINCIPAL, appId: 'com.example/editor' } }),
+      entry({ actor: { subjectId: ACTOR, principalId: PRINCIPAL, appId: 'com.example/editor' } }),
     );
     expect(w.actor).toEqual({
-      entityId: ACTOR,
+      subjectId: ACTOR,
       principalId: PRINCIPAL,
       appId: 'com.example/editor',
     });

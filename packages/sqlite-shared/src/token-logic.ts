@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { TokenSession } from '@haverstack/core';
+import type { Actor, TokenSession } from '@haverstack/core';
 import type { TokenInfo } from '@haverstack/core/wire';
 import type { SqlExecutor } from './executor.js';
 import { toMs, fromMs } from './mappers.js';
@@ -30,8 +30,8 @@ export class SharedTokenLogic {
   }
 
   async createToken(
-    principalId: string,
-    opts: { onBehalfOf?: string; label?: string; expiresAt?: Date } = {},
+    actor: Actor,
+    opts: { label?: string; expiresAt?: Date } = {},
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');
     const token = randomBytes(32).toString('hex');
@@ -41,10 +41,10 @@ export class SharedTokenLogic {
       [
         id,
         tokenHash,
-        principalId,
         // Stored rather than left null for an undelegated token, so a
         // reader never has to know which column stands in for the other.
-        opts.onBehalfOf ?? principalId,
+        actor.principalId ?? actor.subjectId,
+        actor.subjectId,
         opts.label ?? null,
         toMs(new Date()),
         opts.expiresAt ? toMs(opts.expiresAt) : null,

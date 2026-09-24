@@ -72,17 +72,17 @@ An app that holds a key acts in one of two ways. Alone — an indexer with no pe
 
 `appId` **grants nothing** — it is never an input to an access decision, in any posture. Whether it can be _trusted_ depends on whether there is a verified principal to check it against:
 
-- A Record written by a delegated app carries `principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` is checked at the write: find the `_app` Record whose `content.did` equals the principal, and compare that card's `content.appId` to the `appId` being stamped. A mismatch is refused with `StackPermissionError`. The check runs where the fact is known rather than being left to each reader, so a stored `appId` on a Record carrying `principalId` is one the registry agreed to.
+- A Record written by a delegated app carries `createdBy.principalId` — the DID that actually authenticated. That DID is verified by construction (the handshake proved key possession), so a claimed `appId` is checked at the write: find the `_app` Record whose `content.did` equals the principal, and compare that card's `content.appId` to the `appId` being stamped. A mismatch is refused with `StackPermissionError`. The check runs where the fact is known rather than being left to each reader, so a stored `appId` on a Record whose `createdBy` carries a `principalId` is one the registry agreed to.
 - A delegated app the owner never registered has no card to check against, so its `appId` stays a bare self-report. Registering the app is what turns it into a checked claim — which is the same act that makes `principalId` resolvable at all.
-- A Record written by an app riding its user's identity carries no `principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
+- A Record written by an app riding its user's identity carries no `createdBy.principalId`, because there was no separate principal. Its `appId` is an assertion by whoever held the token and cannot be checked against anything.
 
-So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. On a Record with no `principalId` it is not an audit trail on its own; `principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
+So `appId` is sound for "posted via X" display and for grouping a stack's Records by the software that wrote them. On a Record with no `createdBy.principalId` it is not an audit trail on its own; `createdBy.principalId` is the field that answers _which principal actually did this_, and only for delegated writes.
 
 The check costs a lookup over the `_app` family per delegated write that carries an `appId`, narrowed to `content.did` where the adapter advertises a [`filter.content` reach](./adapters.md#adapter-capabilities) and cursor-walked where it doesn't — the same shape, and the same cost, as the binding-uniqueness check described below.
 
-**Both fields describe the write that created the Record, and are never restamped.** A later mutation leaves `appId` and `principalId` naming whoever authored the Record, so a Record edited later by different software still reports its creator — as `entityId` does, and for the same reason. The cross-check above therefore answers "which app _wrote_ this", not "which app touched it last".
+**Both fields describe the write that created the Record, and are never restamped.** A later mutation leaves `appId` and `createdBy` naming whoever authored the Record, so a Record edited later by different software still reports its creator. The cross-check above therefore answers "which app _wrote_ this", not "which app touched it last".
 
-**Per-edit app attribution does not exist**, and version history is not a way around that: a [snapshot](./versioning.md#version-history) carries `content`, the `typeId` it was read under, the author's `entityId` and the actors of that one change, never `appId` or `principalId`. So a Record whose creator is a verified delegated app says nothing about the software behind any later edit, and nothing records it. An app that needs edits attributable individually should model them as Records of its own rather than reading attribution off the edited one.
+**Per-edit app attribution does not exist**, and version history is not a way around that: a [snapshot](./versioning.md#version-history) carries `content`, the `typeId` it was read under, the author's `createdBy` and the `updatedBy` of that one change, never `appId`. So a Record whose creator is a verified delegated app says nothing about the software behind any later edit, and nothing records it. An app that needs edits attributable individually should model them as Records of its own rather than reading attribution off the edited one.
 
 Linking the two is the owner's job, not the library's: an `_app` Record with a `did` is the owner's card for a piece of software, the same way an `_entity` Record is their card for a person. Nothing creates one automatically — `grant()` writes a `_grant` Record and nothing else, since naming an app is a display decision the library has no truthful answer for.
 
@@ -103,8 +103,8 @@ Two system types carry fields that are **lookup keys rather than display values*
 
 | Field         | What resolves through it                        | Unique |
 | ------------- | ----------------------------------------------- | ------ |
-| `_entity.did` | a Record's `entityId` → who authored it         | yes    |
-| `_app.did`    | a Record's `principalId` → which app wrote it   | yes    |
+| `_entity.did` | an Actor's `subjectId` → who it names           | yes    |
+| `_app.did`    | an Actor's `principalId` → which app wrote it   | yes    |
 | `_app.appId`  | a verified principal → the `appId` it may claim | no     |
 
 A binding is not a value a card happens to hold; it is what makes the card _about_ something. Two rules follow:

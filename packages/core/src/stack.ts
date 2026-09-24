@@ -65,7 +65,7 @@ import type {
   EntityContent,
   AppId,
   RecordId,
-  TokenSession,
+  Actor,
   ActorOptions,
   ChangeActor,
   RecordChange,
@@ -81,7 +81,6 @@ import {
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
-  StackPermissionError,
   StackQueryError,
   StackSchemaDriftError,
   StackValidationError,
@@ -160,6 +159,25 @@ const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
  */
 const MAX_PARENT_DEPTH = 64;
 
+/**
+ * An Actor in the one form `Stack` stores: a `principalId` equal to the
+ * subject is dropped, so "acted as itself" has a single spelling, and an
+ * empty id is refused rather than stored as a name for nobody.
+ * See docs/spec/data-model.md § Actor.
+ */
+export function normalizeActor(actor: Actor | undefined): Actor | undefined {
+  if (!actor) return undefined;
+  for (const field of ['subjectId', 'principalId'] as const) {
+    if (actor[field] === '') {
+      throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
+    }
+  }
+  const { subjectId, principalId } = actor;
+  return principalId === undefined || principalId === subjectId
+    ? { subjectId }
+    : { subjectId, principalId };
+}
+
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
@@ -185,15 +203,14 @@ export type CreateRecordOptions = {
    */
   id?: string;
   parentId?: string;
-  entityId?: EntityId;
+  /**
+   * The author. ScopedStack sets this from its own identities; callers of
+   * plain Stack supply it only when reconstructing an attributed write.
+   * See StackRecord.createdBy.
+   */
+  createdBy?: Actor;
   /** Reverse-DNS identifier of the writing software — see AppId. */
   appId?: AppId;
-  /**
-   * The authenticated principal, when it isn't the author. ScopedStack sets
-   * this from its own principal; callers of plain Stack supply it only when
-   * reconstructing a delegated write. See StackRecord.principalId.
-   */
-  principalId?: EntityId;
   permissions?: AuthorityAssociation[];
   associations?: DataAssociation[];
   /**
@@ -228,15 +245,6 @@ export type BackdatableCreateRecordOptions = CreateRecordOptions & {
    * `createdAt`.
    */
   updatedAt?: Date;
-};
-
-export type ScopedStackOptions = {
-  /**
-   * The entity a delegated app acts for. Omit when the principal acts as
-   * itself — the case for an app riding its user's identity, which needs
-   * no delegation. See docs/spec/identity.md § App.
-   */
-  onBehalfOf?: EntityId;
 };
 
 export type StackOptions = {
@@ -501,27 +509,7 @@ export class Stack implements StackClient {
    */
   private static createActor(record: StackRecord): ChangeActor | undefined {
     if (!record.updatedBy) return undefined;
-    return {
-      entityId: record.updatedBy,
-      ...(record.updatedVia !== undefined && { principalId: record.updatedVia }),
-      ...(record.appId !== undefined && { appId: record.appId }),
-    };
-  }
-
-  /**
-   * The requester behind a write that stamps nothing on the record itself —
-   * a hard delete, which leaves no record to stamp, and associate()/
-   * dissociate(), which don't bump and so don't touch updatedBy/updatedVia.
-   * Hard delete is owner-acting-alone only, so it never has a principal to
-   * name beside the subject; associate()/dissociate() can run delegated,
-   * so `updatedVia` rides along here when present.
-   */
-  private static actorFrom(opts: ActorOptions): ChangeActor | undefined {
-    if (!opts.updatedBy) return undefined;
-    return {
-      entityId: opts.updatedBy,
-      ...(opts.updatedVia !== undefined && { principalId: opts.updatedVia }),
-    };
+    return { ...record.updatedBy, ...(record.appId !== undefined && { appId: record.appId }) };
   }
 
   private async getTypeCached(id: TypeId): Promise<StackType | null> {
@@ -597,45 +585,38 @@ export class Stack implements StackClient {
 
   /**
    * Get a permission-scoped view of this Stack, as if requests came from
-   * the given principal (null = anonymous). Plain Stack methods are
-   * unscoped; use asEntity() when one Stack serves multiple, possibly
-   * untrusted, entities.
-   *
-   * `onBehalfOf` names the subject a delegated app acts for: authority is
-   * then the intersection of both parties' grants, while authorship and
-   * `-own` resolve against the subject. See
+   * the given entity acting as itself (null = anonymous). Plain Stack
+   * methods are unscoped; use asEntity() when one Stack serves multiple,
+   * possibly untrusted, entities. See
    * docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
-  asEntity(entityId: EntityId | null, opts: ScopedStackOptions = {}): ScopedStack {
+  asEntity(entityId: EntityId | null): ScopedStack {
+    return entityId === null ? this.scope(null, null) : this.asActor({ subjectId: entityId });
+  }
+
+  /**
+   * Scope to an Actor — a delegated app acting for its user, or a
+   * TokenSession exactly as StackTokenStore.lookupToken() returns it, which
+   * is what a server should reach for at its request boundary. Authority is
+   * the intersection of both parties' grants, while authorship and `-own`
+   * resolve against the subject. Taking the pair whole leaves no order to
+   * swap. See docs/spec/access-control.md § Delegation: principal and subject.
+   */
+  asActor(actor: Actor): ScopedStack {
+    const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
+    return this.scope(principalId, subjectId);
+  }
+
+  private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
     this.assertOpen();
-    if (opts.onBehalfOf && !entityId) {
-      throw new StackPermissionError('An anonymous principal cannot act on behalf of an entity');
-    }
     return new ScopedStack(
       this,
-      entityId,
-      opts.onBehalfOf ?? entityId,
+      principalId,
+      subjectId,
       this.idTimestampSkewMsValue,
       this.adapter,
       this.changes,
     );
-  }
-
-  /**
-   * Scope to an authenticated session — what StackTokenStore.lookupToken()
-   * returns. Equivalent to asEntity(principalId, { onBehalfOf: subjectId }),
-   * and what a server should reach for at its request boundary.
-   *
-   * Both identities are DIDs, so passing them positionally leaves nothing
-   * to catch a swap, and a swapped pair is undetectable in the undelegated
-   * case where they are equal — it would surface only once delegation is in
-   * use, as authority no longer fenced by the app's grants and every write
-   * attributed to the app rather than the person. Taking the pair whole
-   * removes the order to get wrong. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  forSession(session: TokenSession): ScopedStack {
-    return this.asEntity(session.principalId, { onBehalfOf: session.subjectId });
   }
 
   // -------------------------------------------------------
@@ -951,9 +932,10 @@ export class Stack implements StackClient {
       if (opts.parentId !== undefined) await this.assertNoParentCycle(opts.id, opts.parentId);
     }
 
+    const createdBy = normalizeActor(opts.createdBy);
     const associations =
       baseIdOf(typeId) === SYSTEM_TYPES.GROUP
-        ? stampGroupAdmin(opts.associations, opts.entityId ?? this.ownerEntityId)
+        ? stampGroupAdmin(opts.associations, createdBy?.subjectId ?? this.ownerEntityId)
         : opts.associations;
 
     // createdAt drives the id, so the two agree by construction rather than
@@ -970,10 +952,8 @@ export class Stack implements StackClient {
     // An id field a caller supplies is a value or it is absent — never the
     // empty string, which names nobody. Refused rather than dropped, so the
     // caller is never silently ignored.
-    for (const field of ['entityId', 'appId', 'principalId'] as const) {
-      if (opts[field] === '') {
-        throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
-      }
+    if (opts.appId === '') {
+      throw new StackQueryError('Invalid appId: the empty string is not an id.');
     }
 
     // Every create naming a parent owes the reference check, whether or not
@@ -990,14 +970,11 @@ export class Stack implements StackClient {
       // Presence, not truthiness: '' is refused above, so absence is the
       // only thing a falsy value could mean here.
       ...(opts.parentId !== undefined && { parentId: opts.parentId }),
-      ...(opts.entityId !== undefined && { entityId: opts.entityId }),
       ...(opts.appId !== undefined && { appId: opts.appId }),
-      ...(opts.principalId !== undefined && { principalId: opts.principalId }),
-      // A create's actor is its author, so these are derived rather than
-      // taken: stamping them here keeps "absent means an unscoped write"
+      // A create's actor is its author, so `updatedBy` is derived rather
+      // than taken: stamping it here keeps "absent means an unscoped write"
       // true of version 1 as it is of every later version.
-      ...(opts.entityId && { updatedBy: opts.entityId }),
-      ...(opts.principalId && { updatedVia: opts.principalId }),
+      ...(createdBy && { createdBy, updatedBy: createdBy }),
       ...(opts.permissions?.length && { permissions: opts.permissions }),
       ...(associations?.length && { associations }),
       ...(opts.unlisted && { unlistedAt: createdAt }),
@@ -1097,8 +1074,8 @@ export class Stack implements StackClient {
     // A change set naming only aspects the journal already keeps in full
     // doesn't bump — the same rule associate()/dissociate() follow
     // unconditionally. Its actor travels as an explicit opt rather than a
-    // record stamp, since a non-bumping write never touches
-    // updatedBy/updatedVia. See docs/spec/versioning.md § Version history.
+    // record stamp, since a non-bumping write never touches `updatedBy`.
+    // See docs/spec/versioning.md § Version history.
     const bumps = bumpsVersion(ops);
 
     // Computed against the same before/after changeSetOps compared, so
@@ -1118,17 +1095,12 @@ export class Stack implements StackClient {
 
     const previousParentId = existing.parentId ?? null;
     const change = new PendingChange(ops, {
-      actor: Stack.actorFrom(opts),
+      actor: normalizeActor(opts.actor),
       ...(ops.includes('reparent') && { previousParentId }),
       ...(assocDelta.length && { associations: assocDelta }),
     });
     const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
-      ...(bumps
-        ? this.writeOptions(existing, opts)
-        : {
-            updatedBy: opts.updatedBy,
-            updatedVia: opts.updatedVia,
-          }),
+      ...(bumps ? this.writeOptions(existing, opts) : { actor: normalizeActor(opts.actor) }),
       bumpsVersion: bumps,
       journal: change.journal,
     });
@@ -1296,7 +1268,7 @@ export class Stack implements StackClient {
     await this.checkAttachmentAssociationPointers([association]);
 
     const change = new PendingChange('associate', {
-      actor: Stack.actorFrom(opts),
+      actor: normalizeActor(opts.actor),
       // A re-point carries what it overwrote: nothing else retains the
       // attachmentRecordId that association held.
       associations: [
@@ -1344,7 +1316,7 @@ export class Stack implements StackClient {
     }
 
     const change = new PendingChange('dissociate', {
-      actor: Stack.actorFrom(opts),
+      actor: normalizeActor(opts.actor),
       // In full, annotation included — what makes a removal as undoable
       // from the log as a re-point is. The frame this becomes still names
       // identity only. See docs/spec/journal.md § The entry.
@@ -1377,7 +1349,7 @@ export class Stack implements StackClient {
     this.assertPermissionSet([...current, permission]);
 
     const change = new PendingChange('permissions', {
-      actor: Stack.actorFrom(opts),
+      actor: normalizeActor(opts.actor),
       associations: [{ op: 'add', association: permission }],
     });
     const updated = await this.adapter.associate(id, permission, { journal: change.journal });
@@ -1406,7 +1378,7 @@ export class Stack implements StackClient {
     this.assertPermissionSet(current.filter((p) => !associationEqual(p, permission)));
 
     const change = new PendingChange('permissions', {
-      actor: Stack.actorFrom(opts),
+      actor: normalizeActor(opts.actor),
       associations: [{ op: 'remove', previous: matched }],
     });
     const updated = await this.adapter.dissociate(id, permission, { journal: change.journal });
@@ -1531,7 +1503,7 @@ export class Stack implements StackClient {
       // write: a read here instead would race the delete, and afterwards
       // there is nothing left to read. Null means there was no record, so
       // nothing was purged and nothing is announced.
-      const change = new PendingChange('hard-delete', { actor: Stack.actorFrom(opts) });
+      const change = new PendingChange('hard-delete', { actor: normalizeActor(opts.actor) });
       const purged = await this.adapter.deleteRecord(id, {
         hard: true,
         expectedVersion: opts.ifVersion,
@@ -1551,7 +1523,7 @@ export class Stack implements StackClient {
     // attachments intact — so nothing is stranded and nothing is reported.
     if (existing.deletedAt) return { record: existing, referencedFileIds: [] };
 
-    const change = new PendingChange('delete', { actor: Stack.actorFrom(opts) });
+    const change = new PendingChange('delete', { actor: normalizeActor(opts.actor) });
     const deleted = await this.adapter.deleteRecord(id, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -1594,7 +1566,7 @@ export class Stack implements StackClient {
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
-    const change = new PendingChange('undelete', { actor: Stack.actorFrom(opts) });
+    const change = new PendingChange('undelete', { actor: normalizeActor(opts.actor) });
     const undeleted = await this.adapter.undeleteRecord(id, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -1749,7 +1721,7 @@ export class Stack implements StackClient {
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
     // gate. See docs/spec/versioning.md § Restore semantics.
-    const change = new PendingChange('restore', { actor: Stack.actorFrom(opts) });
+    const change = new PendingChange('restore', { actor: normalizeActor(opts.actor) });
     const restored = await this.adapter.restoreVersion(id, version, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -1866,7 +1838,7 @@ export class Stack implements StackClient {
       );
     }
 
-    const change = new PendingChange('migrate', { actor: Stack.actorFrom(opts) });
+    const change = new PendingChange('migrate', { actor: normalizeActor(opts.actor) });
     const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -1945,8 +1917,8 @@ export class Stack implements StackClient {
   }
 
   /**
-   * A unique binding field is what a lookup resolves *by* — a record's
-   * `principalId` by `_app.did`, its `entityId` by `_entity.did`. Two cards
+   * A unique binding field is what a lookup resolves *by* — an Actor's
+   * `principalId` by `_app.did`, its `subjectId` by `_entity.did`. Two cards
    * claiming one value would leave that lookup without a single answer, and
    * ambiguity is all an impersonating card needs. Enforced here rather than
    * by schema, since uniqueness is a property of the set, not of the value.
@@ -2139,7 +2111,7 @@ export class Stack implements StackClient {
 
   /**
    * Store bytes and create an _attachment@1 metadata record (owner-
-   * attributed, no entityId), returning that record — `content.fileId`
+   * attributed, no createdBy), returning that record — `content.fileId`
    * addresses the bytes, `id` addresses the metadata. Delegates to the
    * adapter's atomic putAttachmentWithMetadata() when implemented, trusting
    * the returned record as backend-authoritative; otherwise falls back to
@@ -2241,7 +2213,7 @@ export class Stack implements StackClient {
       const at = new Date();
       for (const record of deletedRecords) {
         this.announce(
-          new PendingChange('hard-delete', { actor: Stack.actorFrom(opts) }),
+          new PendingChange('hard-delete', { actor: normalizeActor(opts.actor) }),
           record,
           at,
         );
@@ -2358,7 +2330,7 @@ export class Stack implements StackClient {
       }
 
       try {
-        await this.deleteAttachment(fileId, { updatedBy: opts.updatedBy });
+        await this.deleteAttachment(fileId, { actor: opts.actor });
       } catch (err) {
         // Raced with a new reference, or another sweep/call already removed
         // it — not a sweep failure, just move on to the next candidate.
@@ -2415,7 +2387,7 @@ export class Stack implements StackClient {
    *
    * The subscription's own filter goes to the relay rather than being
    * applied on the way back: the emitter at the far end holds the record,
-   * so it can answer `entityId` and `parentId`, which the envelope
+   * so it can answer `createdBy` and `parentId`, which the envelope
    * deliberately does not carry. That is also why a relay is opened per
    * subscription rather than shared.
    */
@@ -2744,16 +2716,15 @@ export class Stack implements StackClient {
    * The options every version-bumping adapter write carries: the `ifVersion`
    * precondition, the prior-state snapshot that has to land in the same
    * atomic write, and who to attribute the change to. Taken together so a
-   * new mutating verb cannot quietly omit one — `updatedVia` most of all,
-   * whose absence reads as an undelegated write.
+   * new mutating verb cannot quietly omit one — the actor's `principalId`
+   * most of all, whose absence reads as an undelegated write.
    * See docs/spec/versioning.md § Version history.
    */
   private writeOptions(existing: StackRecord, opts: IfVersionOptions & ActorOptions) {
     return {
       expectedVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
-      updatedBy: opts.updatedBy,
-      updatedVia: opts.updatedVia,
+      actor: normalizeActor(opts.actor),
     };
   }
 
@@ -2772,9 +2743,8 @@ export class Stack implements StackClient {
       typeId: record.typeId,
       content: record.content,
       updatedAt: record.updatedAt,
-      ...(record.entityId && { entityId: record.entityId }),
+      ...(record.createdBy && { createdBy: record.createdBy }),
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
-      ...(record.updatedVia && { updatedVia: record.updatedVia }),
     };
   }
 }

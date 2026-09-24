@@ -12,7 +12,7 @@
  * SqlExecutor interface.
  */
 
-import type { TokenSession } from '@haverstack/core';
+import type { Actor, TokenSession } from '@haverstack/core';
 import type { StackTokenStore, TokenInfo } from '@haverstack/core/wire';
 import {
   TOKENS_SCHEMA_SQL,
@@ -52,10 +52,10 @@ export class NativeTokenStore implements StackTokenStore {
   }
 
   createToken(
-    principalId: string,
-    opts?: { onBehalfOf?: string; label?: string; expiresAt?: Date },
+    actor: Actor,
+    opts?: { label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
-    return this.tokens.createToken(principalId, opts);
+    return this.tokens.createToken(actor, opts);
   }
 
   lookupToken(token: string): Promise<TokenSession | null> {

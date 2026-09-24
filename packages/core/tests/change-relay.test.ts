@@ -49,7 +49,7 @@ const remoteChange = (overrides: Partial<RecordChange> = {}): RecordChange => ({
   typeId: NOTE,
   version: 4,
   updatedAt: new Date('2024-01-02T00:00:00.000Z'),
-  actor: { entityId: REMOTE_EDITOR },
+  actor: { subjectId: REMOTE_EDITOR },
   seq: 'AA3f1R',
   ...overrides,
 });
@@ -66,14 +66,14 @@ beforeEach(async () => {
 describe('a stack whose adapter relays', () => {
   test('opens one relay per subscription, carrying that subscription’s filter', async () => {
     await stack.subscribe(() => {}, { filter: { typeId: NOTE }, includeRecords: true });
-    await stack.subscribe(() => {}, { filter: { entityId: REMOTE_EDITOR } });
+    await stack.subscribe(() => {}, { filter: { createdBy: { subjectId: REMOTE_EDITOR } } });
 
     expect(adapter.relays).toHaveLength(2);
     expect(adapter.relays[0]!.opts.filter).toEqual({ typeId: NOTE });
     expect(adapter.relays[0]!.opts.includeRecords).toBe(true);
     // The author is not in the envelope, so only the emitter holding the
     // record can answer this filter — which is why it travels.
-    expect(adapter.relays[1]!.opts.filter).toEqual({ entityId: REMOTE_EDITOR });
+    expect(adapter.relays[1]!.opts.filter).toEqual({ createdBy: { subjectId: REMOTE_EDITOR } });
   });
 
   test('delivers a relayed frame to the subscriber that opened it', async () => {
@@ -103,7 +103,7 @@ describe('a stack whose adapter relays', () => {
     await stack.subscribe((c) => void seen.push(c), { filter: { typeId: NOTE } });
 
     adapter.relays[0]!.push(
-      remoteChange({ kind: 'purged', ops: ['hard-delete'], actor: { entityId: OWNER } }),
+      remoteChange({ kind: 'purged', ops: ['hard-delete'], actor: { subjectId: OWNER } }),
     );
 
     expect(seen[0]).toMatchObject({ kind: 'purged', ops: ['hard-delete'] });

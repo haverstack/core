@@ -269,13 +269,13 @@ describe('records — CRUD', () => {
     const adapter = await initAdapter();
     const record = makeRecord({
       parentId: 'parent-abc',
-      entityId: 'entity-xyz',
+      createdBy: { subjectId: 'entity-xyz' },
       appId: 'app-123',
     });
     await adapter.createRecord(record);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe('parent-abc');
-    expect(retrieved?.entityId).toBe('entity-xyz');
+    expect(retrieved?.createdBy?.subjectId).toBe('entity-xyz');
     expect(retrieved?.appId).toBe('app-123');
   });
 
@@ -1798,12 +1798,16 @@ describe('absent fields are read by presence, not truthiness', () => {
 
   test('empty-string authorship fields survive the round trip', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ entityId: '', appId: '', updatedBy: '' });
+    const record = makeRecord({
+      createdBy: { subjectId: '' },
+      appId: '',
+      updatedBy: { subjectId: '' },
+    });
     await adapter.createRecord(record);
     const retrieved = await adapter.getRecord(record.id);
-    expect(retrieved?.entityId).toBe('');
+    expect(retrieved?.createdBy?.subjectId).toBe('');
     expect(retrieved?.appId).toBe('');
-    expect(retrieved?.updatedBy).toBe('');
+    expect(retrieved?.updatedBy?.subjectId).toBe('');
   });
 });
 
@@ -1885,12 +1889,12 @@ describe('versions', () => {
       typeId: record.typeId,
       content: { text: 'original' },
       updatedAt: new Date('2024-01-01'),
-      entityId: 'entity-123',
+      createdBy: { subjectId: 'entity-123' },
     };
     await adapter.saveVersion(record.id, version);
     const retrieved = await adapter.getVersion(record.id, 1);
     expect(retrieved?.content).toEqual({ text: 'original' });
-    expect(retrieved?.entityId).toBe('entity-123');
+    expect(retrieved?.createdBy?.subjectId).toBe('entity-123');
   });
 
   // The `versions` table has no parent_id column: containment bumps no
@@ -2015,8 +2019,7 @@ describe('versions', () => {
         typeId: record.typeId,
         content: { text: 'stale' },
         updatedAt: record.updatedAt,
-        updatedBy: 'entity-stale',
-        updatedVia: 'app-stale',
+        updatedBy: { subjectId: 'entity-stale', principalId: 'app-stale' },
       });
 
       await adapter.mutateRecord(
@@ -2035,7 +2038,7 @@ describe('versions', () => {
       const healed = await adapter.getVersion(record.id, 1);
       expect(healed?.content).toEqual({ text: 'original' });
       expect(healed?.updatedBy).toBeUndefined();
-      expect(healed?.updatedVia).toBeUndefined();
+      expect(healed?.updatedBy?.principalId).toBeUndefined();
 
       const restored = await adapter.restoreVersion(record.id, 1);
       expect(restored.content).toEqual({ text: 'original' });
@@ -2371,48 +2374,52 @@ describe('actor attribution', () => {
   test('createRecord persists the actor columns', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const created = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const created = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
     const read = await adapter.getRecord(created.id);
-    expect(read?.updatedBy).toBe(ACTOR);
-    expect(read?.updatedVia).toBeUndefined();
+    expect(read?.updatedBy?.subjectId).toBe(ACTOR);
+    expect(read?.updatedBy?.principalId).toBeUndefined();
     await adapter.close();
   });
 
   test('every version-bumping verb restamps the actor', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const r = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
 
     await adapter.mutateRecord(
       r.id,
       { contentPatch: { text: 'v2' } },
-      { updatedBy: OTHER, updatedVia: APP },
+      { actor: { subjectId: OTHER, principalId: APP } },
     );
     const read = await adapter.getRecord(r.id);
-    expect([read?.updatedBy, read?.updatedVia]).toEqual([OTHER, APP]);
+    expect([read?.updatedBy?.subjectId, read?.updatedBy?.principalId]).toEqual([OTHER, APP]);
 
     await adapter.mutateRecord(
       r.id,
       { permissions: [{ kind: 'anyone', label: 'read' }] },
-      { updatedBy: ACTOR },
+      { actor: { subjectId: ACTOR } },
     );
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
-    await adapter.deleteRecord(r.id, { updatedBy: OTHER });
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+    await adapter.deleteRecord(r.id, { actor: { subjectId: OTHER } });
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(OTHER);
 
-    await adapter.undeleteRecord(r.id, { updatedBy: ACTOR });
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+    await adapter.undeleteRecord(r.id, { actor: { subjectId: ACTOR } });
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
     await adapter.commitMigration(
       r.id,
       'com.example.test/note@1',
       { text: 'm' },
       {
-        updatedBy: OTHER,
+        actor: { subjectId: OTHER },
       },
     );
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(OTHER);
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(OTHER);
     await adapter.close();
   });
 
@@ -2422,84 +2429,90 @@ describe('actor attribution', () => {
   test('associate()/dissociate() never restamp the actor', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const r = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
 
     await adapter.associate(r.id, { kind: 'tag', label: 'x' });
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
     await adapter.dissociate(r.id, { kind: 'tag', label: 'x' });
-    expect((await adapter.getRecord(r.id))?.updatedBy).toBe(ACTOR);
+    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
     await adapter.close();
   });
 
   test('a mutation naming no actor clears the previous one', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const r = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
 
     await adapter.mutateRecord(r.id, { contentPatch: { text: 'v2' } }, {});
 
     const read = await adapter.getRecord(r.id);
     expect(read?.updatedBy).toBeUndefined();
-    expect(read?.entityId).toBe(ACTOR);
+    expect(read?.createdBy?.subjectId).toBe(ACTOR);
     await adapter.close();
   });
 
   test('version snapshots round-trip the actor', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const r = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
 
     await adapter.mutateRecord(
       r.id,
       { contentPatch: { text: 'v2' } },
       {
-        updatedBy: OTHER,
+        actor: { subjectId: OTHER },
         snapshot: {
           version: 1,
           typeId: r.typeId,
           content: r.content,
           updatedAt: r.updatedAt,
-          entityId: ACTOR,
-          updatedBy: ACTOR,
-          updatedVia: APP,
+          createdBy: { subjectId: ACTOR, principalId: APP },
+          updatedBy: { subjectId: ACTOR, principalId: APP },
         },
       },
     );
 
     const [v1] = await adapter.getVersions(r.id);
-    expect(v1.entityId).toBe(ACTOR);
-    expect(v1.updatedBy).toBe(ACTOR);
-    expect(v1.updatedVia).toBe(APP);
+    expect(v1.createdBy).toEqual({ subjectId: ACTOR, principalId: APP });
+    expect(v1.updatedBy).toEqual({ subjectId: ACTOR, principalId: APP });
     await adapter.close();
   });
 
   test('restoreVersion stamps the restorer, not the restored version', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
-    const r = await adapter.createRecord(makeRecord({ entityId: ACTOR, updatedBy: ACTOR }));
+    const r = await adapter.createRecord(
+      makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
+    );
 
     await adapter.mutateRecord(
       r.id,
       { contentPatch: { text: 'v2' } },
       {
-        updatedBy: OTHER,
+        actor: { subjectId: OTHER },
         snapshot: {
           version: 1,
           typeId: r.typeId,
           content: r.content,
           updatedAt: r.updatedAt,
-          entityId: ACTOR,
-          updatedBy: ACTOR,
+          createdBy: { subjectId: ACTOR },
+          updatedBy: { subjectId: ACTOR },
         },
       },
     );
 
-    await adapter.restoreVersion(r.id, 1, { updatedBy: APP });
+    await adapter.restoreVersion(r.id, 1, { actor: { subjectId: APP } });
 
     const read = await adapter.getRecord(r.id);
     expect(read?.content.text).toBe('Hello world');
-    expect(read?.updatedBy).toBe(APP);
+    expect(read?.updatedBy?.subjectId).toBe(APP);
     await adapter.close();
   });
 });

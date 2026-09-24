@@ -29,6 +29,8 @@ import type {
   JournalQuery,
   RecordJournalEntry,
   StackAdapter,
+  Actor,
+  ChangeActor,
   StackRecord,
   StackType,
   TypeSchema,
@@ -62,6 +64,8 @@ import {
 } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import type {
+  WireActor,
+  WireChangeActor,
   WireRecord,
   WireQueryResponse,
   WireType,
@@ -374,10 +378,20 @@ const parseJsonBody = async (res: Response, method: string, path: string): Promi
 // -------------------------------------------------------
 //
 // Responses only. This adapter is a client: it never reads a request body,
-// so the identity fields a server assigns from the session — entityId,
-// principalId, updatedBy, updatedVia — arrive already decided, and parsing
+// so the identity fields a server assigns from the session — createdBy and
+// updatedBy — arrive already decided, and parsing
 // them is reading an answer rather than accepting a claim.
 // See docs/spec/wire-format.md § Records.
+
+const parseActor = (raw: WireActor): Actor => ({
+  subjectId: raw.subjectId,
+  ...(raw.principalId != null && { principalId: raw.principalId }),
+});
+
+const parseChangeActor = (raw: WireChangeActor): ChangeActor => ({
+  ...parseActor(raw),
+  ...(raw.appId != null && { appId: raw.appId }),
+});
 
 const parseRecord = (raw: WireRecord): StackRecord => {
   const record: StackRecord = {
@@ -389,11 +403,9 @@ const parseRecord = (raw: WireRecord): StackRecord => {
     version: raw.version,
   };
   if (raw.parentId != null) record.parentId = raw.parentId;
-  if (raw.entityId != null) record.entityId = raw.entityId;
   if (raw.appId != null) record.appId = raw.appId;
-  if (raw.principalId != null) record.principalId = raw.principalId;
-  if (raw.updatedBy != null) record.updatedBy = raw.updatedBy;
-  if (raw.updatedVia != null) record.updatedVia = raw.updatedVia;
+  if (raw.createdBy != null) record.createdBy = parseActor(raw.createdBy);
+  if (raw.updatedBy != null) record.updatedBy = parseActor(raw.updatedBy);
   if (raw.deletedAt != null) record.deletedAt = new Date(raw.deletedAt);
   if (raw.unlistedAt != null) record.unlistedAt = new Date(raw.unlistedAt);
   if (raw.permissions != null) record.permissions = raw.permissions;
@@ -465,9 +477,8 @@ const parseVersion = (raw: WireVersion): RecordVersion => {
     content: raw.content,
     updatedAt: new Date(raw.updatedAt),
   };
-  if (raw.entityId != null) v.entityId = raw.entityId;
-  if (raw.updatedBy != null) v.updatedBy = raw.updatedBy;
-  if (raw.updatedVia != null) v.updatedVia = raw.updatedVia;
+  if (raw.createdBy != null) v.createdBy = parseActor(raw.createdBy);
+  if (raw.updatedBy != null) v.updatedBy = parseActor(raw.updatedBy);
   return v;
 };
 
@@ -487,13 +498,7 @@ const parseJournalEntry = (raw: WireJournalEntry): RecordJournalEntry => {
     typeId: raw.typeId,
   };
   if (raw.parentId != null) e.parentId = raw.parentId;
-  if (raw.actor != null) {
-    e.actor = {
-      entityId: raw.actor.entityId,
-      ...(raw.actor.principalId != null && { principalId: raw.actor.principalId }),
-      ...(raw.actor.appId != null && { appId: raw.actor.appId }),
-    };
-  }
+  if (raw.actor != null) e.actor = parseChangeActor(raw.actor);
   if (raw.previousParentId !== undefined) e.previousParentId = raw.previousParentId;
   if (raw.associations != null) e.associations = raw.associations;
   return e;
@@ -526,8 +531,10 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
   if (f.appId !== undefined) appendEach(p, 'appId', f.appId);
-  if (f.entityId !== undefined) appendEach(p, 'entityId', f.entityId);
-  if (f.principalId !== undefined) appendEach(p, 'principalId', f.principalId);
+  if (f.createdBy?.subjectId !== undefined)
+    appendEach(p, 'createdBySubject', f.createdBy.subjectId);
+  if (f.createdBy?.principalId !== undefined)
+    appendEach(p, 'createdByPrincipal', f.createdBy.principalId);
   if (f.createdAt?.before) p.set('createdBefore', f.createdAt.before.toISOString());
   if (f.createdAt?.after) p.set('createdAfter', f.createdAt.after.toISOString());
   if (f.updatedAt?.before) p.set('updatedBefore', f.updatedAt.before.toISOString());
@@ -582,13 +589,7 @@ const parseChange = (raw: WireRecordChange): RecordChange => {
     version: raw.version,
     updatedAt: new Date(raw.updatedAt),
   };
-  if (raw.actor != null) {
-    change.actor = {
-      entityId: raw.actor.entityId,
-      ...(raw.actor.principalId != null && { principalId: raw.actor.principalId }),
-      ...(raw.actor.appId != null && { appId: raw.actor.appId }),
-    };
-  }
+  if (raw.actor != null) change.actor = parseChangeActor(raw.actor);
   if (raw.seq != null) change.seq = raw.seq;
   // A purge carries nothing about the record it destroyed. A conformant
   // server sends neither field on one; dropping them here means a server
@@ -607,7 +608,7 @@ const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
 
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
-  if (f.entityId !== undefined) p.set('entityId', f.entityId);
+  if (f.createdBy !== undefined) p.set('createdBySubject', f.createdBy.subjectId);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
   if (opts.includeUnlisted) p.set('includeUnlisted', 'true');

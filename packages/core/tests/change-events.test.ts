@@ -319,9 +319,9 @@ describe('actor names who performed the change', () => {
 
     await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
 
-    expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
     // The author rides the record, never the envelope.
-    expect(seen[0]!.record!.entityId).toBe(AUTHOR);
+    expect(seen[0]!.record!.createdBy?.subjectId).toBe(AUTHOR);
   });
 
   // associate()/dissociate() never bump, so they never restamp
@@ -339,11 +339,11 @@ describe('actor names who performed the change', () => {
     await stack.asEntity(EDITOR).associate(note.id, { kind: 'tag', label: 'x' });
     await stack.asEntity(EDITOR).dissociate(note.id, { kind: 'tag', label: 'x' });
 
-    expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
-    expect(seen[1]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
+    expect(seen[1]!.actor).toEqual({ subjectId: EDITOR });
     // The record itself was never restamped — no version-bumping write has
     // touched updatedBy since creation, so it still reads the author.
-    expect(seen[1]!.record!.updatedBy).toBe(AUTHOR);
+    expect(seen[1]!.record!.updatedBy?.subjectId).toBe(AUTHOR);
   });
 
   // An actorless associate()/dissociate() must not fall back to
@@ -378,9 +378,11 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.asEntity(APP, { onBehalfOf: EDITOR }).patchContent(note.id, { text: 'edited' });
+    await stack
+      .asActor({ principalId: APP, subjectId: EDITOR })
+      .patchContent(note.id, { text: 'edited' });
 
-    expect(seen[0]!.actor).toEqual({ entityId: EDITOR, principalId: APP });
+    expect(seen[0]!.actor).toEqual({ subjectId: EDITOR, principalId: APP });
   });
 
   test('a purge names the requester, which a destroyed record cannot', async () => {
@@ -390,7 +392,7 @@ describe('actor names who performed the change', () => {
 
     await stack.asEntity(OWNER).delete(note.id, { hard: true });
 
-    expect(seen[0]).toMatchObject({ kind: 'purged', actor: { entityId: OWNER } });
+    expect(seen[0]).toMatchObject({ kind: 'purged', actor: { subjectId: OWNER } });
   });
 
   test('appId rides a create and never a later version', async () => {
@@ -403,13 +405,13 @@ describe('actor names who performed the change', () => {
     const note = await stack.create(
       NOTE,
       { text: 'hello' },
-      { entityId: AUTHOR, appId: 'com.example.app' },
+      { createdBy: { subjectId: AUTHOR }, appId: 'com.example.app' },
     );
     await stack.asEntity(EDITOR).patchContent(note.id, { text: 'edited' });
 
-    expect(seen[0]!.actor).toEqual({ entityId: AUTHOR, appId: 'com.example.app' });
+    expect(seen[0]!.actor).toEqual({ subjectId: AUTHOR, appId: 'com.example.app' });
     // The creating app describes the record, not this change.
-    expect(seen[1]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[1]!.actor).toEqual({ subjectId: EDITOR });
   });
 });
 
@@ -782,20 +784,20 @@ describe('filtering is exact', () => {
     expect(seen).toHaveLength(0);
   });
 
-  test('entityId filters on the record author, not the actor', async () => {
+  test('createdBy filters on the record author, not the actor', async () => {
     await stack.grant({ kind: 'authenticated' }, [
       { actions: ['create', 'read-any', 'update-any'], typeId: NOTE },
     ]);
     const authored = await stack.asEntity(AUTHOR).create(NOTE, { text: 'a' });
     await stack.asEntity(EDITOR).create(NOTE, { text: 'b' });
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { entityId: AUTHOR } });
+    await stack.subscribe(handler, { filter: { createdBy: { subjectId: AUTHOR } } });
 
     // Edited by someone else: the author is what the filter reads.
     await stack.asEntity(EDITOR).patchContent(authored.id, { text: 'edited' });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.actor).toEqual({ entityId: EDITOR });
+    expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
   });
 });
 

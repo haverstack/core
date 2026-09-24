@@ -186,11 +186,11 @@ describe('Stack.create', () => {
       expect(records[0].typeId).toBe('_entity@2');
     });
 
-    test('leaves the created record unauthored (no entityId), matching owner-attributed convention', async () => {
+    test('leaves the created record unauthored (no createdBy), matching owner-attributed convention', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
-      expect(records[0].entityId).toBeUndefined();
+      expect(records[0].createdBy?.subjectId).toBeUndefined();
     });
 
     // The idempotency check cursor-walks every `_entity@1` record, so an
@@ -462,14 +462,18 @@ describe('create', () => {
     expect(record.version).toBe(1);
   });
 
-  test('does not set entityId when none is supplied (owner-created records are implicitly owner-owned)', async () => {
+  test('does not set createdBy when none is supplied (owner-created records are implicitly owner-owned)', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    expect(record.entityId).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBeUndefined();
   });
 
-  test('allows overriding entityId via options', async () => {
-    const record = await stack.create(NOTE_V1, { text: 'hello' }, { entityId: 'other-456' });
-    expect(record.entityId).toBe('other-456');
+  test('allows overriding createdBy via options', async () => {
+    const record = await stack.create(
+      NOTE_V1,
+      { text: 'hello' },
+      { createdBy: { subjectId: 'other-456' } },
+    );
+    expect(record.createdBy?.subjectId).toBe('other-456');
   });
 
   test('sets parentId when provided', async () => {
@@ -507,8 +511,12 @@ describe('create — _group admin bootstrap', () => {
     ]);
   });
 
-  test('stamps the supplied entityId, not the owner, when one is provided', async () => {
-    const group = await stack.create('_group@1', { name: 'New Group' }, { entityId: 'other-456' });
+  test('stamps the supplied createdBy, not the owner, when one is provided', async () => {
+    const group = await stack.create(
+      '_group@1',
+      { name: 'New Group' },
+      { createdBy: { subjectId: 'other-456' } },
+    );
     expect(group.associations).toEqual([
       { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: 'other-456' } },
     ]);
@@ -1478,14 +1486,13 @@ describe('Stack.mutate — the `parentId` key', () => {
 
   // The empty string names nobody, so it is refused rather than quietly
   // dropped — the same answer parentId gives, and for the same reason.
-  test.each(['entityId', 'appId', 'principalId'] as const)(
-    'creating with an empty-string %s is refused',
-    async (field) => {
-      await expect(stack.create(NOTE_V1, { text: 'note' }, { [field]: '' })).rejects.toThrow(
-        StackQueryError,
-      );
-    },
-  );
+  test.each([
+    ['createdBy.subjectId', { createdBy: { subjectId: '' } }],
+    ['createdBy.principalId', { createdBy: { subjectId: 'did:key:zAuthor', principalId: '' } }],
+    ['appId', { appId: '' }],
+  ] as const)('creating with an empty-string %s is refused', async (_field, opts) => {
+    await expect(stack.create(NOTE_V1, { text: 'note' }, opts)).rejects.toThrow(StackQueryError);
+  });
 
   test('parenting to a record that does not exist is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
@@ -3449,9 +3456,9 @@ describe('grant', () => {
       { actions: ['create'], typeId: NOTE_V1 },
     ]);
     expect(records).toHaveLength(1);
-    // The grantee lives in content, not record.entityId — entityId means
+    // The grantee lives in content, not record.createdBy — createdBy means
     // "author", and the owner (who called grant()) authored this record.
-    expect(records[0].entityId).toBeUndefined();
+    expect(records[0].createdBy?.subjectId).toBeUndefined();
     expect(records[0].content).toEqual({
       typeId: NOTE_V1,
       actions: ['create'],
@@ -3463,7 +3470,7 @@ describe('grant', () => {
     const records = await stack.grant({ kind: 'authenticated' }, [
       { actions: ['create'], typeId: NOTE_V1 },
     ]);
-    expect(records[0].entityId).toBeUndefined();
+    expect(records[0].createdBy?.subjectId).toBeUndefined();
     expect(records[0].content).toEqual({
       typeId: NOTE_V1,
       actions: ['create'],
@@ -3491,14 +3498,14 @@ describe('grant', () => {
     expect(await stack.getType('_attachment@1')).not.toBeNull();
   });
 
-  // The grantee lives in content.grantee, not record.entityId,
+  // The grantee lives in content.grantee, not record.createdBy,
   // which means "author" everywhere else — so "everything Alice authored"
   // queries don't pick up grants that merely name her.
   test('an authorship query does not pick up grants naming that entity', async () => {
     await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
       { actions: ['create'], typeId: NOTE_V1 },
     ]);
-    const result = await stack.query({ filter: { entityId: 'entity-abc' } });
+    const result = await stack.query({ filter: { createdBy: { subjectId: 'entity-abc' } } });
     expect(result.records).toHaveLength(0);
   });
 
@@ -4814,11 +4821,11 @@ describe('putAttachment', () => {
     expect(content.filename).toBe('photo.png');
   });
 
-  test('attachment record has no entityId (owner-attributed)', async () => {
+  test('attachment record has no createdBy (owner-attributed)', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
-    expect(result.records[0].entityId).toBeUndefined();
+    expect(result.records[0].createdBy?.subjectId).toBeUndefined();
   });
 });
 
@@ -6086,12 +6093,12 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 3, filename: 'alice.png' },
-      { entityId: 'entity-alice' },
+      { createdBy: { subjectId: 'entity-alice' } },
     );
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 3, filename: 'bob.png' },
-      { entityId: 'entity-bob' },
+      { createdBy: { subjectId: 'entity-bob' } },
     );
 
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
@@ -6827,7 +6834,7 @@ describe('_app.appId bindings', () => {
   });
 });
 
-// entityId resolves through _entity.did exactly as principalId resolves
+// An Actor's subjectId resolves through _entity.did exactly as its principalId resolves
 // through _app.did, so the binding rules are the same ones — a petname card
 // that could be repointed would carry the owner's chosen name onto a key
 // someone else holds.

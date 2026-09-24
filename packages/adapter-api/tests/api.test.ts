@@ -79,7 +79,7 @@ const VERSION_RAW = {
   typeId: 'com.example/note@1',
   content: { text: 'original' },
   updatedAt: '2024-01-01T00:00:00.000Z',
-  entityId: 'entity-owner-123',
+  createdBy: { subjectId: 'entity-owner-123' },
 };
 
 // -------------------------------------------------------
@@ -699,7 +699,7 @@ describe('getRecord', () => {
     const withOptionals = {
       ...RECORD_RAW,
       parentId: 'parent-1',
-      entityId: 'entity-1',
+      createdBy: { subjectId: 'entity-1' },
       appId: 'app-1',
       deletedAt: '2024-06-16T00:00:00.000Z',
       permissions: [{ kind: 'anyone', label: 'read' }],
@@ -708,7 +708,7 @@ describe('getRecord', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(withOptionals));
     const result = await adapter.getRecord('rec-abc123');
     expect(result!.parentId).toBe('parent-1');
-    expect(result!.entityId).toBe('entity-1');
+    expect(result!.createdBy?.subjectId).toBe('entity-1');
     expect(result!.appId).toBe('app-1');
     expect(result!.deletedAt).toBeInstanceOf(Date);
     expect(result!.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
@@ -1347,7 +1347,7 @@ describe('getVersions', () => {
     expect(versions[0].version).toBe(1);
     expect(versions[0].typeId).toBe('com.example/note@1');
     expect(versions[0].updatedAt).toBeInstanceOf(Date);
-    expect(versions[0].entityId).toBe('entity-owner-123');
+    expect(versions[0].createdBy?.subjectId).toBe('entity-owner-123');
   });
 
   // A snapshot describes content and the type it is read under; containment

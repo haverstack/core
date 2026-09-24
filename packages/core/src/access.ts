@@ -221,8 +221,9 @@ export function isGroupAdminAssociation(association: Association): boolean {
  * See docs/spec/access-control.md § Delegation: principal and subject.
  */
 export function isOwnerActingAlone(
-  session: { principalId: EntityId | null; subjectId: EntityId | null },
+  actor: { subjectId: EntityId | null; principalId?: EntityId | null },
   ownerEntityId: EntityId,
 ): boolean {
-  return session.principalId === ownerEntityId && session.subjectId === ownerEntityId;
+  const principalId = actor.principalId === undefined ? actor.subjectId : actor.principalId;
+  return principalId === ownerEntityId && actor.subjectId === ownerEntityId;
 }

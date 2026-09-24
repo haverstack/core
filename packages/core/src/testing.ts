@@ -126,14 +126,13 @@ export class MemoryAdapter implements StackAdapter {
    * names no requester, and carrying the last one forward would attribute
    * it to whoever happened to touch the record before.
    */
-  private bump(record: StackRecord, actor: ActorOptions = {}): StackRecord {
-    const { updatedBy: _by, updatedVia: _via, ...rest } = record;
+  private bump(record: StackRecord, { actor }: ActorOptions = {}): StackRecord {
+    const { updatedBy: _by, ...rest } = record;
     return {
       ...rest,
       version: record.version + 1,
       updatedAt: new Date(),
-      ...(actor.updatedBy && { updatedBy: actor.updatedBy }),
-      ...(actor.updatedVia && { updatedVia: actor.updatedVia }),
+      ...(actor && { updatedBy: actor }),
     };
   }
 
@@ -203,7 +202,7 @@ export class MemoryAdapter implements StackAdapter {
 
     // A change set touching only `associations` doesn't bump — see
     // docs/spec/versioning.md § Version history. `next` already carries
-    // the prior version/updatedAt/updatedBy/updatedVia untouched.
+    // the prior version/updatedAt/updatedBy untouched.
     const updated = opts.bumpsVersion === false ? next : this.bump(next, opts);
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
@@ -285,13 +284,14 @@ export class MemoryAdapter implements StackAdapter {
       const ids = Array.isArray(f.appId) ? f.appId : [f.appId];
       results = results.filter((r) => r.appId !== undefined && ids.includes(r.appId));
     }
-    if (f.entityId !== undefined) {
-      const ids = Array.isArray(f.entityId) ? f.entityId : [f.entityId];
-      results = results.filter((r) => r.entityId !== undefined && ids.includes(r.entityId));
-    }
-    if (f.principalId !== undefined) {
-      const ids = Array.isArray(f.principalId) ? f.principalId : [f.principalId];
-      results = results.filter((r) => r.principalId !== undefined && ids.includes(r.principalId));
+    for (const field of ['subjectId', 'principalId'] as const) {
+      const wanted = f.createdBy?.[field];
+      if (wanted === undefined) continue;
+      const ids = Array.isArray(wanted) ? wanted : [wanted];
+      results = results.filter((r) => {
+        const id = r.createdBy?.[field];
+        return id !== undefined && ids.includes(id);
+      });
     }
     if (f.createdAt?.after) results = results.filter((r) => r.createdAt > f.createdAt!.after!);
     if (f.createdAt?.before) results = results.filter((r) => r.createdAt < f.createdAt!.before!);

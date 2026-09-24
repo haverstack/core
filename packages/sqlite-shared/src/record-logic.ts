@@ -94,6 +94,7 @@ const VERSION_COLUMNS = [
   'content',
   'updated_at',
   'entity_id',
+  'principal_id',
   'updated_by',
   'updated_via',
 ] as const;
@@ -102,9 +103,10 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
   version.typeId,
   JSON.stringify(version.content),
   toMs(version.updatedAt),
-  version.entityId ?? null,
-  version.updatedBy ?? null,
-  version.updatedVia ?? null,
+  version.createdBy?.subjectId ?? null,
+  version.createdBy?.principalId ?? null,
+  version.updatedBy?.subjectId ?? null,
+  version.updatedBy?.principalId ?? null,
 ];
 
 export type SharedSqlRecordLogicDeps = {
@@ -197,8 +199,8 @@ export class SharedSqlRecordLogic {
       [
         ...values,
         now,
-        opts.updatedBy ?? null,
-        opts.updatedVia ?? null,
+        opts.actor?.subjectId ?? null,
+        opts.actor?.principalId ?? null,
         id,
         ...(guarded ? [opts.expectedVersion] : []),
       ],
@@ -256,11 +258,11 @@ export class SharedSqlRecordLogic {
             JSON.stringify(record.content),
             record.version,
             record.parentId ?? null,
-            record.entityId ?? null,
+            record.createdBy?.subjectId ?? null,
             record.appId ?? null,
-            record.principalId ?? null,
-            record.updatedBy ?? null,
-            record.updatedVia ?? null,
+            record.createdBy?.principalId ?? null,
+            record.updatedBy?.subjectId ?? null,
+            record.updatedBy?.principalId ?? null,
             record.deletedAt ? toMs(record.deletedAt) : null,
             record.unlistedAt ? toMs(record.unlistedAt) : null,
           ],
