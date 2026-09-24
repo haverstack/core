@@ -18,11 +18,9 @@ type StackRecord = {
 
   // --- Optional native fields ---
   parentId?: string; // ID of a parent Record (for hierarchy/folders)
-  entityId?: string; // Author Entity. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Access control)
   appId?: string; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
-  principalId?: string; // The authenticated principal, when it isn't the author — a delegated app's own DID. Absent means the writer authenticated as the author (see Identity)
-  updatedBy?: string; // Who performed the most recent mutation. Unlike entityId, it moves with every write (see Authorship and attribution)
-  updatedVia?: string; // The principal behind that mutation, when it isn't updatedBy
+  createdBy?: Actor; // The author. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Authorship and attribution)
+  updatedBy?: Actor; // Who performed the most recent mutation. Unlike createdBy, it moves with every write
   deletedAt?: Date; // Present if soft-deleted
   unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Access control)
   permissions?: AuthorityAssociation[]; // Who reaches this Record (see Access control)
@@ -32,19 +30,32 @@ type StackRecord = {
 
 **Design principle:** native fields are things the library needs to operate (routing, querying, syncing, hierarchy). Everything semantic and domain-specific goes in `content`.
 
+### Actor
+
+"Who did this, and through which principal" is one pair of identities, spelled one way everywhere it appears — on a Record, a [version](./versioning.md#version-history), a [change event](./events.md#attribution) and a [token session](./access-control.md#delegation-principal-and-subject):
+
+```ts
+type Actor = {
+  subjectId: EntityId; // Who the act is attributed to. Governs authorship and -own
+  principalId?: EntityId; // Who authenticated, when it isn't the subject — a delegated app's own DID
+};
+```
+
+**An absent `principalId` means the subject acted as itself.** `Stack` stores a `principalId` equal to `subjectId` as absent, so "acted as itself" has one stored spelling and a present `principalId` is itself the signal that a delegated app wrote. A `TokenSession` is the one Actor that always carries both — `principalId` equal to `subjectId` on an undelegated token — so a server reading it never has to default the field; it passes to `Stack.asActor()` as is.
+
 ### Authorship and attribution
 
-Two different questions, answered by two different pairs of fields.
+Two different questions, answered by two different Actors.
 
-**`entityId` and `principalId` describe the Record.** `entityId` is its author, stamped once by `create()`; it never moves, because "whose Record is this" does not change when someone else edits it. `principalId` is the principal behind that create. Together they are the Record's provenance, and `entityId` is what every `-own` grant resolves against — so a later editor never acquires `-own` standing over what they edited.
+**`createdBy` describes the Record.** Its `subjectId` is the author, stamped once by `create()`; it never moves, because "whose Record is this" does not change when someone else edits it. Its `principalId` is the principal behind that create. Together they are the Record's provenance, and `createdBy.subjectId` is what every `-own` grant resolves against — so a later editor never acquires `-own` standing over what they edited.
 
-**`updatedBy` and `updatedVia` describe the latest mutation.** Every mutation restamps them: `updatedBy` is the requester (the subject), and `updatedVia` names the principal beside it only when the two differ, exactly as `principalId` does for the create. At version 1 the two pairs agree, since a Record's first actor is its author; from version 2 they diverge whenever anyone but the author writes.
+**`updatedBy` describes the latest mutation.** Every mutation restamps it with the requester, naming the principal beside the subject only when the two differ, exactly as `createdBy` does for the create. At version 1 the two agree, since a Record's first actor is its author; from version 2 they diverge whenever anyone but the author writes.
 
 Because a [version snapshot](./versioning.md#version-history) captures the Record as it stood at that version, each snapshot carries the actor that produced it. **A version history is therefore a record of both states and actors**, and the live Record answers for the current version.
 
 - **Absent means unknown, never "the author".** An unscoped `Stack` names no requester, so it writes no actor — and clears any the Record carried, rather than leaving the previous one in place to be read as this one.
-- **Neither is a permission input.** No grant, permission entry or gate resolves against `updatedBy`. It is an audit fact, not an authority one, and reading it as authority would let a write-holder acquire standing by touching a Record.
-- **Both are assigned from the authenticated session** and ignored on input, on the same terms and for the same reason as `entityId` and `principalId` — see [Wire format § Records](./wire-format.md#records).
+- **`updatedBy` is not a permission input.** No grant, permission entry or gate resolves against it. It is an audit fact, not an authority one, and reading it as authority would let a write-holder acquire standing by touching a Record.
+- **Both are assigned from the authenticated session** and ignored on input — see [Wire format § Records](./wire-format.md#records).
 - **`restoreVersion()` stamps the restorer.** A rollback is a write by whoever performs it, so it never restores the stamp along with the content.
 
 ### Record IDs
@@ -76,7 +87,7 @@ The same rules are enforced locally, so a client-minted ID behaves identically w
 
 - **Unconditional on unscoped `Stack.create()`** — the same full-trust context as the `id` option above.
 - **Owner-only on `ScopedStack.create()`.** Refused to everyone but the stack owner acting alone (undelegated, authenticated as themselves — the same `ownerActingAlone` tier that already gates hard delete, `commitMigration()`, and `includeUnlisted`): a grantee, or a delegated app acting for the owner, could otherwise forge a sort position through `createdAt` the same way the `id` skew check exists to stop it forging one through `id`. `ScopedStack.create()` refuses both fields outright for anyone else.
-- **Owner-authenticated only, over the wire.** `POST /records` may carry `createdAt`/`updatedAt` when the request authenticates as the stack owner acting alone. Unlike `entityId`/`principalId`, this is **not** inherited from `ScopedStack` for free: those are silently overridden, while `createdAt`/`updatedAt` are refused outright, and every client sends both fields on every create (a record body is a whole record). A server must therefore drop them from a non-owner body itself — forwarding one unfiltered turns an ordinary grantee create into a `StackPermissionError` rather than a create stamped with the current time. See [Wire format § Records](./wire-format.md#records).
+- **Owner-authenticated only, over the wire.** `POST /records` may carry `createdAt`/`updatedAt` when the request authenticates as the stack owner acting alone. Unlike `createdBy`, this is **not** inherited from `ScopedStack` for free: that is silently overridden, while `createdAt`/`updatedAt` are refused outright, and every client sends both fields on every create (a record body is a whole record). A server must therefore drop them from a non-owner body itself — forwarding one unfiltered turns an ordinary grantee create into a `StackPermissionError` rather than a create stamped with the current time. See [Wire format § Records](./wire-format.md#records).
 - **`id` and `createdAt` must agree.** Omit `id` and it's derived from `createdAt`'s timestamp, so the two can't diverge. Supply both, and they're checked against each other using the same `idTimestampSkewMs` tolerance the `id`-vs-current-time check above uses (default 24 hours; `null` disables this check too) — disagreement beyond that tolerance throws `StackValidationError` rather than silently diverging. Supplying `id` alone, with no `createdAt`, is unaffected: that stays a pure position choice, exactly as before this option existed — including for the owner, whose plain `id`-only creates through `ScopedStack` still get the ordinary `id`-vs-current-time check, not this one.
 - **`updatedAt` defaults to `createdAt`**, not to the actual current time, so a plain import doesn't fabricate a fake edit and inflate version history. Supplying an `updatedAt` earlier than `createdAt` is a validation error — including when `createdAt` was left to default to now.
 - **Both fields must be valid, representable Dates.** An `Invalid Date` (what `new Date()` yields for a malformed date string, a common shape for a bad row in an imported corpus) is a `StackValidationError`, not a record: its `getTime()` is `NaN`, and every comparison against `NaN` is false, so an unchecked one would switch off the ordering and skew checks above rather than fail them. The representable range is the range a record ID's 9-character timestamp prefix can encode — `1970-01-01T00:00:00.000Z` through `3084-12-12T12:41:28.831Z` — since a `createdAt` outside it has no ID that can agree with it. Content genuinely dated outside that window belongs in the record's own content fields, not in `createdAt`.
@@ -167,7 +178,7 @@ type RelationshipTarget =
 
 ### Reparenting
 
-**`parentId` is the one native field a write-holder may change after creation**, through [`mutate()`](#mutations)'s `parentId` key — `null` moves the record to the root. It is a [no-bump write](./versioning.md#version-history) that appends a journal entry carrying `previousParentId` and emits a change event. Every other native field is either create-only (`id`, `createdAt`, `entityId`, `appId`, `principalId`), stamped by the write itself (`version`, `updatedAt`, `updatedBy`, `updatedVia`), or reached through a key or verb carrying its own authority (`permissions`, `unlistedAt`, `deletedAt`, `typeId`).
+**`parentId` is the one native field a write-holder may change after creation**, through [`mutate()`](#mutations)'s `parentId` key — `null` moves the record to the root. It is a [no-bump write](./versioning.md#version-history) that appends a journal entry carrying `previousParentId` and emits a change event. Every other native field is either create-only (`id`, `createdAt`, `createdBy`, `appId`), stamped by the write itself (`version`, `updatedAt`, `updatedBy`), or reached through a key or verb carrying its own authority (`permissions`, `unlistedAt`, `deletedAt`, `typeId`).
 
 **Moving a record confers nothing.** Containment is not an access-control edge, so nothing is inherited from a container and nothing cascades out of one. A move changes which queries and feeds enumerate the record, and nothing about who may read it.
 
@@ -409,8 +420,7 @@ type Filter = {
   baseId?: string | string[]; // matches every version of a type family
   parentId?: string | null; // null = root records only
   appId?: string | string[];
-  entityId?: string | string[];
-  principalId?: string | string[];
+  createdBy?: { subjectId?: string | string[]; principalId?: string | string[] }; // the author, never the latest actor
   createdAt?: DateRange;
   updatedAt?: DateRange;
 

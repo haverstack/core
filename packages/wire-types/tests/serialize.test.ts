@@ -36,44 +36,49 @@ describe('serializeRecord', () => {
     });
   });
 
-  it('carries authorship and attribution as four distinct fields', () => {
+  it('carries authorship and attribution as two distinct actors', () => {
     const w = serializeRecord(
-      record({ entityId: AUTHOR, principalId: APP, updatedBy: EDITOR, updatedVia: APP }),
+      record({
+        createdBy: { subjectId: AUTHOR, principalId: APP },
+        updatedBy: { subjectId: EDITOR, principalId: APP },
+      }),
     );
-    expect(w.entityId).toBe(AUTHOR);
-    expect(w.principalId).toBe(APP);
-    expect(w.updatedBy).toBe(EDITOR);
-    expect(w.updatedVia).toBe(APP);
+    expect(w.createdBy).toEqual({ subjectId: AUTHOR, principalId: APP });
+    expect(w.updatedBy).toEqual({ subjectId: EDITOR, principalId: APP });
   });
 
   // Absent means unknown, and it has to survive the wire as absent: a key
   // present with a null value would read back as a value.
   it('omits an absent actor rather than encoding a null', () => {
-    const w = serializeRecord(record({ entityId: AUTHOR }));
+    const w = serializeRecord(record({ createdBy: { subjectId: AUTHOR } }));
     expect('updatedBy' in w).toBe(false);
-    expect('updatedVia' in w).toBe(false);
     expect(JSON.parse(JSON.stringify(w))).not.toHaveProperty('updatedBy');
   });
 
-  it('omits updatedVia alone when a write is undelegated', () => {
-    const w = serializeRecord(record({ entityId: AUTHOR, updatedBy: EDITOR }));
-    expect(w.updatedBy).toBe(EDITOR);
-    expect('updatedVia' in w).toBe(false);
+  it('omits principalId alone when a write is undelegated', () => {
+    const w = serializeRecord(
+      record({ createdBy: { subjectId: AUTHOR }, updatedBy: { subjectId: EDITOR } }),
+    );
+    expect(w.updatedBy).toEqual({ subjectId: EDITOR });
+    expect('principalId' in w.updatedBy!).toBe(false);
   });
 });
 
 describe('serializeVersion', () => {
   it('carries the author and the actor of that version separately', () => {
-    const w = serializeVersion(version({ entityId: AUTHOR, updatedBy: EDITOR, updatedVia: APP }));
-    expect(w.entityId).toBe(AUTHOR);
-    expect(w.updatedBy).toBe(EDITOR);
-    expect(w.updatedVia).toBe(APP);
+    const w = serializeVersion(
+      version({
+        createdBy: { subjectId: AUTHOR },
+        updatedBy: { subjectId: EDITOR, principalId: APP },
+      }),
+    );
+    expect(w.createdBy).toEqual({ subjectId: AUTHOR });
+    expect(w.updatedBy).toEqual({ subjectId: EDITOR, principalId: APP });
   });
 
   it('omits an absent actor', () => {
-    const w = serializeVersion(version({ entityId: AUTHOR }));
+    const w = serializeVersion(version({ createdBy: { subjectId: AUTHOR } }));
     expect('updatedBy' in w).toBe(false);
-    expect('updatedVia' in w).toBe(false);
   });
 
   it('encodes updatedAt as an ISO string', () => {

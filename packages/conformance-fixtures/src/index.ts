@@ -349,14 +349,14 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
   {
     name: 'create-record-ignores-client-supplied-entity-and-principal',
     description:
-      'entityId and principalId are assigned by the server from the authenticated session, so a ' +
-      'body carrying them is ignored rather than honoured — here the session is an undelegated ' +
-      'contributor, so the response names that contributor as author and omits principalId ' +
-      'entirely, discarding both values the client sent. These are the two fields that answer ' +
-      '"who did this", and principalId exists to be the one a client cannot assert: honouring ' +
-      'it would let any requester dress a write up as a verified app action and defeat the _app ' +
-      'cross-check that reads it. updatedBy and updatedVia answer the same question about the ' +
-      'mutation rather than the record, so they are assigned and ignored on the same terms. ' +
+      'createdBy is assigned by the server from the authenticated session, so a body carrying ' +
+      'it is ignored rather than honoured — here the session is an undelegated contributor, so ' +
+      'the response names that contributor as subjectId and omits principalId entirely, ' +
+      'discarding both values the client sent. The pair answers "who did this", and principalId ' +
+      'exists to be the half a client cannot assert: honouring it would let any requester dress ' +
+      'a write up as a verified app action and defeat the _app cross-check that reads it. ' +
+      'updatedBy answers the same question about the mutation rather than the record, so it is ' +
+      'assigned and ignored on the same terms. ' +
       'appId is the deliberate exception, self-reported by design. ' +
       'See docs/spec/wire-format.md § Records.',
     method: 'POST',
@@ -368,10 +368,14 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Forged', body: 'World' },
       version: 1,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      principalId: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
-      updatedBy: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      updatedVia: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      createdBy: {
+        subjectId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+        principalId: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      },
+      updatedBy: {
+        subjectId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+        principalId: 'did:key:z6MkfNotesAppKeyClaimedByTheClient00000000000000',
+      },
       appId: 'com.example.myapp',
     },
     responseStatus: 200,
@@ -382,16 +386,16 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: { title: 'Forged', body: 'World' },
       version: 1,
-      entityId: 'entity-contributor-789',
-      updatedBy: 'entity-contributor-789',
+      createdBy: { subjectId: 'entity-contributor-789' },
+      updatedBy: { subjectId: 'entity-contributor-789' },
       appId: 'com.example.myapp',
     },
   },
   {
     name: 'create-record-response-carries-principal-under-delegation',
     description:
-      'A write made by a delegated app comes back with entityId naming the subject it acted for ' +
-      'and principalId naming the app that authenticated — the pair a reader needs to tell ' +
+      'A write made by a delegated app comes back with createdBy.subjectId naming the subject it ' +
+      'acted for and createdBy.principalId naming the app that authenticated — the pair a reader needs to tell ' +
       'verified app attribution from a bare appId self-report. An undelegated write omits ' +
       'principalId (see create-record above), so its presence is itself the signal. ' +
       'See docs/spec/identity.md § Attribution and what can be trusted.',
@@ -414,10 +418,14 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: { body: 'Posted through a blog server' },
       version: 1,
-      entityId: 'entity-contributor-789',
-      principalId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      updatedBy: 'entity-contributor-789',
-      updatedVia: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      createdBy: {
+        subjectId: 'entity-contributor-789',
+        principalId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      },
+      updatedBy: {
+        subjectId: 'entity-contributor-789',
+        principalId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      },
       appId: 'com.example.blog',
     },
   },
@@ -426,7 +434,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     description:
       'mimeType is a property of the fileId, established by the first _attachment@1 ' +
       'record ever created for it. A second upload of the same bytes that declares a matching ' +
-      'mimeType succeeds and gets its own record — its own id, entityId, and filename — rather ' +
+      'mimeType succeeds and gets its own record — its own id, createdBy, and filename — rather ' +
       'than being deduplicated away. Assumes the requester is the owner (generic ' +
       'POST /records for _attachment@1 is owner-only — see ' +
       'error-permission-denied-attachment-non-owner-create and ' +
@@ -788,10 +796,10 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
     name: 'patch-record-restamps-the-actor',
     description:
       'A write by someone other than the author moves updatedBy to the requester and leaves ' +
-      'entityId alone — the record keeps its author, and gains a record of who last changed ' +
-      'it. Under delegation updatedVia names the app alongside it, exactly as principalId does ' +
-      'for the create. Both are assigned from the session and ignored on input, like entityId ' +
-      'and principalId. See docs/spec/data-model.md § Authorship and attribution.',
+      'createdBy alone — the record keeps its author, and gains a record of who last changed ' +
+      'it. Under delegation updatedBy.principalId names the app alongside it, exactly as ' +
+      'createdBy.principalId does for the create. Both are assigned from the session and ' +
+      'ignored on input. See docs/spec/data-model.md § Authorship and attribution.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { contentPatch: { title: 'edited by a contributor' } },
@@ -803,8 +811,8 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       updatedAt: '2024-01-02T00:00:00.000Z',
       content: { title: 'edited by a contributor' },
       version: 2,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      updatedBy: 'entity-contributor-789',
+      createdBy: { subjectId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK' },
+      updatedBy: { subjectId: 'entity-contributor-789' },
     },
   },
   {
@@ -1438,7 +1446,7 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
       'GET /records/:id/versions for a non-owner write-holder — who passes the mutate-surface ' +
       'gate above — returns exactly what the owner sees. A snapshot carries content and the ' +
       'typeId it is read under, and nothing a reader who already passed that gate is denied: ' +
-      'entityId and updatedBy/updatedVia are the same class of fact as the author on the live ' +
+      'createdBy and updatedBy are the same class of fact as the author on the live ' +
       'record. See docs/spec/versioning.md § History access.',
     method: 'GET',
     path: '/records/1hk153x00001/versions',
@@ -1449,8 +1457,8 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
         typeId: 'com.example/note@1',
         content: { title: 'original title' },
         updatedAt: '2024-01-01T00:00:00.000Z',
-        entityId: 'entity-contributor-789',
-        updatedBy: 'entity-contributor-789',
+        createdBy: { subjectId: 'entity-contributor-789' },
+        updatedBy: { subjectId: 'entity-contributor-789' },
       },
     ],
   },
@@ -1673,7 +1681,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           ops: ['create'],
           version: 1,
           typeId: 'com.example/note@1',
-          actor: { entityId: 'entity-owner-123' },
+          actor: { subjectId: 'entity-owner-123' },
         },
         {
           seq: 2,
@@ -1682,7 +1690,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           ops: ['associate'],
           version: 1,
           typeId: 'com.example/note@1',
-          actor: { entityId: 'entity-contributor-789' },
+          actor: { subjectId: 'entity-contributor-789' },
           associations: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }],
         },
       ],
@@ -1736,7 +1744,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           ops: ['associate'],
           version: 1,
           typeId: 'com.example/note@1',
-          actor: { entityId: 'entity-owner-123' },
+          actor: { subjectId: 'entity-owner-123' },
           associations: [
             {
               op: 'repoint',
@@ -1780,7 +1788,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           ops: ['dissociate'],
           version: 1,
           typeId: 'com.example/note@1',
-          actor: { entityId: 'entity-owner-123' },
+          actor: { subjectId: 'entity-owner-123' },
           associations: [
             {
               op: 'remove',
@@ -1822,7 +1830,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           typeId: 'com.example/note@1',
           parentId: '1hk153x0000f',
           previousParentId: null,
-          actor: { entityId: 'entity-owner-123' },
+          actor: { subjectId: 'entity-owner-123' },
         },
       ],
       cursor: null,
@@ -3571,7 +3579,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-01T00:00:00.000Z',
             content: { title: 'Hello' },
             version: 1,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -3585,7 +3593,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 1,
               updatedAt: '2024-01-01T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -3621,8 +3629,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'edited by a contributor' },
             version: 2,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_CONTRIBUTOR,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_CONTRIBUTOR },
           },
         },
         frames: [
@@ -3636,7 +3644,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
-              actor: { entityId: FEED_CONTRIBUTOR },
+              actor: { subjectId: FEED_CONTRIBUTOR },
             },
           },
         ],
@@ -3670,7 +3678,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-01T00:00:00.000Z',
             content: { title: 'Hello', body: 'World' },
             version: 1,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
             associations: [{ kind: 'tag', label: 'starred' }],
           },
         },
@@ -3685,7 +3693,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 1,
               updatedAt: '2024-01-01T00:00:00.000Z',
-              actor: { entityId: FEED_CONTRIBUTOR },
+              actor: { subjectId: FEED_CONTRIBUTOR },
               associationsAdded: [{ kind: 'tag', label: 'starred' }],
             },
           },
@@ -3720,7 +3728,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-01T00:00:00.000Z',
             content: { title: 'Hello', body: 'World' },
             version: 1,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -3734,7 +3742,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 1,
               updatedAt: '2024-01-01T00:00:00.000Z',
-              actor: { entityId: FEED_CONTRIBUTOR },
+              actor: { subjectId: FEED_CONTRIBUTOR },
               associationsRemoved: [{ kind: 'tag', label: 'starred' }],
             },
           },
@@ -3767,7 +3775,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-03T00:00:00.000Z',
             content: { title: 'Hello' },
             version: 3,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
             deletedAt: '2024-01-03T00:00:00.000Z',
           },
         },
@@ -3782,7 +3790,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 3,
               updatedAt: '2024-01-03T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -3820,7 +3828,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
             version: 2,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
             unlistedAt: '2024-01-03T00:00:00.000Z',
           },
         },
@@ -3835,7 +3843,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -3873,7 +3881,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
             version: 2,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
             parentId: '1hk153x0000g',
           },
         },
@@ -3889,7 +3897,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
               parentId: '1hk153x0000g',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -3924,7 +3932,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Hello' },
             version: 2,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -3938,7 +3946,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -3973,7 +3981,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-04T00:00:00.000Z',
             content: { title: 'Edited while unlisted' },
             version: 4,
-            entityId: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
             unlistedAt: '2024-01-03T00:00:00.000Z',
           },
         },
@@ -4014,7 +4022,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             content: { title: 'Gone', body: 'Destroyed' },
             version: 1,
             parentId: '1hk153x0000f',
-            entityId: 'entity-owner-123',
+            createdBy: { subjectId: 'entity-owner-123' },
           },
         },
         frames: [
@@ -4028,7 +4036,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 4,
               updatedAt: '2024-01-04T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -4064,8 +4072,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'Updated title' },
             version: 2,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -4079,7 +4087,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
               record: {
                 id: '1hk153x00001',
                 typeId: 'com.example/note@1',
@@ -4087,8 +4095,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
                 updatedAt: '2024-01-02T00:00:00.000Z',
                 content: { title: 'Updated title' },
                 version: 2,
-                entityId: FEED_OWNER,
-                updatedBy: FEED_OWNER,
+                createdBy: { subjectId: FEED_OWNER },
+                updatedBy: { subjectId: FEED_OWNER },
               },
             },
           },
@@ -4127,8 +4135,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'private' },
             version: 2,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
             permissions: [],
           },
         },
@@ -4149,8 +4157,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { title: 'shared' },
             version: 2,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -4164,7 +4172,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@1',
               version: 2,
               updatedAt: '2024-01-02T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -4198,8 +4206,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-02T00:00:00.000Z',
             content: { url: 'https://example.com' },
             version: 2,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [],
@@ -4222,8 +4230,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             updatedAt: '2024-01-05T00:00:00.000Z',
             content: { title: 'Hello', tags: [] },
             version: 5,
-            entityId: FEED_OWNER,
-            updatedBy: FEED_OWNER,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
           },
         },
         frames: [
@@ -4237,7 +4245,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@2',
               version: 5,
               updatedAt: '2024-01-05T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -4284,7 +4292,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           typeId: 'com.example/note@1',
           version: 2,
           updatedAt: '2024-01-02T00:00:00.000Z',
-          actor: { entityId: FEED_OWNER },
+          actor: { subjectId: FEED_OWNER },
         },
       },
     ],
@@ -4326,8 +4334,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
                 updatedAt: '2024-01-02T00:00:00.000Z',
                 content: { title: 'first' },
                 version: 2,
-                entityId: FEED_OWNER,
-                updatedBy: FEED_OWNER,
+                createdBy: { subjectId: FEED_OWNER },
+                updatedBy: { subjectId: FEED_OWNER },
               },
             },
             frames: [
@@ -4341,7 +4349,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
                   typeId: 'com.example/note@1',
                   version: 2,
                   updatedAt: '2024-01-02T00:00:00.000Z',
-                  actor: { entityId: FEED_OWNER },
+                  actor: { subjectId: FEED_OWNER },
                 },
               },
             ],
@@ -4369,8 +4377,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
               updatedAt: '2024-01-03T00:00:00.000Z',
               content: { title: 'second' },
               version: 3,
-              entityId: FEED_OWNER,
-              updatedBy: FEED_OWNER,
+              createdBy: { subjectId: FEED_OWNER },
+              updatedBy: { subjectId: FEED_OWNER },
             },
           },
         ],
@@ -4387,7 +4395,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
               typeId: 'com.example/note@1',
               version: 3,
               updatedAt: '2024-01-03T00:00:00.000Z',
-              actor: { entityId: FEED_OWNER },
+              actor: { subjectId: FEED_OWNER },
             },
           },
         ],

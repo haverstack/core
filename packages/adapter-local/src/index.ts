@@ -24,6 +24,7 @@ import type {
   StackType,
   TypeId,
   RecordVersion,
+  Actor,
   ActorOptions,
   StackQuery,
   QueryResult,
@@ -337,11 +338,11 @@ export class LocalAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async createToken(
-    principalId: string,
-    opts?: { onBehalfOf?: string; label?: string; expiresAt?: Date },
+    actor: Actor,
+    opts?: { label?: string; expiresAt?: Date },
   ): Promise<{ id: string; token: string }> {
     const store = await this.getTokenStore();
-    return store.createToken(principalId, opts);
+    return store.createToken(actor, opts);
   }
 
   async lookupToken(token: string): Promise<TokenSession | null> {

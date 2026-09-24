@@ -97,25 +97,23 @@ Permission-wise the two are equivalent: **a subscriber who may not read a record
 
 ## Attribution
 
-**The envelope describes the change; the record describes the record.** `actor` is who performed the change, and it is the only identity the envelope carries:
+**The envelope describes the change; the record describes the record.** `actor` is who performed the change, and it is the only identity the envelope carries — an [Actor](./data-model.md#actor), plus the app when there is one to name:
 
 ```ts
-type ChangeActor = {
-  entityId: EntityId; // the subject
-  principalId?: EntityId; // the principal, when delegated
+type ChangeActor = Actor & {
   appId?: AppId; // self-reported at create, never a trust input
 };
 ```
 
-The record's own provenance — `entityId`, `appId`, `principalId` as stored — is deliberately **not** in the envelope. Those fields mean _author_, frozen at creation, and a `RecordChange` carrying a field named `entityId` reads as "the entity behind this change", which is a different fact. A consumer that wants the record's fields asks for `record`, where they describe what they actually describe.
+The record's own provenance — `createdBy` and `appId` as stored — is deliberately **not** in the envelope. Those fields mean _author_, frozen at creation, and the envelope's one Actor is always this change's. A consumer that wants the record's fields asks for `record`, where they describe what they actually describe.
 
 **`actor` is absent when unknown**, which means a write by an unscoped `Stack` — it has no requester to name. **Absent means unknown; it never means "the author"**, and a consumer must not substitute one for the other.
 
-**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` and `updatedVia` are stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Hard delete and the no-bump verbs are the exceptions.** Hard delete destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it. `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` don't bump either, so they don't stamp `updatedBy`/`updatedVia` on the record — but unlike hard delete they aren't owner-only, so their actor still has to reflect whoever actually made the call. It travels the same way a purge's does: read off the request rather than off the record, which in this case simply was never touched.
+**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` is stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Hard delete and the no-bump verbs are the exceptions.** Hard delete destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it. `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` don't bump either, so they don't stamp `updatedBy` on the record — but unlike hard delete they aren't owner-only, so their actor still has to reflect whoever actually made the call. It travels the same way a purge's does: read off the request rather than off the record, which in this case simply was never touched.
 
 `appId` rides a `created` frame only. It is self-reported at create and never recorded per mutation, so on any later version the record's `appId` is the _creating_ app — record provenance, not this change's actor.
 
-**Attribution is record-level, not history-grade.** [Prior state is excluded](#prior-state-is-not-in-the-envelope) because history is gated on the mutate surface while a feed's gate is plain `canRead`. That argument is about prior _content_ — the revision someone deliberately edited out. Knowing that a record changed, and who changed it, reveals nothing about what was removed; and identity is already record-level, since `entityId` sits on the record where every reader sees it. "Who wrote version 7" is the same class of fact as "who wrote version 1".
+**Attribution is record-level, not history-grade.** [Prior state is excluded](#prior-state-is-not-in-the-envelope) because history is gated on the mutate surface while a feed's gate is plain `canRead`. That argument is about prior _content_ — the revision someone deliberately edited out. Knowing that a record changed, and who changed it, reveals nothing about what was removed; and identity is already record-level, since `createdBy` sits on the record where every reader sees it. "Who wrote version 7" is the same class of fact as "who wrote version 1".
 
 ## Purged records carry nothing
 
@@ -127,7 +125,7 @@ The hazard is not disclosure at emission, which is already bounded — a subscri
 
 What follows is worth keeping deliberately: **a purge event tells you to forget something you already knew, and tells someone who never knew it nothing.** `recordId` is opaque, so a subscriber holding the record can evict it and one that never held it learns nothing it could act on.
 
-Filtering is unaffected: the emitter holds the record it destroyed, so a subscription filtered by `parentId` or `entityId` still receives exactly the purges that match. Those fields decide delivery without appearing in what is delivered.
+Filtering is unaffected: the emitter holds the record it destroyed, so a subscription filtered by `parentId` or `createdBy` still receives exactly the purges that match. Those fields decide delivery without appearing in what is delivered.
 
 ## Soft-deleted records reach the feed as tombstones
 
@@ -184,7 +182,7 @@ An optional method checked for truthiness at the call site, per [Adapters § Ada
 
 `onError` here is the relay's own trouble — a connection it could not restore — rather than a subscriber's, and `onReset` is the gap that leaves. A relay reports what it is told and decides nothing, so it has no handler of its own to route errors from.
 
-**One relay per subscription, carrying that subscription's filter.** The filter travels rather than being applied to what comes back, because `entityId` and `parentId` are answerable only where the record is: the far end holds it, and this end never will. Sharing one relay across subscriptions would mean either re-deriving those filters locally without the record, or subscribing unfiltered and paying for every change on every subscription.
+**One relay per subscription, carrying that subscription's filter.** The filter travels rather than being applied to what comes back, because `createdBy` and `parentId` are answerable only where the record is: the far end holds it, and this end never will. Sharing one relay across subscriptions would mean either re-deriving those filters locally without the record, or subscribing unfiltered and paying for every change on every subscription.
 
 **A relayed frame is delivered as it arrives.** It was filtered and permission-checked by the emitter that produced it, against the record it held, and nothing here re-derives that decision — a `purged` frame in particular leaves nothing to decide with. It goes to the subscriber that opened the relay, never through the local emitter, which would hand every other subscriber a stream it did not ask for. Errors from a throwing handler route exactly as they do for a local event.
 
@@ -211,7 +209,7 @@ type SubscribeOptions = {
 type ChangeFilter = {
   typeId?: TypeId | TypeId[]; // matched by baseId, as grants are
   parentId?: RecordId | null;
-  entityId?: EntityId; // the record's author, not the actor
+  createdBy?: { subjectId: EntityId }; // the record's author, not the actor
   kinds?: ChangeKind[];
 };
 

@@ -511,7 +511,7 @@ describe('ScopedStack — write access', () => {
   test('a permissions change set rejects a write-access holder that is not creator or stack owner', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
           { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
@@ -547,7 +547,7 @@ describe('ScopedStack.mutate — the `unlisted` key', () => {
   test('rejects write-access holder that is not creator or stack owner', async () => {
     const record = await adapter.createRecord(
       makeRecord({
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
           { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
@@ -570,7 +570,7 @@ describe('ScopedStack.mutate — the `unlisted` key', () => {
   });
 
   test('the record creator (not stack owner) may toggle it', async () => {
-    const record = await adapter.createRecord(makeRecord({ entityId: MEMBER }));
+    const record = await adapter.createRecord(makeRecord({ createdBy: { subjectId: MEMBER } }));
     await stack.asEntity(MEMBER).mutate(record.id, { unlisted: true });
     expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
   });
@@ -583,7 +583,7 @@ describe('ScopedStack.mutate — the `unlisted` key', () => {
 
 describe('ScopedStack mutators return the record they produced', () => {
   test('associate, dissociate and permissions/unlisted change sets all answer', async () => {
-    const record = await adapter.createRecord(makeRecord({ entityId: OWNER }));
+    const record = await adapter.createRecord(makeRecord({ createdBy: { subjectId: OWNER } }));
     const scoped = stack.asEntity(OWNER);
 
     const associated = await scoped.associate(record.id, { kind: 'tag', label: 'favourite' });
@@ -698,8 +698,12 @@ describe('ScopedStack — record-existence disclosure', () => {
       { actions: ['read-own', 'update-own'], typeId: NOTE },
     ]);
     const view = stack.asEntity(MEMBER);
-    const own = await stack.create(NOTE, { text: 'mine' }, { entityId: MEMBER });
-    const theirs = await stack.create(NOTE, { text: 'theirs' }, { entityId: STRANGER });
+    const own = await stack.create(NOTE, { text: 'mine' }, { createdBy: { subjectId: MEMBER } });
+    const theirs = await stack.create(
+      NOTE,
+      { text: 'theirs' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     // Reachable through the grant, so the refusal may name itself...
     expect((await view.get(own.id))?.id).toBe(own.id);
@@ -812,7 +816,7 @@ describe('ScopedStack — versions', () => {
       typeId: NOTE,
       content: { title: 'snapshotted' },
       updatedAt: new Date(0),
-      entityId: 'someone-else',
+      createdBy: { subjectId: 'someone-else' },
     });
 
     const [memberList, memberSingle] = await Promise.all([
@@ -826,7 +830,7 @@ describe('ScopedStack — versions', () => {
 
     expect(memberList).toEqual(ownerList);
     expect(memberSingle).toEqual(ownerSingle);
-    expect(memberList[0].entityId).toBe('someone-else');
+    expect(memberList[0].createdBy?.subjectId).toBe('someone-else');
   });
 
   test('getVersions/getVersion on a group require admin, not just membership', async () => {
@@ -927,7 +931,7 @@ describe('ScopedStack — versions', () => {
     test('an owner principal acting for someone else is not exempt', async () => {
       const record = await photoRecordWithUnreachableSnapshot();
       await expect(
-        stack.asEntity(OWNER, { onBehalfOf: MEMBER }).restoreVersion(record.id, 1),
+        stack.asActor({ principalId: OWNER, subjectId: MEMBER }).restoreVersion(record.id, 1),
       ).rejects.toThrow(StackPermissionError);
     });
 
@@ -1072,7 +1076,7 @@ describe('ScopedStack.query', () => {
     });
 
     test('an owner-delegated app does not inherit it', async () => {
-      const scoped = stack.asEntity('app-did', { onBehalfOf: OWNER });
+      const scoped = stack.asActor({ principalId: 'app-did', subjectId: OWNER });
       await expect(scoped.query({ filter: { includeUnlisted: true } })).rejects.toThrow(
         StackPermissionError,
       );
@@ -1102,24 +1106,24 @@ describe('ScopedStack.create', () => {
     expect(record.typeId).toBe(COMMENT);
   });
 
-  // A scoped write always names its author, so an absent entityId means
+  // A scoped write always names its author, so an absent createdBy means
   // exactly one thing: an unscoped Stack wrote the record.
-  test('owner writing through asEntity(ownerEntityId) stamps entityId', async () => {
+  test('owner writing through asEntity(ownerEntityId) stamps createdBy', async () => {
     const record = await stack.asEntity(OWNER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBe(OWNER);
-    expect(record.principalId).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBe(OWNER);
+    expect(record.createdBy?.principalId).toBeUndefined();
   });
 
-  test('a non-owner entity still gets entityId stamped as the author', async () => {
+  test('a non-owner entity still gets createdBy stamped as the author', async () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['create'], typeId: COMMENT },
     ]);
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
   // Owner bypasses grants entirely (checkAccess's owner shortcut), so an
-  // owner-authored record carrying no entityId can never accidentally
+  // owner-authored record carrying no createdBy can never accidentally
   // satisfy a *different* requester's -own grant check — pinning the claim
   // that this normalization doesn't regress -own semantics.
   test('a stranger with a -own grant cannot use it against an owner-authored record', async () => {
@@ -1152,7 +1156,7 @@ describe('ScopedStack.create', () => {
     ]);
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
     expect(record.typeId).toBe(COMMENT);
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
   test('entity cannot create a type other than the one granted', async () => {
@@ -1167,7 +1171,7 @@ describe('ScopedStack.create', () => {
   test('an authenticated-tier grant allows any authenticated entity to create', async () => {
     await stack.grant({ kind: 'authenticated' }, [{ actions: ['create'], typeId: COMMENT }]);
     const record = await stack.asEntity(STRANGER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBe(STRANGER);
+    expect(record.createdBy?.subjectId).toBe(STRANGER);
   });
 
   // The authenticated tier stops at the people who turn up with a DID. A
@@ -1196,12 +1200,12 @@ describe('ScopedStack.create', () => {
     );
   });
 
-  test('created record always carries the requester entityId', async () => {
+  test('created record always carries the requester as createdBy', async () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['create'], typeId: COMMENT },
     ]);
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' });
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
   test('content validation still runs after grant check', async () => {
@@ -1322,7 +1326,7 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
     // rather than getting stopped earlier by a missing create grant.
     await expect(
       stack
-        .asEntity(MEMBER, { onBehalfOf: OWNER })
+        .asActor({ principalId: MEMBER, subjectId: OWNER })
         .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -1330,7 +1334,7 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
   test('rejects createdAt when the owner delegates for someone else — the owner’s trust does not transfer to the subject', async () => {
     await expect(
       stack
-        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
         .create(COMMENT, { text: 'hello' }, { createdAt: new Date('2020-01-01') }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -1355,7 +1359,7 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
 
   test('a delegated create may pass both as undefined', async () => {
     const record = await stack
-      .asEntity(MEMBER, { onBehalfOf: OWNER })
+      .asActor({ principalId: MEMBER, subjectId: OWNER })
       .create(COMMENT, { text: 'hello' }, { createdAt: undefined, updatedAt: undefined });
     expect(record.updatedAt).toEqual(record.createdAt);
   });
@@ -1431,7 +1435,11 @@ describe('ScopedStack — grant-based read', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     expect((await stack.asEntity(MEMBER).get(record.id))?.id).toBe(record.id);
   });
 
@@ -1439,7 +1447,11 @@ describe('ScopedStack — grant-based read', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
   });
 
@@ -1661,7 +1673,7 @@ describe('ScopedStack — group-targeted grants', () => {
     ]);
 
     await expect(
-      stack.asEntity(APP, { onBehalfOf: MEMBER }).create(COMMENT, { text: 'hi' }),
+      stack.asActor({ principalId: APP, subjectId: MEMBER }).create(COMMENT, { text: 'hi' }),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -1673,17 +1685,17 @@ describe('ScopedStack — group-targeted grants', () => {
 
     // The subject needs its own standing too — authority intersects.
     await expect(
-      stack.asEntity(APP, { onBehalfOf: MEMBER }).create(COMMENT, { text: 'hi' }),
+      stack.asActor({ principalId: APP, subjectId: MEMBER }).create(COMMENT, { text: 'hi' }),
     ).rejects.toThrow(StackPermissionError);
 
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['create'], typeId: COMMENT },
     ]);
     const record = await stack
-      .asEntity(APP, { onBehalfOf: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' });
-    expect(record.entityId).toBe(MEMBER);
-    expect(record.principalId).toBe(APP);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
+    expect(record.createdBy?.principalId).toBe(APP);
   });
 
   test('a group-targeted grant still applies to the subject under delegation', async () => {
@@ -1706,9 +1718,9 @@ describe('ScopedStack — group-targeted grants', () => {
     ]);
 
     const record = await stack
-      .asEntity(APP, { onBehalfOf: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' });
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
   test('a grant naming a record outside the _group family confers nothing', async () => {
@@ -1878,7 +1890,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own', 'update-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'original' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     const updated = await stack.asEntity(MEMBER).patchContent(record.id, { text: 'edited' });
     expect(updated.content.text).toBe('edited');
   });
@@ -1887,7 +1903,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own', 'update-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'original' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     await expect(
       stack.asEntity(MEMBER).patchContent(record.id, { text: 'edited' }),
     ).rejects.toThrow(StackNotFoundError);
@@ -1897,7 +1917,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'original' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     const updated = await stack.asEntity(MEMBER).patchContent(record.id, { text: 'edited' });
     expect(updated.content.text).toBe('edited');
   });
@@ -1906,7 +1930,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own', 'delete-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     await stack.asEntity(MEMBER).delete(record.id);
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
@@ -1915,7 +1943,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-own', 'delete-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     await expect(stack.asEntity(MEMBER).delete(record.id)).rejects.toThrow(StackNotFoundError);
   });
 
@@ -1923,7 +1955,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'delete-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     await stack.asEntity(MEMBER).delete(record.id);
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
@@ -1932,7 +1968,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'delete-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
       StackPermissionError,
     );
@@ -1943,7 +1983,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     await expect(stack.asEntity(MEMBER).delete(record.id)).rejects.toThrow(StackPermissionError);
   });
 
@@ -1951,7 +1995,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'delete-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     await expect(
       stack.asEntity(MEMBER).patchContent(record.id, { text: 'edited' }),
     ).rejects.toThrow(StackPermissionError);
@@ -1961,7 +2009,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'delete-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     await stack.asEntity(MEMBER).delete(record.id);
     const undeleted = await stack.asEntity(MEMBER).undelete(record.id);
     expect(undeleted.deletedAt).toBeUndefined();
@@ -1971,7 +2023,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: MEMBER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: MEMBER } },
+    );
     await adapter.deleteRecord(record.id);
     await expect(stack.asEntity(MEMBER).undelete(record.id)).rejects.toThrow(StackPermissionError);
   });
@@ -1980,7 +2036,11 @@ describe('ScopedStack — grant-based update/delete', () => {
     await stack.grant({ kind: 'authenticated' }, [
       { actions: ['read-own', 'update-own'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'original' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'original' },
+      { createdBy: { subjectId: STRANGER } },
+    );
     const updated = await stack.asEntity(STRANGER).patchContent(record.id, { text: 'edited' });
     expect(updated.content.text).toBe('edited');
   });
@@ -2071,7 +2131,7 @@ describe('ScopedStack — write implies read', () => {
       actions: ['read-own', 'update-any'],
       grantee: { kind: 'entity', entityId: MEMBER },
     });
-    const own = await stack.create(NOTE, { text: 'mine' }, { entityId: MEMBER });
+    const own = await stack.create(NOTE, { text: 'mine' }, { createdBy: { subjectId: MEMBER } });
     const theirs = await recordWithHistory([]);
     const view = stack.asEntity(MEMBER);
     await expect(view.patchContent(own.id, { text: 'edited' })).rejects.toThrow(
@@ -2114,7 +2174,9 @@ describe('ScopedStack — write implies read', () => {
     });
     const record = await recordWithHistory([]);
     await expect(
-      stack.asEntity(APP, { onBehalfOf: MEMBER }).patchContent(record.id, { text: 'edited' }),
+      stack
+        .asActor({ principalId: APP, subjectId: MEMBER })
+        .patchContent(record.id, { text: 'edited' }),
     ).rejects.toThrow(StackNotFoundError);
   });
 });
@@ -2200,7 +2262,7 @@ describe('ScopedStack — blind write', () => {
     const posted = await view.create(NOTE, { text: 'for the owner' });
     const owners = await stack.create(NOTE, { text: 'already in the box' });
 
-    expect(posted.entityId).toBe(MEMBER);
+    expect(posted.createdBy?.subjectId).toBe(MEMBER);
     expect(await view.get(posted.id)).toBeNull();
     expect(await view.get(owners.id)).toBeNull();
     await expect(view.getVersions(posted.id)).rejects.toThrow(StackNotFoundError);
@@ -2279,7 +2341,11 @@ describe('ScopedStack.commitMigration', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack.asEntity(MEMBER).commitMigration(record.id, NOTE, { text: 'hello' }),
@@ -2291,7 +2357,11 @@ describe('ScopedStack.commitMigration', () => {
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
       { actions: ['create'], typeId: NOTE },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack.asEntity(MEMBER).commitMigration(record.id, NOTE, { text: 'hello' }),
@@ -2302,7 +2372,11 @@ describe('ScopedStack.commitMigration', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any', 'create'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack.asEntity(MEMBER).commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
@@ -2330,7 +2404,11 @@ describe('ScopedStack.commitMigration', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack.asEntity(MEMBER).commitMigration(record.id, '_app@1', {
@@ -2344,7 +2422,11 @@ describe('ScopedStack.commitMigration', () => {
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack.asEntity(MEMBER).commitMigration(record.id, '_grant@1', {
@@ -2372,7 +2454,7 @@ describe('ScopedStack.commitMigration', () => {
 
     await expect(
       stack
-        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
         .commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -2422,7 +2504,11 @@ describe('ScopedStack.commitMigration', () => {
       { actions: ['read-any', 'update-any'], typeId: COMMENT },
       { actions: ['create'], typeId: '_entity@1' },
     ]);
-    const record = await stack.create(COMMENT, { text: 'hello' }, { entityId: STRANGER });
+    const record = await stack.create(
+      COMMENT,
+      { text: 'hello' },
+      { createdBy: { subjectId: STRANGER } },
+    );
 
     await expect(
       stack
@@ -2525,9 +2611,11 @@ describe('ScopedStack.putAttachment', () => {
       { actions: ['create'], typeId: '_attachment@1' },
     ]);
     await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
-    const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
+    const result = await stack.query({
+      filter: { typeId: '_attachment@1', createdBy: { subjectId: MEMBER } },
+    });
     expect(result.records).toHaveLength(1);
-    expect(result.records[0].entityId).toBe(MEMBER);
+    expect(result.records[0].createdBy?.subjectId).toBe(MEMBER);
     const content = result.records[0].content as Record<string, unknown>;
     expect(content.mimeType).toBe('image/png');
     expect(content.size).toBe(3);
@@ -2542,9 +2630,12 @@ describe('ScopedStack.putAttachment', () => {
     const record = await stack.asEntity(MEMBER).putAttachment(data, 'image/png', 'photo.png');
 
     expect(record.typeId).toBe('_attachment@1');
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
     expect(record.content.filename).toBe('photo.png');
-    expect(await stack.get(record.id)).toMatchObject({ id: record.id, entityId: MEMBER });
+    expect(await stack.get(record.id)).toMatchObject({
+      id: record.id,
+      createdBy: { subjectId: MEMBER },
+    });
   });
 
   test('upload without filename omits filename from record content', async () => {
@@ -2552,7 +2643,9 @@ describe('ScopedStack.putAttachment', () => {
       { actions: ['create'], typeId: '_attachment@1' },
     ]);
     await stack.asEntity(MEMBER).putAttachment(data, 'image/png');
-    const result = await stack.query({ filter: { typeId: '_attachment@1', entityId: MEMBER } });
+    const result = await stack.query({
+      filter: { typeId: '_attachment@1', createdBy: { subjectId: MEMBER } },
+    });
     expect(result.records[0].content).not.toHaveProperty('filename');
   });
 
@@ -2568,11 +2661,11 @@ describe('ScopedStack.putAttachment', () => {
 
   // Uploads stamp authorship the same way create() does — one rule for
   // every record a ScopedStack writes.
-  test('owner upload via asEntity(ownerEntityId) stamps entityId', async () => {
+  test('owner upload via asEntity(ownerEntityId) stamps createdBy', async () => {
     await stack.asEntity(OWNER).putAttachment(data, 'image/png');
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records).toHaveLength(1);
-    expect(result.records[0].entityId).toBe(OWNER);
+    expect(result.records[0].createdBy?.subjectId).toBe(OWNER);
   });
 
   test('putAttachment records the appId it is given', async () => {
@@ -2638,7 +2731,7 @@ describe('ScopedStack.getAttachment', () => {
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
+      { createdBy: { subjectId: MEMBER } },
     );
 
     const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
@@ -2660,7 +2753,7 @@ describe('ScopedStack.getAttachment', () => {
     const meta = await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
+      { createdBy: { subjectId: MEMBER } },
     );
     await stack.mutate(meta.id, { unlisted: true });
 
@@ -2677,7 +2770,7 @@ describe('ScopedStack.getAttachment', () => {
     const meta = await incapableStack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
+      { createdBy: { subjectId: MEMBER } },
     );
     await incapableStack.mutate(meta.id, { unlisted: true });
 
@@ -2714,12 +2807,12 @@ describe('ScopedStack.getAttachment', () => {
     await incapableStack.create(
       '_attachment@1',
       { fileId: fileFirst, mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
+      { createdBy: { subjectId: MEMBER } },
     );
     await incapableStack.create(
       '_attachment@1',
       { fileId: fileSecond, mimeType: 'image/png', size: 1 },
-      { entityId: MEMBER },
+      { createdBy: { subjectId: MEMBER } },
     );
 
     const bytes = await incapableStack.asEntity(MEMBER).getAttachment(fileSecond);
@@ -3024,7 +3117,7 @@ describe('ScopedStack — group role gating', () => {
   });
 
   test('a permissions change set on a group requires admin, not just record authorship', async () => {
-    const group = await makeGroup({ entityId: MEMBER });
+    const group = await makeGroup({ createdBy: { subjectId: MEMBER } });
     const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
     // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
     await expect(stack.asEntity(MEMBER).mutate(group.id, { permissions: perms })).rejects.toThrow(
@@ -3035,7 +3128,7 @@ describe('ScopedStack — group role gating', () => {
   });
 
   test('an unlisted change set on a group requires admin, not just record authorship', async () => {
-    const group = await makeGroup({ entityId: MEMBER });
+    const group = await makeGroup({ createdBy: { subjectId: MEMBER } });
     // MEMBER authored the record but isn't an admin — generic creator carve-out doesn't apply.
     await expect(stack.asEntity(MEMBER).mutate(group.id, { unlisted: true })).rejects.toThrow(
       StackNotFoundError,
@@ -3086,7 +3179,7 @@ describe('ScopedStack — group role gating', () => {
   // the owner is no exception, and gets no duplicate roster entry.
   test('owner writing through ScopedStack stamps the owner as admin exactly once', async () => {
     const group = await stack.asEntity(OWNER).create('_group@1', { name: 'New Group' });
-    expect(group.entityId).toBe(OWNER);
+    expect(group.createdBy?.subjectId).toBe(OWNER);
     const adminAssociations = (group.associations ?? []).filter(
       (a) =>
         a.kind === 'relationship' &&
@@ -3124,7 +3217,7 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
   const shared = async () =>
     adapter.createRecord(
       makeRecord({
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [readFor(MEMBER), writeFor(MEMBER)],
         associations: [{ kind: 'tag', label: 'draft' }],
       }),
@@ -3203,7 +3296,10 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
 
   test('revokeAccess() is refused to a write-holder and allowed to the creator', async () => {
     const record = await adapter.createRecord(
-      makeRecord({ entityId: MEMBER, permissions: [readFor(MEMBER), readFor(STRANGER)] }),
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [readFor(MEMBER), readFor(STRANGER)],
+      }),
     );
     await expect(
       stack.asEntity(STRANGER).revokeAccess(record.id, readFor(STRANGER)),
@@ -3339,7 +3435,10 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
   // gate without being able to move the ACL themselves.
   const sharedAndMoved = async () => {
     const record = await adapter.createRecord(
-      makeRecord({ entityId: OWNER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+      makeRecord({
+        createdBy: { subjectId: OWNER },
+        permissions: [readFor(MEMBER), writeFor(MEMBER)],
+      }),
     );
     await stack.asEntity(OWNER).grantAccess(record.id, readFor(STRANGER));
     await stack.asEntity(OWNER).revokeAccess(record.id, readFor(STRANGER));
@@ -3366,7 +3465,10 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
     }
 
     const own = await adapter.createRecord(
-      makeRecord({ entityId: MEMBER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [readFor(MEMBER), writeFor(MEMBER)],
+      }),
     );
     await stack.asEntity(MEMBER).grantAccess(own.id, readFor(STRANGER));
     const byCreator = await stack.asEntity(MEMBER).getJournal(own.id);
@@ -3377,7 +3479,9 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
   // principal does not carry its subject to the sharing graph.
   test('delegation is no route to it', async () => {
     const record = await sharedAndMoved();
-    const entries = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getJournal(record.id);
+    const entries = await stack
+      .asActor({ principalId: OWNER, subjectId: MEMBER })
+      .getJournal(record.id);
     expect(entries.every((e) => e.associations === undefined)).toBe(true);
   });
 
@@ -3385,7 +3489,10 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
   // half the requester is entitled to, and `seq` stays dense.
   test('a mixed entry keeps its data half and its place in the log', async () => {
     const record = await adapter.createRecord(
-      makeRecord({ entityId: OWNER, permissions: [readFor(MEMBER), writeFor(MEMBER)] }),
+      makeRecord({
+        createdBy: { subjectId: OWNER },
+        permissions: [readFor(MEMBER), writeFor(MEMBER)],
+      }),
     );
     await stack.asEntity(OWNER).mutate(record.id, {
       associations: [{ kind: 'tag', label: 'reviewed' }],
@@ -4239,12 +4346,12 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     ]);
     await expect(
       stack
-        .asEntity(MEMBER, { onBehalfOf: OWNER })
+        .asActor({ principalId: MEMBER, subjectId: OWNER })
         .create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID }),
     ).rejects.toThrow(StackPermissionError);
     await expect(
       stack
-        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
         .create(COMMENT, { text: 'hi' }, { parentId: MISSING_ID }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -4328,7 +4435,9 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
 
   test('a delegated principal does not inherit the owner exemption', async () => {
     await expect(
-      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).mutate(writable.id, { parentId: MISSING_ID }),
+      stack
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
+        .mutate(writable.id, { parentId: MISSING_ID }),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -4380,7 +4489,7 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     expect(moved.parentId).toBe(unreadableBox.id);
   });
 
-  // A move bumps nothing, so it leaves the record's updatedBy/updatedVia
+  // A move bumps nothing, so it leaves the record's updatedBy
   // where they stand and the actor travels on the journal entry instead —
   // the same route an association change's does.
   test('the actor travels on the journal entry rather than the record', async () => {
@@ -4388,7 +4497,7 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     expect(moved.updatedBy).toBeUndefined();
     const entries = await stack.getJournal(writable.id);
     expect(entries.at(-1)?.ops).toEqual(['reparent']);
-    expect(entries.at(-1)?.actor).toEqual({ entityId: MEMBER });
+    expect(entries.at(-1)?.actor).toEqual({ subjectId: MEMBER });
   });
 });
 
@@ -4541,30 +4650,26 @@ describe('ScopedStack — delegation', () => {
     await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
   });
 
-  test('an anonymous principal cannot act on behalf of an entity', () => {
-    expect(() => stack.asEntity(null, { onBehalfOf: MEMBER })).toThrow(StackPermissionError);
-  });
-
   // Taking the session whole is what a server should reach for: both
   // identities are DIDs, so a positional pair leaves nothing to catch a
   // swap, and a swap is invisible undelegated where the two are equal.
-  test('forSession() scopes to the principal and subject a token names', async () => {
+  test('asActor() scopes to the principal and subject a token names', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'entity', entityId: MEMBER });
     const record = await stack
-      .forSession({ principalId: APP, subjectId: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' });
-    expect(record.entityId).toBe(MEMBER);
-    expect(record.principalId).toBe(APP);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
+    expect(record.createdBy?.principalId).toBe(APP);
   });
 
-  test('forSession() with one identity is the undelegated case', async () => {
+  test('asActor() with one identity is the undelegated case', async () => {
     await grantAll({ kind: 'entity', entityId: MEMBER });
     const record = await stack
-      .forSession({ principalId: MEMBER, subjectId: MEMBER })
+      .asActor({ principalId: MEMBER, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' });
-    expect(record.entityId).toBe(MEMBER);
-    expect(record.principalId).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
+    expect(record.createdBy?.principalId).toBeUndefined();
   });
 
   // What a swapped pair costs, and why no error catches it: both orders
@@ -4575,35 +4680,35 @@ describe('ScopedStack — delegation', () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'entity', entityId: MEMBER });
     const correct = await stack
-      .forSession({ principalId: APP, subjectId: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' });
     const swapped = await stack
-      .forSession({ principalId: MEMBER, subjectId: APP })
+      .asActor({ principalId: MEMBER, subjectId: APP })
       .create(COMMENT, { text: 'hi' });
-    expect(correct.entityId).toBe(MEMBER);
-    expect(swapped.entityId).toBe(APP);
+    expect(correct.createdBy?.subjectId).toBe(MEMBER);
+    expect(swapped.createdBy?.subjectId).toBe(APP);
   });
 
   test('a delegated create stamps the subject as author and the app as principal', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'entity', entityId: MEMBER });
     const record = await stack
-      .asEntity(APP, { onBehalfOf: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' }, { appId: 'com.example.myapp' });
-    expect(record.entityId).toBe(MEMBER);
-    expect(record.principalId).toBe(APP);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
+    expect(record.createdBy?.principalId).toBe(APP);
     expect(record.appId).toBe('com.example.myapp');
   });
 
   test('an app with no grant of its own cannot act for a granted subject', async () => {
     await grantAll({ kind: 'entity', entityId: MEMBER });
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
   });
 
   test('a granted app cannot act for a subject with no grant', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
   });
 
@@ -4617,13 +4722,17 @@ describe('ScopedStack — delegation', () => {
       { actions: ['read-own'], typeId: COMMENT },
     ]);
     const mine = await adapter.createRecord(
-      makeRecord({ typeId: COMMENT, entityId: MEMBER, content: { text: 'mine' } }),
+      makeRecord({ typeId: COMMENT, createdBy: { subjectId: MEMBER }, content: { text: 'mine' } }),
     );
     const theirs = await adapter.createRecord(
-      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+      makeRecord({
+        typeId: COMMENT,
+        createdBy: { subjectId: STRANGER },
+        content: { text: 'theirs' },
+      }),
     );
 
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     expect((await view.get(mine.id))?.id).toBe(mine.id);
     expect(await view.get(theirs.id)).toBeNull();
   });
@@ -4638,9 +4747,13 @@ describe('ScopedStack — delegation', () => {
       { actions: ['read-any'], typeId: COMMENT },
     ]);
     const theirs = await adapter.createRecord(
-      makeRecord({ typeId: COMMENT, entityId: STRANGER, content: { text: 'theirs' } }),
+      makeRecord({
+        typeId: COMMENT,
+        createdBy: { subjectId: STRANGER },
+        content: { text: 'theirs' },
+      }),
     );
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     expect((await view.get(theirs.id))?.id).toBe(theirs.id);
   });
 
@@ -4658,7 +4771,7 @@ describe('ScopedStack — delegation', () => {
     );
     // Undelegated, the same subject reaches it — the mask is what changes.
     expect((await stack.asEntity(MEMBER).get(shared.id))?.id).toBe(shared.id);
-    expect(await stack.asEntity(APP, { onBehalfOf: MEMBER }).get(shared.id)).toBeNull();
+    expect(await stack.asActor({ principalId: APP, subjectId: MEMBER }).get(shared.id)).toBeNull();
   });
 
   // Owner bypass keys on the principal. An app delegated for the owner is
@@ -4666,15 +4779,17 @@ describe('ScopedStack — delegation', () => {
   // access.
   test('an app delegated for the owner gets no owner bypass', async () => {
     const record = await adapter.createRecord(makeRecord({ content: { text: 'private' } }));
-    expect(await stack.asEntity(APP, { onBehalfOf: OWNER }).get(record.id)).toBeNull();
+    expect(await stack.asActor({ principalId: APP, subjectId: OWNER }).get(record.id)).toBeNull();
   });
 
   test('an app delegated for the owner cannot hard delete', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
-    const record = await adapter.createRecord(makeRecord({ typeId: COMMENT, entityId: OWNER }));
+    const record = await adapter.createRecord(
+      makeRecord({ typeId: COMMENT, createdBy: { subjectId: OWNER } }),
+    );
     await expect(
-      stack.asEntity(APP, { onBehalfOf: OWNER }).delete(record.id, { hard: true }),
+      stack.asActor({ principalId: APP, subjectId: OWNER }).delete(record.id, { hard: true }),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -4683,9 +4798,9 @@ describe('ScopedStack — delegation', () => {
   test('an app delegated for the owner cannot set permissions on its subject records', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
-    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    const view = stack.asActor({ principalId: APP, subjectId: OWNER });
     const record = await view.create(COMMENT, { text: 'hi' });
-    expect(record.entityId).toBe(OWNER);
+    expect(record.createdBy?.subjectId).toBe(OWNER);
     await expect(
       view.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(StackPermissionError);
@@ -4696,7 +4811,7 @@ describe('ScopedStack — delegation', () => {
   // delegated subject and every record in the stack.
   test('an owner principal cannot reshare a record its subject did not author', async () => {
     const record = await stack.create(COMMENT, { text: 'owner private' });
-    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
 
     await expect(
       view.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
@@ -4711,7 +4826,7 @@ describe('ScopedStack — delegation', () => {
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
 
     await stack
-      .asEntity(OWNER, { onBehalfOf: MEMBER })
+      .asActor({ principalId: OWNER, subjectId: MEMBER })
       .mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
 
     expect((await stack.get(record.id))?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
@@ -4722,7 +4837,7 @@ describe('ScopedStack — delegation', () => {
   // it never becomes available to point its did at the subject's own key.
   test('an owner principal cannot reach an _app card through its subject', async () => {
     const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
-    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
 
     await expect(
       view.mutate(card.id, {
@@ -4748,7 +4863,7 @@ describe('ScopedStack — delegation', () => {
         { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
-    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
 
     await expect(view.patchContent(card.id, { did: 'did:key:z6MkMember' })).rejects.toThrow(
       StackPermissionError,
@@ -4773,7 +4888,7 @@ describe('ScopedStack — delegation', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([9, 9, 9]), 'image/png', 'secret.png');
 
-    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
     await expect(
       view.create('_attachment@1', { fileId, mimeType: 'image/png', size: 3 }),
     ).rejects.toThrow(StackPermissionError);
@@ -4789,7 +4904,7 @@ describe('ScopedStack — delegation', () => {
   test('an app delegated for the owner cannot publish its subject records at create time', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
-    const view = stack.asEntity(APP, { onBehalfOf: OWNER });
+    const view = stack.asActor({ principalId: APP, subjectId: OWNER });
     await expect(
       view.create(
         COMMENT,
@@ -4807,7 +4922,7 @@ describe('ScopedStack — delegation', () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
     const record = await stack
-      .asEntity(APP, { onBehalfOf: OWNER })
+      .asActor({ principalId: APP, subjectId: OWNER })
       .create(COMMENT, { text: 'hi' }, { permissions: [] });
     expect(record.permissions).toBeUndefined();
   });
@@ -4832,7 +4947,7 @@ describe('ScopedStack — delegation', () => {
       .putAttachment(new Uint8Array([1, 2, 3]), 'text/plain', 'secret.txt');
     const { fileId } = attachment.content;
 
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     // The record describing the bytes is already refused ...
     expect(await view.get(attachment.id)).toBeNull();
     // ... so the bytes themselves must be too.
@@ -4848,7 +4963,9 @@ describe('ScopedStack — delegation', () => {
     });
     expect(await stack.asEntity(MEMBER).patchContent(group.id, { name: 'Renamed' })).toBeTruthy();
     await expect(
-      stack.asEntity(APP, { onBehalfOf: MEMBER }).patchContent(group.id, { name: 'Hijacked' }),
+      stack
+        .asActor({ principalId: APP, subjectId: MEMBER })
+        .patchContent(group.id, { name: 'Hijacked' }),
     ).rejects.toThrow(StackNotFoundError);
   });
 
@@ -4857,12 +4974,12 @@ describe('ScopedStack — delegation', () => {
   // in, which is the whole of what containment promises.
   test('a default grant does not satisfy the principal side of the intersection', async () => {
     await grantAll({ kind: 'authenticated' });
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
     await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(StackPermissionError);
 
     // The same default grant is all an undelegated requester needs.
     const direct = await stack.asEntity(MEMBER).create(COMMENT, { text: 'hi' });
-    expect(direct.entityId).toBe(MEMBER);
+    expect(direct.createdBy?.subjectId).toBe(MEMBER);
   });
 
   // Unconditional owner authority belongs to the owner acting as itself.
@@ -4874,17 +4991,17 @@ describe('ScopedStack — delegation', () => {
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
 
     await expect(
-      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id, { hard: true }),
+      stack.asActor({ principalId: OWNER, subjectId: MEMBER }).delete(record.id, { hard: true }),
     ).rejects.toThrow(StackPermissionError);
 
     // Soft delete is still reachable, so the refusal is about the verb.
-    await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).delete(record.id);
+    await stack.asActor({ principalId: OWNER, subjectId: MEMBER }).delete(record.id);
     expect((await stack.get(record.id))?.deletedAt).toBeDefined();
   });
 
   test('an owner principal cannot delete attachments for its subject', async () => {
     const attachment = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'text/plain');
-    const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
 
     await expect(view.deleteAttachment(attachment.content.fileId)).rejects.toThrow(
       StackPermissionError,
@@ -4896,7 +5013,9 @@ describe('ScopedStack — delegation', () => {
     const group = await stack.create('_group@1', { name: 'Book Club' });
 
     await expect(
-      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).patchContent(group.id, { name: 'Hijacked' }),
+      stack
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
+        .patchContent(group.id, { name: 'Hijacked' }),
     ).rejects.toThrow(StackNotFoundError);
 
     // An admin subject reaches it, since both identities then manage it.
@@ -4907,7 +5026,7 @@ describe('ScopedStack — delegation', () => {
     });
     expect(
       await stack
-        .asEntity(OWNER, { onBehalfOf: MEMBER })
+        .asActor({ principalId: OWNER, subjectId: MEMBER })
         .patchContent(group.id, { name: 'Renamed' }),
     ).toBeTruthy();
   });
@@ -4915,10 +5034,12 @@ describe('ScopedStack — delegation', () => {
   test('records are queryable by the principal that wrote them', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
-    await stack.asEntity(APP, { onBehalfOf: OWNER }).create(COMMENT, { text: 'via app' });
+    await stack
+      .asActor({ principalId: APP, subjectId: OWNER })
+      .create(COMMENT, { text: 'via app' });
     await stack.asEntity(OWNER).create(COMMENT, { text: 'direct' });
 
-    const viaApp = await stack.query({ filter: { principalId: APP } });
+    const viaApp = await stack.query({ filter: { createdBy: { principalId: APP } } });
     expect(viaApp.records.map((r) => r.content.text)).toEqual(['via app']);
   });
 });
@@ -5183,7 +5304,7 @@ describe('ScopedStack — _entity bindings hold under a grant', () => {
 
     await expect(
       stack
-        .asEntity(APP, { onBehalfOf: OWNER })
+        .asActor({ principalId: APP, subjectId: OWNER })
         .create('_entity@1', { did: OWNER, name: 'Owner, per the app' }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -5267,7 +5388,7 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
     const grantRecord = await shareGrantRecord();
 
     await expect(
-      stack.asEntity(OWNER, { onBehalfOf: MEMBER }).patchContent(grantRecord.id, {
+      stack.asActor({ principalId: OWNER, subjectId: MEMBER }).patchContent(grantRecord.id, {
         actions: ['read-any'],
       }),
     ).rejects.toThrow(StackPermissionError);
@@ -5339,7 +5460,7 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
 
     await expect(
       stack
-        .asEntity(APP, { onBehalfOf: MEMBER })
+        .asActor({ principalId: APP, subjectId: MEMBER })
         .create(COMMENT, { text: 'hi' }, { appId: 'com.example.trustedbank' }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -5348,14 +5469,14 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
     await register('com.example.notes');
 
     const record = await stack
-      .asEntity(APP, { onBehalfOf: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' }, { appId: 'com.example.notes' });
     expect(record.appId).toBe('com.example.notes');
   });
 
   test('a principal the owner never registered keeps appId as a self-report', async () => {
     const record = await stack
-      .asEntity(APP, { onBehalfOf: MEMBER })
+      .asActor({ principalId: APP, subjectId: MEMBER })
       .create(COMMENT, { text: 'hi' }, { appId: 'com.example.anything' });
     expect(record.appId).toBe('com.example.anything');
   });
@@ -5367,12 +5488,12 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
       .asEntity(MEMBER)
       .create(COMMENT, { text: 'hi' }, { appId: 'com.example.somethingelse' });
     expect(record.appId).toBe('com.example.somethingelse');
-    expect(record.principalId).toBeUndefined();
+    expect(record.createdBy?.principalId).toBeUndefined();
   });
 
   test('putAttachment stamps appId under the same rule', async () => {
     await register('com.example.notes');
-    const view = stack.asEntity(APP, { onBehalfOf: MEMBER });
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
 
     await expect(
       view.putAttachment(new Uint8Array([1, 2, 3]), 'text/plain', 'a.txt', 'com.example.evil'),
@@ -5406,7 +5527,7 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
         permissions: writeBit,
         parentId: undefined,
         associations: [{ kind: 'tag', label: 'confidential' }],
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
       },
     );
     await stack.delete(record.id);
@@ -5423,7 +5544,7 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
     expect(got!.deletedAt).toBeInstanceOf(Date);
     expect(got!.content).toEqual({});
     expect(got!.associations).toBeUndefined();
-    expect(got!.entityId).toBeUndefined();
+    expect(got!.createdBy?.subjectId).toBeUndefined();
     expect(got!.updatedBy).toBeUndefined();
   });
 
@@ -5553,7 +5674,7 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
     await adapter.createRecord(
       makeRecord({
         typeId: '_entity@1',
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         content: { did: 'did:key:x', name: 'X' },
       }),
     );
@@ -5584,7 +5705,9 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
         permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     );
-    const found = await stack.asEntity(OWNER, { onBehalfOf: MEMBER }).getEntityByDid('did:key:x');
+    const found = await stack
+      .asActor({ principalId: OWNER, subjectId: MEMBER })
+      .getEntityByDid('did:key:x');
     expect(found).toBeNull();
   });
 
@@ -5627,7 +5750,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       NOTE,
       { text: 'hello' },
       {
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
           { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
@@ -5683,7 +5806,11 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
   // change set would leave it. Widening access in the same call must not
   // satisfy the read check the destination owes.
   test('a widened permissions key cannot satisfy the parentId read check', async () => {
-    const secret = await stack.create(NOTE, { text: 'secret' }, { entityId: OWNER });
+    const secret = await stack.create(
+      NOTE,
+      { text: 'secret' },
+      { createdBy: { subjectId: OWNER } },
+    );
     const scoped = stack.asEntity(MEMBER);
 
     await expect(
@@ -5701,7 +5828,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       NOTE,
       { text: 'box2' },
       {
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -5736,14 +5863,14 @@ describe('ScopedStack.mutate — delegated principals', () => {
   let note: StackRecord;
 
   beforeEach(async () => {
-    note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
+    note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
   });
 
   // Widening access is what containment most needs to hold, so an app with
   // no standing of its own is refused it whichever key reaches for it —
   // even acting for the owner, who holds it.
   test('a delegated app cannot reshare while acting for the owner', async () => {
-    const app = stack.asEntity('did:key:zApp', { onBehalfOf: OWNER });
+    const app = stack.asActor({ principalId: 'did:key:zApp', subjectId: OWNER });
     // Not found rather than forbidden: an ungranted app cannot read the
     // record, so the refusal tells it nothing a read would not have.
     await expect(
@@ -5760,14 +5887,14 @@ describe('ScopedStack.mutate — delegated principals', () => {
       NOTE,
       { text: 'hello' },
       {
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
           { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
-    const forMember = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
+    const forMember = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
     await expect(
       forMember.mutate(shared.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).rejects.toThrow(StackPermissionError);

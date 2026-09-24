@@ -28,9 +28,8 @@ type RecordVersion = {
   typeId: string; // The Record's typeId at the moment this version was snapshotted
   content: object;
   updatedAt: Date;
-  entityId?: string; // The Record's author, carried through from the snapshot
-  updatedBy?: string; // Who performed the mutation that produced this version
-  updatedVia?: string; // The principal behind it, when it isn't updatedBy
+  createdBy?: Actor; // The Record's author, carried through from the snapshot
+  updatedBy?: Actor; // Who performed the mutation that produced this version
 };
 ```
 
@@ -38,7 +37,7 @@ type RecordVersion = {
 
 `typeId` makes a version entry interpretable regardless of migration state: a snapshot taken before a migration records the pre-migration type, so restoring it later doesn't mislabel `@1`-shaped content as `@2`. It's also what lets `_grant` baseId matching work independent of which version a snapshot predates.
 
-**`entityId` on a version is authorship; `updatedBy` is attribution of the change.** `entityId` is the Record's own author copied into the snapshot, and it never moves — so every version reports the same author. `updatedBy` is the requester that produced _that_ version, with `updatedVia` naming the principal beside it under delegation. The two agree at version 1 and diverge whenever anyone but the author writes. See [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution).
+**`createdBy` on a version is authorship; `updatedBy` is attribution of the change.** `createdBy` is the Record's own author copied into the snapshot, and it never moves — so every version reports the same author. `updatedBy` is the requester that produced _that_ version, naming the principal beside it under delegation. The two agree at version 1 and diverge whenever anyone but the author writes. See [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution).
 
 **API surface:**
 
@@ -132,7 +131,7 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 }
 ```
 
-`associations`, `parentId` and the authorship fields (`entityId`, `appId`, `principalId`, `updatedBy`, `updatedVia`) are absent. The [change feed carries the same projection](./events.md#soft-deleted-records-reach-the-feed-as-tombstones), so no channel serves more of a deleted Record than a fetch by ID does.
+`associations`, `parentId` and the authorship fields (`createdBy`, `appId`, `updatedBy`) are absent. The [change feed carries the same projection](./events.md#soft-deleted-records-reach-the-feed-as-tombstones), so no channel serves more of a deleted Record than a fetch by ID does.
 
 **`permissions` is retained** because it is what decides whether the caller may `undelete()`. A write-holder who could not see the bit would have to attempt the verb to discover it. It discloses nothing further: a tombstone only ever reaches a requester who passed the same read check the live Record required, and one who fails it gets `null`, exactly as a missing ID gives.
 

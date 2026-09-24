@@ -48,20 +48,20 @@ describe('createOptionsFromWireRecord — stamped fields', () => {
   test('a body naming its own identity fields yields options carrying none of them', () => {
     const { options } = parse(
       wireBody({
-        entityId: MEMBER,
-        principalId: APP,
-        updatedBy: MEMBER,
-        updatedVia: APP,
+        createdBy: { subjectId: MEMBER, principalId: APP },
+        updatedBy: { subjectId: MEMBER, principalId: APP },
         version: 99,
       }),
     );
-    for (const key of ['entityId', 'principalId', 'updatedBy', 'updatedVia', 'version']) {
+    for (const key of ['createdBy', 'updatedBy', 'version']) {
       expect(key in options).toBe(false);
     }
   });
 
   test('a body naming them is accepted, not refused — they are ignored on input', () => {
-    expect(() => parse(wireBody({ entityId: MEMBER, principalId: APP }))).not.toThrow();
+    expect(() =>
+      parse(wireBody({ createdBy: { subjectId: MEMBER, principalId: APP } })),
+    ).not.toThrow();
   });
 });
 
@@ -237,7 +237,7 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
 
   const create = async (body: Record<string, unknown>, as: TokenSession): Promise<StackRecord> => {
     const { typeId, content, options } = createOptionsFromWireRecord(body, as, OWNER);
-    return stack.forSession(as).create(typeId, content, options);
+    return stack.asActor(as).create(typeId, content, options);
   };
 
   // The failure the helper exists to prevent: a client sends both clock
@@ -247,7 +247,7 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
     const before = Date.now();
     const record = await create(wireBody({ id: undefined }), grantee);
     expect(record.createdAt.getTime()).toBeGreaterThanOrEqual(before);
-    expect(record.entityId).toBe(MEMBER);
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
   test('an owner create carrying both keeps the dates it sent', async () => {
@@ -258,11 +258,11 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
 
   test('a body claiming another entity is stamped with the requester instead', async () => {
     const record = await create(
-      wireBody({ id: undefined, entityId: OWNER, principalId: APP }),
+      wireBody({ id: undefined, createdBy: { subjectId: OWNER, principalId: APP } }),
       grantee,
     );
-    expect(record.entityId).toBe(MEMBER);
-    expect(record.principalId).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBe(MEMBER);
+    expect(record.createdBy?.principalId).toBeUndefined();
   });
 });
 

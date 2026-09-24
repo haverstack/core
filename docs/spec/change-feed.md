@@ -28,7 +28,7 @@ Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 
 ?typeId=          (repeatable; baseId or versioned, matched by baseId)
 ?parentId=        ("null" for root records, as GET /records; see Events § The reparent transition)
-?entityId=        (the record's author, not the actor)
+?createdBySubject= (the record's author, not the actor)
 ?kind=            (repeatable: created|changed|deleted|purged)
 ?include=record   (ignored for kind=purged)
 ?includeUnlisted= (owner-only — see Unlisted)
@@ -38,7 +38,7 @@ Response: `200 text/event-stream`, a stream of frames.
 
 `@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — filter, `include` and `includeUnlisted` in one object, since a server needs the last of those before the stream opens to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
 
-**Filtering is [exact, not advisory](./events.md#subscribing)**, and `typeId` is matched by `baseId`. `entityId` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
+**Filtering is [exact, not advisory](./events.md#subscribing)**, and `typeId` is matched by `baseId`. `createdBySubject` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
 
 ## Frames
 
@@ -51,7 +51,7 @@ event: record
 data: {"kind":"changed","ops":["patch","reparent"],"recordId":"1hk153x00001",
        "typeId":"com.example/note@1","version":7,
        "updatedAt":"2026-08-13T12:00:00.000Z","parentId":"1hk153x0000f",
-       "actor":{"entityId":"did:key:z6Mk..."}}
+       "actor":{"subjectId":"did:key:z6Mk..."}}
 
 id: AA3f1S
 event: record
@@ -59,14 +59,14 @@ data: {"kind":"changed","ops":["associate"],"recordId":"1hk153x00001",
        "typeId":"com.example/note@1","version":7,
        "updatedAt":"2026-08-13T12:00:00.000Z",
        "associationsAdded":[{"kind":"tag","label":"starred"}],
-       "actor":{"entityId":"did:key:z6Mk..."}}
+       "actor":{"subjectId":"did:key:z6Mk..."}}
 
 id: AA3f1T
 event: record
 data: {"kind":"purged","ops":["hard-delete"],"recordId":"1hk153x00002",
        "typeId":"com.example/note@1","version":4,
        "updatedAt":"2026-08-13T12:00:03.000Z",
-       "actor":{"entityId":"did:key:z6MkOwner..."}}
+       "actor":{"subjectId":"did:key:z6MkOwner..."}}
 
 : keepalive
 
@@ -96,7 +96,7 @@ data: {"reason":"cursor_expired"}
 
 ## Permission scoping
 
-**A connection delivers the events its token's session may read, and nothing else** — the `canRead`-per-event rule the [local feed](./events.md#permission-scoping) defines, including its refusal to emit anything at all about a record the requester cannot read. A server subscribes **unscoped** at the storage owner and fans out per connection, filtering each through the `ScopedStack` its token's session names via `Stack.forSession()`, taking the `(principalId, subjectId)` pair whole. Delegated authority is then the ordinary [intersection](./access-control.md#delegation-principal-and-subject), inherited rather than reimplemented.
+**A connection delivers the events its token's session may read, and nothing else** — the `canRead`-per-event rule the [local feed](./events.md#permission-scoping) defines, including its refusal to emit anything at all about a record the requester cannot read. A server subscribes **unscoped** at the storage owner and fans out per connection, filtering each through the `ScopedStack` its token's session names via `Stack.asActor()`, which takes the session whole as an [Actor](./data-model.md#actor). Delegated authority is then the ordinary [intersection](./access-control.md#delegation-principal-and-subject), inherited rather than reimplemented.
 
 One consequence is easy to discover too late: **`canRead` is not free per event.** It resolves grants, and without a cache that is a `_grant` query per event per connection. A subscription opened through `ScopedStack.subscribe()` already carries that cache and expires it from the stream itself, so a server that opens one per connection inherits both and has nothing to build — see [Change events § Permission scoping](./events.md#permission-scoping). The cost is a real one to weigh only where a server scopes the feed some other way.
 

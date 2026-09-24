@@ -107,7 +107,7 @@ these.
 5. **Use the native machinery, don't duplicate it in content.** Tags are tag
    associations, not a `tags: string[]` field. Cross-references are relationship
    associations or `parentId`, not bare ID strings in content. Files are attachment
-   associations. Authorship is `entityId`; timestamps are `createdAt`/`updatedAt` —
+   associations. Authorship is `createdBy`; timestamps are `createdAt`/`updatedAt` —
    never mirrored into content. The boundary runs the other way too: **associations
    point and mark; they never carry data.** Anything that needs validation, migration,
    or patching lives in content, where the schema machinery can see it — which is why
@@ -231,7 +231,7 @@ without a name, an article is an entry with one) plus `post`, the broadcast-spee
 counterpart to `article`'s published-artifact contract. The **group cluster** covers the
 small-group workspace — the Basecamp shape: message board, shared calendar, decisions,
 shared drive — built on collaborative group stacks (`_group` with `stackUrl`), where
-`entityId`-as-author and per-type grants do the heavy lifting. Pairs across the set
+`createdBy`-as-author and per-type grants do the heavy lifting. Pairs across the set
 make the interop story demonstrable: notes ↔ flashcards, bookmarks ↔ read-later,
 articles and pages ↔ any site generator, polls ↔ calendar (a scheduling poll's winning
 slot becomes an event).

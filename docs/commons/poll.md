@@ -10,7 +10,7 @@ simply a poll whose options carry time slots; the winning slot gets promoted to 
 [`event`](./event.md).
 
 The design leans on the stack's native machinery harder than any other commons type:
-each member's ballot is a **record they author** (`entityId` = voter, set natively),
+each member's ballot is a **record they author** (`createdBy` = voter, set natively),
 revising a ballot is an ordinary update (version history = a free audit trail), and
 who-may-vote is a grant on `vote@1` — the permission system is the election official.
 
@@ -87,7 +87,7 @@ await stack.defineType('org.haverstack/vote@1', 'Vote', {
   fetch-and-scan of `vote@1` records, which is fine at this project's stated scale
   (small cohesive groups) and recorded here so nobody discovers it by surprise.
 - **One ballot per member per poll.** Revoting is updating your existing `vote` record,
-  not creating a second — a writer obligation (query `pollId` + own `entityId` before
+  not creating a second — a writer obligation (query `pollId` + own `createdBy.subjectId` before
   creating), with version history preserving every revision. Duplicate ballots from a
   buggy writer: latest `updatedAt` wins, consumers warn.
 - **Results are computed, never stored.** Any member's app tallies by reading ballots;
@@ -120,7 +120,7 @@ await stack.defineType('org.haverstack/vote@1', 'Vote', {
 ## Deliberately excluded
 
 - Stored results/tallies — computed, see conventions.
-- Anonymous ballots — `ScopedStack.create()` always stamps the requester's `entityId`,
+- Anonymous ballots — `ScopedStack.create()` always stamps the requester as `createdBy`,
   and pretending otherwise would be a lie; see ballot visibility above.
 - Quorum/threshold rules — the deciding app's policy (sidecar on the poll), not ballot
   data.

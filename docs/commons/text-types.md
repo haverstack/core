@@ -125,9 +125,9 @@ four mechanical reasons, not just taxonomy:
    write-holder does, the owner can undo." Broadcast breaks it — the network has
    copies; deletion is a request (ATProto's tombstones exist because of this). The type
    boundary keeps the commons honest about which text lives under which physics.
-4. **Different authorship requirements.** In-stack, `entityId` means author because
+4. **Different authorship requirements.** In-stack, `createdBy` means author because
    the stack is a trust domain. A broadcast utterance travels _without_ its stack, so
-   authorship must be self-certifying — the DID identity model used for `entityId`
+   authorship must be self-certifying — the DID identity model used for `createdBy`
    generally, plus the `alias` relationships that resolve a foreign identifier back to
    a known entity. `message` needs none of it; `post` can't exist without it.
 

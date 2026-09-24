@@ -40,26 +40,28 @@ beforeEach(async () => {
 describe('attribution — updatedBy tracks the actor', () => {
   test('create stamps the author as the actor of version 1', async () => {
     const record = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    expect(record.entityId).toBe(AUTHOR);
-    expect(record.updatedBy).toBe(AUTHOR);
-    expect(record.updatedVia).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBe(AUTHOR);
+    expect(record.updatedBy?.subjectId).toBe(AUTHOR);
+    expect(record.updatedBy?.principalId).toBeUndefined();
   });
 
   test('a delegated create names both halves at version 1', async () => {
-    const record = await stack.asEntity(APP, { onBehalfOf: AUTHOR }).create(NOTE, { text: 'v1' });
-    expect(record.entityId).toBe(AUTHOR);
-    expect(record.updatedBy).toBe(AUTHOR);
-    expect(record.principalId).toBe(APP);
-    expect(record.updatedVia).toBe(APP);
+    const record = await stack
+      .asActor({ principalId: APP, subjectId: AUTHOR })
+      .create(NOTE, { text: 'v1' });
+    expect(record.createdBy?.subjectId).toBe(AUTHOR);
+    expect(record.updatedBy?.subjectId).toBe(AUTHOR);
+    expect(record.createdBy?.principalId).toBe(APP);
+    expect(record.updatedBy?.principalId).toBe(APP);
   });
 
-  test('a non-author update moves updatedBy but never entityId', async () => {
+  test('a non-author update moves updatedBy but never createdBy', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
-    expect(record?.entityId).toBe(AUTHOR);
-    expect(record?.updatedBy).toBe(EDITOR);
+    expect(record?.createdBy?.subjectId).toBe(AUTHOR);
+    expect(record?.updatedBy?.subjectId).toBe(EDITOR);
   });
 
   test('every version-bumping verb restamps the actor', async () => {
@@ -67,13 +69,13 @@ describe('attribution — updatedBy tracks the actor', () => {
     const view = stack.asEntity(EDITOR);
 
     await view.patchContent(created.id, { text: 'v2' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
     await view.delete(created.id);
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
     await view.undelete(created.id);
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
   });
 
   // associate()/dissociate() never bump `version`, so they never touch
@@ -85,10 +87,10 @@ describe('attribution — updatedBy tracks the actor', () => {
     const view = stack.asEntity(EDITOR);
 
     await view.associate(created.id, { kind: 'tag', label: 'x' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
 
     await view.dissociate(created.id, { kind: 'tag', label: 'x' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
   });
 
   // Resharing is owner-or-creator-only and never delegated, so the creator
@@ -98,50 +100,52 @@ describe('attribution — updatedBy tracks the actor', () => {
   test('a permissions change set records who reshared', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
     await stack
       .asEntity(AUTHOR)
       .mutate(created.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
 
-    expect((await stack.get(created.id))?.updatedBy).toBe(EDITOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
     const entry = (await stack.getJournal(created.id)).at(-1);
     expect(entry?.ops).toEqual(['permissions']);
-    expect(entry?.actor?.entityId).toBe(AUTHOR);
+    expect(entry?.actor?.subjectId).toBe(AUTHOR);
   });
 
   test('a delegated write records both halves', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    await stack.asEntity(APP, { onBehalfOf: EDITOR }).patchContent(created.id, { text: 'v2' });
+    await stack
+      .asActor({ principalId: APP, subjectId: EDITOR })
+      .patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
-    expect(record?.updatedBy).toBe(EDITOR);
-    expect(record?.updatedVia).toBe(APP);
+    expect(record?.updatedBy?.subjectId).toBe(EDITOR);
+    expect(record?.updatedBy?.principalId).toBe(APP);
   });
 
   test('an undelegated write names no principal', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
-    expect((await stack.get(created.id))?.updatedVia).toBeUndefined();
+    expect((await stack.get(created.id))?.updatedBy?.principalId).toBeUndefined();
   });
 
   // An unscoped Stack has no requester to name. Carrying the previous actor
   // forward would attribute the write to whoever last touched the record.
   test('an unscoped write clears the actor rather than inheriting it', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
-    expect((await stack.get(created.id))?.updatedBy).toBe(AUTHOR);
+    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
 
     await stack.patchContent(created.id, { text: 'v2' });
 
     const record = await stack.get(created.id);
     expect(record?.updatedBy).toBeUndefined();
-    expect(record?.updatedVia).toBeUndefined();
-    expect(record?.entityId).toBe(AUTHOR);
+    expect(record?.updatedBy?.principalId).toBeUndefined();
+    expect(record?.createdBy?.subjectId).toBe(AUTHOR);
   });
 
   test('an unscoped create names no actor at all', async () => {
     const record = await stack.create(NOTE, { text: 'v1' });
-    expect(record.entityId).toBeUndefined();
+    expect(record.createdBy?.subjectId).toBeUndefined();
     expect(record.updatedBy).toBeUndefined();
   });
 });
@@ -153,17 +157,17 @@ describe('attribution — updatedBy tracks the actor', () => {
 describe('attribution — not caller-assertable', () => {
   // A scoped requester is named by making the request. Honouring an actor
   // it described in the options would make attribution self-reported, which
-  // is the property principalId already exists to deny.
+  // is the property `principalId` already exists to deny.
   test('a scoped caller cannot supply its own updatedBy', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
 
-    await stack
-      .asEntity(EDITOR)
-      .patchContent(created.id, { text: 'v2' }, { updatedBy: AUTHOR, updatedVia: APP } as never);
+    await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' }, {
+      actor: { subjectId: AUTHOR, principalId: APP },
+    } as never);
 
     const record = await stack.get(created.id);
-    expect(record?.updatedBy).toBe(EDITOR);
-    expect(record?.updatedVia).toBeUndefined();
+    expect(record?.updatedBy?.subjectId).toBe(EDITOR);
+    expect(record?.updatedBy?.principalId).toBeUndefined();
   });
 });
 
@@ -175,18 +179,20 @@ describe('attribution — version history', () => {
   test('each version carries the actor that produced it', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
-    await stack.asEntity(APP, { onBehalfOf: AUTHOR }).patchContent(created.id, { text: 'v3' });
+    await stack
+      .asActor({ principalId: APP, subjectId: AUTHOR })
+      .patchContent(created.id, { text: 'v3' });
 
     const versions = await stack.getVersions(created.id);
     const byVersion = new Map(versions.map((v) => [v.version, v]));
 
     // v1 was the create, v2 the editor's update; v3 is the live record.
-    expect(byVersion.get(1)?.updatedBy).toBe(AUTHOR);
-    expect(byVersion.get(2)?.updatedBy).toBe(EDITOR);
+    expect(byVersion.get(1)?.updatedBy?.subjectId).toBe(AUTHOR);
+    expect(byVersion.get(2)?.updatedBy?.subjectId).toBe(EDITOR);
 
     const live = await stack.get(created.id);
-    expect(live?.updatedBy).toBe(AUTHOR);
-    expect(live?.updatedVia).toBe(APP);
+    expect(live?.updatedBy?.subjectId).toBe(AUTHOR);
+    expect(live?.updatedBy?.principalId).toBe(APP);
   });
 
   test('a version snapshot keeps author and actor as separate facts', async () => {
@@ -195,8 +201,8 @@ describe('attribution — version history', () => {
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v3' });
 
     const v2 = (await stack.getVersions(created.id)).find((v) => v.version === 2);
-    expect(v2?.entityId).toBe(AUTHOR);
-    expect(v2?.updatedBy).toBe(EDITOR);
+    expect(v2?.createdBy?.subjectId).toBe(AUTHOR);
+    expect(v2?.updatedBy?.subjectId).toBe(EDITOR);
   });
 });
 
@@ -211,12 +217,12 @@ describe('attribution — restoreVersion', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
-    await stack.asEntity(APP, { onBehalfOf: EDITOR }).restoreVersion(created.id, 1);
+    await stack.asActor({ principalId: APP, subjectId: EDITOR }).restoreVersion(created.id, 1);
 
     const record = await stack.get(created.id);
     expect(record?.content.text).toBe('v1');
-    expect(record?.updatedBy).toBe(EDITOR);
-    expect(record?.updatedVia).toBe(APP);
+    expect(record?.updatedBy?.subjectId).toBe(EDITOR);
+    expect(record?.updatedBy?.principalId).toBe(APP);
   });
 
   test('restoring never moves the author', async () => {
@@ -224,7 +230,7 @@ describe('attribution — restoreVersion', () => {
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     await stack.asEntity(EDITOR).restoreVersion(created.id, 1);
 
-    expect((await stack.get(created.id))?.entityId).toBe(AUTHOR);
+    expect((await stack.get(created.id))?.createdBy?.subjectId).toBe(AUTHOR);
   });
 });
 
@@ -245,8 +251,8 @@ describe('attribution — separate from authorship checks', () => {
     await s2.grant({ kind: 'authenticated' }, [{ actions: ['create', 'read-own'], typeId: NOTE }]);
 
     const authored = await s2.asEntity(AUTHOR).create(NOTE, { text: 'a' });
-    // EDITOR can neither read nor restamp it: read-own resolves on entityId.
+    // EDITOR can neither read nor restamp it: read-own resolves on createdBy.
     expect(await s2.asEntity(EDITOR).get(authored.id)).toBeNull();
-    expect((await s2.get(authored.id))?.updatedBy).toBe(AUTHOR);
+    expect((await s2.get(authored.id))?.updatedBy?.subjectId).toBe(AUTHOR);
   });
 });

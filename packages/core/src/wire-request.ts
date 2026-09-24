@@ -297,12 +297,16 @@ export function parseQueryParams(url: URL): StackQuery {
   const appIds = url.searchParams.getAll('appId');
   if (appIds.length) filter.appId = appIds.length === 1 ? appIds[0] : appIds;
 
-  const entityIds = url.searchParams.getAll('entityId');
-  if (entityIds.length) filter.entityId = entityIds.length === 1 ? entityIds[0] : entityIds;
-
-  const principalIds = url.searchParams.getAll('principalId');
-  if (principalIds.length)
-    filter.principalId = principalIds.length === 1 ? principalIds[0] : principalIds;
+  const subjectIds = url.searchParams.getAll('createdBySubject');
+  const principalIds = url.searchParams.getAll('createdByPrincipal');
+  if (subjectIds.length || principalIds.length) {
+    filter.createdBy = {
+      ...(subjectIds.length && { subjectId: subjectIds.length === 1 ? subjectIds[0] : subjectIds }),
+      ...(principalIds.length && {
+        principalId: principalIds.length === 1 ? principalIds[0] : principalIds,
+      }),
+    };
+  }
 
   const tags = url.searchParams.getAll('tag');
   if (tags.length) filter.tags = tags;
@@ -391,10 +395,17 @@ export function parseQueryBody(raw: unknown): StackQuery {
     if (f.parentId !== undefined)
       filter.parentId = f.parentId === null ? null : requireString(f.parentId, 'filter.parentId');
     if (f.appId !== undefined) filter.appId = requireStringOrArray(f.appId, 'filter.appId');
-    if (f.entityId !== undefined)
-      filter.entityId = requireStringOrArray(f.entityId, 'filter.entityId');
-    if (f.principalId !== undefined)
-      filter.principalId = requireStringOrArray(f.principalId, 'filter.principalId');
+    if (f.createdBy !== undefined) {
+      const by = requirePlainObject(f.createdBy, 'filter.createdBy');
+      filter.createdBy = {
+        ...(by.subjectId !== undefined && {
+          subjectId: requireStringOrArray(by.subjectId, 'filter.createdBy.subjectId'),
+        }),
+        ...(by.principalId !== undefined && {
+          principalId: requireStringOrArray(by.principalId, 'filter.createdBy.principalId'),
+        }),
+      };
+    }
     if (f.tags !== undefined) filter.tags = requireStringArray(f.tags, 'filter.tags');
     if (f.hasAttachment !== undefined)
       filter.hasAttachment = requireString(f.hasAttachment, 'filter.hasAttachment');
@@ -469,8 +480,8 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   const parentId = url.searchParams.get('parentId');
   if (parentId !== null) filter.parentId = parentId === 'null' ? null : parentId;
 
-  const entityId = url.searchParams.get('entityId');
-  if (entityId !== null) filter.entityId = entityId;
+  const subjectId = url.searchParams.get('createdBySubject');
+  if (subjectId !== null) filter.createdBy = { subjectId };
 
   const kinds = url.searchParams.getAll('kind');
   if (kinds.length) {

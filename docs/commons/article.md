@@ -31,15 +31,15 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
 
 ## Field semantics
 
-| Field         | Kind     | Required | Meaning                                                                                                                                                                                                                                                                                   |
-| ------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title`       | `string` | yes      | The work's name. What makes it an article rather than a note.                                                                                                                                                                                                                             |
-| `text`        | `text`   | yes      | The body.                                                                                                                                                                                                                                                                                 |
-| `format`      | `string` | no       | Interpretation of `text`. Same vocabulary and defaults as `note`: `"markdown"` (default when absent), `"plain"`; unknown values render as plain.                                                                                                                                          |
-| `summary`     | `text`   | no       | Abstract/deck/excerpt. Authored: written or app-derived-and-saved. Captured: the source's own summary. Readers must not regenerate and write back over a present value.                                                                                                                   |
-| `url`         | `string` | no       | Canonical location of the published work. Authored drafts have none yet; captured articles always carry the source URL. Presence of `url` is what makes an article record read-compatible with `bookmark` consumers in spirit — though formally `bookmark`'s core requires it, see below. |
-| `author`      | `string` | no       | External attribution — the byline as displayed ("Jane Doe"). **Absent means the record's `entityId` (or the stack owner) is the author.** This is deliberately a string, not a reference: a captured work's byline is a property of the work, and its author is rarely a known principal. |
-| `publishedAt` | `date`   | no       | When the work was (or will be) published. **Absent means draft/unpublished.** Distinct from `createdAt` (when the record entered the stack) and `updatedAt` (last edit).                                                                                                                  |
+| Field         | Kind     | Required | Meaning                                                                                                                                                                                                                                                                                    |
+| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `title`       | `string` | yes      | The work's name. What makes it an article rather than a note.                                                                                                                                                                                                                              |
+| `text`        | `text`   | yes      | The body.                                                                                                                                                                                                                                                                                  |
+| `format`      | `string` | no       | Interpretation of `text`. Same vocabulary and defaults as `note`: `"markdown"` (default when absent), `"plain"`; unknown values render as plain.                                                                                                                                           |
+| `summary`     | `text`   | no       | Abstract/deck/excerpt. Authored: written or app-derived-and-saved. Captured: the source's own summary. Readers must not regenerate and write back over a present value.                                                                                                                    |
+| `url`         | `string` | no       | Canonical location of the published work. Authored drafts have none yet; captured articles always carry the source URL. Presence of `url` is what makes an article record read-compatible with `bookmark` consumers in spirit — though formally `bookmark`'s core requires it, see below.  |
+| `author`      | `string` | no       | External attribution — the byline as displayed ("Jane Doe"). **Absent means the record's `createdBy` (or the stack owner) is the author.** This is deliberately a string, not a reference: a captured work's byline is a property of the work, and its author is rarely a known principal. |
+| `publishedAt` | `date`   | no       | When the work was (or will be) published. **Absent means draft/unpublished.** Distinct from `createdAt` (when the record entered the stack) and `updatedAt` (last edit).                                                                                                                   |
 
 ## Conventions
 
@@ -62,7 +62,7 @@ await stack.defineType('org.haverstack/article@1', 'Article', {
   associations.
 - **Known authors** use the cross-type `author` relationship (see README) alongside —
   never instead of — the `author` string. Three tiers of acquaintance, three
-  mechanisms: a principal writing in this stack is `entityId` (native); someone you
+  mechanisms: a principal writing in this stack is `createdBy` (native); someone you
   know is an `author` relationship to their `contact` record; a stranger's byline is
   the `author` string alone. When string and association coexist they don't conflict —
   the association is machine-readable identity ("3 articles by Alice" is a query), the

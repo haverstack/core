@@ -23,8 +23,8 @@ const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Ma
 
 /**
  * The subset that is additionally unique per stack: the fields something
- * resolves *by*. A Record's `principalId` finds its card by `_app.did` and
- * its `entityId` by `_entity.did`, so a second card claiming either leaves
+ * resolves *by*. An Actor's `principalId` finds its card by `_app.did` and
+ * its `subjectId` by `_entity.did`, so a second card claiming either leaves
  * that lookup without a single answer — and ambiguity is all an
  * impersonating card needs.
  *

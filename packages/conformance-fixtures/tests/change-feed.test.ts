@@ -114,7 +114,7 @@ describe('every record frame', () => {
   it('carries no record provenance beside the actor', () => {
     for (const { connection, frame } of recordFrames) {
       const data = frame.data as Record<string, unknown>;
-      for (const field of ['entityId', 'appId', 'principalId', 'updatedBy', 'updatedVia']) {
+      for (const field of ['createdBy', 'appId', 'updatedBy']) {
         expect(field in data, `${connection}: ${field}`).toBe(false);
       }
     }
@@ -143,7 +143,7 @@ describe('a purged frame', () => {
   // principal beside the subject would describe a call that cannot happen.
   it('names an actor with no principal beside it', () => {
     for (const { connection, change } of purges) {
-      expect(change.actor?.entityId, connection).toBeTruthy();
+      expect(change.actor?.subjectId, connection).toBeTruthy();
       expect(change.actor?.principalId, connection).toBeUndefined();
     }
   });

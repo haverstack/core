@@ -40,7 +40,7 @@ describe('NativeTokenStore', () => {
 
   test('createToken returns id and plaintext token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { id, token } = await store.createToken('entity-abc');
+    const { id, token } = await store.createToken({ subjectId: 'entity-abc' });
     expect(typeof id).toBe('string');
     expect(id.length).toBeGreaterThan(0);
     expect(typeof token).toBe('string');
@@ -49,7 +49,7 @@ describe('NativeTokenStore', () => {
 
   test('an undelegated token resolves both identities to the authenticated DID', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { token } = await store.createToken('entity-abc');
+    const { token } = await store.createToken({ subjectId: 'entity-abc' });
     const result = await store.lookupToken(token);
     expect(result).toEqual({ principalId: 'entity-abc', subjectId: 'entity-abc' });
   });
@@ -59,7 +59,10 @@ describe('NativeTokenStore', () => {
   // asserts it at issuance. See docs/spec/wire-format.md § Authentication.
   test('a delegated token keeps the two identities distinct', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { token } = await store.createToken('did:key:zApp', { onBehalfOf: 'did:key:zBob' });
+    const { token } = await store.createToken({
+      principalId: 'did:key:zApp',
+      subjectId: 'did:key:zBob',
+    });
     expect(await store.lookupToken(token)).toEqual({
       principalId: 'did:key:zApp',
       subjectId: 'did:key:zBob',
@@ -68,7 +71,10 @@ describe('NativeTokenStore', () => {
 
   test('listTokens reports the delegation a token carries', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    await store.createToken('did:key:zApp', { onBehalfOf: 'did:key:zBob', label: 'Blog' });
+    await store.createToken(
+      { principalId: 'did:key:zApp', subjectId: 'did:key:zBob' },
+      { label: 'Blog' },
+    );
     const [info] = await store.listTokens();
     expect(info).toMatchObject({
       principalId: 'did:key:zApp',
@@ -84,24 +90,30 @@ describe('NativeTokenStore', () => {
 
   test('lookupToken returns null for an expired token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { token } = await store.createToken('entity-abc', {
-      expiresAt: new Date(Date.now() - 1000),
-    });
+    const { token } = await store.createToken(
+      { subjectId: 'entity-abc' },
+      {
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    );
     expect(await store.lookupToken(token)).toBeNull();
   });
 
   test('lookupToken resolves a non-expired token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { token } = await store.createToken('entity-abc', {
-      expiresAt: new Date(Date.now() + 60_000),
-    });
+    const { token } = await store.createToken(
+      { subjectId: 'entity-abc' },
+      {
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    );
     expect((await store.lookupToken(token))?.principalId).toBe('entity-abc');
   });
 
   test('listTokens returns all created tokens without plaintext values', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    await store.createToken('entity-a', { label: 'Token A' });
-    await store.createToken('entity-b', { label: 'Token B' });
+    await store.createToken({ subjectId: 'entity-a' }, { label: 'Token A' });
+    await store.createToken({ subjectId: 'entity-b' }, { label: 'Token B' });
     const tokens = await store.listTokens();
     expect(tokens.length).toBe(2);
     expect(tokens.map((t) => t.label)).toEqual(expect.arrayContaining(['Token A', 'Token B']));
@@ -112,14 +124,14 @@ describe('NativeTokenStore', () => {
 
   test('revokeToken removes the token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
-    const { id, token } = await store.createToken('entity-abc');
+    const { id, token } = await store.createToken({ subjectId: 'entity-abc' });
     await store.revokeToken(id);
     expect(await store.lookupToken(token)).toBeNull();
   });
 
   test('tokens persist across store instances', async () => {
     const store1 = await NativeTokenStore.open({ path: tokenPath });
-    const { token } = await store1.createToken('entity-abc');
+    const { token } = await store1.createToken({ subjectId: 'entity-abc' });
     await store1.close();
 
     const store2 = await NativeTokenStore.open({ path: tokenPath });

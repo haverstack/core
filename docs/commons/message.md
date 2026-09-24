@@ -40,7 +40,7 @@ await stack.defineType('org.haverstack/message@1', 'Message', {
 | `subject` | `string` | no       | Thread subject. Conventionally present on thread starters, absent on replies (a reply that sets one is a subject change, as in email). |
 | `format`  | `string` | no       | Same vocabulary and defaults as `note`: `"markdown"` (default), `"plain"`.                                                             |
 
-The author is `entityId` — set natively by `ScopedStack.create()` for every member
+The author is `createdBy` — set natively by `ScopedStack.create()` for every member
 write, which is the whole reason this type needs no author field.
 
 ## Conventions

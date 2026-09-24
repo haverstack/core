@@ -32,7 +32,7 @@ export type WireCreateRequest = {
   typeId: TypeId;
   content: Record<string, unknown>;
   /** Omitted, not optional: a caller cannot forward what the type lacks. */
-  options: Omit<BackdatableCreateRecordOptions, 'entityId' | 'principalId'>;
+  options: Omit<BackdatableCreateRecordOptions, 'createdBy'>;
 };
 
 function requireBody(body: unknown): Record<string, unknown> {

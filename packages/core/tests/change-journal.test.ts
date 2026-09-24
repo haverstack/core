@@ -333,22 +333,26 @@ describe('a hard delete leaves no journal behind', () => {
 describe('every entry names who made the change', () => {
   test('an association change attributes the actor that made it', async () => {
     await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
-    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
+    const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
 
     await stack.associate(
       note.id,
       { kind: 'tag', label: 'starred' },
-      { updatedBy: EDITOR, updatedVia: OWNER },
+      { actor: { subjectId: EDITOR, principalId: OWNER } },
     );
 
     const entry = (await stack.getJournal(note.id)).at(-1)!;
-    expect(entry.actor).toEqual({ entityId: EDITOR, principalId: OWNER });
+    expect(entry.actor).toEqual({ subjectId: EDITOR, principalId: OWNER });
   });
 
   test('a create names its author and the app that wrote it', async () => {
-    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER, appId: 'app-1' });
+    const note = await stack.create(
+      NOTE,
+      { text: 'hello' },
+      { createdBy: { subjectId: OWNER }, appId: 'app-1' },
+    );
     const entry = (await stack.getJournal(note.id))[0]!;
-    expect(entry.actor).toMatchObject({ entityId: OWNER, appId: 'app-1' });
+    expect(entry.actor).toMatchObject({ subjectId: OWNER, appId: 'app-1' });
   });
 });
 
@@ -361,18 +365,26 @@ describe('the journal and the feed report the same change', () => {
     const seen: RecordChange[] = [];
     const unsubscribe = await stack.subscribe((change) => seen.push(change));
 
-    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
-    const folder = await stack.create(FOLDER, { name: 'box' }, { entityId: OWNER });
-    await stack.patchContent(note.id, { text: 'edited' }, { updatedBy: OWNER });
+    const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
+    const folder = await stack.create(FOLDER, { name: 'box' }, { createdBy: { subjectId: OWNER } });
+    await stack.patchContent(note.id, { text: 'edited' }, { actor: { subjectId: OWNER } });
     await stack.mutate(
       note.id,
       { parentId: folder.id, permissions: [{ kind: 'anyone', label: 'read' }] },
-      { updatedBy: OWNER },
+      { actor: { subjectId: OWNER } },
     );
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' }, { updatedBy: EDITOR });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' }, { updatedBy: EDITOR });
-    await stack.delete(note.id, { updatedBy: OWNER });
-    await stack.undelete(note.id, { updatedBy: OWNER });
+    await stack.associate(
+      note.id,
+      { kind: 'tag', label: 'starred' },
+      { actor: { subjectId: EDITOR } },
+    );
+    await stack.dissociate(
+      note.id,
+      { kind: 'tag', label: 'starred' },
+      { actor: { subjectId: EDITOR } },
+    );
+    await stack.delete(note.id, { actor: { subjectId: OWNER } });
+    await stack.undelete(note.id, { actor: { subjectId: OWNER } });
     unsubscribe();
 
     const log = await stack.getJournal(note.id);
@@ -491,7 +503,7 @@ describe('the journal is gated on the mutate surface, like version history', () 
       NOTE,
       { text: 'hello' },
       {
-        entityId: OWNER,
+        createdBy: { subjectId: OWNER },
         permissions: [
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
           { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: EDITOR } },
@@ -547,7 +559,7 @@ describe('JournalQuery is validated at the surface', () => {
   });
 
   test('the scoped surface is held to the same rule', async () => {
-    const note = await stack.create(NOTE, { text: 'hello' }, { entityId: OWNER });
+    const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
     await expect(stack.asEntity(OWNER).getJournal(note.id, { limit: -1 })).rejects.toThrow(
       StackQueryError,
     );

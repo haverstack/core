@@ -160,7 +160,7 @@ describe('type-level grants reach the feed exactly as they reach query()', () =>
     // The app holds no grant on this type, so the intersection is empty
     // however much the subject may read.
     await stack
-      .asEntity(APP, { onBehalfOf: READER })
+      .asActor({ principalId: APP, subjectId: READER })
       .subscribe(delegated.handler, { filter: { typeId: NOTE } });
 
     await stack.create(NOTE, { text: 'granted to the person, not the app' });
@@ -452,8 +452,8 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
     await settle();
 
     expect(reader.seen.map((c) => c.recordId)).toEqual([note.id]);
-    expect((reader.seen[0]!.record as StackRecord).entityId).toBe(READER);
-    expect(reader.seen[0]!.actor).toEqual({ entityId: READER });
+    expect((reader.seen[0]!.record as StackRecord).createdBy?.subjectId).toBe(READER);
+    expect(reader.seen[0]!.actor).toEqual({ subjectId: READER });
   });
 
   test('unsubscribing stops delivery even mid-flight', async () => {

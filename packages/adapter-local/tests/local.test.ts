@@ -201,7 +201,7 @@ describe('attachments', () => {
 describe('tokens', () => {
   test('createToken and lookupToken roundtrip', async () => {
     const adapter = await initAdapter();
-    const { token } = await adapter.createToken('entity-abc');
+    const { token } = await adapter.createToken({ subjectId: 'entity-abc' });
     const result = await adapter.lookupToken(token);
     expect(result).toEqual({ principalId: 'entity-abc', subjectId: 'entity-abc' });
   });
@@ -213,15 +213,15 @@ describe('tokens', () => {
 
   test('revokeToken invalidates the token', async () => {
     const adapter = await initAdapter();
-    const { id, token } = await adapter.createToken('entity-abc');
+    const { id, token } = await adapter.createToken({ subjectId: 'entity-abc' });
     await adapter.revokeToken(id);
     expect(await adapter.lookupToken(token)).toBeNull();
   });
 
   test('listTokens returns created tokens', async () => {
     const adapter = await initAdapter();
-    await adapter.createToken('entity-a', { label: 'Token A' });
-    await adapter.createToken('entity-b', { label: 'Token B' });
+    await adapter.createToken({ subjectId: 'entity-a' }, { label: 'Token A' });
+    await adapter.createToken({ subjectId: 'entity-b' }, { label: 'Token B' });
     const tokens = await adapter.listTokens();
     expect(tokens.length).toBe(2);
   });
@@ -229,7 +229,7 @@ describe('tokens', () => {
   test('tokens live in a separate sibling file, not the main .db', async () => {
     const adapter = await initAdapter();
     expect(existsSync(`${dbPath}.tokens`)).toBe(false);
-    await adapter.createToken('entity-abc');
+    await adapter.createToken({ subjectId: 'entity-abc' });
     expect(existsSync(`${dbPath}.tokens`)).toBe(true);
   });
 
@@ -272,12 +272,12 @@ describe('journal', () => {
   test('records the entry a create carries', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ id: 'rec1' }), {
-      journal: { kind: 'created', ops: ['create'], actor: { entityId: 'entity-123' } },
+      journal: { kind: 'created', ops: ['create'], actor: { subjectId: 'entity-123' } },
     });
 
     const entries = await adapter.getJournal(record.id);
     expect(entries.map((e) => ({ seq: e.seq, ops: e.ops }))).toEqual([{ seq: 1, ops: ['create'] }]);
-    expect(entries[0]!.actor).toEqual({ entityId: 'entity-123' });
+    expect(entries[0]!.actor).toEqual({ subjectId: 'entity-123' });
   });
 
   test('records the entry an associate carries, with what it displaced', async () => {

@@ -31,6 +31,7 @@ import {
 import type { EmittedChange } from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
 import type {
+  Actor,
   ActorOptions,
   AppContent,
   AppId,
@@ -244,7 +245,7 @@ export class ScopedStack implements StackClient {
     private readonly idTimestampSkewMs: number | null,
     // Bytes-storage primitive for putAttachment(). Held directly because
     // ScopedStack always composes bytes + its own create() — the record
-    // must carry the subject's entityId and the principal behind it,
+    // must carry the subject and the principal behind it as `createdBy`,
     // neither of which the adapter-level atomic capability takes.
     private readonly adapter: StackAdapter,
     // The stack's own stream, filtered by subscribe(). Held here rather
@@ -284,14 +285,18 @@ export class ScopedStack implements StackClient {
    * principal is named beside it only when the two differ.
    * See docs/spec/data-model.md § Authorship and attribution.
    */
+  private get requester(): Actor | undefined {
+    if (this.subjectEntityId === null) return undefined;
+    return this.delegated && this.principalEntityId !== null
+      ? { subjectId: this.subjectEntityId, principalId: this.principalEntityId }
+      : { subjectId: this.subjectEntityId };
+  }
+
   private get actor(): ActorOptions {
-    // Both keys are always present, so spreading this last overrides
-    // anything a caller passed: a scoped requester names itself by making
-    // the request, never by describing itself in the options.
-    return {
-      updatedBy: this.subjectEntityId ?? undefined,
-      updatedVia: this.delegated ? (this.principalEntityId ?? undefined) : undefined,
-    };
+    // The key is always present, so spreading this last overrides anything
+    // a caller passed: a scoped requester names itself by making the
+    // request, never by describing itself in the options.
+    return { actor: this.requester };
   }
 
   /**
@@ -337,7 +342,7 @@ export class ScopedStack implements StackClient {
   /**
    * Whether `grantee` holds a _grant covering one of `actions` for the
    * type's family (grants match by baseId, so a version bump never orphans
-   * one). -own actions additionally require record.entityId === grantee,
+   * one). -own actions additionally require the author to be `grantee`,
    * unless `matchOwn` is false — on the principal side of a delegated
    * request the suffix reads as the bare verb, since which records are
    * reachable is the subject's business. `allowDefault` decides whether a
@@ -404,7 +409,7 @@ export class ScopedStack implements StackClient {
       if (!covers) continue;
       const matches = actions.some((action) => {
         if (!grantConveys(reach.actions, action)) return false;
-        if (matchOwn && action.endsWith('-own')) return record?.entityId === grantee;
+        if (matchOwn && action.endsWith('-own')) return record?.createdBy?.subjectId === grantee;
         return true;
       });
       if (matches) return true;
@@ -676,7 +681,7 @@ export class ScopedStack implements StackClient {
           await this.stack.query({
             filter: {
               typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              entityId: this.subjectEntityId,
+              createdBy: { subjectId: this.subjectEntityId },
               content: { fileId },
               includeUnlisted: true,
             },
@@ -687,7 +692,7 @@ export class ScopedStack implements StackClient {
           await queryAllPages((q) => this.stack.query(q), {
             filter: {
               typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              entityId: this.subjectEntityId,
+              createdBy: { subjectId: this.subjectEntityId },
               includeUnlisted: true,
             },
           })
@@ -749,10 +754,10 @@ export class ScopedStack implements StackClient {
 
   /**
    * Create a record on behalf of the subject: create grant required,
-   * anonymous denied, entityId set to the subject, client IDs skew-checked,
+   * anonymous denied, `createdBy` set to the requester, client IDs skew-checked,
    * reference-creating options gated, and non-owner `_attachment@1`
    * creation refused save one carve-out. A scoped create always stamps
-   * authorship — an absent entityId means an unscoped `Stack` wrote it.
+   * authorship — an absent `createdBy` means an unscoped `Stack` wrote it.
    * `createdAt`/`updatedAt` are refused to everyone but the owner acting
    * alone, rather than dropped, so an app never believes it published
    * something it didn't. See docs/spec/access-control.md and
@@ -821,8 +826,7 @@ export class ScopedStack implements StackClient {
     await this.requireFileRefAccess(typeId, content);
     return this.stack.create(typeId, content, {
       ...opts,
-      entityId: this.subjectEntityId ?? undefined,
-      principalId: this.delegated ? principal : undefined,
+      createdBy: this.requester,
     });
   }
 
@@ -849,7 +853,7 @@ export class ScopedStack implements StackClient {
    */
   private mayReshare(entityId: EntityId | null, record: StackRecord): boolean {
     if (!entityId) return false;
-    return entityId === this.stack.ownerEntityId || entityId === record.entityId;
+    return entityId === this.stack.ownerEntityId || entityId === record.createdBy?.subjectId;
   }
 
   /**
@@ -1372,11 +1376,7 @@ export class ScopedStack implements StackClient {
         size: data.byteLength,
         ...(filename && { filename }),
       },
-      {
-        entityId: this.subjectEntityId ?? undefined,
-        principalId: this.delegated ? principal : undefined,
-        appId,
-      },
+      { createdBy: this.requester, appId },
     );
   }
 
