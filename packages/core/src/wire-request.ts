@@ -276,6 +276,19 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
 // GET /records
 // -------------------------------------------------------
 
+/** The author filter, spelled the same on `GET /records` and `GET /changes`. */
+function parseCreatedByParams(url: URL): RecordFilter['createdBy'] {
+  const subjectIds = url.searchParams.getAll('createdBySubject');
+  const principalIds = url.searchParams.getAll('createdByPrincipal');
+  if (!subjectIds.length && !principalIds.length) return undefined;
+  return {
+    ...(subjectIds.length && { subjectId: subjectIds.length === 1 ? subjectIds[0] : subjectIds }),
+    ...(principalIds.length && {
+      principalId: principalIds.length === 1 ? principalIds[0] : principalIds,
+    }),
+  };
+}
+
 /**
  * Build a `StackQuery` from `GET /records` search params — the inverse of
  * what `APIAdapter` encodes for a server that reaches no content.
@@ -297,16 +310,8 @@ export function parseQueryParams(url: URL): StackQuery {
   const appIds = url.searchParams.getAll('appId');
   if (appIds.length) filter.appId = appIds.length === 1 ? appIds[0] : appIds;
 
-  const subjectIds = url.searchParams.getAll('createdBySubject');
-  const principalIds = url.searchParams.getAll('createdByPrincipal');
-  if (subjectIds.length || principalIds.length) {
-    filter.createdBy = {
-      ...(subjectIds.length && { subjectId: subjectIds.length === 1 ? subjectIds[0] : subjectIds }),
-      ...(principalIds.length && {
-        principalId: principalIds.length === 1 ? principalIds[0] : principalIds,
-      }),
-    };
-  }
+  const createdBy = parseCreatedByParams(url);
+  if (createdBy) filter.createdBy = createdBy;
 
   const tags = url.searchParams.getAll('tag');
   if (tags.length) filter.tags = tags;
@@ -477,11 +482,14 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   const typeIds = url.searchParams.getAll('typeId');
   if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
 
+  const baseIds = url.searchParams.getAll('baseId');
+  if (baseIds.length) filter.baseId = baseIds.length === 1 ? baseIds[0] : baseIds;
+
   const parentId = url.searchParams.get('parentId');
   if (parentId !== null) filter.parentId = parentId === 'null' ? null : parentId;
 
-  const subjectId = url.searchParams.get('createdBySubject');
-  if (subjectId !== null) filter.createdBy = { subjectId };
+  const createdBy = parseCreatedByParams(url);
+  if (createdBy) filter.createdBy = createdBy;
 
   const kinds = url.searchParams.getAll('kind');
   if (kinds.length) {

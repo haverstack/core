@@ -4180,13 +4180,14 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     ],
   },
   {
-    name: 'change-feed-typeid-filter-matches-by-baseid',
+    name: 'change-feed-typeid-filter-matches-exactly',
     description:
-      'A ?typeId filter is matched by baseId, exactly as a grant is, so a type version bump ' +
-      'never silently orphans a subscription: a connection filtered on note@1 receives note@2 ' +
-      'changes, including the migration that produced them. A change to another type is not ' +
-      'delivered at all — filtering here is exact rather than advisory, so a client that ' +
-      'filters again is doing redundant work rather than defensive work.',
+      'A ?typeId filter is an exact match, as it is on GET /records, so one filter selects the ' +
+      'same records from both: a connection filtered on note@1 receives nothing for a record ' +
+      'already at note@2. A migration out of note@1 is still delivered, because a type change ' +
+      'is matched against the type it left as well as the one it entered — the frame carries ' +
+      'the new typeId, and a subscriber reads the mismatch as a departure. A change to another ' +
+      'type is not delivered at all: filtering here is exact rather than advisory.',
     path: '/changes?typeId=com.example/note@1',
     responseStatus: 200,
     openingFrames: [READY],
@@ -4214,8 +4215,31 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       },
       {
         mutation: {
-          name: 'change-feed-typeid-filter-migrated-record-mutation',
-          description: 'The note is migrated to note@2, which the filter still covers.',
+          name: 'change-feed-typeid-filter-later-version-mutation',
+          description: 'A change to a record already at note@2.',
+          method: 'PATCH',
+          path: '/records/1hk153x03002',
+          requestBody: { contentPatch: { title: 'Later' } },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x03002',
+            typeId: 'com.example/note@2',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            content: { title: 'Later', tags: [] },
+            version: 2,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
+          },
+        },
+        frames: [],
+      },
+      {
+        mutation: {
+          name: 'change-feed-typeid-filter-migration-mutation',
+          description:
+            'The note is migrated to note@2. The filter names the type it left, so the ' +
+            'subscriber learns it is gone.',
           method: 'POST',
           path: '/records/1hk153x00001/migrate',
           requestBody: {
@@ -4245,6 +4269,76 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
               typeId: 'com.example/note@2',
               version: 5,
               updatedAt: '2024-01-05T00:00:00.000Z',
+              actor: { subjectId: FEED_OWNER },
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'change-feed-baseid-filter-matches-every-version',
+    description:
+      'A ?baseId filter matches every version of a type family, so a type version bump never ' +
+      'silently orphans a subscription: a connection filtered on com.example/note receives ' +
+      'note@2 changes as well as note@1 ones. Unlike GET /records, where baseId is resolved ' +
+      'client-side and refused on the wire, the feed carries it, because the versions it must ' +
+      'cover include ones not yet registered when the connection opened.',
+    path: '/changes?baseId=com.example/note',
+    responseStatus: 200,
+    openingFrames: [READY],
+    activity: [
+      {
+        mutation: {
+          name: 'change-feed-baseid-filter-other-type-mutation',
+          description: 'A change to a record of an unrelated type.',
+          method: 'PATCH',
+          path: '/records/1hk153x03001',
+          requestBody: { contentPatch: { url: 'https://example.com' } },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x03001',
+            typeId: 'com.example/bookmark@1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+            content: { url: 'https://example.com' },
+            version: 2,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
+          },
+        },
+        frames: [],
+      },
+      {
+        mutation: {
+          name: 'change-feed-baseid-filter-later-version-mutation',
+          description: 'A change to a record already at note@2.',
+          method: 'PATCH',
+          path: '/records/1hk153x03002',
+          requestBody: { contentPatch: { title: 'Later' } },
+          responseStatus: 200,
+          responseBody: {
+            id: '1hk153x03002',
+            typeId: 'com.example/note@2',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            content: { title: 'Later', tags: [] },
+            version: 2,
+            createdBy: { subjectId: FEED_OWNER },
+            updatedBy: { subjectId: FEED_OWNER },
+          },
+        },
+        frames: [
+          {
+            id: 'AA3f1Y',
+            event: 'record',
+            data: {
+              kind: 'changed',
+              ops: ['patch'],
+              recordId: '1hk153x03002',
+              typeId: 'com.example/note@2',
+              version: 2,
+              updatedAt: '2024-01-03T00:00:00.000Z',
               actor: { subjectId: FEED_OWNER },
             },
           },

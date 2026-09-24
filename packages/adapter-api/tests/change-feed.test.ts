@@ -200,8 +200,9 @@ describe('opening a connection', () => {
       {
         filter: {
           typeId: ['com.example/note@1', 'com.example/memo@1'],
+          baseId: 'com.example/task',
           parentId: null,
-          createdBy: { subjectId: EDITOR },
+          createdBy: { subjectId: EDITOR, principalId: [EDITOR, 'entity-app'] },
           kinds: ['created', 'purged'],
         },
         includeRecords: true,
@@ -215,7 +216,9 @@ describe('opening a connection', () => {
     expect(url.pathname).toBe('/changes');
     expect(url.searchParams.getAll('typeId')).toEqual(['com.example/note@1', 'com.example/memo@1']);
     expect(url.searchParams.get('parentId')).toBe('null');
+    expect(url.searchParams.getAll('baseId')).toEqual(['com.example/task']);
     expect(url.searchParams.get('createdBySubject')).toBe(EDITOR);
+    expect(url.searchParams.getAll('createdByPrincipal')).toEqual([EDITOR, 'entity-app']);
     expect(url.searchParams.getAll('kind')).toEqual(['created', 'purged']);
     expect(url.searchParams.get('include')).toBe('record');
     stop();

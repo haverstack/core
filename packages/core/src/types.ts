@@ -1007,14 +1007,11 @@ export type RecordChange = {
 /**
  * Applied by the emitter, exactly: a filtered subscription never receives
  * an event outside its filter, so filtering again is redundant rather than
- * defensive.
+ * defensive. Every key means what it means on `RecordFilter`, so one value
+ * can drive both `query()` and `subscribe()`. See docs/spec/events.md
+ * § Subscribing.
  */
-export type ChangeFilter = {
-  /** Matched by baseId, as grants are, so a version bump orphans nothing. */
-  typeId?: TypeId | TypeId[];
-  parentId?: RecordId | null;
-  /** Matches the record's author, as `RecordFilter.createdBy` does. */
-  createdBy?: { subjectId: EntityId };
+export type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
   kinds?: ChangeKind[];
 };
 

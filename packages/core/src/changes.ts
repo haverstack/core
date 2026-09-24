@@ -52,6 +52,14 @@ export type EmittedChange = {
    * record did not move. See docs/spec/events.md § The reparent transition.
    */
   previousParentId?: string | null;
+  /**
+   * The type a `migrate` or `restore` took the record out of. Emitter-side
+   * only, like `previousParentId` and for the same reason: a `typeId` or
+   * `baseId` filter answers for the origin as well as the destination.
+   * Absent wherever the type did not change. See docs/spec/events.md
+   * § The type-change transition.
+   */
+  previousTypeId?: string;
 };
 
 /** The `baseId@version` split, as grants and query filters read it. */
@@ -68,10 +76,19 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
 
   if (filter.kinds && !filter.kinds.includes(change.kind)) return false;
 
+  // A type change is announced to both types it concerns, as a move is to
+  // both containers: see docs/spec/events.md § The type-change transition.
+  const typeIds = [change.typeId];
+  if (emitted.previousTypeId !== undefined) typeIds.push(emitted.previousTypeId);
+
   if (filter.typeId !== undefined) {
-    const wanted = Array.isArray(filter.typeId) ? filter.typeId : [filter.typeId];
-    const family = baseIdOf(change.typeId);
-    if (!wanted.some((t) => baseIdOf(t) === family)) return false;
+    const wanted = asArray(filter.typeId);
+    if (!typeIds.some((t) => wanted.includes(t))) return false;
+  }
+
+  if (filter.baseId !== undefined) {
+    const wanted = asArray(filter.baseId);
+    if (!typeIds.some((t) => wanted.includes(baseIdOf(t)))) return false;
   }
 
   if (filter.parentId !== undefined) {
@@ -85,15 +102,17 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
     if (parentId !== filter.parentId && origin !== filter.parentId) return false;
   }
 
-  if (
-    filter.createdBy !== undefined &&
-    record.createdBy?.subjectId !== filter.createdBy.subjectId
-  ) {
-    return false;
+  for (const field of ['subjectId', 'principalId'] as const) {
+    const wanted = filter.createdBy?.[field];
+    if (wanted === undefined) continue;
+    const id = record.createdBy?.[field];
+    if (id === undefined || !asArray(wanted).includes(id)) return false;
   }
 
   return true;
 }
+
+const asArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [value]);
 
 /**
  * Whether an emission passes the unlisted-enumeration boundary for one
@@ -260,6 +279,12 @@ export class PendingChange {
       actor?: ChangeActor;
       previousParentId?: string | null;
       /**
+       * The type before a write that can change it. Feed-only: every journal
+       * entry carries its own `typeId`, so consecutive entries already show
+       * the change.
+       */
+      previousTypeId?: string;
+      /**
        * What the write moved, association by association. One list for
        * both halves: the journal takes it as it stands and the feed is
        * flattened out of it, so neither can report an edit the other
@@ -330,6 +355,10 @@ export class PendingChange {
       ...(this.moved.previousParentId !== undefined && {
         previousParentId: this.moved.previousParentId,
       }),
+      ...(this.moved.previousTypeId !== undefined &&
+        this.moved.previousTypeId !== record.typeId && {
+          previousTypeId: this.moved.previousTypeId,
+        }),
       change: {
         kind: this.kind,
         ops: this.ops,

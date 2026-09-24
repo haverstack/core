@@ -206,10 +206,8 @@ type SubscribeOptions = {
   onReset?: () => void;
 };
 
-type ChangeFilter = {
-  typeId?: TypeId | TypeId[]; // matched by baseId, as grants are
-  parentId?: RecordId | null;
-  createdBy?: { subjectId: EntityId }; // the record's author, not the actor
+// Every key means what it means on RecordFilter
+type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
   kinds?: ChangeKind[];
 };
 
@@ -221,7 +219,7 @@ interface StackClient {
 - **It lives on `StackClient`**, so both `Stack` and `ScopedStack` implement it, and plugin code written against `StackClient` gets reactivity without learning the backend.
 - **`subscribe()` is async and resolves when the subscription is live** — immediately for a local stack, after a server's ready signal for a remote one. This makes the no-gap startup pattern the natural one: `await subscribe()`, _then_ `query()` for initial state, and let the consumer's own version comparison absorb the overlap. A synchronous `subscribe()` would leave every remote consumer to discover that race alone.
 - **It returns an unsubscribe function**, not `off(name, handler)`: handler identity is a bad key once closures are involved.
-- **`typeId` matches by `baseId`**, exactly as [grants do](./access-control.md#type-level-grants), so a type version bump never silently orphans a subscription.
+- **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — and, unlike in `query()`, covers versions registered after the subscription opened, since it is matched against each change's `typeId` rather than resolved against registered Types up front.
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event outside its filter; a consumer that filters again is doing redundant work, not defensive work.
 - **`onReset` is the one control signal an app must handle.** A reconnect that resumes cleanly is the adapter's business and the app never hears about it; `onReset` means a gap opened that resumption could not close, and reconciling by query is the repair — the same work as startup. It never fires on a local stack, which has one writing process and so no gap to open. Passing a `since` the far end refuses (a `resume: false` server, an expired cursor) fires it on the very first connection — that is a gap too, and the one an app most needs to hear about: the difference between "you are current" and "you are missing an unknown amount."
 - **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter as `SubscribeChangesOptions.since` — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackQueryError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
@@ -274,6 +272,14 @@ A `parentId` filter is answered by the record, not the envelope, so a record tha
 **Kind is `changed`, not `deleted`.** `unlist` maps to `deleted` because the record genuinely leaves the subscriber's view and must be dropped. A moved record is still there and still readable; only its container moved, and the same frame reaches the destination's subscribers, for whom "drop your copy" would be exactly wrong. A subscriber maintaining a list of one container's children therefore has to read `parentId` rather than treating every `changed` as an upsert — the one place where kind alone under-determines what to do, and the reason a filtered subscription is [guaranteed `parentId` in the stub](#the-event-shape).
 
 An unscoped `parentId` filter (`null`, for root records) participates on the same terms: a record moved to the root is an arrival there, and one moved off it a departure.
+
+## The type-change transition
+
+`typeId` and `baseId` filters are answered by the record, so a record whose type changes would otherwise be announced only to subscribers of the type it arrived at — a subscriber of the old type would keep a record that no longer matches its filter, and that its own `query()` no longer returns. A type change is therefore matched against **both** types, the pre-change one and the post-change one, on the same terms as [a move between containers](#the-reparent-transition).
+
+**`migrate` and `restore` are the ops that can change a type.** A migration always names a new `typeId`, possibly in another family; a restore puts back the snapshot's `typeId`, which is the pre-migration one for a snapshot that predates a migration (see [Versioning § Restore semantics](./versioning.md#restore-semantics)). Either one that leaves the type where it was matches one type, as every other op does.
+
+**A frame carries only the new type.** `typeId` on a frame is the record's type at the moment of the change, as everywhere, and a subscriber tells a departure from an arrival by comparing it to its filter — the same comparison a `reparent` frame asks for with `parentId`. Kind is `changed`: the record is still there and still readable.
 
 ## Delivery
 

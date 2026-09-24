@@ -612,16 +612,91 @@ describe('a purged frame carries nothing about the record', () => {
 // -------------------------------------------------------
 
 describe('filtering is exact', () => {
-  test('typeId matches by family, so a version bump orphans nothing', async () => {
+  test('typeId matches exactly, as it does in query()', async () => {
     await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
+    await stack.create(NOTE, { text: 'this version' });
+    await stack.create(NOTE_V2, { text: 'later version' });
+
+    expect(seen.map((c) => c.typeId)).toEqual([NOTE]);
+  });
+
+  test('baseId matches the whole family, so a version bump orphans nothing', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter: { baseId: 'com.example.test/note' } });
+
+    await stack.create(NOTE, { text: 'a' });
     await stack.create(NOTE_V2, { text: 'later version' });
     await stack.create(OTHER, { text: 'other family' });
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.typeId).toBe(NOTE_V2);
+    expect(seen.map((c) => c.typeId)).toEqual([NOTE, NOTE_V2]);
+  });
+
+  test('one filter selects the same records in query() and subscribe()', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const filter = { typeId: NOTE };
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, { filter });
+
+    await stack.create(NOTE, { text: 'a' });
+    await stack.create(NOTE_V2, { text: 'b' });
+
+    const { records } = await stack.query({ filter });
+    expect(seen.map((c) => c.recordId)).toEqual(records.map((r) => r.id));
+  });
+
+  test('a migration reaches subscribers of the type it left and the type it entered', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const note = await stack.create(NOTE, { text: 'a' });
+    const left = collector();
+    const entered = collector();
+    const unrelated = collector();
+    await stack.subscribe(left.handler, { filter: { typeId: NOTE } });
+    await stack.subscribe(entered.handler, { filter: { typeId: NOTE_V2 } });
+    await stack.subscribe(unrelated.handler, { filter: { typeId: OTHER } });
+
+    await stack.commitMigration(note.id, NOTE_V2, { text: 'a' });
+
+    expect(left.seen.map((c) => c.typeId)).toEqual([NOTE_V2]);
+    expect(entered.seen.map((c) => c.typeId)).toEqual([NOTE_V2]);
+    expect(unrelated.seen).toHaveLength(0);
+  });
+
+  test('a migration across families reaches both families', async () => {
+    const note = await stack.create(NOTE, { text: 'a' });
+    const left = collector();
+    await stack.subscribe(left.handler, { filter: { baseId: 'com.example.test/note' } });
+
+    await stack.commitMigration(note.id, OTHER, { text: 'a' });
+
+    expect(left.seen.map((c) => c.typeId)).toEqual([OTHER]);
+  });
+
+  test('a restore that changes the type reaches both types', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const note = await stack.create(NOTE, { text: 'a' });
+    await stack.commitMigration(note.id, NOTE_V2, { text: 'a' });
+    const left = collector();
+    await stack.subscribe(left.handler, { filter: { typeId: NOTE_V2 } });
+
+    await stack.restoreVersion(note.id, 1);
+
+    expect(left.seen.map((c) => [c.ops, c.typeId])).toEqual([[['restore'], NOTE]]);
+  });
+
+  test('a write that keeps the type reaches only that type', async () => {
+    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    const note = await stack.create(NOTE, { text: 'a' });
+    await stack.patchContent(note.id, { text: 'b' });
+    const other = collector();
+    await stack.subscribe(other.handler, { filter: { typeId: NOTE_V2 } });
+
+    await stack.restoreVersion(note.id, 1);
+
+    expect(other.seen).toHaveLength(0);
   });
 
   test('a filter accepts a list of types', async () => {
@@ -798,6 +873,25 @@ describe('filtering is exact', () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
+  });
+
+  test('createdBy matches a list of authors and the principal behind them', async () => {
+    await stack.grant({ kind: 'authenticated' }, [
+      { actions: ['create', 'read-any'], typeId: NOTE },
+    ]);
+    await stack.grant({ kind: 'entity', entityId: APP }, [
+      { actions: ['create', 'read-any'], typeId: NOTE },
+    ]);
+    const { seen, handler } = collector();
+    await stack.subscribe(handler, {
+      filter: { createdBy: { subjectId: [AUTHOR, EDITOR], principalId: APP } },
+    });
+
+    await stack.asActor({ subjectId: AUTHOR, principalId: APP }).create(NOTE, { text: 'a' });
+    await stack.asActor({ subjectId: EDITOR, principalId: APP }).create(NOTE, { text: 'b' });
+    await stack.asEntity(AUTHOR).create(NOTE, { text: 'acting as itself' });
+
+    expect(seen).toHaveLength(2);
   });
 });
 
