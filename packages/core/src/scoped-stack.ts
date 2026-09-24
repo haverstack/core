@@ -21,7 +21,6 @@
 import { baseIdOf } from './schema.js';
 import { validatePatchValues } from './validate.js';
 import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from './access.js';
-import type { GroupRole } from './access.js';
 import {
   ChangeEmitter,
   Subscription,
@@ -42,6 +41,7 @@ import type {
   EntityId,
   GrantAction,
   GrantContent,
+  GroupRole,
   QueryResult,
   RecordChange,
   RecordVersion,
@@ -742,7 +742,7 @@ export class ScopedStack implements StackClient {
       // empty are one target — storage, targetEqual() and the filter all
       // read them as this stack — so a check on presence alone would
       // leave one spelling of a local Record ungated.
-      if (target.scope !== 'record' || target.stackUrl) return;
+      if (target.kind !== 'record' || target.stackUrl) return;
       if (!(await this.canReadReferent(target.recordId))) throw new StackPermissionError();
     }
   }

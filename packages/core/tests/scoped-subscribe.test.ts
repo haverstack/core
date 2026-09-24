@@ -66,7 +66,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -83,7 +83,7 @@ describe('a record the subscriber cannot read produces no event', () => {
 
     await stack.mutate(note.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
       ],
     });
     await settle();
@@ -97,7 +97,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -117,7 +117,7 @@ describe('a record the subscriber cannot read produces no event', () => {
       { text: 'shared' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -220,7 +220,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       { name: 'Team' },
       {
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -240,7 +240,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: READER },
+      target: { kind: 'entity', entityId: READER },
     });
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
@@ -291,7 +291,7 @@ describe('a revocation takes effect on the next event, not the next subscription
       { name: 'Team' },
       {
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: READER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: READER } },
         ],
       },
     );
@@ -303,7 +303,7 @@ describe('a revocation takes effect on the next event, not the next subscription
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       },
@@ -318,7 +318,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: READER },
+      target: { kind: 'entity', entityId: READER },
     });
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();

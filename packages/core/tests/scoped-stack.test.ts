@@ -80,12 +80,12 @@ describe('ScopedStack — a group keeps at least one admin', () => {
   const admin = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'admin',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
   const member = (entityId: string): DataAssociation => ({
     kind: 'relationship',
     label: 'member',
-    target: { scope: 'entity', entityId },
+    target: { kind: 'entity', entityId },
   });
 
   // Creating the group as MEMBER is what makes them its first admin, which
@@ -189,7 +189,7 @@ describe('ScopedStack — read access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -200,7 +200,7 @@ describe('ScopedStack — read access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -212,7 +212,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -222,7 +222,7 @@ describe('ScopedStack — read access', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -238,7 +238,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'record', recordId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'record', recordId: MEMBER } },
         ],
       }),
     );
@@ -248,7 +248,7 @@ describe('ScopedStack — read access', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -264,7 +264,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: 'com.example.app/project@1',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -274,7 +274,7 @@ describe('ScopedStack — read access', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: notAGroup.id, role: 'member' },
+            grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
           },
         ],
       }),
@@ -287,7 +287,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group@2',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -297,7 +297,7 @@ describe('ScopedStack — read access', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -310,7 +310,7 @@ describe('ScopedStack — read access', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -320,7 +320,7 @@ describe('ScopedStack — read access', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -362,8 +362,8 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -375,7 +375,7 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -395,8 +395,8 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -440,8 +440,8 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -463,8 +463,8 @@ describe('ScopedStack — write access', () => {
       makeRecord({
         deletedAt: new Date(),
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -476,8 +476,8 @@ describe('ScopedStack — write access', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -513,8 +513,8 @@ describe('ScopedStack — write access', () => {
       makeRecord({
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -549,8 +549,8 @@ describe('ScopedStack.mutate — the `unlisted` key', () => {
       makeRecord({
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -600,17 +600,17 @@ describe('ScopedStack mutators return the record they produced', () => {
     const granted = await scoped.grantAccess(record.id, {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'entity', entityId: MEMBER },
+      grantee: { kind: 'entity', entityId: MEMBER },
     });
     expect(granted.permissions).toContainEqual({
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'entity', entityId: MEMBER },
+      grantee: { kind: 'entity', entityId: MEMBER },
     });
 
     const revoked = await scoped.revokeAccess(record.id, { kind: 'anyone', label: 'read' });
     expect(revoked.permissions).toEqual([
-      { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+      { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
     ]);
 
     const unlisted = await scoped.mutate(record.id, { unlisted: true });
@@ -663,7 +663,7 @@ describe('ScopedStack — record-existence disclosure', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -761,7 +761,7 @@ describe('ScopedStack — versions', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -783,8 +783,8 @@ describe('ScopedStack — versions', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -802,8 +802,8 @@ describe('ScopedStack — versions', () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -835,8 +835,8 @@ describe('ScopedStack — versions', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -870,8 +870,8 @@ describe('ScopedStack — versions', () => {
           typeId: PHOTO_NOTE,
           version: 2,
           permissions: [
-            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
           ],
         }),
       );
@@ -902,8 +902,8 @@ describe('ScopedStack — versions', () => {
           typeId: PHOTO_NOTE,
           version: 2,
           permissions: [
-            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
           ],
         }),
       );
@@ -942,8 +942,8 @@ describe('ScopedStack — versions', () => {
           version: 2,
           parentId: box.id,
           permissions: [
-            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
           ],
         }),
       );
@@ -967,8 +967,8 @@ describe('ScopedStack — versions', () => {
           version: 2,
           parentId: box.id,
           permissions: [
-            { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
           ],
         }),
       );
@@ -1528,7 +1528,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1544,7 +1544,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1560,7 +1560,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1576,7 +1576,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1594,7 +1594,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1618,7 +1618,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1647,7 +1647,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: APP } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: APP } },
         ],
       }),
     );
@@ -1692,7 +1692,7 @@ describe('ScopedStack — group-targeted grants', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -1718,7 +1718,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(notAGroup.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: notAGroup.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1797,7 +1797,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'admin' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1812,7 +1812,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1827,7 +1827,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'admin' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1846,7 +1846,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
       { actions: ['read-any'], typeId: COMMENT },
@@ -1859,7 +1859,7 @@ describe('ScopedStack — group-targeted grants', () => {
     await stack.dissociate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(await view.get(record.id)).toBeNull();
   });
@@ -2011,7 +2011,7 @@ describe('ScopedStack — write implies read', () => {
 
   test('a write bit without read conveys neither the mutate surface nor history', async () => {
     const record = await recordWithHistory([
-      { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+      { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
     ]);
     const view = stack.asEntity(MEMBER);
     expect(await view.get(record.id)).toBeNull();
@@ -2032,13 +2032,13 @@ describe('ScopedStack — write implies read', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     const record = await recordWithHistory([
       {
         kind: 'permission',
         label: 'write',
-        grantee: { scope: 'group', groupId: group.id, role: 'member' },
+        grantee: { kind: 'group', groupId: group.id, role: 'member' },
       },
     ]);
     const view = stack.asEntity(MEMBER);
@@ -2130,12 +2130,12 @@ describe('ScopedStack — an `anyone` read carries the write bit', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
   const writeFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'write',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
   const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
 
@@ -2221,7 +2221,7 @@ describe('ScopedStack — blind write', () => {
 
     await stack.mutate(box.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     const posted = await stack
@@ -2313,8 +2313,8 @@ describe('ScopedStack.commitMigration', () => {
     const record = await stack.create(COMMENT, { text: 'hello' });
     await stack.mutate(record.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
@@ -2383,8 +2383,8 @@ describe('ScopedStack.commitMigration', () => {
     ]);
     await stack.mutate(grantRecord.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
@@ -2404,8 +2404,8 @@ describe('ScopedStack.commitMigration', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     await stack.grant({ kind: 'entity', entityId: MEMBER }, [
@@ -2739,7 +2739,7 @@ describe('ScopedStack.getAttachment', () => {
         unlisted: true,
         associations: [{ kind: 'attachment', label: 'cover', fileId }],
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -2786,7 +2786,7 @@ describe('ScopedStack.getAttachment', () => {
       {
         associations: [{ kind: 'attachment', label: 'x', fileId }],
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -2814,7 +2814,7 @@ describe('ScopedStack.getAttachment', () => {
       {
         associations: [{ kind: 'attachment', label: 'x', fileId }],
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -2925,8 +2925,8 @@ describe('ScopedStack — group role gating', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
         ...overrides,
       }),
@@ -2945,7 +2945,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
       StackNotFoundError,
@@ -2953,7 +2953,7 @@ describe('ScopedStack — group role gating', () => {
     const existingMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     };
     await expect(stack.asEntity(MEMBER).dissociate(group.id, existingMember)).rejects.toThrow(
       StackNotFoundError,
@@ -2974,7 +2974,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await stack.asEntity(ADMIN).associate(group.id, newMember);
     expect((await adapter.getRecord(group.id))?.associations).toContainEqual(newMember);
@@ -3006,8 +3006,8 @@ describe('ScopedStack — group role gating', () => {
     // generic write grant must not let that grantee touch the roster.
     const group = await makeGroup({
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: STRANGER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: STRANGER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: STRANGER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: STRANGER } },
       ],
     });
     await expect(
@@ -3016,7 +3016,7 @@ describe('ScopedStack — group role gating', () => {
     const newMember: DataAssociation = {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: STRANGER },
+      target: { kind: 'entity', entityId: STRANGER },
     };
     await expect(stack.asEntity(STRANGER).associate(group.id, newMember)).rejects.toThrow(
       StackPermissionError,
@@ -3052,7 +3052,7 @@ describe('ScopedStack — group role gating', () => {
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
 
     const updated = await stack.asEntity(MEMBER).patchContent(group.id, { name: 'renamed' });
@@ -3068,7 +3068,7 @@ describe('ScopedStack — group role gating', () => {
       { name: 'New Group' },
       {
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -3076,7 +3076,7 @@ describe('ScopedStack — group role gating', () => {
       (a) =>
         a.kind === 'relationship' &&
         a.label === 'admin' &&
-        a.target.scope === 'entity' &&
+        a.target.kind === 'entity' &&
         a.target.entityId === MEMBER,
     );
     expect(adminAssociations).toHaveLength(1);
@@ -3091,7 +3091,7 @@ describe('ScopedStack — group role gating', () => {
       (a) =>
         a.kind === 'relationship' &&
         a.label === 'admin' &&
-        a.target.scope === 'entity' &&
+        a.target.kind === 'entity' &&
         a.target.entityId === OWNER,
     );
     expect(adminAssociations).toHaveLength(1);
@@ -3111,12 +3111,12 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
   const writeFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'write',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
 
   // Authored by the owner, so MEMBER holds the write bit and nothing else:
@@ -3327,12 +3327,12 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
   const writeFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'write',
-    grantee: { scope: 'entity', entityId },
+    grantee: { kind: 'entity', entityId },
   });
 
   // MEMBER holds the write bit and nothing else, so they pass the history
@@ -3414,9 +3414,9 @@ describe('Permission — group role restriction', () => {
           {
             kind: 'relationship',
             label: 'admin',
-            target: { scope: 'entity', entityId: 'group-admin-2' },
+            target: { kind: 'entity', entityId: 'group-admin-2' },
           },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -3426,7 +3426,7 @@ describe('Permission — group role restriction', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'admin' },
+            grantee: { kind: 'group', groupId: group.id, role: 'admin' },
           },
         ],
       }),
@@ -3441,8 +3441,8 @@ describe('Permission — group role restriction', () => {
       makeRecord({
         typeId: '_group',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: admin } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: admin } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -3452,7 +3452,7 @@ describe('Permission — group role restriction', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -3480,8 +3480,8 @@ describe('_group — a deleted Group carries no roster', () => {
       makeRecord({
         typeId: '_group@1',
         associations: [
-          { kind: 'relationship', label: 'admin', target: { scope: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -3494,7 +3494,7 @@ describe('_group — a deleted Group carries no roster', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       }),
@@ -3673,7 +3673,7 @@ describe('Permission — an anyone element labelled otherwise reaches nobody', (
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: STRANGER },
+            grantee: { kind: 'entity', entityId: STRANGER },
           },
         ],
       }),
@@ -3987,7 +3987,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     readableNote = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4004,7 +4004,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id },
+              target: { kind: 'record', recordId: unreadableNote.id },
             },
           ],
         },
@@ -4025,7 +4025,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id, stackUrl: '' },
+              target: { kind: 'record', recordId: unreadableNote.id, stackUrl: '' },
             },
           ],
         },
@@ -4046,7 +4046,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             kind: 'relationship',
             label: 'reply-to',
             target: {
-              scope: 'record',
+              kind: 'record',
               recordId: unreadableNote.id,
               stackUrl: 'https://alice.example/stack',
             },
@@ -4066,7 +4066,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'author',
-            target: { scope: 'entity', entityId: 'did:key:z6MkAlice' },
+            target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
           },
         ],
       },
@@ -4084,7 +4084,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             kind: 'relationship',
             label: 'syndicated-to',
             target: {
-              scope: 'external',
+              kind: 'external',
               ns: 'atproto',
               id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
             },
@@ -4104,7 +4104,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: readableNote.id },
+            target: { kind: 'record', recordId: readableNote.id },
           },
         ],
       },
@@ -4112,7 +4112,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(record.associations).toContainEqual({
       kind: 'relationship',
       label: 'related',
-      target: { scope: 'record', recordId: readableNote.id },
+      target: { kind: 'record', recordId: readableNote.id },
     });
   });
 
@@ -4128,7 +4128,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: 'nonexistent-record' },
+              target: { kind: 'record', recordId: 'nonexistent-record' },
             },
           ],
         },
@@ -4145,7 +4145,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
             {
               kind: 'relationship',
               label: 'related',
-              target: { scope: 'record', recordId: unreadableNote.id },
+              target: { kind: 'record', recordId: unreadableNote.id },
             },
           ],
         },
@@ -4167,7 +4167,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(group.associations).toContainEqual({
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
   });
 
@@ -4192,7 +4192,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: unreadableNote.id },
+            target: { kind: 'record', recordId: unreadableNote.id },
           },
         ],
       },
@@ -4221,7 +4221,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
           {
             kind: 'relationship',
             label: 'related',
-            target: { scope: 'record', recordId: MISSING_ID },
+            target: { kind: 'record', recordId: MISSING_ID },
           },
         ],
       },
@@ -4229,7 +4229,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     expect(record.associations).toContainEqual({
       kind: 'relationship',
       label: 'related',
-      target: { scope: 'record', recordId: MISSING_ID },
+      target: { kind: 'record', recordId: MISSING_ID },
     });
   });
 
@@ -4278,7 +4278,7 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     readableBox = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4286,8 +4286,8 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     writable = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4336,7 +4336,7 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
     const readOnly = await adapter.createRecord(
       makeRecord({
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4352,8 +4352,8 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
       makeRecord({
         parentId: unreadableBox.id,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4435,7 +4435,7 @@ describe('ScopedStack.associate — reference-creation gating', () => {
       stack.asEntity(MEMBER).associate(ownedRecord.id, {
         kind: 'relationship',
         label: 'related',
-        target: { scope: 'record', recordId: unreadableNote.id },
+        target: { kind: 'record', recordId: unreadableNote.id },
       }),
     ).rejects.toThrow(StackPermissionError);
   });
@@ -4505,8 +4505,8 @@ describe('ScopedStack — file-ref content field gating', () => {
       { coverFileId: fileId },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -4652,7 +4652,7 @@ describe('ScopedStack — delegation', () => {
       makeRecord({
         typeId: NOTE,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     );
@@ -4727,8 +4727,8 @@ describe('ScopedStack — delegation', () => {
     await expect(
       view.mutate(card.id, {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       }),
     ).rejects.toThrow(StackNotFoundError);
@@ -4744,8 +4744,8 @@ describe('ScopedStack — delegation', () => {
     const card = await stack.asEntity(OWNER).create('_app@1', { appId: 'com.trusted', name: 'T' });
     await stack.mutate(card.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     const view = stack.asEntity(OWNER, { onBehalfOf: MEMBER });
@@ -4844,7 +4844,7 @@ describe('ScopedStack — delegation', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(await stack.asEntity(MEMBER).patchContent(group.id, { name: 'Renamed' })).toBeTruthy();
     await expect(
@@ -4903,7 +4903,7 @@ describe('ScopedStack — delegation', () => {
     await stack.associate(group.id, {
       kind: 'relationship',
       label: 'admin',
-      target: { scope: 'entity', entityId: MEMBER },
+      target: { kind: 'entity', entityId: MEMBER },
     });
     expect(
       await stack
@@ -4947,8 +4947,8 @@ describe('ScopedStack — _app bindings', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -4968,8 +4968,8 @@ describe('ScopedStack — _app bindings', () => {
     await stack.patchContent(shared.id, { did: APP_DID });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -4989,8 +4989,8 @@ describe('ScopedStack — _app bindings', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -5018,8 +5018,8 @@ describe('ScopedStack — _app bindings', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -5055,8 +5055,8 @@ describe('ScopedStack — _app bindings', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -5086,8 +5086,8 @@ describe('ScopedStack — _app.appId is owner-only', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -5104,8 +5104,8 @@ describe('ScopedStack — _app.appId is owner-only', () => {
     });
     await stack.mutate(shared.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
 
@@ -5220,8 +5220,8 @@ describe('ScopedStack — _grant records are owner-write-only', () => {
     ]);
     await stack.mutate(grantRecord.id, {
       permissions: [
-        { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-        { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
     });
     return grantRecord;
@@ -5394,8 +5394,8 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
 
 describe('ScopedStack — soft delete presents a tombstone', () => {
   const writeBit: AuthorityAssociation[] = [
-    { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-    { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
   ];
 
   const deletedRecord = async () => {
@@ -5470,8 +5470,8 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
 
 describe('ScopedStack — mutating a soft-deleted record', () => {
   const writeBit: AuthorityAssociation[] = [
-    { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-    { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+    { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
   ];
 
   const deleted = async () => {
@@ -5629,8 +5629,8 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       {
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -5703,7 +5703,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
       {
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );
@@ -5762,8 +5762,8 @@ describe('ScopedStack.mutate — delegated principals', () => {
       {
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
         ],
       },
     );

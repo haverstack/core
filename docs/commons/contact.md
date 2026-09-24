@@ -48,7 +48,7 @@ verbatim — they are the user's words ("boat phone" is legal and correct), not 
 machine namespace. Absent means unspecified.
 
 These are **directory data the user typed**, not machine identifiers. The resemblance
-to a relationship's `{ scope: 'external', ns, id }` target is superficial and the two
+to a relationship's `{ kind: 'external', ns, id }` target is superficial and the two
 do different jobs: an `alias` relationship is what an app resolves an inbound record's
 author _through_, while `contact.emails` is what a person reads. A contact that is also
 a known principal carries both — see the conventions below.

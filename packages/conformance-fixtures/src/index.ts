@@ -769,7 +769,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'A relationship filter naming something outside the Stack travels as relatedToNs plus an ' +
       'optional relatedToId. Omitting relatedToId matches every target in the namespace, which ' +
       'is how a bridge asks what it has already syndicated. A server MUST reject a request ' +
-      'mixing parameters from two scopes with 400, and can rely on at least one relatedTo ' +
+      'mixing parameters from two target kinds with 400, and can rely on at least one relatedTo ' +
       'parameter being present whenever the filter is used — the filter never encodes to ' +
       'nothing. See docs/spec/wire-format.md § Records.',
     method: 'GET',
@@ -1080,7 +1080,7 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
   {
     name: 'associate-relationship-external-target',
     description:
-      'A relationship association carries its target as a discriminated union — the scope names ' +
+      'A relationship association carries its target as a discriminated union — the kind names ' +
       'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
       'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
       '§ Associations.',
@@ -1089,7 +1089,7 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
     requestBody: {
       kind: 'relationship',
       label: 'syndicated-to',
-      target: { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     },
     responseStatus: 200,
     responseBody: {
@@ -1104,7 +1104,7 @@ export const associateFixtures: ConformanceFixture<Record<string, unknown>, Wire
           kind: 'relationship',
           label: 'syndicated-to',
           target: {
-            scope: 'external',
+            kind: 'external',
             ns: 'atproto',
             id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
           },
@@ -1181,7 +1181,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     requestBody: {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
     },
     responseStatus: 200,
     responseBody: {
@@ -1195,7 +1195,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },
@@ -1211,7 +1211,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     requestBody: {
       kind: 'permission',
       label: 'read',
-      grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+      grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
     },
     responseStatus: 200,
     responseBody: {
@@ -1225,7 +1225,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId: '1hk153x0000g', role: 'admin' },
+          grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
         },
       ],
     },
@@ -2157,7 +2157,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         {
           kind: 'permission',
           label: 'write',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },
@@ -2540,7 +2540,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkMember' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
         },
       ],
     },
@@ -2687,7 +2687,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'A request naming both ?sort= and ?sortContent= returns 400 with code "bad_request" ' +
       'rather than resolving one of them: a content field may be named after a native column, ' +
       'so there is no correct way to guess which was meant — the same posture as a request ' +
-      'mixing two relationship scopes. See docs/spec/wire-format.md § Records.',
+      'mixing two relationship target kinds. See docs/spec/wire-format.md § Records.',
     method: 'GET',
     path: '/records?sort=createdAt&sortContent=publishedAt',
     responseStatus: 400,

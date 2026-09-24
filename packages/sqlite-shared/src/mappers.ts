@@ -7,6 +7,7 @@
 import type {
   AuthorityAssociation,
   DataAssociation,
+  GroupRole,
   PermissionGrantee,
   RecordJournalEntry,
   StackRecord,
@@ -112,14 +113,14 @@ export const associationKeyColumns = (
   if (a.kind === 'attachment') return [a.fileId, '', '', '', '', ''];
   if (a.kind === 'permission') {
     const g = a.grantee;
-    return g.scope === 'entity'
+    return g.kind === 'entity'
       ? ['', 'entity', g.entityId, '', '', '']
       : ['', 'group', g.groupId, '', '', g.role];
   }
   if (a.kind !== 'relationship') return ['', '', '', '', '', ''];
   const t = a.target;
-  if (t.scope === 'entity') return ['', 'entity', t.entityId, '', '', ''];
-  if (t.scope === 'external') return ['', 'external', t.id, t.ns, '', ''];
+  if (t.kind === 'entity') return ['', 'entity', t.entityId, '', '', ''];
+  if (t.kind === 'external') return ['', 'external', t.id, t.ns, '', ''];
   return ['', 'record', t.recordId, '', t.stackUrl ?? '', ''];
 };
 
@@ -132,20 +133,20 @@ export const associationKeyColumns = (
 const rowToGrantee = (row: Record<string, unknown>): PermissionGrantee =>
   row.related_scope === 'group'
     ? {
-        scope: 'group',
+        kind: 'group',
         groupId: row.related_id as string,
-        role: row.related_role as 'member' | 'admin',
+        role: row.related_role as GroupRole,
       }
-    : { scope: 'entity', entityId: row.related_id as string };
+    : { kind: 'entity', entityId: row.related_id as string };
 
 const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
   const id = row.related_id as string;
-  if (row.related_scope === 'entity') return { scope: 'entity', entityId: id };
+  if (row.related_scope === 'entity') return { kind: 'entity', entityId: id };
   if (row.related_scope === 'external') {
-    return { scope: 'external', ns: row.related_ns as string, id };
+    return { kind: 'external', ns: row.related_ns as string, id };
   }
   const stackUrl = row.related_stack as string;
-  return { scope: 'record', recordId: id, ...(stackUrl && { stackUrl }) };
+  return { kind: 'record', recordId: id, ...(stackUrl && { stackUrl }) };
 };
 
 export const rowToType = (row: Record<string, unknown>): StackType => {

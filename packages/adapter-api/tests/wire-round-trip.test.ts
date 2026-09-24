@@ -141,16 +141,16 @@ describe('GET /records round trip', () => {
     ['includeUnlisted', { filter: { includeUnlisted: true } }],
     ['relatedTo label alone', { filter: { relatedTo: { label: 'attachment' } } }],
     [
-      'relatedTo record scope',
-      { filter: { relatedTo: { target: { scope: 'record', recordId: 'rec-target1' } } } },
+      'relatedTo record target',
+      { filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-target1' } } } },
     ],
     [
-      'relatedTo record scope with stackUrl',
+      'relatedTo record target with stackUrl',
       {
         filter: {
           relatedTo: {
             target: {
-              scope: 'record',
+              kind: 'record',
               recordId: 'rec-target1',
               stackUrl: 'https://other.example.com',
             },
@@ -159,22 +159,22 @@ describe('GET /records round trip', () => {
       },
     ],
     [
-      'relatedTo entity scope',
-      { filter: { relatedTo: { target: { scope: 'entity', entityId: 'did:key:zCarol' } } } },
+      'relatedTo entity target',
+      { filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:zCarol' } } } },
     ],
     [
-      'relatedTo external scope, whole namespace',
-      { filter: { relatedTo: { target: { scope: 'external', ns: 'isbn' } } } },
+      'relatedTo external target, whole namespace',
+      { filter: { relatedTo: { target: { kind: 'external', ns: 'isbn' } } } },
     ],
     [
-      'relatedTo external scope with id',
-      { filter: { relatedTo: { target: { scope: 'external', ns: 'isbn', id: '9780123456789' } } } },
+      'relatedTo external target with id',
+      { filter: { relatedTo: { target: { kind: 'external', ns: 'isbn', id: '9780123456789' } } } },
     ],
     [
       'relatedTo label and target together',
       {
         filter: {
-          relatedTo: { label: 'cites', target: { scope: 'entity', entityId: 'did:key:zCarol' } },
+          relatedTo: { label: 'cites', target: { kind: 'entity', entityId: 'did:key:zCarol' } },
         },
       },
     ],
@@ -196,7 +196,7 @@ describe('GET /records round trip', () => {
           tags: ['starred'],
           hasAttachment: 'cover',
           attachmentFileId: 'file-abc123',
-          relatedTo: { label: 'cites', target: { scope: 'external', ns: 'isbn', id: '978' } },
+          relatedTo: { label: 'cites', target: { kind: 'external', ns: 'isbn', id: '978' } },
           search: 'report',
           includeDeleted: true,
           includeUnlisted: true,
@@ -226,8 +226,8 @@ describe('POST /records/query round trip', () => {
     ['single-segment content filter', { filter: { content: { status: 'open' } } }],
     ['nested content filter', { filter: { content: { 'emails.value': 'a@example.com' } } }],
     [
-      'relatedTo external scope with id',
-      { filter: { relatedTo: { target: { scope: 'external', ns: 'isbn', id: '978' } } } },
+      'relatedTo external target with id',
+      { filter: { relatedTo: { target: { kind: 'external', ns: 'isbn', id: '978' } } } },
     ],
     [
       'sort, limit and cursor',

@@ -493,9 +493,9 @@ describe('the journal is gated on the mutate surface, like version history', () 
       {
         entityId: OWNER,
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: READER } },
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: EDITOR } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: EDITOR } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: READER } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: EDITOR } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: EDITOR } },
         ],
       },
     );

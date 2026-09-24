@@ -321,7 +321,7 @@ describe('queryRecords fixtures', () => {
     expect(result.cursor).toBe(fixture.responseBody!.cursor);
   });
 
-  // The scope is implied by which parameters appear, so a client that
+  // The target kind is implied by which parameters appear, so a client that
   // dropped one would silently widen the query rather than fail.
   for (const [name, filter] of [
     [
@@ -329,17 +329,17 @@ describe('queryRecords fixtures', () => {
       {
         relatedTo: {
           label: 'series',
-          target: { scope: 'record' as const, recordId: '1hk153x00001' },
+          target: { kind: 'record' as const, recordId: '1hk153x00001' },
         },
       },
     ],
     [
       'query-related-to-entity-target',
-      { relatedTo: { target: { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' } } },
+      { relatedTo: { target: { kind: 'entity' as const, entityId: 'did:key:z6MkAlice' } } },
     ],
     [
       'query-related-to-external-namespace',
-      { relatedTo: { target: { scope: 'external' as const, ns: 'atproto' } } },
+      { relatedTo: { target: { kind: 'external' as const, ns: 'atproto' } } },
     ],
   ] as const) {
     test(name, async () => {

@@ -69,7 +69,7 @@ direction.
 - **Threading**: `parentId` for in-stack anchoring, as `message` does. Cross-stack
   replies — a reply living in the replier's stack, referencing a record in someone
   else's — are a relationship's `target` union
-  (`{ scope: 'record', recordId, stackUrl }` / `{ scope: 'external', ns, id }`), not
+  (`{ kind: 'record', recordId, stackUrl }` / `{ kind: 'external', ns, id }`), not
   `parentId`, and need no change here; see
   [Choosing a text type § The fourth contract](./text-types.md#the-fourth-contract-posts-are-broadcast).
 - **Embedded media**: attachment associations labeled `embed`, per the cross-type

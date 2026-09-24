@@ -13,12 +13,12 @@ import { baseIdOf } from './schema.js';
 import { StackQueryError } from './errors.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import { carriesRoster, groupRoleFromAssociations } from './access.js';
-import type { GroupRole } from './access.js';
 import type {
   EntityId,
   GrantAction,
   GrantContent,
   GrantGrantee,
+  GroupRole,
   QueryResult,
   RecordId,
   StackQuery,
@@ -87,22 +87,13 @@ export function grantReach(content: unknown): { familyId: string; actions: Grant
 }
 
 /**
- * Who a grant() / revoke() / listGrants() call targets — the same union a
- * stored grant carries, so a target is the grantee it writes.
- * `{ kind: 'authenticated' }` is the default grant, and the default-only
- * listing.
- */
-export type GrantTarget = GrantGrantee;
-
-/**
- * What listGrants() accepts: a GrantTarget, widened so a group listing can
+ * What listGrants() accepts: a GrantGrantee, widened so a group listing can
  * ask for every role at once. `role: 'any'` is not a role an entity can
  * hold and never reaches storage — a query can say it, a grantee cannot.
  */
 export type GrantQuery =
-  | { kind: 'entity'; entityId: EntityId }
-  | { kind: 'group'; groupId: RecordId; role: 'member' | 'admin' | 'any' }
-  | { kind: 'authenticated' };
+  | Exclude<GrantGrantee, { kind: 'group' }>
+  | { kind: 'group'; groupId: RecordId; role: GroupRole | 'any' };
 
 /**
  * Direct (non-roster) match between a stored _grant's content and a target:

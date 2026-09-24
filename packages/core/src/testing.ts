@@ -763,12 +763,12 @@ function matchesRelatedTo(
     const want = filter.target;
     if (!want) return true;
     const got = a.target;
-    if (got.scope !== want.scope) return false;
-    if (want.scope === 'record' && got.scope === 'record') {
+    if (got.kind !== want.kind) return false;
+    if (want.kind === 'record' && got.kind === 'record') {
       return got.recordId === want.recordId && (got.stackUrl ?? '') === (want.stackUrl ?? '');
     }
-    if (want.scope === 'entity' && got.scope === 'entity') return got.entityId === want.entityId;
-    if (want.scope === 'external' && got.scope === 'external') {
+    if (want.kind === 'entity' && got.kind === 'entity') return got.entityId === want.entityId;
+    if (want.kind === 'external' && got.kind === 'external') {
       return got.ns === want.ns && (want.id === undefined || got.id === want.id);
     }
     return false;

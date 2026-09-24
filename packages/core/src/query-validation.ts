@@ -210,7 +210,7 @@ export function assertSortCapability(
 }
 
 /** The identifier spaces a relationship target may name. */
-const TARGET_SCOPES = new Set(['record', 'entity', 'external']);
+const TARGET_KINDS = new Set(['record', 'entity', 'external']);
 
 /**
  * Collect what makes a relationship target malformed. Absence is
@@ -227,19 +227,19 @@ function targetErrors(
   const fail = (message: string): ValidationError[] => [{ path, message }];
   if (!target || typeof target !== 'object')
     return fail('A relationship target must be an object.');
-  if (!TARGET_SCOPES.has(target.scope)) {
+  if (!TARGET_KINDS.has(target.kind)) {
     return fail(
-      `Unknown relationship target scope "${target.scope}": expected "record", "entity" or "external".`,
+      `Unknown relationship target kind "${target.kind}": expected "record", "entity" or "external".`,
     );
   }
-  if (target.scope === 'record') {
+  if (target.kind === 'record') {
     if (!target.recordId) return fail('A record target requires a non-empty recordId.');
     if (target.stackUrl !== undefined && !target.stackUrl) {
       return fail("A record target's stackUrl must be non-empty; omit it to name this stack.");
     }
     return [];
   }
-  if (target.scope === 'entity') {
+  if (target.kind === 'entity') {
     return target.entityId ? [] : fail('An entity target requires a non-empty entityId.');
   }
   if (!target.ns) return fail('An external target requires a non-empty ns.');
@@ -253,7 +253,7 @@ function targetErrors(
  * Reject a relationship target outside the closed set the types promise.
  * A discriminated union is not a runtime guard — a server mapping a
  * request body onto an association supplies raw JSON — and an
- * unrecognized scope would otherwise be stored under the one arm that
+ * unrecognized kind would otherwise be stored under the one arm that
  * names a Record in this stack. See docs/spec/data-model.md
  * § Relationship targets.
  */
@@ -288,7 +288,7 @@ export function validateAssociation(
 function granteeSuffix(association: Association): string {
   if (association.kind !== 'permission') return '';
   const g = association.grantee;
-  return g.scope === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
+  return g.kind === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
 }
 
 /** The kinds an association may name — the closed set every surface reads. */
@@ -333,17 +333,17 @@ function granteeErrors(
   }
   const grantee = association.grantee;
   if (!grantee || typeof grantee !== 'object') return fail('A permission requires a grantee.');
-  if (grantee.scope === 'entity') {
+  if (grantee.kind === 'entity') {
     return grantee.entityId ? [] : fail('An entity grantee requires a non-empty entityId.');
   }
-  if (grantee.scope === 'group') {
+  if (grantee.kind === 'group') {
     if (!grantee.groupId) return fail('A group grantee requires a non-empty groupId.');
     return grantee.role === 'member' || grantee.role === 'admin'
       ? []
       : fail('A group grantee requires a role of "member" or "admin".');
   }
   return fail(
-    `Unknown permission grantee scope "${String((grantee as { scope?: unknown }).scope)}": expected "entity" or "group".`,
+    `Unknown permission grantee kind "${String((grantee as { kind?: unknown }).kind)}": expected "entity" or "group".`,
   );
 }
 

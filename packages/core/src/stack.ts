@@ -34,7 +34,6 @@ import {
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
-import type { GroupRole } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
@@ -57,6 +56,8 @@ import type {
   StackFeatures,
   GrantAction,
   GrantContent,
+  GrantGrantee,
+  GroupRole,
   AttachmentContent,
   FileId,
   ConfigContent,
@@ -110,7 +111,7 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
   loadGrantRecords,
 } from './grants.js';
-import type { GrantQuery, GrantTarget } from './grants.js';
+import type { GrantQuery } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
@@ -2511,7 +2512,7 @@ export class Stack implements StackClient {
    * docs/spec/access-control.md § Type-level grants.
    */
   async grant(
-    target: GrantTarget,
+    target: GrantGrantee,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
     this.assertOpen();
@@ -2584,7 +2585,7 @@ export class Stack implements StackClient {
    * See docs/spec/access-control.md § Type-level grants.
    */
   async revoke(
-    target: GrantTarget,
+    target: GrantGrantee,
     grants: Array<{ actions: GrantAction[]; typeId: TypeId }>,
   ): Promise<StackRecord[]> {
     this.assertOpen();

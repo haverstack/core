@@ -54,7 +54,7 @@ const POSITIVE_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
-const TARGET_SCOPES: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
+const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
 
 /**
  * Strict positive-integer parse for a URL param — rejects "1abc", "2.7",
@@ -181,31 +181,31 @@ export function assertQueryTravels(query: StackQuery): void {
 // -------------------------------------------------------
 
 /**
- * Route a `filter.relatedTo.target` by scope. Core validates the
- * non-emptiness of whichever fields the scope names, so this only rejects
- * a scope it does not recognize.
+ * Route a `filter.relatedTo.target` by kind. Core validates the
+ * non-emptiness of whichever fields the kind names, so this only rejects
+ * a kind it does not recognize.
  */
 function parseRelatedToTarget(raw: unknown): RelationshipTargetPattern {
   const t = requirePlainObject(raw, 'filter.relatedTo.target');
-  if (typeof t.scope !== 'string' || !TARGET_SCOPES.has(t.scope))
-    throw new StackQueryError(`Invalid filter.relatedTo.target.scope: ${JSON.stringify(t.scope)}`);
-  if (t.scope === 'record') {
+  if (typeof t.kind !== 'string' || !TARGET_KINDS.has(t.kind))
+    throw new StackQueryError(`Invalid filter.relatedTo.target.kind: ${JSON.stringify(t.kind)}`);
+  if (t.kind === 'record') {
     return {
-      scope: 'record',
+      kind: 'record',
       recordId: requireString(t.recordId, 'filter.relatedTo.target.recordId'),
       ...(t.stackUrl !== undefined && {
         stackUrl: requireString(t.stackUrl, 'filter.relatedTo.target.stackUrl'),
       }),
     };
   }
-  if (t.scope === 'entity') {
+  if (t.kind === 'entity') {
     return {
-      scope: 'entity',
+      kind: 'entity',
       entityId: requireString(t.entityId, 'filter.relatedTo.target.entityId'),
     };
   }
   return {
-    scope: 'external',
+    kind: 'external',
     ns: requireString(t.ns, 'filter.relatedTo.target.ns'),
     ...(t.id !== undefined && { id: requireString(t.id, 'filter.relatedTo.target.id') }),
   };
@@ -241,7 +241,7 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
 
   if ([hasRecord, hasEntity, hasNs].filter(Boolean).length > 1) {
     throw new StackQueryError(
-      'relatedTo, relatedToEntity and relatedToNs name different target scopes and are mutually exclusive',
+      'relatedTo, relatedToEntity and relatedToNs name different target kinds and are mutually exclusive',
     );
   }
   if (hasStack && !hasRecord)
@@ -251,15 +251,15 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
   let target: RelationshipTargetPattern | undefined;
   if (hasRecord) {
     target = {
-      scope: 'record',
+      kind: 'record',
       recordId: url.searchParams.get('relatedTo')!,
       ...(hasStack && { stackUrl: url.searchParams.get('relatedToStack')! }),
     };
   } else if (hasEntity) {
-    target = { scope: 'entity', entityId: url.searchParams.get('relatedToEntity')! };
+    target = { kind: 'entity', entityId: url.searchParams.get('relatedToEntity')! };
   } else if (hasNs) {
     target = {
-      scope: 'external',
+      kind: 'external',
       ns: url.searchParams.get('relatedToNs')!,
       ...(hasId && { id: url.searchParams.get('relatedToId')! }),
     };

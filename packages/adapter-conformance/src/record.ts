@@ -283,7 +283,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const grant: AuthorityAssociation = {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'did:key:z6MkConformance' },
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkConformance' },
         };
 
         await adapter.associate(record.id, { kind: 'tag', label: 'draft' });
@@ -304,7 +304,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const forRole = (role: 'member' | 'admin'): AuthorityAssociation => ({
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'group', groupId, role },
+          grantee: { kind: 'group', groupId, role },
         });
         const member = forRole('member');
         const admin = forRole('admin');
