@@ -26,9 +26,11 @@ Accept: text/event-stream
 Authorization: Bearer <token>
 Last-Event-ID: <seq>          (equivalently ?since=<seq>)
 
-?typeId=          (repeatable; baseId or versioned, matched by baseId)
-?parentId=        ("null" for root records, as GET /records; see Events § The reparent transition)
-?createdBySubject= (the record's author, not the actor)
+?typeId=             (repeatable; exact match, as GET /records)
+?baseId=             (repeatable; the whole type family)
+?parentId=           ("null" for root records, as GET /records; see Events § The reparent transition)
+?createdBySubject=   (repeatable; the record's author, not the actor, as GET /records)
+?createdByPrincipal= (repeatable; the principal behind the author, as GET /records)
 ?kind=            (repeatable: created|changed|deleted|purged)
 ?include=record   (ignored for kind=purged)
 ?includeUnlisted= (owner-only — see Unlisted)
@@ -38,7 +40,7 @@ Response: `200 text/event-stream`, a stream of frames.
 
 `@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — filter, `include` and `includeUnlisted` in one object, since a server needs the last of those before the stream opens to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
 
-**Filtering is [exact, not advisory](./events.md#subscribing)**, and `typeId` is matched by `baseId`. `createdBySubject` filters on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
+**Filtering is [exact, not advisory](./events.md#subscribing)**, and every param means what it means on [`GET /records`](./wire-format.md#records), so a client that loads a set there and follows it here sends the same filter to both. `baseId` is the one param `GET /records` refuses: there it is resolved client-side against registered Types, while here it is matched against each change's `typeId`, so it covers a version registered after the connection opened. A `typeId` or `baseId` filter reaches both sides of a [type change](./events.md#the-type-change-transition). `createdBySubject` and `createdByPrincipal` filter on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
 
 ## Frames
 

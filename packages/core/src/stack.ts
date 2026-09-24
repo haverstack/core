@@ -1721,7 +1721,10 @@ export class Stack implements StackClient {
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
     // gate. See docs/spec/versioning.md § Restore semantics.
-    const change = new PendingChange('restore', { actor: normalizeActor(opts.actor) });
+    const change = new PendingChange('restore', {
+      actor: normalizeActor(opts.actor),
+      previousTypeId: existing.typeId,
+    });
     const restored = await this.adapter.restoreVersion(id, version, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,
@@ -1838,7 +1841,10 @@ export class Stack implements StackClient {
       );
     }
 
-    const change = new PendingChange('migrate', { actor: normalizeActor(opts.actor) });
+    const change = new PendingChange('migrate', {
+      actor: normalizeActor(opts.actor),
+      previousTypeId: existing.typeId,
+    });
     const migrated = await this.adapter.commitMigration(id, toTypeId, content, {
       ...this.writeOptions(existing, opts),
       journal: change.journal,

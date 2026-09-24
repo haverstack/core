@@ -273,6 +273,17 @@ describe('parseChangeParams', () => {
     expect(parseChangeParams(changes('?parentId=rec-1')).filter.parentId).toBe('rec-1');
   });
 
+  test('typeId, baseId and createdBy read as they do on GET /records', () => {
+    const qs =
+      '?typeId=com.example/note@1&baseId=com.example/task&baseId=com.example/memo' +
+      '&createdBySubject=entity-a&createdByPrincipal=entity-b&createdByPrincipal=entity-c';
+    expect(parseChangeParams(changes(qs)).filter).toEqual({
+      typeId: 'com.example/note@1',
+      baseId: ['com.example/task', 'com.example/memo'],
+      createdBy: { subjectId: 'entity-a', principalId: ['entity-b', 'entity-c'] },
+    });
+  });
+
   test('an unrecognized kind is refused rather than dropped from the set', () => {
     expect(() => parseChangeParams(changes('?kind=created&kind=exploded'))).toThrow(
       StackQueryError,

@@ -43,6 +43,7 @@ import type {
   FileId,
   EntityId,
   ChangeFilter,
+  RecordFilter,
   RecordChange,
   RecordChanges,
 } from '@haverstack/core';
@@ -524,6 +525,13 @@ const setParentId = (p: URLSearchParams, parentId: string | null): void => {
   p.set('parentId', parentId === null ? 'null' : parentId);
 };
 
+/** The author filter, spelled the same on `GET /records` and `GET /changes`. */
+const appendCreatedBy = (p: URLSearchParams, createdBy: RecordFilter['createdBy']): void => {
+  if (createdBy?.subjectId !== undefined) appendEach(p, 'createdBySubject', createdBy.subjectId);
+  if (createdBy?.principalId !== undefined)
+    appendEach(p, 'createdByPrincipal', createdBy.principalId);
+};
+
 const buildQueryParams = (query: StackQuery): URLSearchParams => {
   const p = new URLSearchParams();
   const f = query.filter ?? {};
@@ -531,10 +539,7 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
   if (f.appId !== undefined) appendEach(p, 'appId', f.appId);
-  if (f.createdBy?.subjectId !== undefined)
-    appendEach(p, 'createdBySubject', f.createdBy.subjectId);
-  if (f.createdBy?.principalId !== undefined)
-    appendEach(p, 'createdByPrincipal', f.createdBy.principalId);
+  appendCreatedBy(p, f.createdBy);
   if (f.createdAt?.before) p.set('createdBefore', f.createdAt.before.toISOString());
   if (f.createdAt?.after) p.set('createdAfter', f.createdAt.after.toISOString());
   if (f.updatedAt?.before) p.set('updatedBefore', f.updatedAt.before.toISOString());
@@ -607,8 +612,9 @@ const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
   const f: ChangeFilter = opts.filter ?? {};
 
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
+  if (f.baseId !== undefined) appendEach(p, 'baseId', f.baseId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
-  if (f.createdBy !== undefined) p.set('createdBySubject', f.createdBy.subjectId);
+  appendCreatedBy(p, f.createdBy);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
   if (opts.includeUnlisted) p.set('includeUnlisted', 'true');
