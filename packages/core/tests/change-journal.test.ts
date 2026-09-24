@@ -91,8 +91,11 @@ describe('every emitting write appends exactly one entry', () => {
 describe('association history survives without a subscriber', () => {
   const twoUploads = async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const first = await stack.putAttachment(data, 'image/png', 'original.png');
-    const second = await stack.putAttachment(data, 'image/png', 'copy.png');
+    const first = await stack.putAttachment(data, {
+      mimeType: 'image/png',
+      filename: 'original.png',
+    });
+    const second = await stack.putAttachment(data, { mimeType: 'image/png', filename: 'copy.png' });
     return { first, second, fileId: first.content.fileId };
   };
 
@@ -184,8 +187,11 @@ describe('association history survives without a subscriber', () => {
 describe('an association change is reversible from the log alone', () => {
   const twoUploads = async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const first = await stack.putAttachment(data, 'image/png', 'original.png');
-    const second = await stack.putAttachment(data, 'image/png', 'copy.png');
+    const first = await stack.putAttachment(data, {
+      mimeType: 'image/png',
+      filename: 'original.png',
+    });
+    const second = await stack.putAttachment(data, { mimeType: 'image/png', filename: 'copy.png' });
     return { first, second, fileId: first.content.fileId };
   };
 
@@ -262,7 +268,10 @@ describe('an association change is reversible from the log alone', () => {
     // which edit a sibling belongs to: (kind, label) is not identity —
     // one record holds two `cover` attachments for different files.
     const { first, second } = await twoUploads();
-    const other = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const other = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'image/png',
+      filename: 'other.png',
+    });
     const note = await stack.create(NOTE, { text: 'hello' });
     await stack.associate(note.id, {
       kind: 'attachment',

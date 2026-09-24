@@ -843,7 +843,11 @@ describe('attachment upload fixtures', () => {
       const data = new Uint8Array(fixture.requestBodyBytes);
 
       const dispatch = () =>
-        adapter.putAttachmentWithMetadata(data, contentType, filename, fixture.appId);
+        adapter.putAttachmentWithMetadata(data, {
+          mimeType: contentType,
+          filename,
+          appId: fixture.appId,
+        });
 
       if (fixture.responseStatus >= 400) {
         const code = (

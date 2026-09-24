@@ -35,12 +35,10 @@ await stack.create('_app@1', {
   did: notesAppDid, // the keypair the app generated at install
 });
 
-await stack.grant({ kind: 'entity', entityId: notesAppDid }, [
-  {
-    typeId: 'com.example.myapp/note@1',
-    actions: ['create', 'read-own', 'update-own', 'delete-own'],
-  },
-]);
+await stack.grant('com.example.myapp/note@1', {
+  actions: ['create', 'read-own', 'update-own', 'delete-own'],
+  grantee: { kind: 'entity', entityId: notesAppDid },
+});
 ```
 
 The containment is the **type list**, not the `-own` suffix. When a delegated app acts for someone, `-own` is read as the bare verb and the subject decides which records are in reach — so in a personal stack, where nearly everything is owner-authored, `read-own` is close to `read-any`. Grant an app the types it needs and no more.

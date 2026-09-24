@@ -120,6 +120,8 @@ export type {
   GrantAction,
   GrantContent,
   GrantGrantee,
+  TypeGrant,
+  PutAttachmentOptions,
   ConfigContent,
 } from './types.js';
 

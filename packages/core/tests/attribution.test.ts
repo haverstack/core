@@ -19,18 +19,14 @@ beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.create(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
-  await stack.grant({ kind: 'authenticated' }, [
-    {
-      actions: ['create', 'read-any', 'update-any', 'delete-any'],
-      typeId: NOTE,
-    },
-  ]);
-  await stack.grant({ kind: 'entity', entityId: APP }, [
-    {
-      actions: ['create', 'read-any', 'update-any', 'delete-any'],
-      typeId: NOTE,
-    },
-  ]);
+  await stack.grant(NOTE, {
+    actions: ['create', 'read-any', 'update-any', 'delete-any'],
+    grantee: { kind: 'authenticated' },
+  });
+  await stack.grant(NOTE, {
+    actions: ['create', 'read-any', 'update-any', 'delete-any'],
+    grantee: { kind: 'entity', entityId: APP },
+  });
 });
 
 // -------------------------------------------------------
@@ -248,7 +244,7 @@ describe('attribution — separate from authorship checks', () => {
     const ownOnly = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const s2 = await Stack.create(ownOnly);
     await s2.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
-    await s2.grant({ kind: 'authenticated' }, [{ actions: ['create', 'read-own'], typeId: NOTE }]);
+    await s2.grant(NOTE, { actions: ['create', 'read-own'], grantee: { kind: 'authenticated' } });
 
     const authored = await s2.asEntity(AUTHOR).create(NOTE, { text: 'a' });
     // EDITOR can neither read nor restamp it: read-own resolves on createdBy.

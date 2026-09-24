@@ -5,7 +5,7 @@ Binary files are stored and retrieved through the library using **content-addres
 ```ts
 // Upload a file — stores the bytes and creates the _attachment@1 record,
 // returning that record. content.fileId is a stable SHA-256 hex ID.
-const record = await stack.putAttachment(data: Uint8Array, mimeType: string, filename?: string, appId?: AppId)
+const record = await stack.putAttachment(data: Uint8Array, { mimeType: string, filename?: string, appId?: AppId })
   : Promise<StackRecord & { content: AttachmentContent }>
 
 // Fetch the binary
@@ -93,8 +93,8 @@ Keeping it outside identity is what leaves the rest of the model alone. [Garbage
 
 ## `Stack` vs `ScopedStack` methods
 
-- `Stack.putAttachment(data, mimeType, filename?, appId?)` — owner-level upload. Creates an `_attachment@1` record with no `createdBy`. No grant check.
-- `ScopedStack.putAttachment(data, mimeType, filename?, appId?)` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `createdBy` names the subject, and the authenticated principal beside it when the two differ — stamped exactly as `ScopedStack.create()` does (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)).
+- `Stack.putAttachment(data, { mimeType, filename?, appId? })` — owner-level upload. Creates an `_attachment@1` record with no `createdBy`. No grant check.
+- `ScopedStack.putAttachment(data, { mimeType, filename?, appId? })` — entity-scoped upload. Requires a `create` grant on `_attachment@1`. The created record's `createdBy` names the subject, and the authenticated principal beside it when the two differ — stamped exactly as `ScopedStack.create()` does (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)).
 - `Stack.getAttachment(fileId)` — no permission check; always succeeds if the bytes exist.
 - `ScopedStack.getAttachment(fileId)` — accessible if the requester is the owner, can read any record that references the file, or uploaded the file themselves. Throws `StackPermissionError` otherwise. A referencing record that is [unlisted](./unlisted.md) counts exactly as a listed one does: unlisted governs enumeration, not reach, and the requester's ability to read the record is what the clause turns on.
 

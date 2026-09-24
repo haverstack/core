@@ -2185,7 +2185,10 @@ describe('Stack.commitMigration — binding fields', () => {
 
 describe('Stack.commitMigration — _attachment protections', () => {
   test('refuses repointing fileId', async () => {
-    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const a = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'text/plain',
+      filename: 'a.txt',
+    });
 
     await expect(
       stack.commitMigration(a.id, '_attachment@1', {
@@ -2198,7 +2201,10 @@ describe('Stack.commitMigration — _attachment protections', () => {
   });
 
   test('refuses rewriting mimeType and size', async () => {
-    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const a = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'text/plain',
+      filename: 'a.txt',
+    });
 
     await expect(
       stack.commitMigration(a.id, '_attachment@1', {
@@ -2217,7 +2223,10 @@ describe('Stack.commitMigration — _attachment protections', () => {
       filename: { kind: 'string' },
       caption: { kind: 'string' },
     });
-    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const a = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'text/plain',
+      filename: 'a.txt',
+    });
 
     const migrated = await stack.commitMigration(a.id, '_attachment@2', {
       fileId: a.content.fileId,
@@ -2229,7 +2238,10 @@ describe('Stack.commitMigration — _attachment protections', () => {
   });
 
   test('applies the mimeType-establishment check when arriving from outside the family', async () => {
-    const a = await stack.putAttachment(new Uint8Array([9]), 'text/plain', 'a.txt');
+    const a = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'text/plain',
+      filename: 'a.txt',
+    });
     const note = await stack.create(NOTE_V1, { text: 'decoy' });
 
     await expect(
@@ -2985,7 +2997,7 @@ describe('delete', () => {
     test('names the attachment associations the record held', async () => {
       const {
         content: { fileId },
-      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
@@ -2998,7 +3010,7 @@ describe('delete', () => {
       await stack.defineType(PHOTO, 'Photo', { coverFileId: { kind: 'file-ref', required: true } });
       const {
         content: { fileId },
-      } = await stack.putAttachment(new Uint8Array([4, 5, 6]), 'image/png');
+      } = await stack.putAttachment(new Uint8Array([4, 5, 6]), { mimeType: 'image/png' });
       const photo = await stack.create(PHOTO, { coverFileId: fileId });
       // The same file, reached both ways: one file, one entry.
       await stack.associate(photo.id, { kind: 'attachment', label: 'cover', fileId });
@@ -3012,7 +3024,7 @@ describe('delete', () => {
       const data = new Uint8Array([7, 8, 9]);
       const {
         content: { fileId },
-      } = await stack.putAttachment(data, 'image/png');
+      } = await stack.putAttachment(data, { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
@@ -3027,7 +3039,7 @@ describe('delete', () => {
     test('a soft delete strands nothing, so it names nothing', async () => {
       const {
         content: { fileId },
-      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+      } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
@@ -3085,7 +3097,7 @@ describe('deleteAndReturn', () => {
   test('a hard delete reports the record as it stood at destruction, associations included', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
@@ -3414,9 +3426,9 @@ describe('use after close', () => {
   });
 
   test('attachment uploads throw StackClosedError', async () => {
-    await expect(stack.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
-      StackClosedError,
-    );
+    await expect(
+      stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
+    ).rejects.toBeInstanceOf(StackClosedError);
   });
 
   test('identity getters still read — they touch no storage', () => {
@@ -3434,9 +3446,9 @@ describe('use after close — scoped views', () => {
     const scoped = stack.asEntity('owner-123');
     await stack.close();
 
-    await expect(scoped.putAttachment(new Uint8Array([1]), 'text/plain')).rejects.toBeInstanceOf(
-      StackClosedError,
-    );
+    await expect(
+      scoped.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
+    ).rejects.toBeInstanceOf(StackClosedError);
     expect(await adapter.listFiles!()).toHaveLength(0);
   });
 
@@ -3452,14 +3464,15 @@ describe('use after close — scoped views', () => {
 
 describe('grant', () => {
   test('creates a grant record for the given entity and type', async () => {
-    const records = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    expect(records).toHaveLength(1);
+    const record = await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(record.typeId).toBe('_grant@1');
     // The grantee lives in content, not record.createdBy — createdBy means
     // "author", and the owner (who called grant()) authored this record.
-    expect(records[0].createdBy?.subjectId).toBeUndefined();
-    expect(records[0].content).toEqual({
+    expect(record.createdBy?.subjectId).toBeUndefined();
+    expect(record.content).toEqual({
       typeId: NOTE_V1,
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
@@ -3467,27 +3480,16 @@ describe('grant', () => {
   });
 
   test('an authenticated target creates a default grant naming that tier', async () => {
-    const records = await stack.grant({ kind: 'authenticated' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    expect(records[0].createdBy?.subjectId).toBeUndefined();
-    expect(records[0].content).toEqual({
+    const record = await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'authenticated' },
+    });
+    expect(record.createdBy?.subjectId).toBeUndefined();
+    expect(record.content).toEqual({
       typeId: NOTE_V1,
       actions: ['create'],
       grantee: { kind: 'authenticated' },
     });
-  });
-
-  test('creates multiple grant records in one call', async () => {
-    await stack.defineType(NOTE_V2, 'Note v2', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
-    });
-    const records = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-      { actions: ['create'], typeId: NOTE_V2 },
-    ]);
-    expect(records).toHaveLength(2);
   });
 
   test('_grant@1 type is available immediately after Stack.create()', async () => {
@@ -3502,17 +3504,19 @@ describe('grant', () => {
   // which means "author" everywhere else — so "everything Alice authored"
   // queries don't pick up grants that merely name her.
   test('an authorship query does not pick up grants naming that entity', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     const result = await stack.query({ filter: { createdBy: { subjectId: 'entity-abc' } } });
     expect(result.records).toHaveLength(0);
   });
 
   test('a grant record still resolves through ScopedStack for its named grantee', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     const record = await stack.asEntity('entity-abc').create(NOTE_V1, { text: 'hi' });
     expect(record.content.text).toBe('hi');
   });
@@ -3521,62 +3525,54 @@ describe('grant', () => {
   // silently and simply never match at check time (hasGrant).
   test('rejects an unknown grant action', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['read-all' as never], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['read-all' as never],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
-  });
-
-  test('does not create any records when one grant in a batch has an unknown action', async () => {
-    await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: NOTE_V1 },
-        { actions: ['read-all' as never], typeId: NOTE_V1 },
-      ]),
-    ).rejects.toThrow(StackValidationError);
-    const grants = await stack.listGrants();
-    expect(grants).toHaveLength(0);
   });
 
   // typeId must be a well-formed bare baseId or versioned TypeId.
   test('rejects an empty typeId', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: '' },
-      ]),
+      stack.grant('', { actions: ['create'], grantee: { kind: 'entity', entityId: 'entity-abc' } }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('rejects a malformed versioned typeId', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: 'com.example.test/note@abc' },
-      ]),
+      stack.grant('com.example.test/note@abc', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('accepts a bare baseId (no version suffix)', async () => {
-    const records = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: 'com.example.test/note' },
-    ]);
-    expect(records).toHaveLength(1);
+    const record = await stack.grant('com.example.test/note', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(record.typeId).toBe('_grant@1');
   });
 
   // grants on _grant/_config/_app are refused outright; other reserved
   // types (_attachment, _entity, _group) stay grantable.
   test('rejects a grant targeting _grant@1', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: '_grant@1' },
-      ]),
+      stack.grant('_grant@1', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('rejects a grant targeting _config@1', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['update-any'], typeId: '_config@1' },
-      ]),
+      stack.grant('_config@1', {
+        actions: ['update-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -3584,31 +3580,34 @@ describe('grant', () => {
   // the owner writes cards to it.
   test('rejects a grant targeting _app@1', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: '_app@1' },
-      ]),
+      stack.grant('_app@1', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('rejects a default (any-authenticated) grant targeting _grant@1', async () => {
     await expect(
-      stack.grant({ kind: 'authenticated' }, [{ actions: ['create'], typeId: '_grant@1' }]),
+      stack.grant('_grant@1', { actions: ['create'], grantee: { kind: 'authenticated' } }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('still allows a grant targeting _attachment@1', async () => {
-    const records = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: '_attachment@1' },
-    ]);
-    expect(records).toHaveLength(1);
+    const record = await stack.grant('_attachment@1', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(record.typeId).toBe('_grant@1');
   });
 
   test('creates a group-targeted grant record', async () => {
-    const records = await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
-    expect(records).toHaveLength(1);
-    expect(records[0].content).toEqual({
+    const record = await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    expect(record.typeId).toBe('_grant@1');
+    expect(record.content).toEqual({
       typeId: NOTE_V1,
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
@@ -3694,9 +3693,10 @@ describe('grant', () => {
   // The same refusal on every path that writes content, so a grant cannot
   // be edited into an arm it does not satisfy.
   test("a patch dropping a group grantee's role is refused", async () => {
-    const [granted] = await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
+    const granted = await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
     await expect(
       stack.patchContent(granted.id, { grantee: { kind: 'group', groupId: 'group-abc' } }),
     ).rejects.toThrow(StackValidationError);
@@ -3704,9 +3704,10 @@ describe('grant', () => {
 
   test('rejects a group-targeted grant on _grant@1', async () => {
     await expect(
-      stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-        { actions: ['create'], typeId: '_grant@1' },
-      ]),
+      stack.grant('_grant@1', {
+        actions: ['create'],
+        grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -3714,41 +3715,44 @@ describe('grant', () => {
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {
     await expect(
-      stack.grant({ kind: 'group', groupId: '', role: 'member' }, [
-        { actions: ['read-any'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: '', role: 'member' },
+      }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects a group target with a missing groupId', async () => {
     await expect(
-      stack.grant({ kind: 'group', groupId: undefined as unknown as string, role: 'member' }, [
-        { actions: ['read-any'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
+      }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects a group target with no role', async () => {
     await expect(
-      stack.grant({ kind: 'group', groupId: 'group-abc' } as unknown as GrantGrantee, [
-        { actions: ['read-any'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['read-any'],
+        grantee: { kind: 'group', groupId: 'group-abc' } as unknown as GrantGrantee,
+      }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects a target naming no tier', async () => {
     await expect(
-      stack.grant(null as unknown as GrantGrantee, [{ actions: ['read-any'], typeId: NOTE_V1 }]),
+      stack.grant(NOTE_V1, { actions: ['read-any'], grantee: null as unknown as GrantGrantee }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects an empty entityId target', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: '' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]),
+      stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'entity', entityId: '' } }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
@@ -3758,39 +3762,44 @@ describe('grant', () => {
   // docs/spec/access-control.md § Write implies read.
   test('rejects a mutate action with no read action alongside it', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['update-any'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['update-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create', 'delete-own'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['create', 'delete-own'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects a -any mutate action paired only with read-own', async () => {
     await expect(
-      stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['read-own', 'delete-any'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['read-own', 'delete-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('accepts a -own mutate action paired with the wider read-any', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['read-any', 'update-own'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any', 'update-own'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(await stack.listGrants()).toHaveLength(1);
   });
 
   // Contribute-without-reading is the one blind write the model offers.
   test('accepts a create-only grant', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(await stack.listGrants()).toHaveLength(1);
   });
 });
@@ -3801,32 +3810,36 @@ describe('grant', () => {
 
 describe('listGrants', () => {
   test('omitting the target returns every grant record', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
     const grants = await stack.listGrants();
     expect(grants).toHaveLength(2);
   });
 
   test('an authenticated target returns only default grants', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
     const grants = await stack.listGrants({ kind: 'authenticated' });
     expect(grants).toHaveLength(1);
     expect(grants[0].content).toMatchObject({ actions: ['read-any'] });
   });
 
   test('an entity target returns grants naming it plus every default grant', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'entity', entityId: 'entity-xyz' }, [
-      { actions: ['read-own', 'delete-own'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['read-any'], typeId: NOTE_V1 }]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-own', 'delete-own'],
+      grantee: { kind: 'entity', entityId: 'entity-xyz' },
+    });
+    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
 
     const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(2);
@@ -3836,15 +3849,18 @@ describe('listGrants', () => {
   });
 
   test('a group target returns grants naming that exact group and role', async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'group', groupId: 'group-xyz', role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['read-own', 'update-own'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-own', 'update-own'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
 
     const grants = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'member' });
     expect(grants).toHaveLength(1);
@@ -3858,12 +3874,14 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'entity', entityId: 'entity-xyz' }, [
-      { actions: ['read-own', 'delete-own'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-own', 'delete-own'],
+      grantee: { kind: 'entity', entityId: 'entity-xyz' },
+    });
 
     const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(1);
@@ -3881,23 +3899,27 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant({ kind: 'group', groupId: notAGroup.id, role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
+    });
 
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 
   test("role 'any' returns every grant naming the group, whichever role it carries", async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'group', groupId: 'group-xyz', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
+    });
 
     const grants = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' });
     expect(grants).toHaveLength(2);
@@ -3912,12 +3934,14 @@ describe('listGrants', () => {
   // The listing answers identity, not coverage: a role names the grant, not
   // someone who might hold it, so the wider tier is not swept in.
   test('a group role returns only the grants carrying that exact role', async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
+    });
 
     const admin = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'admin' });
     expect(admin).toHaveLength(1);
@@ -3931,9 +3955,10 @@ describe('listGrants', () => {
   });
 
   test('a group target naming no group is refused rather than over-reporting', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'member' })).rejects.toThrow(
       StackQueryError,
     );
@@ -3946,9 +3971,10 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-xyz' },
     });
-    await stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
-      { actions: ['read-any'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
 
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
@@ -3960,23 +3986,27 @@ describe('listGrants', () => {
 
 describe('revoke', () => {
   test('deletes the grant record matching grantee, typeId, and actions', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(0);
   });
 
   test('returns the grants it withdrew, as they stood', async () => {
-    const [granted] = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    const withdrawn = await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    const granted = await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    const withdrawn = await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(withdrawn).toHaveLength(1);
     expect(withdrawn[0].id).toBe(granted.id);
     expect(withdrawn[0].content).toMatchObject({
@@ -3988,35 +4018,41 @@ describe('revoke', () => {
   // An empty result is the signal, not an error: re-running a revocation
   // must stay safe, and a grant already withdrawn is the ordinary case.
   test('returns an empty array when nothing matched, rather than throwing', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(
-      await stack.revoke({ kind: 'entity', entityId: 'entity-xyz' }, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      await stack.revoke(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-xyz' },
+      }),
     ).toEqual([]);
 
-    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(
-      await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      await stack.revoke(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).toEqual([]);
   });
 
   // A revocation aimed at a group's admins must not sweep the members'
   // grant, which is the wider tier — and the empty result says it did not.
   test('a group role narrower than the stored grant withdraws nothing, and says so', async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
     expect(
-      await stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'admin' }, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      await stack.revoke(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
+      }),
     ).toEqual([]);
     expect(
       await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
@@ -4025,24 +4061,28 @@ describe('revoke', () => {
 
   test("role 'any' is listing-only — grant() and revoke() refuse it", async () => {
     await expect(
-      stack.grant({ kind: 'group', groupId: 'group-abc', role: 'any' } as never, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      stack.grant(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
+      }),
     ).rejects.toThrow(StackQueryError);
     await expect(
-      stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'any' } as never, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      stack.revoke(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
+      }),
     ).rejects.toThrow(StackQueryError);
   });
 
   test('revocation is a soft delete — the owner can undelete it like any other mutation', async () => {
-    const [granted] = await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    const granted = await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
 
     await stack.undelete(granted.id);
@@ -4050,23 +4090,27 @@ describe('revoke', () => {
   });
 
   test('does not affect a grant for a different entity or a default grant', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
-    await stack.revoke({ kind: 'entity', entityId: 'entity-xyz' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-xyz' },
+    });
     expect(await stack.listGrants()).toHaveLength(2);
   });
 
   test('does not affect a grant for the same entity with a different action set', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create', 'read-own'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create', 'read-own'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(1);
   });
 
@@ -4075,61 +4119,71 @@ describe('revoke', () => {
       text: { kind: 'text', required: true },
       title: { kind: 'string' },
     });
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V2 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.revoke(NOTE_V2, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
     expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 
   test('an authenticated target revokes a default grant', async () => {
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
-    await stack.revoke({ kind: 'authenticated' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    await stack.revoke(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
     expect(await stack.listGrants({ kind: 'authenticated' })).toHaveLength(0);
   });
 
   test('a group target revokes the grant matching that exact group and role', async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
     expect(
       await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'member' }),
     ).toHaveLength(0);
   });
 
   test('a group target does not affect a grant for a different group or an entity', async () => {
-    await stack.grant({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'group', groupId: 'group-xyz', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.revoke({ kind: 'group', groupId: 'group-abc', role: 'member' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
+    });
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.revoke(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+    });
     expect(await stack.listGrants()).toHaveLength(2);
   });
 
   // A group target carrying no group is refused before any record is
   // matched, so an unnamed group cannot stand in for every other grantee.
   test('a group target naming no group is refused, leaving other grants standing', async () => {
-    await stack.grant({ kind: 'entity', entityId: 'entity-abc' }, [
-      { actions: ['create'], typeId: NOTE_V1 },
-    ]);
-    await stack.grant({ kind: 'authenticated' }, [{ actions: ['create'], typeId: NOTE_V1 }]);
+    await stack.grant(NOTE_V1, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
 
     await expect(
-      stack.revoke({ kind: 'group', groupId: undefined as unknown as string, role: 'member' }, [
-        { actions: ['create'], typeId: NOTE_V1 },
-      ]),
+      stack.revoke(NOTE_V1, {
+        actions: ['create'],
+        grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
+      }),
     ).rejects.toThrow(StackQueryError);
     expect(await stack.listGrants()).toHaveLength(2);
   });
@@ -4806,13 +4860,13 @@ describe('putAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     expect(typeof fileId).toBe('string');
   });
 
   test('creates _attachment@1 record with metadata', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png', 'photo.png');
+    await stack.putAttachment(data, { mimeType: 'image/png', filename: 'photo.png' });
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records).toHaveLength(1);
     const content = result.records[0].content as Record<string, unknown>;
@@ -4823,7 +4877,7 @@ describe('putAttachment', () => {
 
   test('attachment record has no createdBy (owner-attributed)', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png');
+    await stack.putAttachment(data, { mimeType: 'image/png' });
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(result.records[0].createdBy?.subjectId).toBeUndefined();
   });
@@ -5399,7 +5453,7 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
     const limitedStack = await Stack.create(limitedAdapter);
 
     await expect(
-      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
     ).rejects.toThrow(StackPayloadTooLargeError);
     expect(putAttachmentSpy).not.toHaveBeenCalled();
   });
@@ -5409,13 +5463,13 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
     const limitedStack = await Stack.create(limitedAdapter);
 
     await expect(
-      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png'),
+      limitedStack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
     ).resolves.toMatchObject({ typeId: '_attachment@1' });
   });
 
   test('a null attachmentBytes never throws, regardless of size', async () => {
     const data = new Uint8Array(1000);
-    await expect(stack.putAttachment(data, 'image/png')).resolves.toMatchObject({
+    await expect(stack.putAttachment(data, { mimeType: 'image/png' })).resolves.toMatchObject({
       typeId: '_attachment@1',
     });
   });
@@ -5448,15 +5502,13 @@ describe('putAttachment — atomic adapter path', () => {
 
     const {
       content: { fileId },
-    } = await atomicStack.putAttachment(data, 'image/png', 'photo.png');
+    } = await atomicStack.putAttachment(data, { mimeType: 'image/png', filename: 'photo.png' });
 
     expect(fileId).toBe('atomic-file-id');
-    expect(atomicAdapter.putAttachmentWithMetadata).toHaveBeenCalledWith(
-      data,
-      'image/png',
-      'photo.png',
-      undefined,
-    );
+    expect(atomicAdapter.putAttachmentWithMetadata).toHaveBeenCalledWith(data, {
+      mimeType: 'image/png',
+      filename: 'photo.png',
+    });
     expect(createSpy).not.toHaveBeenCalled();
   });
 
@@ -5464,7 +5516,7 @@ describe('putAttachment — atomic adapter path', () => {
     const data = new Uint8Array([1, 2, 3]);
     const createSpy = vi.spyOn(stack, 'create');
 
-    await stack.putAttachment(data, 'image/png', 'photo.png');
+    await stack.putAttachment(data, { mimeType: 'image/png', filename: 'photo.png' });
 
     expect(createSpy).toHaveBeenCalledTimes(1);
   });
@@ -5484,7 +5536,9 @@ describe('putAttachment — atomic adapter path', () => {
     );
     const atomicStack = await Stack.create(atomicAdapter);
 
-    const record = await atomicStack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const record = await atomicStack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+    });
 
     expect(record.id).toBe(fabricatedRecord.id);
     expect(record.content.fileId).toBe('atomic-file-id');
@@ -5502,7 +5556,10 @@ describe('putAttachment — returned record', () => {
   test('returns the metadata record, not just the fileId', async () => {
     const data = new Uint8Array([1, 2, 3]);
 
-    const record = await stack.putAttachment(data, 'image/png', 'photo.png');
+    const record = await stack.putAttachment(data, {
+      mimeType: 'image/png',
+      filename: 'photo.png',
+    });
 
     expect(record.typeId).toBe('_attachment@1');
     expect(record.content).toEqual({
@@ -5515,7 +5572,7 @@ describe('putAttachment — returned record', () => {
   });
 
   test('the returned id sets filename later without a lookup', async () => {
-    const record = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    const record = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
 
     const renamed = await stack.patchContent(record.id, { filename: 'renamed.png' });
 
@@ -5551,8 +5608,14 @@ describe('Stack.getAttachmentRecords', () => {
   test('returns only the records for the requested fileId', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'wanted.png');
-    await stack.putAttachment(new Uint8Array([2]), 'image/png', 'other.png');
+    } = await stack.putAttachment(new Uint8Array([1]), {
+      mimeType: 'image/png',
+      filename: 'wanted.png',
+    });
+    await stack.putAttachment(new Uint8Array([2]), {
+      mimeType: 'image/png',
+      filename: 'other.png',
+    });
 
     const records = await stack.getAttachmentRecords(fileId);
     expect(records.map((r) => r.content.filename)).toEqual(['wanted.png']);
@@ -5586,7 +5649,10 @@ describe('Stack.getAttachmentRecords', () => {
     const {
       id,
       content: { fileId, mimeType, size },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png', 'cover.png');
+    } = await stack.putAttachment(new Uint8Array([1]), {
+      mimeType: 'image/png',
+      filename: 'cover.png',
+    });
     await defineAttachmentV2(stack);
     await stack.commitMigration(id, '_attachment@2', {
       fileId,
@@ -5647,7 +5713,10 @@ describe('Stack.getAttachmentRecords', () => {
     }
     const {
       content: { fileId },
-    } = await incapableStack.putAttachment(new Uint8Array([9, 9, 9]), 'text/markdown', 'late.md');
+    } = await incapableStack.putAttachment(new Uint8Array([9, 9, 9]), {
+      mimeType: 'text/markdown',
+      filename: 'late.md',
+    });
 
     const records = await incapableStack.getAttachmentRecords(fileId);
     expect(records.map((r) => r.content.filename)).toEqual(['late.md']);
@@ -5659,8 +5728,11 @@ describe('attachment association — attachmentRecordId', () => {
   // association's own pointer is the only thing telling them apart.
   const twoUploads = async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const first = await stack.putAttachment(data, 'image/png', 'original.png');
-    const second = await stack.putAttachment(data, 'image/png', 'copy.png');
+    const first = await stack.putAttachment(data, {
+      mimeType: 'image/png',
+      filename: 'original.png',
+    });
+    const second = await stack.putAttachment(data, { mimeType: 'image/png', filename: 'copy.png' });
     return { first, second, fileId: first.content.fileId };
   };
 
@@ -5824,7 +5896,10 @@ describe('attachment association — attachmentRecordId', () => {
 
   test('rejects a pointer at an _attachment record for other bytes', async () => {
     const { fileId } = await twoUploads();
-    const elsewhere = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const elsewhere = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'image/png',
+      filename: 'other.png',
+    });
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
@@ -5842,7 +5917,10 @@ describe('attachment association — attachmentRecordId', () => {
   // docs/spec/attachments.md.
   test('names no difference between a missing record and one for other bytes', async () => {
     const { fileId } = await twoUploads();
-    const elsewhere = await stack.putAttachment(new Uint8Array([9]), 'image/png', 'other.png');
+    const elsewhere = await stack.putAttachment(new Uint8Array([9]), {
+      mimeType: 'image/png',
+      filename: 'other.png',
+    });
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const reject = async (attachmentRecordId: string) => {
       try {
@@ -5966,10 +6044,10 @@ describe('_attachment@1 mimeType conflict on create', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId: fileId1 },
-    } = await stack.putAttachment(data, 'image/png', 'first.png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png', filename: 'first.png' });
     const {
       content: { fileId: fileId2 },
-    } = await stack.putAttachment(data, 'image/png', 'second.png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png', filename: 'second.png' });
 
     expect(fileId2).toBe(fileId1);
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
@@ -5978,9 +6056,11 @@ describe('_attachment@1 mimeType conflict on create', () => {
 
   test('second upload of identical bytes with a conflicting mimeType is rejected', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'text/markdown');
+    await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
-    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+    await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
+      StackValidationError,
+    );
 
     // The rejected upload's metadata record must not have been created.
     const result = await stack.query({ filter: { typeId: '_attachment@1' } });
@@ -5993,11 +6073,11 @@ describe('_attachment@1 mimeType conflict on create', () => {
   // confirmation-oracle the anti-oracle rule exists to prevent.
   test('the conflict message never names the established mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'text/markdown');
+    await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
     let error: StackValidationError | undefined;
     try {
-      await stack.putAttachment(data, 'text/plain');
+      await stack.putAttachment(data, { mimeType: 'text/plain' });
     } catch (e) {
       error = e as StackValidationError;
     }
@@ -6023,9 +6103,9 @@ describe('_attachment@1 mimeType conflict on create', () => {
       });
     }
     const data = new Uint8Array([9, 9, 9]);
-    await incapableStack.putAttachment(data, 'text/markdown');
+    await incapableStack.putAttachment(data, { mimeType: 'text/markdown' });
 
-    await expect(incapableStack.putAttachment(data, 'text/plain')).rejects.toThrow(
+    await expect(incapableStack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -6035,21 +6115,25 @@ describe('_attachment@1 mimeType conflict on create', () => {
     const {
       id,
       content: { fileId, size },
-    } = await stack.putAttachment(data, 'text/markdown');
+    } = await stack.putAttachment(data, { mimeType: 'text/markdown' });
     await defineAttachmentV2(stack);
     await stack.commitMigration(id, '_attachment@2', { fileId, mimeType: 'text/markdown', size });
 
-    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
-    await expect(stack.putAttachment(data, 'text/markdown')).resolves.toBeDefined();
+    await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(stack.putAttachment(data, { mimeType: 'text/markdown' })).resolves.toBeDefined();
   });
 
   test('a soft-deleted earlier record still establishes the mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'text/markdown');
+    await stack.putAttachment(data, { mimeType: 'text/markdown' });
     const [metaRecord] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
     await stack.delete(metaRecord.id);
 
-    await expect(stack.putAttachment(data, 'text/plain')).rejects.toThrow(StackValidationError);
+    await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   // The check is check-then-create with no storage-level uniqueness behind
@@ -6083,8 +6167,10 @@ describe('_attachment@1 mimeType conflict on create', () => {
 
     // Core's write-time check reads the same winner: a third upload
     // matching it is accepted, one matching the loser is not.
-    await expect(stack.putAttachment(data, 'text/html')).rejects.toThrow(StackValidationError);
-    await expect(stack.putAttachment(data, 'image/png')).resolves.toBeDefined();
+    await expect(stack.putAttachment(data, { mimeType: 'text/html' })).rejects.toThrow(
+      StackValidationError,
+    );
+    await expect(stack.putAttachment(data, { mimeType: 'image/png' })).resolves.toBeDefined();
   });
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {
@@ -6120,7 +6206,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
 describe('_attachment@1 immutable fields on update', () => {
   test('filename may be changed', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png', 'old.png');
+    await stack.putAttachment(data, { mimeType: 'image/png', filename: 'old.png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     const updated = await stack.patchContent(record.id, { filename: 'new.png' });
@@ -6130,7 +6216,7 @@ describe('_attachment@1 immutable fields on update', () => {
 
   test('changing mimeType is rejected, even to the same value', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png');
+    await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
@@ -6143,7 +6229,7 @@ describe('_attachment@1 immutable fields on update', () => {
 
   test('changing fileId is rejected', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png');
+    await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
@@ -6153,7 +6239,7 @@ describe('_attachment@1 immutable fields on update', () => {
 
   test('changing size is rejected', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png');
+    await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(
@@ -6163,7 +6249,7 @@ describe('_attachment@1 immutable fields on update', () => {
 
   test('setting fileId or size to their current value is a no-op, not an error', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    await stack.putAttachment(data, 'image/png');
+    await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
     const content = record.content as Record<string, unknown>;
 
@@ -6182,7 +6268,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -6200,7 +6286,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -6216,7 +6302,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const [metaRecord] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
     await stack.delete(metaRecord.id);
 
@@ -6230,7 +6316,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
 
     await stack.deleteAttachment(fileId);
 
@@ -6297,7 +6383,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     await stack.create(attachmentTypeId, { coverFileId: fileId });
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
@@ -6312,7 +6398,7 @@ describe('deleteAttachment', () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
-    } = await stack.putAttachment(data, 'image/png');
+    } = await stack.putAttachment(data, { mimeType: 'image/png' });
     await stack.create(attachmentTypeId, { coverFileId: fileId });
 
     await expect(stack.deleteAttachment(fileId)).resolves.toBeUndefined();
@@ -6322,7 +6408,7 @@ describe('deleteAttachment', () => {
     const {
       id,
       content: { fileId, mimeType, size },
-    } = await stack.putAttachment(new Uint8Array([9]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
     await defineAttachmentV2(stack);
     await stack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
 
@@ -6363,7 +6449,7 @@ describe('deleteAttachment', () => {
 
     const {
       content: { fileId },
-    } = await atomicStack.putAttachment(new Uint8Array([9]), 'image/png');
+    } = await atomicStack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
     await atomicStack.deleteAttachment(fileId);
 
     // The family, not just @1 — core resolves the baseId so the adapter
@@ -6380,7 +6466,7 @@ describe('collectAttachmentGarbage', () => {
   test('collects a file whose only referencing record was hard-deleted', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -6399,7 +6485,7 @@ describe('collectAttachmentGarbage', () => {
   test('does not collect a file referenced by a live record', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -6417,7 +6503,7 @@ describe('collectAttachmentGarbage', () => {
   test('does not collect a file referenced only by a soft-deleted record', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
     await stack.associate(note.id, {
       kind: 'attachment',
@@ -6440,7 +6526,7 @@ describe('collectAttachmentGarbage', () => {
     });
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     await stack.create(photoType, { coverFileId: fileId });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
@@ -6449,7 +6535,7 @@ describe('collectAttachmentGarbage', () => {
   });
 
   test('default grace period protects a fresh unreferenced upload', async () => {
-    await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
 
     const result = await stack.collectAttachmentGarbage();
 
@@ -6461,7 +6547,7 @@ describe('collectAttachmentGarbage', () => {
   test('graceMs: 0 collects an unreferenced upload immediately', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -6471,10 +6557,10 @@ describe('collectAttachmentGarbage', () => {
   test('reports reclaimedBytes summed across deleted files', async () => {
     const {
       content: { fileId: fileId1 },
-    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
     const {
       content: { fileId: fileId2 },
-    } = await stack.putAttachment(new Uint8Array([1, 2, 3, 4, 5]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3, 4, 5]), { mimeType: 'image/png' });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -6485,7 +6571,7 @@ describe('collectAttachmentGarbage', () => {
   test('dryRun reports what would be deleted without deleting anything', async () => {
     const {
       content: { fileId },
-    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0, dryRun: true });
 
@@ -6517,7 +6603,7 @@ describe('collectAttachmentGarbage', () => {
     );
     const {
       content: { fileId },
-    } = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await noListFilesStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -6537,7 +6623,7 @@ describe('collectAttachmentGarbage', () => {
     const {
       id,
       content: { fileId, mimeType, size },
-    } = await noListFilesStack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await noListFilesStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     await defineAttachmentV2(noListFilesStack);
     await noListFilesStack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
 
@@ -6569,10 +6655,10 @@ describe('collectAttachmentGarbage', () => {
   test('a file whose delete call races is skipped, not thrown, and the rest of the sweep still completes', async () => {
     const {
       content: { fileId: racedFileId },
-    } = await stack.putAttachment(new Uint8Array([1]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const {
       content: { fileId: okFileId },
-    } = await stack.putAttachment(new Uint8Array([2, 2]), 'image/png');
+    } = await stack.putAttachment(new Uint8Array([2, 2]), { mimeType: 'image/png' });
 
     const realDeleteAttachment = stack.deleteAttachment.bind(stack);
     stack.deleteAttachment = async (fileId: string) => {

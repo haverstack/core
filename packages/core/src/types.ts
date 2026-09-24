@@ -453,6 +453,16 @@ export type GrantAction = (typeof GRANT_ACTIONS)[number];
  */
 export type GrantGrantee = Grantee | { kind: 'authenticated' };
 
+/**
+ * What `Stack.grant()` and `Stack.revoke()` take beside the type they act
+ * on — the type-level counterpart of the `AuthorityAssociation`
+ * `grantAccess()` takes beside a record id.
+ */
+export type TypeGrant = {
+  actions: GrantAction[];
+  grantee: GrantGrantee;
+};
+
 /** Content for _grant records */
 export type GrantContent = {
   /** Which record type the grant applies to. */
@@ -461,6 +471,14 @@ export type GrantContent = {
   actions: GrantAction[];
   /** Who the grant reaches. Required — see GrantGrantee. */
   grantee: GrantGrantee;
+};
+
+/** The metadata an upload's `_attachment@1` record carries beside its bytes. */
+export type PutAttachmentOptions = {
+  mimeType: string;
+  filename?: string;
+  /** Attribution for the metadata record, as create()'s `appId`. */
+  appId?: AppId;
 };
 
 /** Content for _attachment records — one per upload, tracks file metadata. */
@@ -1298,12 +1316,7 @@ export type StackAdapter = StackRecordAdapter &
      * synthesized by combineAdapters(). A security boundary, not an
      * efficiency shortcut — see docs/spec/adapters.md § Interface split.
      */
-    putAttachmentWithMetadata?(
-      data: Uint8Array,
-      mimeType: string,
-      filename?: string,
-      appId?: AppId,
-    ): Promise<StackRecord>;
+    putAttachmentWithMetadata?(data: Uint8Array, opts: PutAttachmentOptions): Promise<StackRecord>;
   };
 
 /**

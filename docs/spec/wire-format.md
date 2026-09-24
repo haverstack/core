@@ -580,7 +580,7 @@ File IDs are SHA-256 hashes of the content. Uploading identical bytes twice retu
 
 ### Upload
 
-Send the raw binary as the request body, with `Content-Type` set to the MIME type and, optionally, `Content-Disposition` carrying a filename. The server stores the bytes and creates the `_attachment@1` record in the same request — implemented as `scopedStack.putAttachment(bytes, mimeType, filename, appId)`. `Content-Type` defaults to `application/octet-stream` if omitted.
+Send the raw binary as the request body, with `Content-Type` set to the MIME type and, optionally, `Content-Disposition` carrying a filename. The server stores the bytes and creates the `_attachment@1` record in the same request — implemented as `scopedStack.putAttachment(bytes, { mimeType, filename, appId })`. `Content-Type` defaults to `application/octet-stream` if omitted.
 
 An optional `?appId=` query param carries the writing app's reverse-DNS identifier onto the created record, since a binary body has nowhere to put the field that `POST /records` takes inline. Self-reported like every other `appId`.
 
@@ -605,7 +605,7 @@ Returns `413 Request Entity Too Large` (code `payload_too_large`, reconstructed 
 
 Either way the caller gets the created `_attachment@1` record back, the same thing this endpoint returns — the atomic path passes the server's response through, and the fallback path returns what its own `create()` produced. See [Attachments](./attachments.md#the-_attachment-record-type).
 
-One consequence: there is no bytes-only upload anywhere on the wire — this endpoint always creates a record. Accordingly, **bytes-only upload has no public SDK surface either**: `putAttachment(data, mimeType, filename?)` is the upload operation, everywhere, for everyone. `StackBlobAdapter.putAttachment()` remains the required adapter-level primitive local storage needs (it's what `Stack.putAttachment()`'s fallback writes bytes through), but on `APIAdapter` it is **unsupported and throws** rather than mapping to this endpoint — implementing it anyway would silently create a record with a default `mimeType`, a bytes-only upload that isn't. `Stack.putAttachment()` never reaches it there (the atomic capability takes precedence), so the throw guards direct adapter-level callers only.
+One consequence: there is no bytes-only upload anywhere on the wire — this endpoint always creates a record. Accordingly, **bytes-only upload has no public SDK surface either**: `putAttachment(data, { mimeType, filename? })` is the upload operation, everywhere, for everyone. `StackBlobAdapter.putAttachment()` remains the required adapter-level primitive local storage needs (it's what `Stack.putAttachment()`'s fallback writes bytes through), but on `APIAdapter` it is **unsupported and throws** rather than mapping to this endpoint — implementing it anyway would silently create a record with a default `mimeType`, a bytes-only upload that isn't. `Stack.putAttachment()` never reaches it there (the atomic capability takes precedence), so the throw guards direct adapter-level callers only.
 
 ### Download
 
