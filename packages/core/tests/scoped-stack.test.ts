@@ -426,7 +426,7 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
 
-  test('write:true holder can soft-delete but not hard-delete', async () => {
+  test('write:true holder can soft-delete but not purge', async () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
@@ -435,7 +435,7 @@ describe('ScopedStack — write access', () => {
         ],
       }),
     );
-    await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).delete(record.id, { purge: true })).rejects.toThrow(
       StackPermissionError,
     );
     expect(await adapter.getRecord(record.id)).not.toBeNull();
@@ -444,17 +444,17 @@ describe('ScopedStack — write access', () => {
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
 
-  test('owner can hard-delete', async () => {
+  test('owner can purge', async () => {
     const record = await adapter.createRecord(makeRecord());
-    await stack.asEntity(OWNER).delete(record.id, { hard: true });
+    await stack.asEntity(OWNER).delete(record.id, { purge: true });
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
-  test('deleteAndReturn() reports the record it hard-deleted, atomically', async () => {
+  test('deleteAndReturn() reports the record it purged, atomically', async () => {
     const record = await adapter.createRecord(makeRecord());
     const { record: deleted, referencedFileIds } = await stack
       .asEntity(OWNER)
-      .deleteAndReturn(record.id, { hard: true });
+      .deleteAndReturn(record.id, { purge: true });
     expect(deleted?.id).toBe(record.id);
     expect(referencedFileIds).toEqual([]);
     expect(await adapter.getRecord(record.id)).toBeNull();
@@ -471,7 +471,7 @@ describe('ScopedStack — write access', () => {
     );
   });
 
-  test('deleteAndReturn() hard delete is owner-only, like delete()', async () => {
+  test('deleteAndReturn() purge is owner-only, like delete()', async () => {
     const record = await adapter.createRecord(
       makeRecord({
         permissions: [
@@ -480,9 +480,9 @@ describe('ScopedStack — write access', () => {
         ],
       }),
     );
-    await expect(stack.asEntity(MEMBER).deleteAndReturn(record.id, { hard: true })).rejects.toThrow(
-      StackPermissionError,
-    );
+    await expect(
+      stack.asEntity(MEMBER).deleteAndReturn(record.id, { purge: true }),
+    ).rejects.toThrow(StackPermissionError);
     expect(await adapter.getRecord(record.id)).not.toBeNull();
   });
 
@@ -673,7 +673,7 @@ describe('ScopedStack — record-existence disclosure', () => {
   const verbs = (view: ReturnType<Stack['asEntity']>, id: string): Promise<unknown>[] => [
     view.patchContent(id, { text: 'edited' }),
     view.delete(id),
-    view.delete(id, { hard: true }),
+    view.delete(id, { purge: true }),
     view.undelete(id),
     view.associate(id, tag),
     view.dissociate(id, tag),
@@ -744,7 +744,7 @@ describe('ScopedStack — record-existence disclosure', () => {
 
     // Reachable through the grant, so the refusal may name itself...
     expect((await view.get(own.id))?.id).toBe(own.id);
-    await expect(view.delete(own.id, { hard: true })).rejects.toThrow(StackPermissionError);
+    await expect(view.delete(own.id, { purge: true })).rejects.toThrow(StackPermissionError);
     // ...while a record of the same type it cannot read stays unconfirmed.
     expect(await view.get(theirs.id)).toBeNull();
     await expect(view.patchContent(theirs.id, { text: 'edited' })).rejects.toThrow(
@@ -1010,9 +1010,9 @@ describe('ScopedStack — versions', () => {
       expect(restored.parentId).toBe(box.id);
     });
 
-    // A container hard-deleted out from under the record costs it nothing
+    // A container purged out from under the record costs it nothing
     // either: the record keeps its dangling parent and its rollback.
-    test('a hard-deleted container blocks no restore', async () => {
+    test('a purged container blocks no restore', async () => {
       const box = await adapter.createRecord(makeRecord());
       const record = await adapter.createRecord(
         makeRecord({
@@ -1030,7 +1030,7 @@ describe('ScopedStack — versions', () => {
         content: { text: 'older' },
         updatedAt: new Date(),
       });
-      await stack.delete(box.id, { hard: true });
+      await stack.delete(box.id, { purge: true });
 
       const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
       expect(restored.content).toEqual({ text: 'older' });
@@ -2084,7 +2084,7 @@ describe('ScopedStack — grant-based update/delete', () => {
     expect((await adapter.getRecord(record.id))?.deletedAt).toBeDefined();
   });
 
-  test('delete-any grant does not allow hard delete', async () => {
+  test('delete-any grant does not allow purge', async () => {
     await stack.grantType(COMMENT, {
       actions: ['read-any', 'delete-any'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -2094,7 +2094,7 @@ describe('ScopedStack — grant-based update/delete', () => {
       { text: 'hello' },
       { createdBy: { subjectId: STRANGER } },
     );
-    await expect(stack.asEntity(MEMBER).delete(record.id, { hard: true })).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).delete(record.id, { purge: true })).rejects.toThrow(
       StackPermissionError,
     );
     expect(await adapter.getRecord(record.id)).not.toBeNull();
@@ -3629,12 +3629,12 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
     return record;
   };
 
-  test('a write-holder gets the permissions op without the grantees beneath it', async () => {
+  test('a write-holder gets the reshare op without the grantees beneath it', async () => {
     const record = await sharedAndMoved();
     const entries = await stack.asEntity(MEMBER).getJournal(record.id);
 
     expect(entries).toHaveLength(2);
-    expect(entries.map((e) => e.ops)).toEqual([['permissions'], ['permissions']]);
+    expect(entries.map((e) => e.ops)).toEqual([['reshare'], ['reshare']]);
     expect(entries.every((e) => e.associations === undefined)).toBe(true);
   });
 
@@ -3685,7 +3685,7 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
 
     const [entry] = await stack.asEntity(MEMBER).getJournal(record.id);
     expect(entry.seq).toBe(1);
-    expect(entry.ops).toEqual(expect.arrayContaining(['associate', 'permissions']));
+    expect(entry.ops).toEqual(expect.arrayContaining(['associate', 'reshare']));
     expect(entry.associations).toEqual([
       { op: 'add', association: { kind: 'tag', label: 'reviewed' } },
     ]);
@@ -5012,14 +5012,14 @@ describe('ScopedStack — delegation', () => {
     expect(await stack.asActor({ principalId: APP, subjectId: OWNER }).get(record.id)).toBeNull();
   });
 
-  test('an app delegated for the owner cannot hard delete', async () => {
+  test('an app delegated for the owner cannot purge', async () => {
     await grantAll({ kind: 'entity', entityId: APP });
     await grantAll({ kind: 'authenticated' });
     const record = await adapter.createRecord(
       makeRecord({ typeId: COMMENT, createdBy: { subjectId: OWNER } }),
     );
     await expect(
-      stack.asActor({ principalId: APP, subjectId: OWNER }).delete(record.id, { hard: true }),
+      stack.asActor({ principalId: APP, subjectId: OWNER }).delete(record.id, { purge: true }),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -5221,12 +5221,12 @@ describe('ScopedStack — delegation', () => {
   // The verbs resting on it are irreversible or disclose the sharing
   // graph, so delegation carries none of them, whichever side the owner
   // is on. The group rule below is two-sided instead, like a reshare.
-  test('an owner principal cannot hard delete for its subject', async () => {
+  test('an owner principal cannot purge for its subject', async () => {
     await grantAll({ kind: 'entity', entityId: MEMBER });
     const record = await stack.asEntity(MEMBER).create(COMMENT, { text: 'mine' });
 
     await expect(
-      stack.asActor({ principalId: OWNER, subjectId: MEMBER }).delete(record.id, { hard: true }),
+      stack.asActor({ principalId: OWNER, subjectId: MEMBER }).delete(record.id, { purge: true }),
     ).rejects.toThrow(StackPermissionError);
 
     // Soft delete is still reachable, so the refusal is about the verb.

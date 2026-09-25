@@ -73,7 +73,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
       [['patch'], 'changed'],
       [['associate'], 'changed'],
       [['dissociate'], 'changed'],
-      [['permissions'], 'changed'],
+      [['reshare'], 'changed'],
       [['delete'], 'deleted'],
       [['undelete'], 'changed'],
       [['restore'], 'changed'],
@@ -104,18 +104,18 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     });
   });
 
-  test('a hard delete emits `purged` and nothing further', async () => {
+  test('a purge emits `purged` and nothing further', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
     await stack.patchContent(note.id, { text: 'edited' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.delete(note.id, { hard: true });
+    await stack.delete(note.id, { purge: true });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({
       kind: 'purged',
-      ops: ['hard-delete'],
+      ops: ['purge'],
       recordId: note.id,
       typeId: NOTE,
       version: 2,
@@ -178,11 +178,11 @@ describe('a mutation that changes nothing emits nothing', () => {
     expect(seen).toEqual([]);
   });
 
-  test('a hard delete of a record that is not there emits nothing', async () => {
+  test('a purge of a record that is not there emits nothing', async () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.delete('1hk153x00099', { hard: true });
+    await stack.delete('1hk153x00099', { purge: true });
 
     expect(seen).toEqual([]);
   });
@@ -299,12 +299,12 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     expect(seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['list']]]);
   });
 
-  test('a hard delete of a still-unlisted record is not announced either', async () => {
+  test('a purge of a still-unlisted record is not announced either', async () => {
     const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.delete(note.id, { hard: true });
+    await stack.delete(note.id, { purge: true });
 
     expect(seen).toEqual([]);
   });
@@ -412,7 +412,7 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.asEntity(OWNER).delete(note.id, { hard: true });
+    await stack.asEntity(OWNER).delete(note.id, { purge: true });
 
     expect(seen[0]).toMatchObject({ kind: 'purged', actor: { subjectId: OWNER } });
   });
@@ -597,7 +597,7 @@ describe('a purged frame carries nothing about the record', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.delete(note.id, { hard: true });
+    await stack.delete(note.id, { purge: true });
 
     expect(seen[0]!.record).toBeUndefined();
   });
@@ -605,12 +605,12 @@ describe('a purged frame carries nothing about the record', () => {
   test('no parentId, which a soft delete of the same record would carry', async () => {
     const parent = await stack.create(NOTE, { text: 'parent' });
     const soft = await stack.create(NOTE, { text: 'child' }, { parentId: parent.id });
-    const hard = await stack.create(NOTE, { text: 'child' }, { parentId: parent.id });
+    const purged = await stack.create(NOTE, { text: 'child' }, { parentId: parent.id });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.delete(soft.id);
-    await stack.delete(hard.id, { hard: true });
+    await stack.delete(purged.id, { purge: true });
 
     expect(seen[0]).toMatchObject({ kind: 'deleted', parentId: parent.id });
     expect(seen[1]!.kind).toBe('purged');
@@ -626,7 +626,7 @@ describe('a purged frame carries nothing about the record', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.asEntity(OWNER).delete(note.id, { hard: true });
+    await stack.asEntity(OWNER).delete(note.id, { purge: true });
 
     const frame = seen[0]!;
     expect(frame.record).toBeUndefined();
@@ -778,8 +778,8 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: parent.id } });
 
-    await stack.delete(child.id, { hard: true });
-    await stack.delete(orphan.id, { hard: true });
+    await stack.delete(child.id, { purge: true });
+    await stack.delete(orphan.id, { purge: true });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.recordId).toBe(child.id);

@@ -232,7 +232,7 @@ export class LocalAdapter implements StackAdapter {
 
   async deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }

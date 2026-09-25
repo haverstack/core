@@ -203,7 +203,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(undeleted.deletedAt).toBeUndefined();
       });
 
-      test('hard deleteRecord removes the record and its version history', async () => {
+      test('purging deleteRecord removes the record and its version history', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         await adapter.saveVersion(record.id, {
@@ -213,7 +213,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           updatedAt: record.updatedAt,
         });
 
-        await adapter.deleteRecord(record.id, { hard: true });
+        await adapter.deleteRecord(record.id, { purge: true });
         expect(await adapter.getRecord(record.id)).toBeNull();
         expect(await adapter.getVersions(record.id)).toEqual([]);
       });
@@ -628,7 +628,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await expectStackErrorCode(adapter.getJournal(missing), 'not_found');
       });
 
-      test('a soft delete keeps the journal; a hard delete destroys it', async () => {
+      test('a soft delete keeps the journal; a purge destroys it', async () => {
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         await adapter.deleteRecord(record.id, {
@@ -638,7 +638,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         // recovers it.
         expect(await adapter.getJournal(record.id)).toHaveLength(2);
 
-        await adapter.deleteRecord(record.id, { hard: true });
+        await adapter.deleteRecord(record.id, { purge: true });
         // Gone with the record, so the log is refused: an empty one would
         // mean "nothing changed", which is the one reading it must keep.
         await expectStackErrorCode(adapter.getJournal(record.id), 'not_found');
@@ -878,10 +878,10 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           expect(fresh.records.map((r) => r.id)).toContain(record.id);
         });
 
-        test('a hard-deleted record is no longer found by search', async () => {
+        test('a purged record is no longer found by search', async () => {
           const record = makeRecord({ content: { title: 'ephemeral content' } });
           await adapter.createRecord(record);
-          await adapter.deleteRecord(record.id, { hard: true });
+          await adapter.deleteRecord(record.id, { purge: true });
 
           const result = await adapter.queryRecords({ filter: { search: 'ephemeral' } });
           expect(result.records.map((r) => r.id)).not.toContain(record.id);

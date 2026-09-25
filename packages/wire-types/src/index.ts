@@ -676,7 +676,7 @@ export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
 
 /**
  * A change as a server frames it. A purge carries neither the record nor
- * its parent, whatever the subscriber asked for: hard delete is the
+ * its parent, whatever the subscriber asked for: purge is the
  * erasure primitive, and a frame carrying the body — or anything else
  * pointing at it — hands every subscriber a permanent copy of what the
  * stack has just destroyed.

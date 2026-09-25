@@ -108,7 +108,7 @@ describe('attribution — updatedBy tracks the actor', () => {
 
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
     const entry = (await stack.getJournal(created.id)).at(-1);
-    expect(entry?.ops).toEqual(['permissions']);
+    expect(entry?.ops).toEqual(['reshare']);
     expect(entry?.actor?.subjectId).toBe(AUTHOR);
   });
 

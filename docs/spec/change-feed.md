@@ -65,7 +65,7 @@ data: {"kind":"changed","ops":["associate"],"recordId":"1hk153x00001",
 
 id: AA3f1T
 event: record
-data: {"kind":"purged","ops":["hard-delete"],"recordId":"1hk153x00002",
+data: {"kind":"purged","ops":["purge"],"recordId":"1hk153x00002",
        "typeId":"com.example/note@1","version":4,
        "updatedAt":"2026-08-13T12:00:03.000Z",
        "actor":{"subjectId":"did:key:z6MkOwner..."}}
@@ -120,7 +120,7 @@ As with [the auth checklist](./wire-format.md#server-implementation-checklist), 
 - **Close on buffer overflow; never drop a frame silently.**
 - **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
 - **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
-- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, hard delete, the [association](./wire-format.md#associations) and [permission](./wire-format.md#permissions) endpoints, and a `PATCH` naming only no-bump keys. None of that second group bumps `version`, so a server that emits off its snapshot path alone silently serves no association, permission, move or listing events at all.
+- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, purge, the [association](./wire-format.md#associations) and [permission](./wire-format.md#permissions) endpoints, and a `PATCH` naming only no-bump keys. None of that second group bumps `version`, so a server that emits off its snapshot path alone silently serves no association, permission, move or listing events at all.
 
 ## Why SSE, and why not `EventSource`
 

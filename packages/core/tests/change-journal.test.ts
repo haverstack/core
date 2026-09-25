@@ -54,7 +54,7 @@ describe('every emitting write appends exactly one entry', () => {
       ['patch'],
       ['associate'],
       ['dissociate'],
-      ['permissions'],
+      ['reshare'],
       ['delete'],
       ['undelete'],
     ]);
@@ -318,14 +318,14 @@ describe('an association change is reversible from the log alone', () => {
 // Erasure
 // -------------------------------------------------------
 
-describe('a hard delete leaves no journal behind', () => {
+describe('a purge leaves no journal behind', () => {
   test('the log goes with the record, as the version history does', async () => {
     const note = await stack.create(NOTE, { text: 'secret' });
     await stack.associate(note.id, { kind: 'tag', label: 'sensitive' });
     await stack.patchContent(note.id, { text: 'still secret' });
     expect(await stack.getJournal(note.id)).toHaveLength(3);
 
-    await stack.delete(note.id, { hard: true });
+    await stack.delete(note.id, { purge: true });
 
     // A purged record is gone, so its log is refused rather than answered
     // empty — the same answer any other missing record gets.

@@ -894,37 +894,37 @@ describe('deleteRecord', () => {
     expect(deleted?.deletedAt).toBeInstanceOf(Date);
   });
 
-  test('a hard delete that answers with no body is refused', async () => {
+  test('a purge that answers with no body is refused', async () => {
     // The body is the purge's only report of what it referenced, so a
     // server that withholds it leaves the client unable to name the bytes
     // the purge stranded.
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).rejects.toThrow(
+    await expect(adapter.deleteRecord('rec-abc123', { purge: true })).rejects.toThrow(
       APIAdapterError,
     );
   });
 
-  test('appends ?hard=true for hard delete, and returns what it destroyed', async () => {
+  test('appends ?purge=true for purge, and returns what it destroyed', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const purged = await adapter.deleteRecord('rec-abc123', { hard: true });
+    const purged = await adapter.deleteRecord('rec-abc123', { purge: true });
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123?hard=true`,
+      `${BASE_URL}/records/rec-abc123?purge=true`,
       expect.objectContaining({ method: 'DELETE' }),
     );
     // The body is the purge's only report of what it referenced.
     expect(purged!.id).toBe(RECORD_RAW.id);
   });
 
-  test('a hard delete of a record that is not there purges nothing', async () => {
+  test('a purge of a record that is not there purges nothing', async () => {
     // Parity with the local adapters, which return null rather than
     // throwing for an unconditional purge that found nothing.
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'not_found', message: 'gone' } }, 404),
     );
-    expect(await adapter.deleteRecord('rec-abc123', { hard: true })).toBeNull();
+    expect(await adapter.deleteRecord('rec-abc123', { purge: true })).toBeNull();
   });
 });
 
@@ -1455,13 +1455,13 @@ describe('a mutation answering with no Record body', () => {
     await expect(call(adapter)).rejects.toThrow(/no Record body/);
   });
 
-  // A hard delete bumps no version, and still owes a body: it answers with
+  // A purge bumps no version, and still owes a body: it answers with
   // the record it destroyed, which is the only report of the files it
   // stranded. See docs/spec/wire-format.md § Records.
-  test('a hard delete is held to the same rule', async () => {
+  test('a purge is held to the same rule', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.deleteRecord('rec-abc123', { hard: true })).rejects.toThrow(
+    await expect(adapter.deleteRecord('rec-abc123', { purge: true })).rejects.toThrow(
       /no Record body/,
     );
   });

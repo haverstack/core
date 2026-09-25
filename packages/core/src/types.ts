@@ -928,22 +928,22 @@ export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
 
 /**
  * The precise verb behind a ChangeKind, for consumers that distinguish a
- * reshare from an edit. `associate`, `dissociate`, `reparent`, `unlist`
- * and `list` carry the record's version/updatedAt exactly as they stood
- * before the call; every other entry bumps. See docs/spec/versioning.md
- * § Version history.
+ * reshare from an edit. Each is named after the call that produced it; see
+ * docs/spec/events.md § The event shape for the three that aren't a method
+ * name. `associate`, `dissociate`, `reshare`, `reparent`, `unlist` and
+ * `list` don't bump; see docs/spec/versioning.md § Version history.
  */
 export type ChangeOp =
   | 'create'
   | 'patch'
   | 'associate'
   | 'dissociate'
-  | 'permissions'
+  | 'reshare'
   | 'migrate'
   | 'restore'
   | 'delete'
   | 'undelete'
-  | 'hard-delete'
+  | 'purge'
   /**
    * Emitted even though the record's post-change state (`unlistedAt` now
    * set) would otherwise be excluded by the same filter it announces —
@@ -1169,14 +1169,14 @@ export interface StackRecordAdapter {
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
-   * delete, and as it stood immediately before destruction after a hard
-   * one — captured inside the same write, so nothing can observe or alter
+   * delete, and as it stood immediately before destruction after a
+   * purge — captured inside the same write, so nothing can observe or alter
    * it in between. Null when there was no record to delete, which is the
    * only case that mutates nothing.
    */
   deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean } & IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: { purge?: boolean } & IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(
@@ -1245,7 +1245,7 @@ export interface StackRecordAdapter {
   listTypes(): Promise<StackType[]>;
 
   /**
-   * Atomically verify fileId is unreferenced, then hard-delete its
+   * Atomically verify fileId is unreferenced, then purge its
    * metadata records in the same adapter call, returning the deleted records.
    * Throws StackConflictError if still referenced. Optional —
    * Stack.deleteAttachment() has a non-atomic fallback. See

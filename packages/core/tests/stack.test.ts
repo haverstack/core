@@ -1723,14 +1723,14 @@ describe('Stack.restoreVersion — containment', () => {
     expect(restored.parentId).toBeUndefined();
   });
 
-  // A hard-deleted container never cost a record its content rollback, and
+  // A purged container never cost a record its content rollback, and
   // now has nothing to do with one: the record stays where it is, dangling
   // parent and all.
-  test('a record whose container was hard-deleted still rolls its content back', async () => {
+  test('a record whose container was purged still rolls its content back', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.delete(box.id, { hard: true });
+    await stack.delete(box.id, { purge: true });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
     expect(restored.parentId).toBe(box.id);
@@ -1739,7 +1739,7 @@ describe('Stack.restoreVersion — containment', () => {
   test('naming a deleted container as parentId is still refused', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.delete(box.id, { hard: true });
+    await stack.delete(box.id, { purge: true });
     await expect(stack.mutate(note.id, { parentId: box.id })).rejects.toThrow(StackConflictError);
   });
 });
@@ -2978,17 +2978,17 @@ describe('ifVersion', () => {
     expect(undeleted.deletedAt).toBeUndefined();
   });
 
-  test('delete() (hard) enforces ifVersion atomically at the adapter', async () => {
+  test('delete() (purge) enforces ifVersion atomically at the adapter', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
 
-    await expect(stack.delete(record.id, { hard: true, ifVersion: 1 })).rejects.toThrow(
+    await expect(stack.delete(record.id, { purge: true, ifVersion: 1 })).rejects.toThrow(
       StackVersionConflictError,
     );
-    // A rejected hard delete must leave the record fully intact.
+    // A rejected purge must leave the record fully intact.
     expect(await stack.get(record.id)).not.toBeNull();
 
-    await stack.delete(record.id, { hard: true, ifVersion: 2 });
+    await stack.delete(record.id, { purge: true, ifVersion: 2 });
     expect(await stack.get(record.id)).toBeNull();
   });
 
@@ -3157,7 +3157,7 @@ describe('delete', () => {
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
-      expect(await stack.delete(note.id, { hard: true })).toEqual({
+      expect(await stack.delete(note.id, { purge: true })).toEqual({
         referencedFileIds: [fileId],
       });
     });
@@ -3175,7 +3175,7 @@ describe('delete', () => {
       // The same file, reached both ways: one file, one entry.
       await stack.associate(photo.id, { kind: 'attachment', label: 'cover', fileId });
 
-      expect(await stack.delete(photo.id, { hard: true })).toEqual({
+      expect(await stack.delete(photo.id, { purge: true })).toEqual({
         referencedFileIds: [fileId],
       });
     });
@@ -3188,7 +3188,7 @@ describe('delete', () => {
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
-      const { referencedFileIds } = await stack.delete(note.id, { hard: true });
+      const { referencedFileIds } = await stack.delete(note.id, { purge: true });
       expect(await stack.getAttachment(fileId)).toEqual(data);
 
       // And the report is exactly what the intentional follow-up takes.
@@ -3210,24 +3210,24 @@ describe('delete', () => {
     });
   });
 
-  test('a hard delete of a record that is not there is silent', async () => {
+  test('a purge of a record that is not there is silent', async () => {
     // Nothing was purged, so nothing was stranded to report.
-    await expect(stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true })).resolves.toEqual({
+    await expect(stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { purge: true })).resolves.toEqual({
       referencedFileIds: [],
     });
   });
 
-  test('a hard delete under a precondition reports a record that is not there', async () => {
+  test('a purge under a precondition reports a record that is not there', async () => {
     // The precondition cannot be satisfied by a record that does not
     // exist, so the call reports that rather than succeeding vacuously.
     await expect(
-      stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true, ifVersion: 1 }),
+      stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { purge: true, ifVersion: 1 }),
     ).rejects.toThrow(StackNotFoundError);
   });
 
-  test('hard delete removes the record entirely', async () => {
+  test('purge removes the record entirely', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.delete(record.id, { hard: true });
+    await stack.delete(record.id, { purge: true });
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
@@ -3254,14 +3254,14 @@ describe('delete', () => {
 });
 
 describe('deleteAndReturn', () => {
-  test('a hard delete reports the record as it stood at destruction, associations included', async () => {
+  test('a purge reports the record as it stood at destruction, associations included', async () => {
     const {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
 
-    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id, { hard: true });
+    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id, { purge: true });
     expect(record?.id).toBe(note.id);
     expect(record?.associations).toEqual([{ kind: 'attachment', label: 'cover', fileId }]);
     expect(referencedFileIds).toEqual([fileId]);
@@ -3274,11 +3274,11 @@ describe('deleteAndReturn', () => {
   // implementation detail of it — asserting it never happens is what turns
   // this from a fixture that happens to pass into one that would fail if
   // the race were reintroduced.
-  test('never reads the record separately before a hard delete — nothing can slip in between', async () => {
+  test('never reads the record separately before a purge — nothing can slip in between', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
     const getRecordSpy = vi.spyOn(adapter, 'getRecord');
 
-    await stack.deleteAndReturn(note.id, { hard: true });
+    await stack.deleteAndReturn(note.id, { purge: true });
 
     expect(getRecordSpy).not.toHaveBeenCalled();
   });
@@ -3291,18 +3291,18 @@ describe('deleteAndReturn', () => {
     expect(referencedFileIds).toEqual([]);
   });
 
-  test('a hard delete of a record that is not there reports a null record', async () => {
+  test('a purge of a record that is not there reports a null record', async () => {
     await expect(
-      stack.deleteAndReturn('01hzzzzzzzzzzzzzzzzzzzzzzz', { hard: true }),
+      stack.deleteAndReturn('01hzzzzzzzzzzzzzzzzzzzzzzz', { purge: true }),
     ).resolves.toEqual({ record: null, referencedFileIds: [] });
   });
 
   test('delete() is deleteAndReturn() minus the record', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    const full = await stack.deleteAndReturn(note.id, { hard: true });
+    const full = await stack.deleteAndReturn(note.id, { purge: true });
 
     const other = await stack.create(NOTE_V1, { text: 'hello again' });
-    const stripped = await stack.delete(other.id, { hard: true });
+    const stripped = await stack.delete(other.id, { purge: true });
 
     expect(stripped).toEqual({ referencedFileIds: full.referencedFileIds });
   });
@@ -3355,9 +3355,9 @@ describe('_config protections', () => {
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
-  test('hard delete is rejected', async () => {
+  test('purge is rejected', async () => {
     await seedConfig();
-    await expect(stack.delete(CONFIG_ID, { hard: true })).rejects.toThrow(StackConflictError);
+    await expect(stack.delete(CONFIG_ID, { purge: true })).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
@@ -3468,9 +3468,9 @@ describe('undelete', () => {
     expect(result.deletedAt).toBeUndefined();
   });
 
-  test('throws StackNotFoundError for a hard-deleted (missing) record', async () => {
+  test('throws StackNotFoundError for a purged (missing) record', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.delete(record.id, { hard: true });
+    await stack.delete(record.id, { purge: true });
     await expect(stack.undelete(record.id)).rejects.toThrow(StackNotFoundError);
   });
 
@@ -4588,9 +4588,9 @@ describe('Stack.grantAccess/revokeAccess', () => {
     await stack.revokeAccess(record.id, readFor('entity-a'));
 
     const [, granted, revoked] = await stack.getJournal(record.id);
-    expect(granted.ops).toEqual(['permissions']);
+    expect(granted.ops).toEqual(['reshare']);
     expect(granted.associations).toEqual([{ op: 'add', association: readFor('entity-a') }]);
-    expect(revoked.ops).toEqual(['permissions']);
+    expect(revoked.ops).toEqual(['reshare']);
     expect(revoked.associations).toEqual([{ op: 'remove', previous: readFor('entity-a') }]);
     // Neither moved the record's own version.
     expect(revoked.version).toBe(1);
@@ -4690,7 +4690,7 @@ describe('Stack.mutate — the `permissions` key', () => {
 
     const journal = await stack.getJournal(record.id);
     expect(journal).toHaveLength(2);
-    expect(journal[1].ops).toEqual(['permissions']);
+    expect(journal[1].ops).toEqual(['reshare']);
     expect(journal[1].associations).toEqual([
       { op: 'add', association: { kind: 'permission', label: 'read', grantee: entityB } },
       { op: 'remove', previous: { kind: 'permission', label: 'read', grantee: entityA } },
@@ -6244,7 +6244,7 @@ describe('attachment association — attachmentRecordId', () => {
       attachmentRecordId: second.id,
     };
     await stack.associate(record.id, association);
-    await stack.delete(second.id, { hard: true });
+    await stack.delete(second.id, { purge: true });
 
     const updated = await stack.mutate(record.id, {
       associations: [association],
@@ -6266,7 +6266,7 @@ describe('attachment association — attachmentRecordId', () => {
       attachmentRecordId: second.id,
     });
 
-    await stack.delete(second.id, { hard: true });
+    await stack.delete(second.id, { purge: true });
 
     expect((await adapter.getRecord(record.id))?.associations?.[0]).toMatchObject({
       attachmentRecordId: second.id,
@@ -6536,7 +6536,7 @@ describe('deleteAttachment', () => {
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
   });
 
-  test('hard-deletes a soft-deleted _attachment@1 metadata record too (fallback path)', async () => {
+  test('purges a soft-deleted _attachment@1 metadata record too (fallback path)', async () => {
     const data = new Uint8Array([1, 2, 3]);
     const {
       content: { fileId },
@@ -6713,7 +6713,7 @@ describe('deleteAttachment', () => {
 // -------------------------------------------------------
 
 describe('collectAttachmentGarbage', () => {
-  test('collects a file whose only referencing record was hard-deleted', async () => {
+  test('collects a file whose only referencing record was purged', async () => {
     const {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
@@ -6723,7 +6723,7 @@ describe('collectAttachmentGarbage', () => {
       label: 'cover',
       fileId,
     });
-    await stack.delete(note.id, { hard: true });
+    await stack.delete(note.id, { purge: true });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -7713,7 +7713,7 @@ describe('Stack.mutate — one call, one version', () => {
     });
 
     expect(seen).toHaveLength(1);
-    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'permissions', 'reparent']);
+    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'reparent', 'reshare']);
     expect(seen[0]!.kind).toBe('changed');
     expect(seen[0]!.version).toBe(2);
   });

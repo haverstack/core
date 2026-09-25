@@ -101,7 +101,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   deleteRecord(
     id: string,
-    opts?: { hard?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions &
       JournalOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);

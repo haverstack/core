@@ -9,7 +9,7 @@
  *  - Content validation on write
  *  - Migration registry and explicit, owner-driven migrateAll()
  *  - Version snapshotting on update
- *  - Soft and hard delete
+ *  - Soft delete and purge
  *
  * Apps should never talk to a StackAdapter directly.
  */
@@ -297,7 +297,7 @@ export type GetRecordOptions = {
 
 export type DeleteRecordOptions = IfVersionOptions & {
   /** If true, permanently remove the record and all its history. Default: false */
-  hard?: boolean;
+  purge?: boolean;
 };
 
 /**
@@ -325,8 +325,8 @@ export type DeleteResult = {
 export type DeleteAndReturnResult = DeleteResult & {
   /**
    * The record as it stood at the moment of deletion: immediately before
-   * destruction for a hard delete, or the resulting tombstone for a soft
-   * delete. Null only for the hard-delete no-op — there was nothing to
+   * destruction for a purge, or the resulting tombstone for a soft
+   * delete. Null only for the purge no-op — there was nothing to
    * delete, and nothing to report; every other outcome throws instead of
    * returning null (see Stack.delete()'s own no-op cases).
    */
@@ -407,7 +407,7 @@ export interface StackClient {
   /**
    * delete(), plus the record it acted on — read and destroyed as one
    * atomic operation, so a caller that needs the record for its own
-   * response (e.g. a server building a hard delete's body) never opens a
+   * response (e.g. a server building a purge's body) never opens a
    * gap between reading it and destroying it. See Stack.deleteAndReturn().
    */
   deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
@@ -1070,7 +1070,7 @@ export class Stack implements StackClient {
     const bumps = bumpsVersion(ops);
 
     // Computed against the same before/after changeSetOps compared, so
-    // whether associate/dissociate/permissions appear in `ops` and what
+    // whether associate/dissociate/reshare appear in `ops` and what
     // the journal lists can never disagree. Both halves of the partition
     // produce the same tagged edits and travel as one list: the journal's
     // argument is prior state, and an ACL element's is no different from a
@@ -1339,7 +1339,7 @@ export class Stack implements StackClient {
     if (current.some((p) => associationEqual(p, permission))) return existing;
     this.assertPermissionSet([...current, permission]);
 
-    const change = new PendingChange('permissions', {
+    const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
       associations: [{ op: 'add', association: permission }],
     });
@@ -1368,7 +1368,7 @@ export class Stack implements StackClient {
     if (!matched) return existing;
     this.assertPermissionSet(current.filter((p) => !associationEqual(p, permission)));
 
-    const change = new PendingChange('permissions', {
+    const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
       associations: [{ op: 'remove', previous: matched }],
     });
@@ -1448,7 +1448,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Soft-delete a record (default) or hard-delete it permanently, removing
+   * Soft-delete a record (default) or purge it permanently, removing
    * the record and its version history. Soft delete snapshots and bumps
    * version; a no-op if already deleted. `_config` is never deletable
    * (docs/spec.md § The `_config` record). See docs/spec/versioning.md
@@ -1472,8 +1472,8 @@ export class Stack implements StackClient {
 
   /**
    * delete(), reporting the record it acted on alongside the files it
-   * stranded: as it stood immediately before destruction for a hard
-   * delete, or as the resulting tombstone for a soft delete. Both are
+   * stranded: as it stood immediately before destruction for a
+   * purge, or as the resulting tombstone for a soft delete. Both are
    * captured inside the same write that destroys or tombstones the record,
    * never a read beforehand — a read-then-delete would leave a window
    * where a concurrent write can land, get destroyed or overwritten by
@@ -1489,14 +1489,14 @@ export class Stack implements StackClient {
         "Cannot delete the _config record: it holds the stack's identity and is required for every permission check.",
       );
     }
-    if (opts.hard) {
+    if (opts.purge) {
       // The adapter hands back what it destroyed, captured inside the same
       // write: a read here instead would race the delete, and afterwards
       // there is nothing left to read. Null means there was no record, so
       // nothing was purged and nothing is announced.
-      const change = new PendingChange('hard-delete', { actor: normalizeActor(opts.actor) });
+      const change = new PendingChange('purge', { actor: normalizeActor(opts.actor) });
       const purged = await this.adapter.deleteRecord(id, {
-        hard: true,
+        purge: true,
         ifVersion: opts.ifVersion,
         journal: change.journal,
       });
@@ -1544,7 +1544,7 @@ export class Stack implements StackClient {
 
   /**
    * Reverse a soft delete. Idempotent — undeleting a record that isn't
-   * deleted returns it unchanged. Hard-deleted records are gone, so this
+   * deleted returns it unchanged. Purged records are gone, so this
    * throws StackNotFoundError for them just like any other missing record.
    * Snapshots and bumps version, same as delete().
    */
@@ -2209,7 +2209,7 @@ export class Stack implements StackClient {
       const at = new Date();
       for (const record of deletedRecords) {
         this.announce(
-          new PendingChange('hard-delete', { actor: normalizeActor(opts.actor) }),
+          new PendingChange('purge', { actor: normalizeActor(opts.actor) }),
           record,
           at,
         );
@@ -2254,7 +2254,7 @@ export class Stack implements StackClient {
     const metaRecords = await this.getAttachmentRecords(fileId);
 
     for (const record of metaRecords) {
-      await this.delete(record.id, { hard: true, ...opts });
+      await this.delete(record.id, { purge: true, ...opts });
     }
 
     return metaRecords;

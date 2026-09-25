@@ -7,7 +7,7 @@
  *
  * The split between those last two is the point of this module. Emission
  * always carries the record — a permission filter has nothing to decide
- * with otherwise, and on a hard delete there is nothing left to fetch —
+ * with otherwise, and on a purge there is nothing left to fetch —
  * while the frame handed to a handler is projected from it. So the rule
  * that a purge discloses neither the record nor its provenance is a
  * property of one function here, not a convention every emission site has
@@ -130,7 +130,7 @@ export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?:
 
 /**
  * The frame a subscriber receives. A `purged` frame never carries the
- * record, whatever was asked for: hard delete is the erasure primitive,
+ * record, whatever was asked for: purge is the erasure primitive,
  * and a frame that shipped the body — or the author — of a record the
  * stack has just destroyed would hand every subscriber a permanent copy of
  * the thing being erased. See docs/spec/events.md § Purged records carry
@@ -307,8 +307,8 @@ export class PendingChange {
    *
    * Absent for a purge, which destroys the log an entry would be appended
    * to. The rule lives here rather than at each call site that would
-   * otherwise have to remember it. See docs/spec/journal.md § A hard
-   * delete destroys the journal.
+   * otherwise have to remember it. See docs/spec/journal.md § A purge
+   * destroys the journal.
    */
   get journal(): JournalEntryInput | undefined {
     if (this.kind === 'purged') return undefined;
@@ -377,7 +377,7 @@ export class PendingChange {
    * The frame's two flat lists, flattened out of the one the journal
    * takes. Present only where non-empty.
    *
-   * The data half alone: the `permissions` op is what announces an ACL
+   * The data half alone: the `reshare` op is what announces an ACL
    * move, so a subscriber watching tags is never handed the sharing graph
    * as a side effect of the partition sharing one delta.
    * See docs/spec/events.md § The event shape.
@@ -462,12 +462,12 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   patch: 'changed',
   associate: 'changed',
   dissociate: 'changed',
-  permissions: 'changed',
+  reshare: 'changed',
   migrate: 'changed',
   restore: 'changed',
   undelete: 'changed',
   delete: 'deleted',
-  'hard-delete': 'purged',
+  purge: 'purged',
   list: 'changed',
   unlist: 'deleted',
   reparent: 'changed',

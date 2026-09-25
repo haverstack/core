@@ -91,7 +91,7 @@ export const RECORD_SCHEMA_SQL = `
     at          INTEGER NOT NULL,
     -- No 'purged': a purge destroys the log rather than appending to it,
     -- so the constraint names exactly the kinds an entry can carry.
-    -- See docs/spec/journal.md § A hard delete destroys the journal.
+    -- See docs/spec/journal.md § A purge destroys the journal.
     kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'deleted')),
     ops         TEXT NOT NULL CHECK (json_valid(ops)),
     version     INTEGER NOT NULL,

@@ -150,7 +150,7 @@ describe('a failed write leaves nothing behind', () => {
     db.close();
   });
 
-  test('a hard delete failing partway destroys nothing', async () => {
+  test('a purge failing partway destroys nothing', async () => {
     const { db, logic } = await setup(0);
     await logic.createRecord(makeRecord(), journal);
     const counts = snapshotCounts(db);
@@ -159,7 +159,7 @@ describe('a failed write leaves nothing behind', () => {
     // the journal have all been dropped. The verb is irreversible, so a
     // partial one is unrecoverable by definition.
     const failing = new SharedSqlRecordLogic({ exec: failingExecutor(db, 5) });
-    await expect(failing.deleteRecord('rec000000001', { hard: true })).rejects.toThrow();
+    await expect(failing.deleteRecord('rec000000001', { purge: true })).rejects.toThrow();
 
     expect(snapshotCounts(db)).toEqual(counts);
     await expect(logic.getRecord('rec000000001')).resolves.not.toBeNull();

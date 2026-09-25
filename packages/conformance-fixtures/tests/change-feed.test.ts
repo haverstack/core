@@ -40,7 +40,7 @@ const KIND_OF_OP: Record<string, string> = {
   restore: 'changed',
   undelete: 'changed',
   delete: 'deleted',
-  'hard-delete': 'purged',
+  purge: 'purged',
   list: 'changed',
   unlist: 'deleted',
   reparent: 'changed',
@@ -139,7 +139,7 @@ describe('a purged frame', () => {
     }
   });
 
-  // Hard delete is owner-acting-alone and refuses delegation, so a
+  // Purge is owner-acting-alone and refuses delegation, so a
   // principal beside the subject would describe a call that cannot happen.
   it('names an actor with no principal beside it', () => {
     for (const { connection, change } of purges) {

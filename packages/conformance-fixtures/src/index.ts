@@ -904,9 +904,9 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
     },
   },
   {
-    name: 'delete-record-hard',
+    name: 'delete-record-purge',
     description:
-      'DELETE /records/:id?hard=true permanently removes the record, its history and its ' +
+      'DELETE /records/:id?purge=true permanently removes the record, its history and its ' +
       'journal, and answers 200 with the record as it last stood. It is the one response that ' +
       'is not the record a write produced, because this write produces none: the body is the ' +
       "purge's only report of what it destroyed, and a client reads the files it stranded — " +
@@ -915,7 +915,7 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
       'that fans out to every subscriber, this goes to the owner who authorized the purge. ' +
       'See docs/spec/attachments.md § A purge strands the bytes it referenced.',
     method: 'DELETE',
-    path: '/records/1hk153x00001?hard=true',
+    path: '/records/1hk153x00001?purge=true',
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -936,7 +936,7 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
 ];
 
 /**
- * A single request/response pair pins the shape of a hard delete's body,
+ * A single request/response pair pins the shape of a purge's body,
  * but not that the body was produced by reading and destroying the record
  * as one operation rather than by a read taken earlier and a destroy that
  * followed it — the gap a server bridging the two with two separate calls
@@ -947,26 +947,26 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
  */
 export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
   {
-    name: 'hard-delete-under-concurrent-write',
+    name: 'purge-under-concurrent-write',
     description:
       'A write lands on a record — here, an association with no If-Match to fence it, the kind ' +
-      "a concurrent request makes — immediately before that record is hard-deleted. The purge's " +
-      'response MUST carry that association: a server whose hard delete reads the record and ' +
-      'destroys it in two separate steps would satisfy the single delete-record-hard fixture ' +
+      "a concurrent request makes — immediately before that record is purged. The purge's " +
+      'response MUST carry that association: a server whose purge reads the record and ' +
+      'destroys it in two separate steps would satisfy the single delete-record-purge fixture ' +
       'while still losing this write whenever it lands between the two — read early, land late, ' +
       'destroyed unreported. Nothing about the request sequence below is itself concurrent; what ' +
       "it pins is that the purge's response reflects the record as stored at the moment of " +
       'destruction, current as of whatever the last write before it was, not a snapshot taken ' +
-      'earlier in the request. Assumes a record readable and hard-deletable by this requester at ' +
+      'earlier in the request. Assumes a record readable and purgeable by this requester at ' +
       '"1hk153x0000c", already carrying one attachment association: {"kind": "attachment", ' +
       '"label": "cover", "fileId": ' +
       '"933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d"}.',
     steps: [
       {
-        name: 'hard-delete-under-concurrent-write-late-association',
+        name: 'purge-under-concurrent-write-late-association',
         description:
           'The write that must not be lost: a second attachment association added to the ' +
-          'record the very next step hard-deletes. Ordinary POST /records/:id/associations ' +
+          'record the very next step purges. Ordinary POST /records/:id/associations ' +
           'semantics apply — no version bump, no If-Match read.',
         method: 'POST',
         path: '/records/1hk153x0000c/associations',
@@ -998,13 +998,13 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         },
       },
       {
-        name: 'hard-delete-under-concurrent-write-purge-reports-both',
+        name: 'purge-under-concurrent-write-purge-reports-both',
         description:
           "The purge that follows: its response's associations MUST name both files — the " +
           'original and the one the previous step just added — proving the body came from ' +
           'reading the record at destruction time rather than from a copy read before that step.',
         method: 'DELETE',
-        path: '/records/1hk153x0000c?hard=true',
+        path: '/records/1hk153x0000c?purge=true',
         responseStatus: 200,
         responseBody: {
           id: '1hk153x0000c',
@@ -2067,7 +2067,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     name: 'error-not-found-journal-of-a-record-that-is-gone',
     description:
       'GET /records/:id/journal for a record the server does not have — never created, or ' +
-      'hard-deleted — returns 404 / code "not_found", never an empty log. An empty log means ' +
+      'purged — returns 404 / code "not_found", never an empty log. An empty log means ' +
       '"nothing changed" unconditionally, which is the reading a client reconstructing an ' +
       "association's history depends on; answering it here would make that reading " +
       'ambiguous exactly where it matters. This is the one 404 the journal endpoint gives: ' +
@@ -2956,9 +2956,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-delete-config',
     description:
-      'DELETE /records/_config — soft or hard — is always refused with 409 / ' +
+      'DELETE /records/_config — soft or purge — is always refused with 409 / ' +
       'code "conflict": _config holds the stack\'s identity (ownerEntityId, read at open and ' +
-      'consulted by every permission check) and deleting it either bricks the stack (hard) or ' +
+      'consulted by every permission check) and deleting it either bricks the stack (purge) or ' +
       'makes it unreadable through normal paths (soft). Reconstructed as StackConflictError.',
     method: 'DELETE',
     path: '/records/_config',
@@ -3630,7 +3630,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     name: 'change-feed-changed-frame-names-the-verb',
     description:
       'Nine mutation verbs arrive as kind "changed" — patch, associate, dissociate, ' +
-      'permissions, migrate, restore, undelete, list and reparent — and `ops` is what ' +
+      'reshare, migrate, restore, undelete, list and reparent — and `ops` is what ' +
       'separates them. A client branching on kind alone is correct and complete; one that ' +
       'needs to tell a reshare from an edit reads ops. Both fields are carried because the ' +
       'safe default has to be the easy one: a client wired to three named events would ' +
@@ -4022,11 +4022,11 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'that moment: readability for a purge can only be evaluated before the write, so the ' +
       'record is in hand when the frame is built. It carries kind, op, recordId, typeId, ' +
       'version, updatedAt and actor — no record body even though this connection asked for one, ' +
-      'no parentId, and no author. Hard delete is the erasure primitive, and a frame naming ' +
+      'no parentId, and no author. Purge is the erasure primitive, and a frame naming ' +
       'what was erased writes a permanent note of it into every subscriber log at the moment ' +
       'the stack finished destroying its own copy. What survives is the useful property: a ' +
       'purge tells a consumer holding the record to forget it, and tells one that never held it ' +
-      'nothing. The actor comes from the request, since a hard delete stamps nothing on a ' +
+      'nothing. The actor comes from the request, since a purge stamps nothing on a ' +
       'record that no longer exists; the verb is owner-only and refuses delegation, so there is ' +
       'never a principal beside it. See docs/spec/events.md § Purged records carry nothing.',
     path: '/changes?include=record',
@@ -4036,9 +4036,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       {
         mutation: {
           name: 'change-feed-purged-frame-mutation',
-          description: 'The owner hard-deletes a note that had a parent and an author.',
+          description: 'The owner purges a note that had a parent and an author.',
           method: 'DELETE',
-          path: '/records/1hk153x00002?hard=true',
+          path: '/records/1hk153x00002?purge=true',
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00002',
@@ -4057,7 +4057,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             event: 'record',
             data: {
               kind: 'purged',
-              ops: ['hard-delete'],
+              ops: ['purge'],
               recordId: '1hk153x00002',
               typeId: 'com.example/note@1',
               version: 4,

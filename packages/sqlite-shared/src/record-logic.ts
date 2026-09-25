@@ -146,7 +146,7 @@ export class SharedSqlRecordLogic {
   /**
    * Precondition check for a mutation that has already read the record —
    * either because it can't fold the check into its own statement
-   * (hardDeleteRecord: children reference the row, so the DELETE can't
+   * (purgeRecord: children reference the row, so the DELETE can't
    * carry it), or because it has to settle the precondition *before*
    * fts5Strategy.remove() runs, which needs the records row still holding
    * the old content. In the latter case versionedUpdate() re-checks it
@@ -408,14 +408,14 @@ export class SharedSqlRecordLogic {
   async deleteRecord(
     id: string,
     opts: {
-      hard?: boolean;
+      purge?: boolean;
       ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
       JournalOptions = {},
   ): Promise<StackRecord | null> {
-    if (opts.hard) {
-      return this.exec.transaction(() => this.hardDeleteRecord(id, opts.ifVersion));
+    if (opts.purge) {
+      return this.exec.transaction(() => this.purgeRecord(id, opts.ifVersion));
     }
 
     // One timestamp for both columns: a soft delete is a single event, and
@@ -440,11 +440,11 @@ export class SharedSqlRecordLogic {
    * leaves nothing touched (children reference the row, so the check can't
    * fold into the final DELETE).
    */
-  private hardDeleteRecord(id: string, ifVersion?: number): StackRecord | null {
+  private purgeRecord(id: string, ifVersion?: number): StackRecord | null {
     const purged = this.readRecord(id);
     if (!purged) {
       // A CAS against a record that isn't there is a failed precondition,
-      // not the "nothing to delete" that an unconditional hard delete
+      // not the "nothing to delete" that an unconditional purge
       // reports by returning null.
       if (ifVersion !== undefined) throw new StackNotFoundError(`Record not found: "${id}"`);
       return null;
@@ -591,7 +591,7 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Atomically verify fileId is unreferenced, then hard-delete its
+   * Atomically verify fileId is unreferenced, then purge its
    * metadata records across every typeId in `metadataTypeIds` (see
    * deleteUnreferencedAttachmentRecords on the adapter contract). A real
    * SQL transaction of synchronous calls — no `await` between the check
@@ -626,7 +626,7 @@ export class SharedSqlRecordLogic {
       );
       const deleted: StackRecord[] = [];
       for (const row of metaRows) {
-        const purged = this.hardDeleteRecord(row.id);
+        const purged = this.purgeRecord(row.id);
         if (purged) deleted.push(purged);
       }
 

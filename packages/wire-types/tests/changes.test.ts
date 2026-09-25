@@ -133,7 +133,7 @@ describe('serializeChange on a purge', () => {
   const purge = (overrides: Partial<RecordChange> = {}): RecordChange =>
     change({
       kind: 'purged',
-      ops: ['hard-delete'],
+      ops: ['purge'],
       version: 4,
       actor: { subjectId: OWNER },
       ...overrides,
@@ -167,7 +167,7 @@ describe('serializeChange on a purge', () => {
   it('keeps the outline a purge is auditable by', () => {
     expect(serializeChange(purge({ record: record() }))).toEqual({
       kind: 'purged',
-      ops: ['hard-delete'],
+      ops: ['purge'],
       recordId: '1hk153x00001',
       typeId: 'com.example/note@1',
       version: 4,

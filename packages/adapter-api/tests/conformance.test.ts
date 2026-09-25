@@ -398,17 +398,17 @@ describe('deleteRecord fixtures', () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const hard = fixture.path.includes('hard=true');
-      const result = await adapter.deleteRecord(idFromPath(fixture.path), { hard });
+      const purge = fixture.path.includes('purge=true');
+      const result = await adapter.deleteRecord(idFromPath(fixture.path), { purge });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      // A soft delete answers with the version it produced; a hard one
+      // A soft delete answers with the version it produced; a purge
       // answers with the record it destroyed, which is where a client
       // reads the files the purge stranded.
       expect(result!.id).toBe(fixture.responseBody!.id);
-      if (!hard) expect(result!.deletedAt).toBeInstanceOf(Date);
+      if (!purge) expect(result!.deletedAt).toBeInstanceOf(Date);
     });
   }
 });
