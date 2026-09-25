@@ -8,7 +8,7 @@ import type {
   JournalEntryInput,
   JournalOptions,
   JournalQuery,
-  RecordChanges,
+  RecordChangeSet,
   ActorOptions,
   StackQuery,
   QueryResult,
@@ -164,7 +164,7 @@ export class MemoryAdapter implements StackAdapter {
 
   async mutateRecord(
     id: string,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;

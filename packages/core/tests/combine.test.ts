@@ -6,7 +6,7 @@ import type {
   AdapterCapabilities,
   BlobFileInfo,
   StackRecord,
-  RecordChanges,
+  RecordChangeSet,
   FileId,
   TypeId,
   SubscribeChangesOptions,
@@ -137,7 +137,7 @@ describe('combineAdapters', () => {
   });
 
   test('forwards a change set to the record adapter', async () => {
-    let calledWith: [string, RecordChanges] | undefined;
+    let calledWith: [string, RecordChangeSet] | undefined;
     const adapter = combineAdapters({
       record: makeRecordAdapter({
         mutateRecord: async (id, changes) => {
@@ -153,7 +153,7 @@ describe('combineAdapters', () => {
   });
 
   test('forwards every key of a change set, not just the first', async () => {
-    let calledWith: [string, RecordChanges] | undefined;
+    let calledWith: [string, RecordChangeSet] | undefined;
     const adapter = combineAdapters({
       record: makeRecordAdapter({
         mutateRecord: async (id, changes) => {

@@ -199,7 +199,7 @@ export type AssociationChange =
  * record, so they stay their own verbs rather than folding in here.
  * See docs/spec/data-model.md § Mutations.
  */
-export type RecordChanges = {
+export type RecordChangeSet = {
   contentPatch?: Record<string, unknown | null>;
   parentId?: string | null;
   permissions?: AuthorityAssociation[];
@@ -208,13 +208,13 @@ export type RecordChanges = {
 };
 
 /** The keys of a change set, for presence checks that must not miss one. */
-export const RECORD_CHANGE_KEYS = [
+export const RECORD_CHANGE_SET_KEYS = [
   'contentPatch',
   'parentId',
   'permissions',
   'associations',
   'unlisted',
-] as const satisfies readonly (keyof RecordChanges)[];
+] as const satisfies readonly (keyof RecordChangeSet)[];
 
 // -------------------------------------------------------
 // Records
@@ -1148,7 +1148,7 @@ export interface StackRecordAdapter {
    */
   mutateRecord(
     id: RecordId,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts?: ExpectedVersionOptions &
       SnapshotOptions &
       BumpVersionOptions &

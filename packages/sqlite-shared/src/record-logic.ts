@@ -23,7 +23,7 @@ import type {
   TypeId,
   FileId,
   RecordVersion,
-  RecordChanges,
+  RecordChangeSet,
   StackQuery,
   QueryResult,
   Association,
@@ -336,7 +336,7 @@ export class SharedSqlRecordLogic {
    */
   async mutateRecord(
     id: string,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
@@ -906,7 +906,7 @@ export class SharedSqlRecordLogic {
    * Caller-transactional, like every write below.
    * See docs/spec/access-control.md § Record-level permissions.
    */
-  private replaceAssociationHalves(recordId: string, changes: RecordChanges): void {
+  private replaceAssociationHalves(recordId: string, changes: RecordChangeSet): void {
     if (changes.associations !== undefined) {
       this.replaceAssociations(recordId, changes.associations, SharedSqlRecordLogic.DATA_KINDS);
     }

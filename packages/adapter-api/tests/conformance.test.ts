@@ -48,7 +48,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { Association, RecordChanges, StackType } from '@haverstack/core';
+import type { Association, RecordChangeSet, StackType } from '@haverstack/core';
 import type { WireAuthError } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -365,7 +365,7 @@ describe('change set fixtures', () => {
 
       const result = await adapter.mutateRecord(
         idFromPath(fixture.path),
-        fixture.requestBody as RecordChanges,
+        fixture.requestBody as RecordChangeSet,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -789,7 +789,7 @@ describe('error response fixtures', () => {
           const expectedVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
           return adapter.mutateRecord(
             idFromPath(fixture.path),
-            fixture.requestBody as RecordChanges,
+            fixture.requestBody as RecordChangeSet,
             { expectedVersion },
           );
         }

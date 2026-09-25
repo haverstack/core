@@ -12,7 +12,7 @@ import type {
   StackRecord,
   StackQuery,
   Association,
-  RecordChanges,
+  RecordChangeSet,
   RecordVersion,
   StackType,
   TypeId,
@@ -71,7 +71,7 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.undeleteRecord(id, opts);
   }
 
-  async mutateRecord(id: string, changes: RecordChanges, opts?: MutationOpts) {
+  async mutateRecord(id: string, changes: RecordChangeSet, opts?: MutationOpts) {
     await this.ready;
     return this.adapter.mutateRecord(id, changes, opts);
   }

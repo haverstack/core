@@ -31,7 +31,7 @@ import type {
   RecordId,
   FileId,
   TokenSession,
-  RecordChanges,
+  RecordChangeSet,
 } from '@haverstack/core';
 import type {
   AdapterCapabilities,
@@ -220,7 +220,7 @@ export class LocalAdapter implements StackAdapter {
 
   async mutateRecord(
     id: RecordId,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts?: {
       expectedVersion?: number;
       snapshot?: RecordVersion;
