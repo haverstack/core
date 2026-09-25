@@ -22,8 +22,16 @@ let stack: Stack;
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
-  await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
-  await stack.defineType(FOLDER, 'Folder', { name: { kind: 'string', required: true } });
+  await stack.defineType({
+    id: NOTE,
+    name: 'Note',
+    schema: { text: { kind: 'text', required: true } },
+  });
+  await stack.defineType({
+    id: FOLDER,
+    name: 'Folder',
+    schema: { name: { kind: 'string', required: true } },
+  });
 });
 
 // -------------------------------------------------------
@@ -341,7 +349,11 @@ describe('a hard delete leaves no journal behind', () => {
 
 describe('every entry names who made the change', () => {
   test('an association change attributes the actor that made it', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
 
     await stack.associate(

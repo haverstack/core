@@ -43,6 +43,7 @@ import type {
   StackType,
   TypeSchema,
   TypeId,
+  BaseId,
   StackAdapter,
   StackQuery,
   RecordFilter,
@@ -341,7 +342,11 @@ export type DeleteAndReturnResult = DeleteResult & {
   record: StackRecord | null;
 };
 
+/** The argument to Stack.defineType(). */
 export type DefineTypeOptions = {
+  id: TypeId;
+  name: string;
+  schema: TypeSchema;
   migratesFrom?: TypeId;
 };
 
@@ -632,12 +637,7 @@ export class Stack implements StackClient {
    * anything beyond additive evolution throws StackSchemaDriftError. See
    * docs/spec/data-model.md § Schema drift detection.
    */
-  async defineType(
-    id: TypeId,
-    name: string,
-    schema: TypeSchema,
-    opts: DefineTypeOptions = {},
-  ): Promise<StackType> {
+  async defineType({ id, name, schema, migratesFrom }: DefineTypeOptions): Promise<StackType> {
     this.assertOpen();
     const parsed = parseTypeId(id);
     if (!parsed) {
@@ -691,7 +691,7 @@ export class Stack implements StackClient {
       schema,
       schemaHash,
       createdAt: existing?.createdAt ?? new Date(),
-      ...(opts.migratesFrom && { migratesFrom: opts.migratesFrom }),
+      ...(migratesFrom && { migratesFrom }),
     };
 
     await this.adapter.saveType(type);
@@ -789,15 +789,13 @@ export class Stack implements StackClient {
    * too, validates each result before writing, and aborts on the first
    * validation failure. See docs/spec/data-model.md § Type migrations.
    */
-  async migrateAll(baseTypeId: string): Promise<{ migrated: number }> {
+  async migrateAll(baseId: BaseId): Promise<{ migrated: number }> {
     this.assertOpen();
     const types = await this.adapter.listTypes();
-    const familyTypeIds = types.filter((t) => t.baseId === baseTypeId).map((t) => t.id);
+    const familyTypeIds = types.filter((t) => t.baseId === baseId).map((t) => t.id);
 
     if (familyTypeIds.length === 0) {
-      throw new StackMigrationError(
-        `migrateAll: no registered types found for baseTypeId "${baseTypeId}"`,
-      );
+      throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
     }
 
     let migrated = 0;
@@ -2486,7 +2484,7 @@ export class Stack implements StackClient {
    * content.grantee, not record.entityId. See
    * docs/spec/access-control.md § Type-level grants.
    */
-  async grantType(typeOrBaseId: string, grant: TypeGrant): Promise<StackRecord> {
+  async grantType(typeOrBaseId: TypeId | BaseId, grant: TypeGrant): Promise<StackRecord> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
     this.checkGrantValid(typeOrBaseId, grant.actions);
@@ -2551,7 +2549,7 @@ export class Stack implements StackClient {
    * revocation has to stay safe. See
    * docs/spec/access-control.md § Listing and revoking.
    */
-  async revokeType(typeOrBaseId: string, grant: TypeGrant): Promise<StackRecord[]> {
+  async revokeType(typeOrBaseId: TypeId | BaseId, grant: TypeGrant): Promise<StackRecord[]> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
     const familyId = baseIdOf(typeOrBaseId);
@@ -2617,58 +2615,82 @@ export class Stack implements StackClient {
   }
 
   private async seedSystemTypes(): Promise<void> {
-    await this.defineType(`${SYSTEM_TYPES.CONFIG}@1`, 'Config', {
-      entityId: { kind: 'string', required: true },
-      // Optional passthrough app metadata — see ConfigContent.timezone.
-      timezone: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.CONFIG}@1`,
+      name: 'Config',
+      schema: {
+        entityId: { kind: 'string', required: true },
+        // Optional passthrough app metadata — see ConfigContent.timezone.
+        timezone: { kind: 'string' },
+      },
     });
-    await this.defineType(`${SYSTEM_TYPES.ENTITY}@1`, 'Entity', {
-      did: { kind: 'string', required: true },
-      name: { kind: 'string', required: true },
-      handle: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.ENTITY}@1`,
+      name: 'Entity',
+      schema: {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+      },
     });
-    await this.defineType(`${SYSTEM_TYPES.APP}@1`, 'App', {
-      appId: { kind: 'string', required: true },
-      name: { kind: 'string', required: true },
-      version: { kind: 'string' },
-      did: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.APP}@1`,
+      name: 'App',
+      schema: {
+        appId: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        version: { kind: 'string' },
+        did: { kind: 'string' },
+      },
     });
-    await this.defineType(`${SYSTEM_TYPES.GROUP}@1`, 'Group', {
-      name: { kind: 'string', required: true },
-      handle: { kind: 'string' },
-      stackUrl: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.GROUP}@1`,
+      name: 'Group',
+      schema: {
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+        stackUrl: { kind: 'string' },
+      },
     });
-    await this.defineType(`${SYSTEM_TYPES.GRANT}@1`, 'Grant', {
-      typeId: { kind: 'string', required: true },
-      actions: { kind: 'array', items: { kind: 'string' }, required: true },
-      // Required, and closed: a Grant's reach is spelled by its `grantee`,
-      // so a record arriving without one is refused here rather than read
-      // as a grant to every authenticated entity. The arms differ in which
-      // fields they carry, which a schema cannot express — evaluation reads
-      // the `kind` and confers nothing on one it does not recognize.
-      // See docs/spec/access-control.md § Type-level grants.
-      grantee: {
-        kind: 'object',
-        required: true,
-        properties: {
-          kind: { kind: 'string', required: true },
-          entityId: { kind: 'string' },
-          groupId: { kind: 'string' },
-          role: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.GRANT}@1`,
+      name: 'Grant',
+      schema: {
+        typeId: { kind: 'string', required: true },
+        actions: { kind: 'array', items: { kind: 'string' }, required: true },
+        // Required, and closed: a Grant's reach is spelled by its `grantee`,
+        // so a record arriving without one is refused here rather than read
+        // as a grant to every authenticated entity. The arms differ in which
+        // fields they carry, which a schema cannot express — evaluation reads
+        // the `kind` and confers nothing on one it does not recognize.
+        // See docs/spec/access-control.md § Type-level grants.
+        grantee: {
+          kind: 'object',
+          required: true,
+          properties: {
+            kind: { kind: 'string', required: true },
+            entityId: { kind: 'string' },
+            groupId: { kind: 'string' },
+            role: { kind: 'string' },
+          },
         },
       },
     });
-    await this.defineType(`${SYSTEM_TYPES.ATTACHMENT}@1`, 'Attachment', {
-      // Deliberately `string`, not `file-ref`: attachmentFileId matching
-      // (deleteAttachment()/collectAttachmentGarbage()'s reference scan) is
-      // schema-driven, so a `file-ref` fileId here would make every
-      // metadata record its own file's reference — nothing would ever be
-      // deletable or collectible. See docs/spec/attachments.md § Deleting
-      // attachments / Garbage collection.
-      fileId: { kind: 'string', required: true },
-      mimeType: { kind: 'string', required: true },
-      size: { kind: 'number', required: true },
-      filename: { kind: 'string' },
+    await this.defineType({
+      id: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+      name: 'Attachment',
+      schema: {
+        // Deliberately `string`, not `file-ref`: attachmentFileId matching
+        // (deleteAttachment()/collectAttachmentGarbage()'s reference scan) is
+        // schema-driven, so a `file-ref` fileId here would make every
+        // metadata record its own file's reference — nothing would ever be
+        // deletable or collectible. See docs/spec/attachments.md § Deleting
+        // attachments / Garbage collection.
+        fileId: { kind: 'string', required: true },
+        mimeType: { kind: 'string', required: true },
+        size: { kind: 'number', required: true },
+        filename: { kind: 'string' },
+      },
     });
   }
 

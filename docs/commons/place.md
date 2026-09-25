@@ -14,12 +14,16 @@ named fields rather than a GeoJSON-style array precisely because GeoJSON's
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/place@1', 'Place', {
-  latitude: { kind: 'number', required: true },
-  longitude: { kind: 'number', required: true },
-  name: { kind: 'string' },
-  address: { kind: 'string' },
-  url: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/place@1',
+  name: 'Place',
+  schema: {
+    latitude: { kind: 'number', required: true },
+    longitude: { kind: 'number', required: true },
+    name: { kind: 'string' },
+    address: { kind: 'string' },
+    url: { kind: 'string' },
+  },
 });
 ```
 

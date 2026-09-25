@@ -165,7 +165,7 @@ export const defineCommonsTypes = async (
 ): Promise<StackType[]> => {
   const defined: StackType[] = [];
   for (const type of types) {
-    defined.push(await stack.defineType(type.id, type.name, type.schema));
+    defined.push(await stack.defineType(type));
   }
   return defined;
 };

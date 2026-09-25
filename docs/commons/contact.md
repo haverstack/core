@@ -21,13 +21,17 @@ const labeledValue = {
   },
 } as const;
 
-await stack.defineType('org.haverstack/contact@1', 'Contact', {
-  name: { kind: 'string', required: true },
-  emails: { kind: 'array', items: labeledValue },
-  phones: { kind: 'array', items: labeledValue },
-  urls: { kind: 'array', items: labeledValue },
-  org: { kind: 'string' },
-  note: { kind: 'text' },
+await stack.defineType({
+  id: 'org.haverstack/contact@1',
+  name: 'Contact',
+  schema: {
+    name: { kind: 'string', required: true },
+    emails: { kind: 'array', items: labeledValue },
+    phones: { kind: 'array', items: labeledValue },
+    urls: { kind: 'array', items: labeledValue },
+    org: { kind: 'string' },
+    note: { kind: 'text' },
+  },
 });
 ```
 

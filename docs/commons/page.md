@@ -23,18 +23,22 @@ order) to app sidecars.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/page@1', 'Page', {
-  slug: { kind: 'string', required: true },
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
-  format: { kind: 'string' },
-  publishedAt: { kind: 'date' },
-  collection: {
-    kind: 'object',
-    properties: {
-      typeId: { kind: 'string', required: true },
-      tag: { kind: 'string' },
-      order: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/page@1',
+  name: 'Page',
+  schema: {
+    slug: { kind: 'string', required: true },
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+    format: { kind: 'string' },
+    publishedAt: { kind: 'date' },
+    collection: {
+      kind: 'object',
+      properties: {
+        typeId: { kind: 'string', required: true },
+        tag: { kind: 'string' },
+        order: { kind: 'string' },
+      },
     },
   },
 });

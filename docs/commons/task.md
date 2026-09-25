@@ -9,12 +9,16 @@ that pair — so that pair is the required core, and the rest is optional.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/task@1', 'Task', {
-  title: { kind: 'string', required: true },
-  done: { kind: 'boolean', required: true },
-  notes: { kind: 'text' },
-  due: { kind: 'date' },
-  completedAt: { kind: 'date' },
+await stack.defineType({
+  id: 'org.haverstack/task@1',
+  name: 'Task',
+  schema: {
+    title: { kind: 'string', required: true },
+    done: { kind: 'boolean', required: true },
+    notes: { kind: 'text' },
+    due: { kind: 'date' },
+    completedAt: { kind: 'date' },
+  },
 });
 ```
 

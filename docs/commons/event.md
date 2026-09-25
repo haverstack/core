@@ -14,13 +14,17 @@ excludes its famously hard part (recurrence — see conventions).
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/event@1', 'Event', {
-  title: { kind: 'string', required: true },
-  startsAt: { kind: 'date', required: true },
-  endsAt: { kind: 'date' },
-  allDay: { kind: 'boolean' },
-  description: { kind: 'text' },
-  url: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/event@1',
+  name: 'Event',
+  schema: {
+    title: { kind: 'string', required: true },
+    startsAt: { kind: 'date', required: true },
+    endsAt: { kind: 'date' },
+    allDay: { kind: 'boolean' },
+    description: { kind: 'text' },
+    url: { kind: 'string' },
+  },
 });
 ```
 

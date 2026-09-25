@@ -16,11 +16,15 @@ schema-enforced, not convention-only.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/photo@1', 'Photo', {
-  image: { kind: 'file-ref', required: true },
-  caption: { kind: 'text' },
-  alt: { kind: 'string' },
-  takenAt: { kind: 'date' },
+await stack.defineType({
+  id: 'org.haverstack/photo@1',
+  name: 'Photo',
+  schema: {
+    image: { kind: 'file-ref', required: true },
+    caption: { kind: 'text' },
+    alt: { kind: 'string' },
+    takenAt: { kind: 'date' },
+  },
 });
 ```
 

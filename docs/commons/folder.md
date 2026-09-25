@@ -24,9 +24,13 @@ Google Drive/Dropbox.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/folder@1', 'Folder', {
-  name: { kind: 'string', required: true },
-  description: { kind: 'text' },
+await stack.defineType({
+  id: 'org.haverstack/folder@1',
+  name: 'Folder',
+  schema: {
+    name: { kind: 'string', required: true },
+    description: { kind: 'text' },
+  },
 });
 ```
 

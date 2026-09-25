@@ -46,9 +46,13 @@ const adapter = await LocalAdapter.openOrInitialize({
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
 // Define a type
-await stack.defineType('com.example.myapp/note@1', 'Note', {
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
+await stack.defineType({
+  id: 'com.example.myapp/note@1',
+  name: 'Note',
+  schema: {
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+  },
 });
 
 // Create a record
@@ -122,12 +126,12 @@ Tags, attachments, and relationships are unified under a single model:
 Types can evolve over time. Register migration functions between adjacent versions and the library composes them into chains automatically:
 
 ```ts
-await stack.defineType(
-  'com.example.myapp/note@2',
-  'Note',
-  { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-  { migratesFrom: 'com.example.myapp/note@1' },
-);
+await stack.defineType({
+  id: 'com.example.myapp/note@2',
+  name: 'Note',
+  schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+  migratesFrom: 'com.example.myapp/note@1',
+});
 
 stack.registerMigration({
   from: 'com.example.myapp/note@1',

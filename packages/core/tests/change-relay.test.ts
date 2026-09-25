@@ -60,7 +60,11 @@ let stack: Stack;
 beforeEach(async () => {
   adapter = new RelayingMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
-  await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+  await stack.defineType({
+    id: NOTE,
+    name: 'Note',
+    schema: { text: { kind: 'text', required: true } },
+  });
 });
 
 describe('a stack whose adapter relays', () => {
@@ -205,7 +209,11 @@ describe('a stack whose adapter relays', () => {
 describe('a stack whose adapter does not relay', () => {
   test('refuses `since`, which names a cursor it never minted', async () => {
     const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
-    await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+    await local.defineType({
+      id: NOTE,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     await expect(local.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
       StackBadRequestError,
@@ -223,7 +231,11 @@ describe('a scoped view of a stack that relays', () => {
 
   test('subscribes normally when the adapter relays nothing', async () => {
     const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
-    await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+    await local.defineType({
+      id: NOTE,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     const scoped = local.asEntity(OWNER);
     const unsubscribe = await scoped.subscribe(() => {});
@@ -234,7 +246,11 @@ describe('a scoped view of a stack that relays', () => {
 
   test('refuses `since` even when the adapter relays nothing', async () => {
     const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
-    await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
+    await local.defineType({
+      id: NOTE,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     const scoped = local.asEntity(OWNER);
     await expect(scoped.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(

@@ -211,7 +211,7 @@ export class StackSchemaDriftError extends StackError {
     super(
       `Schema drift detected for type "${typeId}": the stored schema and the new definition ` +
         `differ beyond additive evolution (new optional fields only). Bump the version instead ` +
-        `of redefining "${typeId}" in place — e.g. defineType(\`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ...) plus registerMigration().\n` +
+        `of redefining "${typeId}" in place — e.g. defineType({ id: \`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ... }) plus registerMigration().\n` +
         violations.map((v) => `  ${v.path || '(root)'}: ${v.message}`).join('\n'),
     );
     this.name = 'StackSchemaDriftError';
