@@ -23,7 +23,7 @@ import type {
   ChangeOp,
   DataAssociation,
   EntityId,
-  PermissionGrantee,
+  Grantee,
   RecordChanges,
   RecordJournalEntry,
   RelationshipTarget,
@@ -59,7 +59,7 @@ export function associationEqual(a: Association, b: Association): boolean {
  * Structural equality per grantee arm. `role` is required, so there is no
  * absent-means-any spelling to normalize.
  */
-export function granteeEqual(a: PermissionGrantee, b: PermissionGrantee): boolean {
+export function granteeEqual(a: Grantee, b: Grantee): boolean {
   if (!a || !b) return false;
   if (a.kind !== b.kind) return false;
   if (a.kind === 'entity' && b.kind === 'entity') return a.entityId === b.entityId;

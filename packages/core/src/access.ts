@@ -20,7 +20,7 @@ import type {
   DataAssociation,
   EntityId,
   GroupRole,
-  PermissionGrantee,
+  Grantee,
   RecordId,
   StackRecord,
 } from './types.js';
@@ -85,7 +85,7 @@ export async function checkAccess(
  * revoking the `anyone` is what the invariant catches instead.
  * See docs/spec/access-control.md § Write implies read.
  */
-function holdsRead(permissions: AuthorityAssociation[], grantee: PermissionGrantee): boolean {
+function holdsRead(permissions: AuthorityAssociation[], grantee: Grantee): boolean {
   return permissions.some((p) =>
     p?.kind === 'anyone'
       ? isWorldRead(p)
@@ -107,7 +107,7 @@ function isWorldRead(association: AuthorityAssociation): boolean {
  * set — an admin satisfies it — and `role: 'admin'` the narrower.
  */
 async function granteeCovers(
-  grantee: PermissionGrantee,
+  grantee: Grantee,
   subjectEntityId: EntityId | null,
   resolveRecord: RecordResolver,
 ): Promise<boolean> {

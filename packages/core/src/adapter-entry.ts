@@ -16,6 +16,9 @@ export type {
   BlobFileInfo,
   ExpectedVersionOptions,
   BumpVersionOptions,
+  SnapshotOptions,
+  JournalEntryInput,
+  JournalOptions,
   SubscribeChangesOptions,
 } from './types.js';
 export { combineAdapters } from './combine.js';

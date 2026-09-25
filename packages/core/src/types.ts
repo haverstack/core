@@ -126,7 +126,7 @@ export type RelationshipAssociation = {
 export type PermissionAssociation = {
   kind: 'permission';
   label: 'read' | 'write';
-  grantee: PermissionGrantee;
+  grantee: Grantee;
 };
 
 /** An entity's standing within a `_group` Record's roster. `admin` implies `member` for ACL purposes. */
@@ -141,9 +141,6 @@ export type GroupRole = 'member' | 'admin';
 export type Grantee =
   | { kind: 'entity'; entityId: EntityId }
   | { kind: 'group'; groupId: RecordId; role: GroupRole };
-
-/** Who a permission reaches — the shared arms, and nothing wider. */
-export type PermissionGrantee = Grantee;
 
 /**
  * Reach to the world, spelled affirmatively: it names no grantee and
@@ -1240,7 +1237,7 @@ export interface StackRecordAdapter {
 
   /**
    * Atomically verify fileId is unreferenced, then hard-delete its
-   * metadata records in the same adapter call, returning their ids.
+   * metadata records in the same adapter call, returning the deleted records.
    * Throws StackConflictError if still referenced. Optional —
    * Stack.deleteAttachment() has a non-atomic fallback. See
    * docs/spec/attachments.md § Deleting attachments.
@@ -1264,7 +1261,7 @@ export interface StackRecordAdapter {
   subscribeChanges?(
     opts: SubscribeChangesOptions,
     handler: (change: RecordChange) => void,
-  ): Promise<() => void>;
+  ): Promise<Unsubscribe>;
 
   // Lifecycle
   flush?(): Promise<void>;

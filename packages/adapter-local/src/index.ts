@@ -16,7 +16,6 @@
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import type {
-  JournalOptions,
   JournalQuery,
   RecordJournalEntry,
   StackAdapter,
@@ -34,7 +33,12 @@ import type {
   TokenSession,
   RecordChanges,
 } from '@haverstack/core';
-import type { AdapterCapabilities, BlobFileInfo, StackBlobAdapter } from '@haverstack/core/adapter';
+import type {
+  AdapterCapabilities,
+  BlobFileInfo,
+  StackBlobAdapter,
+  JournalOptions,
+} from '@haverstack/core/adapter';
 import type { TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,

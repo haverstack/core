@@ -139,7 +139,7 @@ import {
   stampGroupAdmin,
   isGroupRecord,
 } from './record-changes.js';
-import { ScopedStack } from './scoped-stack.js';
+import { ScopedStack, scopeToken } from './scoped-stack.js';
 
 // -------------------------------------------------------
 // Supporting types
@@ -360,7 +360,7 @@ export interface StackClient {
     content: T,
     opts?: CreateRecordOptions,
   ): Promise<StackRecord & { content: T }>;
-  get(id: string, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
   query(query?: StackQuery): Promise<QueryResult>;
   /**
    * Resolve a DID to its `_entity` card — family-wide and soft-deleted
@@ -382,10 +382,10 @@ export interface StackClient {
    * one refused key refuses the call.
    * See docs/spec/data-model.md § Mutations.
    */
-  mutate(id: string, changes: RecordChanges, opts?: IfVersionOptions): Promise<StackRecord>;
+  mutate(id: RecordId, changes: RecordChanges, opts?: IfVersionOptions): Promise<StackRecord>;
   /** mutate() with `contentPatch` alone — the common case, named for it. */
   patchContent(
-    id: string,
+    id: RecordId,
     patch: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
@@ -394,30 +394,30 @@ export interface StackClient {
    * `ifVersion` — a set-add composes regardless of write order.
    * See docs/spec/versioning.md § Version history.
    */
-  associate(id: string, association: DataAssociation): Promise<StackRecord>;
+  associate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
   /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: string, association: DataAssociation): Promise<StackRecord>;
+  dissociate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
   /**
    * Extend who reaches a record by one element — the record-level mirror of
    * the type-level `grant()`, and the amending spelling of the
    * `permissions` key, which replaces the whole set. No-bump, like
    * associate(). See docs/spec/access-control.md § Record-level permissions.
    */
-  grantAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
+  grantAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
   /** Withdraw one element of who reaches a record — see grantAccess(). */
-  revokeAccess(id: string, permission: AuthorityAssociation): Promise<StackRecord>;
-  delete(id: string, opts?: DeleteRecordOptions): Promise<DeleteResult>;
+  revokeAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
+  delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   /**
    * delete(), plus the record it acted on — read and destroyed as one
    * atomic operation, so a caller that needs the record for its own
    * response (e.g. a server building a hard delete's body) never opens a
    * gap between reading it and destroying it. See Stack.deleteAndReturn().
    */
-  deleteAndReturn(id: string, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
-  undelete(id: string, opts?: IfVersionOptions): Promise<StackRecord>;
-  getVersions(id: string): Promise<RecordVersion[]>;
-  getVersion(id: string, version: number): Promise<RecordVersion | null>;
-  restoreVersion(id: string, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
+  deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
+  undelete(id: RecordId, opts?: IfVersionOptions): Promise<StackRecord>;
+  getVersions(id: RecordId): Promise<RecordVersion[]>;
+  getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
+  restoreVersion(id: RecordId, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
    * A record's change journal, oldest first. On the mutate surface, on the
    * same footing as getVersions() — a plain reader is refused.
@@ -427,7 +427,7 @@ export interface StackClient {
    * unconditionally, so an adapter with nothing to read refuses and names
    * why instead. See docs/spec/journal.md § Reading it.
    */
-  getJournal(id: string, query?: JournalQuery): Promise<RecordJournalEntry[]>;
+  getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
    * Commit a per-record migration: change `typeId` and `content` together,
    * validated against `toTypeId`'s schema. The only way a record's typeId
@@ -437,17 +437,17 @@ export interface StackClient {
    * concurrency); over the wire that is `If-Match`.
    */
   commitMigration(
-    id: string,
+    id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
-  getAttachment(fileId: string): Promise<Uint8Array>;
+  getAttachment(fileId: FileId): Promise<Uint8Array>;
   putAttachment(
     data: Uint8Array,
     opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }>;
-  deleteAttachment(fileId: string): Promise<void>;
+  deleteAttachment(fileId: FileId): Promise<void>;
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
@@ -608,14 +608,16 @@ export class Stack implements StackClient {
 
   private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
     this.assertOpen();
-    return new ScopedStack(
-      this,
+    return new ScopedStack(scopeToken, {
+      stack: this,
       principalId,
       subjectId,
-      this.idTimestampSkewMsValue,
-      this.adapter,
-      this.changes,
-    );
+      idTimestampSkewMs: this.idTimestampSkewMsValue,
+      adapter: this.adapter,
+      changes: this.changes,
+      assertOpen: () => this.assertOpen(),
+      relaysChanges: this.relaysChanges,
+    });
   }
 
   // -------------------------------------------------------
@@ -1025,7 +1027,7 @@ export class Stack implements StackClient {
    * { presentAt: 'latest' } to migrate in memory; only migrateAll()
    * commits migrations to disk.
    */
-  async get(id: string, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
+  async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
@@ -1043,7 +1045,7 @@ export class Stack implements StackClient {
    * See docs/spec/data-model.md § Mutations.
    */
   async mutate(
-    id: string,
+    id: RecordId,
     changes: RecordChanges,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1113,7 +1115,7 @@ export class Stack implements StackClient {
    * that a patch does not have.
    */
   async patchContent(
-    id: string,
+    id: RecordId,
     patch: Record<string, unknown | null>,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1248,7 +1250,7 @@ export class Stack implements StackClient {
    * entry's `repoint`. See docs/spec/journal.md § The entry.
    */
   async associate(
-    id: string,
+    id: RecordId,
     association: DataAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1287,7 +1289,7 @@ export class Stack implements StackClient {
    * journal is where it survives.
    */
   async dissociate(
-    id: string,
+    id: RecordId,
     association: DataAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1334,7 +1336,7 @@ export class Stack implements StackClient {
    * already carries is a no-op.
    */
   async grantAccess(
-    id: string,
+    id: RecordId,
     permission: AuthorityAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1362,7 +1364,7 @@ export class Stack implements StackClient {
    * not carry is a no-op. Returns the record as it now stands.
    */
   async revokeAccess(
-    id: string,
+    id: RecordId,
     permission: AuthorityAssociation,
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1473,7 +1475,7 @@ export class Stack implements StackClient {
    * body from a separate read beforehand is exactly the race and the extra
    * round trip it exists to remove.
    */
-  async delete(id: string, opts: DeleteRecordOptions & ActorOptions = {}): Promise<DeleteResult> {
+  async delete(id: RecordId, opts: DeleteRecordOptions & ActorOptions = {}): Promise<DeleteResult> {
     const { referencedFileIds } = await this.deleteAndReturn(id, opts);
     return { referencedFileIds };
   }
@@ -1488,7 +1490,7 @@ export class Stack implements StackClient {
    * this call, and never appear in the record this returns.
    */
   async deleteAndReturn(
-    id: string,
+    id: RecordId,
     opts: DeleteRecordOptions & ActorOptions = {},
   ): Promise<DeleteAndReturnResult> {
     this.assertOpen();
@@ -1556,7 +1558,7 @@ export class Stack implements StackClient {
    * throws StackNotFoundError for them just like any other missing record.
    * Snapshots and bumps version, same as delete().
    */
-  async undelete(id: string, opts: IfVersionOptions & ActorOptions = {}): Promise<StackRecord> {
+  async undelete(id: RecordId, opts: IfVersionOptions & ActorOptions = {}): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
@@ -1635,7 +1637,7 @@ export class Stack implements StackClient {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: string): Promise<RecordVersion[]> {
+  async getVersions(id: RecordId): Promise<RecordVersion[]> {
     this.assertOpen();
     return this.adapter.getVersions(id);
   }
@@ -1649,13 +1651,13 @@ export class Stack implements StackClient {
    * a destroyed log and an empty one are not the same answer.
    * See docs/spec/journal.md § Reading it.
    */
-  async getJournal(id: string, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+  async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();
     assertValidJournalQuery(query);
     return this.adapter.getJournal(id, query);
   }
 
-  async getVersion(id: string, version: number): Promise<RecordVersion | null> {
+  async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
     this.assertOpen();
     return this.adapter.getVersion(id, version);
   }
@@ -1667,7 +1669,7 @@ export class Stack implements StackClient {
    * carries nothing else. See docs/spec/versioning.md § Restore semantics.
    */
   async restoreVersion(
-    id: string,
+    id: RecordId,
     version: number,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
@@ -1745,7 +1747,7 @@ export class Stack implements StackClient {
    * state create()/mutate() refuse to reach.
    */
   async commitMigration(
-    id: string,
+    id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
     opts: IfVersionOptions & ActorOptions = {},
@@ -2153,7 +2155,7 @@ export class Stack implements StackClient {
     );
   }
 
-  async getAttachment(fileId: string): Promise<Uint8Array> {
+  async getAttachment(fileId: FileId): Promise<Uint8Array> {
     this.assertOpen();
     return this.adapter.getAttachment(fileId);
   }
@@ -2203,7 +2205,7 @@ export class Stack implements StackClient {
    * still references the file, StackNotFoundError if neither metadata
    * records nor bytes exist.
    */
-  async deleteAttachment(fileId: string, opts: ActorOptions = {}): Promise<void> {
+  async deleteAttachment(fileId: FileId, opts: ActorOptions = {}): Promise<void> {
     this.assertOpen();
     let deletedRecords: StackRecord[];
     if (this.adapter.deleteUnreferencedAttachmentRecords) {
@@ -2418,11 +2420,8 @@ export class Stack implements StackClient {
     };
   }
 
-  /**
-   * Whether changes reach this stack from elsewhere. Public only so
-   * ScopedStack can refuse a scope it cannot honor; not an app-facing API.
-   */
-  get relaysChanges(): boolean {
+  /** Whether changes reach this stack from elsewhere. */
+  private get relaysChanges(): boolean {
     return typeof this.adapter.subscribeChanges === 'function';
   }
 
@@ -2457,11 +2456,8 @@ export class Stack implements StackClient {
     }
   }
 
-  /**
-   * Throws once close() has run. Public only so ScopedStack can gate the
-   * one path it takes to the adapter directly; not an app-facing API.
-   */
-  assertOpen(): void {
+  /** Throws once close() has run. */
+  private assertOpen(): void {
     if (this.closed) throw new StackClosedError();
   }
 
