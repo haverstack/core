@@ -33,7 +33,7 @@ type ChangeOp =
   | 'patch'
   | 'associate'
   | 'dissociate'
-  | 'permissions'
+  | 'reshare'
   | 'migrate'
   | 'restore'
   | 'delete'
