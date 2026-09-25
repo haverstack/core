@@ -79,7 +79,7 @@ A server MAY additionally reject an `id` whose timestamp prefix is implausibly f
 The same rules are enforced locally, so a client-minted ID behaves identically whether it travels over the wire or stays in-process:
 
 - `Stack.create(typeId, content, { id })` validates charset, length, and the reserved prefix, and throws `StackConflictError` on a duplicate. This is a full-trust context (an embedded single-app stack, or the server's own code) — no clock-skew check.
-- `ScopedStack.create()` — a grantee minting an ID — applies the same validation **plus** the timestamp-skew check, since a grantee is exactly the untrusted actor who could otherwise forge a sort position. The tolerance is configurable per Stack via `Stack.create(adapter, { idTimestampSkewMs })` (default 24 hours; pass `null` to disable).
+- `ScopedStack.create()` — a grantee minting an ID — applies the same validation **plus** the timestamp-skew check, since a grantee is exactly the untrusted actor who could otherwise forge a sort position. The tolerance is configurable per Stack via `Stack.open(adapter, { idTimestampSkewMs })` (default 24 hours; pass `null` to disable).
 
 ### Backdating on import
 
@@ -303,7 +303,7 @@ Apps that care about semantics filter by exact `typeId`; apps that want flexibil
 
 ### System types
 
-Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), and `_attachment@1` ([Attachments](./attachments.md)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is created via `Stack.create()` — always available without any setup by the caller.
+Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), and `_attachment@1` ([Attachments](./attachments.md)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
 
 ### Type migrations
 

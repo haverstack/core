@@ -47,6 +47,7 @@ export {
   StackPayloadTooLargeError,
   StackTimeoutError,
   StackClosedError,
+  StackMisconfigurationError,
   StackRelayScopeError,
 } from './errors.js';
 export type { StackErrorCode } from './errors.js';

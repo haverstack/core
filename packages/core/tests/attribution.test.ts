@@ -17,7 +17,7 @@ let stack: Stack;
 
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
   await stack.grant(NOTE, {
     actions: ['create', 'read-any', 'update-any', 'delete-any'],
@@ -242,7 +242,7 @@ describe('attribution — separate from authorship checks', () => {
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
     const ownOnly = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-    const s2 = await Stack.create(ownOnly);
+    const s2 = await Stack.open(ownOnly);
     await s2.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
     await s2.grant(NOTE, { actions: ['create', 'read-own'], grantee: { kind: 'authenticated' } });
 

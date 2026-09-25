@@ -43,7 +43,7 @@ const adapter = await LocalAdapter.openOrInitialize({
 
 // ownerProfile creates your own _entity profile record on first run —
 // safe to keep passing on every open, it's a no-op once the record exists.
-const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
+const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
 // Define a type
 await stack.defineType('com.example.myapp/note@1', 'Note', {

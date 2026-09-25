@@ -68,7 +68,7 @@ import { S3BlobAdapter } from '@haverstack/blob-adapter-s3';
 const record = await NativeSQLiteRecordAdapter.initialize({ path, entityId, timezone });
 const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
-const stack = await Stack.create(adapter);
+const stack = await Stack.open(adapter);
 ```
 
 `limits.attachmentBytes` lives on `AdapterCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.

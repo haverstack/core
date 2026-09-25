@@ -125,7 +125,7 @@ const adapter = await LocalAdapter.openOrInitialize({
 
 // ownerProfile creates your own _entity profile record on first run —
 // safe to keep passing on every open, it's a no-op once the record exists.
-const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
+const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
 // Define a type
 await stack.defineType('com.example.myapp/note@1', 'Note', {
@@ -179,7 +179,7 @@ The fundamental unit of data. Every record has:
 
 Every identity — a record's author, permissions, grants, group membership, the stack owner — is a [DID](https://www.w3.org/TR/did-core/) string, e.g. `did:key:z6Mk...`. An identity is a keypair; there's no provider, directory, or domain to trust. `did:key` (a public key, encoded — nothing else) is the mandatory floor; `generateDidKeypair()` mints one. Other DID methods (`did:web`, `did:plc`, ...) are valid `entityId` values too.
 
-The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.create(adapter, { ownerProfile })` creates the owner's own card on first run.
+The `_entity` record type is a **local profile** about a DID, not the identity itself — a petname card (`{ did, name, handle? }`) with a display name you chose for that DID. Two stacks can hold different `_entity` cards with different names for the same DID; that's correct, it's each owner's own contact card. `Stack.open(adapter, { ownerProfile })` creates the owner's own card on first run.
 
 See [Identity](./docs/spec/identity.md) in the spec for the full model, including authentication (challenge–response, not a shared secret) and what's deliberately deferred (key rotation).
 

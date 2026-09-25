@@ -1301,7 +1301,7 @@ export interface StackBlobAdapter {
 
 /**
  * A complete adapter: record storage and blob storage combined.
- * Pass this to Stack.create(). Build one with combineAdapters() when you
+ * Pass this to Stack.open(). Build one with combineAdapters() when you
  * want different backends for records and blobs (e.g. SQLite + S3).
  */
 export type StackAdapter = StackRecordAdapter &
