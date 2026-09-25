@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * What a `_grant` Record says, and who it says it about. The coverage
  * question — does this grant reach this grantee — is answered here rather
- * than at each call site so that the access checks and listGrants() cannot
+ * than at each call site so that the access checks and listTypeGrants() cannot
  * drift apart about it.
  *
  * See docs/spec/access-control.md § Type-level grants.
@@ -29,7 +29,7 @@ import { queryAllPages } from './stack-reads.js';
 import type { ValidationError } from './validate.js';
 
 /**
- * Valid GrantAction values, for runtime validation in Stack.grant(). Built
+ * Valid GrantAction values, for runtime validation in Stack.grantType(). Built
  * from GRANT_ACTIONS, which GrantAction itself derives from, so the set and
  * the type cannot drift.
  */
@@ -87,7 +87,7 @@ export function grantReach(content: unknown): { familyId: string; actions: Grant
 }
 
 /**
- * What listGrants() accepts: a GrantGrantee, widened so a group listing can
+ * What listTypeGrants() accepts: a GrantGrantee, widened so a group listing can
  * ask for every role at once. `role: 'any'` is not a role an entity can
  * hold and never reaches storage — a query can say it, a grantee cannot.
  */
@@ -97,7 +97,7 @@ export type GrantQuery =
 
 /**
  * Direct (non-roster) match between a stored _grant's content and a target:
- * the whole grantee, `role` included. A target is the identity grant()
+ * the whole grantee, `role` included. A target is the identity grantType()
  * wrote, so a revoke aimed at a group's admins leaves the members' grant
  * standing. A query's `role: 'any'` is the one widening, and it is spelled.
  */
@@ -118,7 +118,7 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
  * grant that can only ever deny while looking like a share that worked.
  * Read as data, not as the type: a target reaching Stack from a request
  * body or an import has whatever shape it arrived with. `allowAny` admits
- * the listing-only `role: 'any'`, which grant() and revoke() refuse.
+ * the listing-only `role: 'any'`, which grantType() and revokeType() refuse.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
   const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
@@ -265,7 +265,7 @@ async function resolveGroupRoleMemoized(
 }
 
 /**
- * System type families grant() refuses to target: a grant on any of them
+ * System type families grantType() refuses to target: a grant on any of them
  * would let the grantee mint their own grants, touch stack config, or
  * register an app card claiming a DID that isn't theirs — the last of which
  * is what verified app attribution rests on.
@@ -283,7 +283,7 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
  *
  * `includeUnlisted`, because withholding a Record from enumeration decides
  * nothing about what it confers. Deleted grants are excluded on the
- * opposite grounds — a soft delete is how revoke() withdraws one.
+ * opposite grounds — a soft delete is how revokeType() withdraws one.
  * See docs/spec/unlisted.md.
  */
 export function loadGrantRecords(

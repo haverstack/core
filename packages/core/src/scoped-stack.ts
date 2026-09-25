@@ -433,7 +433,7 @@ export class ScopedStack implements StackClient {
 
     const familyId = baseIdOf(typeId);
 
-    // grant() refuses to write these, but a _grant record is an ordinary
+    // grantType() refuses to write these, but a _grant record is an ordinary
     // Record: an unscoped Stack, an import, or a server mapping a request
     // body onto Stack can mint one anyway. Refusing at the point of use is
     // what makes the rule hold regardless of how the record got there.
@@ -1214,7 +1214,7 @@ export class ScopedStack implements StackClient {
   /**
    * A `_grant` Record *is* authority, so rewriting one is the escalation
    * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
-   * existing grant rather than minting a fresh one. `grant()` and `revoke()`
+   * existing grant rather than minting a fresh one. `grantType()` and `revokeType()`
    * live on `Stack`, never `StackClient`, so no scoped write is lost. Writes
    * only: reading a grant Record and its history stays on the ordinary gate.
    * See docs/spec/access-control.md § Type-level grants.

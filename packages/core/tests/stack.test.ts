@@ -3469,15 +3469,15 @@ describe('use after close — scoped views', () => {
 // grant
 // -------------------------------------------------------
 
-describe('grant', () => {
+describe('grantType', () => {
   test('creates a grant record for the given entity and type', async () => {
-    const record = await stack.grant(NOTE_V1, {
+    const record = await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
     expect(record.typeId).toBe('_grant@1');
     // The grantee lives in content, not record.createdBy — createdBy means
-    // "author", and the owner (who called grant()) authored this record.
+    // "author", and the owner (who called grantType()) authored this record.
     expect(record.createdBy?.subjectId).toBeUndefined();
     expect(record.content).toEqual({
       typeId: NOTE_V1,
@@ -3487,7 +3487,7 @@ describe('grant', () => {
   });
 
   test('an authenticated target creates a default grant naming that tier', async () => {
-    const record = await stack.grant(NOTE_V1, {
+    const record = await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'authenticated' },
     });
@@ -3511,7 +3511,7 @@ describe('grant', () => {
   // which means "author" everywhere else — so "everything Alice authored"
   // queries don't pick up grants that merely name her.
   test('an authorship query does not pick up grants naming that entity', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
@@ -3520,7 +3520,7 @@ describe('grant', () => {
   });
 
   test('a grant record still resolves through ScopedStack for its named grantee', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
@@ -3532,7 +3532,7 @@ describe('grant', () => {
   // silently and simply never match at check time (hasGrant).
   test('rejects an unknown grant action', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['read-all' as never],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -3542,13 +3542,16 @@ describe('grant', () => {
   // typeId must be a well-formed bare baseId or versioned TypeId.
   test('rejects an empty typeId', async () => {
     await expect(
-      stack.grant('', { actions: ['create'], grantee: { kind: 'entity', entityId: 'entity-abc' } }),
+      stack.grantType('', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('rejects a malformed versioned typeId', async () => {
     await expect(
-      stack.grant('com.example.test/note@abc', {
+      stack.grantType('com.example.test/note@abc', {
         actions: ['create'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -3556,7 +3559,7 @@ describe('grant', () => {
   });
 
   test('accepts a bare baseId (no version suffix)', async () => {
-    const record = await stack.grant('com.example.test/note', {
+    const record = await stack.grantType('com.example.test/note', {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
@@ -3567,7 +3570,7 @@ describe('grant', () => {
   // types (_attachment, _entity, _group) stay grantable.
   test('rejects a grant targeting _grant@1', async () => {
     await expect(
-      stack.grant('_grant@1', {
+      stack.grantType('_grant@1', {
         actions: ['create'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -3576,7 +3579,7 @@ describe('grant', () => {
 
   test('rejects a grant targeting _config@1', async () => {
     await expect(
-      stack.grant('_config@1', {
+      stack.grantType('_config@1', {
         actions: ['update-any'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -3587,7 +3590,7 @@ describe('grant', () => {
   // the owner writes cards to it.
   test('rejects a grant targeting _app@1', async () => {
     await expect(
-      stack.grant('_app@1', {
+      stack.grantType('_app@1', {
         actions: ['create'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -3596,12 +3599,12 @@ describe('grant', () => {
 
   test('rejects a default (any-authenticated) grant targeting _grant@1', async () => {
     await expect(
-      stack.grant('_grant@1', { actions: ['create'], grantee: { kind: 'authenticated' } }),
+      stack.grantType('_grant@1', { actions: ['create'], grantee: { kind: 'authenticated' } }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('still allows a grant targeting _attachment@1', async () => {
-    const record = await stack.grant('_attachment@1', {
+    const record = await stack.grantType('_attachment@1', {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
@@ -3609,7 +3612,7 @@ describe('grant', () => {
   });
 
   test('creates a group-targeted grant record', async () => {
-    const record = await stack.grant(NOTE_V1, {
+    const record = await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
@@ -3700,7 +3703,7 @@ describe('grant', () => {
   // The same refusal on every path that writes content, so a grant cannot
   // be edited into an arm it does not satisfy.
   test("a patch dropping a group grantee's role is refused", async () => {
-    const granted = await stack.grant(NOTE_V1, {
+    const granted = await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
@@ -3711,7 +3714,7 @@ describe('grant', () => {
 
   test('rejects a group-targeted grant on _grant@1', async () => {
     await expect(
-      stack.grant('_grant@1', {
+      stack.grantType('_grant@1', {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
       }),
@@ -3722,46 +3725,49 @@ describe('grant', () => {
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '', role: 'member' },
       }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('rejects a group target with a missing groupId', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
       }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('rejects a group target with no role', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: 'group-abc' } as unknown as GrantGrantee,
       }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('rejects a target naming no tier', async () => {
     await expect(
-      stack.grant(NOTE_V1, { actions: ['read-any'], grantee: null as unknown as GrantGrantee }),
+      stack.grantType(NOTE_V1, { actions: ['read-any'], grantee: null as unknown as GrantGrantee }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('rejects an empty entityId target', async () => {
     await expect(
-      stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'entity', entityId: '' } }),
+      stack.grantType(NOTE_V1, {
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: '' },
+      }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   // A mutate verb reaches content through the record it returns and through
@@ -3769,86 +3775,86 @@ describe('grant', () => {
   // docs/spec/access-control.md § Write implies read.
   test('rejects a mutate action with no read action alongside it', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['update-any'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
     ).rejects.toThrow(StackValidationError);
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['create', 'delete-own'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
     ).rejects.toThrow(StackValidationError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('rejects a -any mutate action paired only with read-own', async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['read-own', 'delete-any'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
     ).rejects.toThrow(StackValidationError);
-    expect(await stack.listGrants()).toHaveLength(0);
+    expect(await stack.listTypeGrants()).toHaveLength(0);
   });
 
   test('accepts a -own mutate action paired with the wider read-any', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any', 'update-own'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    expect(await stack.listGrants()).toHaveLength(1);
+    expect(await stack.listTypeGrants()).toHaveLength(1);
   });
 
   // Contribute-without-reading is the one blind write the model offers.
   test('accepts a create-only grant', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    expect(await stack.listGrants()).toHaveLength(1);
+    expect(await stack.listTypeGrants()).toHaveLength(1);
   });
 });
 
 // -------------------------------------------------------
-// listGrants
+// listTypeGrants
 // -------------------------------------------------------
 
-describe('listGrants', () => {
+describe('listTypeGrants', () => {
   test('omitting the target returns every grant record', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
-    const grants = await stack.listGrants();
+    await stack.grantType(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
+    const grants = await stack.listTypeGrants();
     expect(grants).toHaveLength(2);
   });
 
   test('an authenticated target returns only default grants', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
-    const grants = await stack.listGrants({ kind: 'authenticated' });
+    await stack.grantType(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
+    const grants = await stack.listTypeGrants({ kind: 'authenticated' });
     expect(grants).toHaveLength(1);
     expect(grants[0].content).toMatchObject({ actions: ['read-any'] });
   });
 
   test('an entity target returns grants naming it plus every default grant', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-own', 'delete-own'],
       grantee: { kind: 'entity', entityId: 'entity-xyz' },
     });
-    await stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
+    await stack.grantType(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
 
-    const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
+    const grants = await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(2);
     const actionSets = grants.map((g) => (g.content as { actions: string[] }).actions);
     expect(actionSets).toContainEqual(['create']);
@@ -3856,20 +3862,24 @@ describe('listGrants', () => {
   });
 
   test('a group target returns grants naming that exact group and role', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-own', 'update-own'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
 
-    const grants = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'member' });
+    const grants = await stack.listTypeGrants({
+      kind: 'group',
+      groupId: 'group-abc',
+      role: 'member',
+    });
     expect(grants).toHaveLength(1);
     expect(grants[0].content).toMatchObject({ actions: ['create'] });
   });
@@ -3881,21 +3891,21 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-own', 'delete-own'],
       grantee: { kind: 'entity', entityId: 'entity-xyz' },
     });
 
-    const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
+    const grants = await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(1);
     expect(grants[0].content).toMatchObject({ actions: ['read-any'] });
   });
 
-  // listGrants() documents itself as using the same resolution the access
+  // listTypeGrants() documents itself as using the same resolution the access
   // checks use, so it shares grantCoversGrantee() with them. A listing that
   // claimed a grant applied where an access check denied it would be worse
   // than no listing at all.
@@ -3906,29 +3916,29 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
     });
 
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 
   test("role 'any' returns every grant naming the group, whichever role it carries", async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
     });
 
-    const grants = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' });
+    const grants = await stack.listTypeGrants({ kind: 'group', groupId: 'group-abc', role: 'any' });
     expect(grants).toHaveLength(2);
     expect(grants.map((g) => (g.content as GrantContent).grantee)).toEqual(
       expect.arrayContaining([
@@ -3941,34 +3951,38 @@ describe('listGrants', () => {
   // The listing answers identity, not coverage: a role names the grant, not
   // someone who might hold it, so the wider tier is not swept in.
   test('a group role returns only the grants carrying that exact role', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
     });
 
-    const admin = await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'admin' });
+    const admin = await stack.listTypeGrants({
+      kind: 'group',
+      groupId: 'group-abc',
+      role: 'admin',
+    });
     expect(admin).toHaveLength(1);
     expect(admin[0].content).toMatchObject({ actions: ['read-any'] });
   });
 
   test("a group listing with role 'any' still requires a non-empty groupId", async () => {
-    await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'any' })).rejects.toThrow(
+    await expect(stack.listTypeGrants({ kind: 'group', groupId: '', role: 'any' })).rejects.toThrow(
       StackBadRequestError,
     );
   });
 
   test('a group target naming no group is refused rather than over-reporting', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'member' })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      stack.listTypeGrants({ kind: 'group', groupId: '', role: 'member' }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('an entity target does not return a group grant for a group the entity does not belong to', async () => {
@@ -3978,12 +3992,12 @@ describe('listGrants', () => {
       label: 'member',
       target: { kind: 'entity', entityId: 'entity-xyz' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
     });
 
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 });
 
@@ -3991,26 +4005,26 @@ describe('listGrants', () => {
 // revoke
 // -------------------------------------------------------
 
-describe('revoke', () => {
+describe('revokeType', () => {
   test('deletes the grant record matching grantee, typeId, and actions', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    const grants = await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' });
+    const grants = await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' });
     expect(grants).toHaveLength(0);
   });
 
   test('returns the grants it withdrew, as they stood', async () => {
-    const granted = await stack.grant(NOTE_V1, {
+    const granted = await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    const withdrawn = await stack.revoke(NOTE_V1, {
+    const withdrawn = await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
@@ -4025,23 +4039,23 @@ describe('revoke', () => {
   // An empty result is the signal, not an error: re-running a revocation
   // must stay safe, and a grant already withdrawn is the ordinary case.
   test('returns an empty array when nothing matched, rather than throwing', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
     expect(
-      await stack.revoke(NOTE_V1, {
+      await stack.revokeType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'entity', entityId: 'entity-xyz' },
       }),
     ).toEqual([]);
 
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
     expect(
-      await stack.revoke(NOTE_V1, {
+      await stack.revokeType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'entity', entityId: 'entity-abc' },
       }),
@@ -4051,30 +4065,30 @@ describe('revoke', () => {
   // A revocation aimed at a group's admins must not sweep the members'
   // grant, which is the wider tier — and the empty result says it did not.
   test('a group role narrower than the stored grant withdraws nothing, and says so', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
     expect(
-      await stack.revoke(NOTE_V1, {
+      await stack.revokeType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'admin' },
       }),
     ).toEqual([]);
     expect(
-      await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
+      await stack.listTypeGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
     ).toHaveLength(1);
   });
 
-  test("role 'any' is listing-only — grant() and revoke() refuse it", async () => {
+  test("role 'any' is listing-only — grantType() and revokeType() refuse it", async () => {
     await expect(
-      stack.grant(NOTE_V1, {
+      stack.grantType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
       }),
     ).rejects.toThrow(StackBadRequestError);
     await expect(
-      stack.revoke(NOTE_V1, {
+      stack.revokeType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
       }),
@@ -4082,43 +4096,43 @@ describe('revoke', () => {
   });
 
   test('revocation is a soft delete — the owner can undelete it like any other mutation', async () => {
-    const granted = await stack.grant(NOTE_V1, {
+    const granted = await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
 
     await stack.undelete(granted.id);
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(1);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(1);
   });
 
   test('does not affect a grant for a different entity or a default grant', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
-    await stack.revoke(NOTE_V1, {
+    await stack.grantType(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-xyz' },
     });
-    expect(await stack.listGrants()).toHaveLength(2);
+    expect(await stack.listTypeGrants()).toHaveLength(2);
   });
 
   test('does not affect a grant for the same entity with a different action set', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create', 'read-own'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(1);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(1);
   });
 
   test('matches by baseId, covering every version of the type family', async () => {
@@ -4126,73 +4140,73 @@ describe('revoke', () => {
       text: { kind: 'text', required: true },
       title: { kind: 'string' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.revoke(NOTE_V2, {
+    await stack.revokeType(NOTE_V2, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    expect(await stack.listGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
+    expect(await stack.listTypeGrants({ kind: 'entity', entityId: 'entity-abc' })).toHaveLength(0);
   });
 
   test('an authenticated target revokes a default grant', async () => {
-    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
-    await stack.revoke(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
-    expect(await stack.listGrants({ kind: 'authenticated' })).toHaveLength(0);
+    await stack.grantType(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    await stack.revokeType(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    expect(await stack.listTypeGrants({ kind: 'authenticated' })).toHaveLength(0);
   });
 
   test('a group target revokes the grant matching that exact group and role', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
     expect(
-      await stack.listGrants({ kind: 'group', groupId: 'group-abc', role: 'member' }),
+      await stack.listTypeGrants({ kind: 'group', groupId: 'group-abc', role: 'member' }),
     ).toHaveLength(0);
   });
 
   test('a group target does not affect a grant for a different group or an entity', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-xyz', role: 'member' },
     });
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.revoke(NOTE_V1, {
+    await stack.revokeType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
     });
-    expect(await stack.listGrants()).toHaveLength(2);
+    expect(await stack.listTypeGrants()).toHaveLength(2);
   });
 
   // A group target carrying no group is refused before any record is
   // matched, so an unnamed group cannot stand in for every other grantee.
   test('a group target naming no group is refused, leaving other grants standing', async () => {
-    await stack.grant(NOTE_V1, {
+    await stack.grantType(NOTE_V1, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
-    await stack.grant(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
+    await stack.grantType(NOTE_V1, { actions: ['create'], grantee: { kind: 'authenticated' } });
 
     await expect(
-      stack.revoke(NOTE_V1, {
+      stack.revokeType(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
       }),
     ).rejects.toThrow(StackBadRequestError);
-    expect(await stack.listGrants()).toHaveLength(2);
+    expect(await stack.listTypeGrants()).toHaveLength(2);
   });
 });
 
@@ -6981,7 +6995,7 @@ describe('_entity.did bindings', () => {
   });
 });
 
-// grant() refuses these families, but a _grant record is an ordinary Record
+// grantType() refuses these families, but a _grant record is an ordinary Record
 // and an unscoped Stack can mint one regardless. The rule holds at the point
 // of use, so provenance cannot launder it.
 describe('ungrantable families are refused at evaluation', () => {

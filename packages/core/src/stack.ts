@@ -400,7 +400,7 @@ export interface StackClient {
   dissociate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
   /**
    * Extend who reaches a record by one element — the record-level mirror of
-   * the type-level `grant()`, and the amending spelling of the
+   * the type-level `grantType()`, and the amending spelling of the
    * `permissions` key, which replaces the whole set. No-bump, like
    * associate(). See docs/spec/access-control.md § Record-level permissions.
    */
@@ -2481,15 +2481,17 @@ export class Stack implements StackClient {
    * needs, not the suffix that looks narrowest. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
-   * The grantee lives in content.grantee, not record.entityId. See
+   * `typeOrBaseId` is a versioned TypeId (`"baseId@version"`) or a bare
+   * baseId; either names the whole family. The grantee lives in
+   * content.grantee, not record.entityId. See
    * docs/spec/access-control.md § Type-level grants.
    */
-  async grant(typeId: TypeId, grant: TypeGrant): Promise<StackRecord> {
+  async grantType(typeOrBaseId: string, grant: TypeGrant): Promise<StackRecord> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    this.checkGrantValid(typeId, grant.actions);
+    this.checkGrantValid(typeOrBaseId, grant.actions);
     return this.create(`${SYSTEM_TYPES.GRANT}@1`, {
-      typeId,
+      typeId: typeOrBaseId,
       actions: grant.actions,
       grantee: grant.grantee,
     });
@@ -2504,12 +2506,12 @@ export class Stack implements StackClient {
    * (ones naming them, ones naming a group they belong to at a role they
    * hold, plus every default grant) — the same resolution hasGrant() uses.
    *
-   * Every arm but `entity` answers identity — what `grant()` would have
+   * Every arm but `entity` answers identity — what `grantType()` would have
    * written with the same argument. The `entity` arm answers coverage, so
-   * its result is not a preview of what `revoke()` would withdraw.
+   * its result is not a preview of what `revokeType()` would withdraw.
    * See docs/spec/access-control.md § Type-level grants.
    */
-  async listGrants(query?: GrantQuery): Promise<StackRecord[]> {
+  async listTypeGrants(query?: GrantQuery): Promise<StackRecord[]> {
     this.assertOpen();
     if (query !== undefined) validateGrantTarget(query, true);
     const all = await loadGrantRecords((q) => this.query(q));
@@ -2537,21 +2539,22 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The inverse of grant(): soft-deletes the _grant records on `typeId`'s
-   * family matching `grant`, at the same granularity grant() writes — the
-   * grantee is matched whole, role included, and the actions exactly. A
-   * soft delete like any other — the owner can undelete a revocation.
+   * The inverse of grantType(): soft-deletes the _grant records on
+   * `typeOrBaseId`'s family matching `grant`, at the same granularity
+   * grantType() writes — the grantee is matched whole, role included, and
+   * the actions exactly. A soft delete like any other — the owner can
+   * undelete a revocation.
    *
-   * Returns the grants it withdrew, as they stood, so a revocation that
-   * matched nothing says so rather than passing in silence. An empty result
-   * is not an error — a grant already withdrawn or never written is the
-   * ordinary case, and re-running a revocation has to stay safe.
-   * See docs/spec/access-control.md § Type-level grants.
+   * Returns the grants it withdrew, as they stood: an array, where
+   * revokeAccess() returns one Record, because one target can match several
+   * _grant records. An empty result is not an error — re-running a
+   * revocation has to stay safe. See
+   * docs/spec/access-control.md § Listing and revoking.
    */
-  async revoke(typeId: TypeId, grant: TypeGrant): Promise<StackRecord[]> {
+  async revokeType(typeOrBaseId: string, grant: TypeGrant): Promise<StackRecord[]> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    const familyId = baseIdOf(typeId);
+    const familyId = baseIdOf(typeOrBaseId);
     const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
     const matches = all.filter((r) => {
