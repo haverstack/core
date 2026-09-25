@@ -80,8 +80,8 @@ import type {
 } from './types.js';
 
 import {
-  StackClosedError,
-  StackMisconfigurationError,
+  UseAfterCloseError,
+  InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
@@ -205,8 +205,8 @@ export type CreateRecordOptions = {
    * library generate one. See Stack.create() and ScopedStack.create()
    * for the validation each applies.
    */
-  id?: string;
-  parentId?: string;
+  id?: RecordId;
+  parentId?: RecordId;
   /**
    * The author. ScopedStack sets this from its own identities; callers of
    * plain Stack supply it only when reconstructing an attributed write.
@@ -282,7 +282,8 @@ export type CollectAttachmentGarbageOptions = {
 };
 
 export type CollectAttachmentGarbageResult = {
-  deleted: string[];
+  /** The files collected — or, on a dry run, the ones that would be. */
+  deletedFileIds: FileId[];
   reclaimedBytes: number;
 };
 
@@ -521,9 +522,9 @@ export class Stack implements StackClient {
    */
   static async open(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
-      throw new StackMisconfigurationError(
-        'Stack misconfiguration: adapter has no ownerEntityId. ' +
-          'Initialise the adapter with an entityId before calling Stack.open().',
+      throw new InvalidAdapterError(
+        'Invalid adapter: adapter has no ownerEntityId. ' +
+          'Initialize the adapter with an ownerEntityId before calling Stack.open().',
       );
     }
     const stack = new Stack(
@@ -2302,7 +2303,7 @@ export class Stack implements StackClient {
 
     const candidateFileIds = new Set([...metaByFile.keys(), ...blobByFile.keys()]);
 
-    const deleted: string[] = [];
+    const deletedFileIds: FileId[] = [];
     let reclaimedBytes = 0;
 
     for (const fileId of candidateFileIds) {
@@ -2320,7 +2321,7 @@ export class Stack implements StackClient {
       const size = meta?.size ?? blob?.size ?? 0;
 
       if (dryRun) {
-        deleted.push(fileId);
+        deletedFileIds.push(fileId);
         reclaimedBytes += size;
         continue;
       }
@@ -2333,11 +2334,11 @@ export class Stack implements StackClient {
         if (err instanceof StackConflictError || err instanceof StackNotFoundError) continue;
         throw err;
       }
-      deleted.push(fileId);
+      deletedFileIds.push(fileId);
       reclaimedBytes += size;
     }
 
-    return { deleted, reclaimedBytes };
+    return { deletedFileIds, reclaimedBytes };
   }
 
   // -------------------------------------------------------
@@ -2448,7 +2449,7 @@ export class Stack implements StackClient {
 
   /** Throws once close() has run. */
   private assertOpen(): void {
-    if (this.closed) throw new StackClosedError();
+    if (this.closed) throw new UseAfterCloseError();
   }
 
   // -------------------------------------------------------
@@ -2471,15 +2472,17 @@ export class Stack implements StackClient {
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
    * `typeOrBaseId` is a versioned TypeId (`"baseId@version"`) or a bare
-   * baseId; either names the whole family. The grantee lives in
-   * content.grantee, not record.entityId. See
+   * baseId; either names the whole family. See
    * docs/spec/access-control.md § Type-level grants.
    */
-  async grantType(typeOrBaseId: TypeId | BaseId, grant: TypeGrant): Promise<StackRecord> {
+  async grantType(
+    typeOrBaseId: TypeId | BaseId,
+    grant: TypeGrant,
+  ): Promise<StackRecord & { content: GrantContent }> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
     this.checkGrantValid(typeOrBaseId, grant.actions);
-    return this.create(`${SYSTEM_TYPES.GRANT}@1`, {
+    return this.create<GrantContent>(`${SYSTEM_TYPES.GRANT}@1`, {
       typeId: typeOrBaseId,
       actions: grant.actions,
       grantee: grant.grantee,
@@ -2500,13 +2503,13 @@ export class Stack implements StackClient {
    * its result is not a preview of what `revokeType()` would withdraw.
    * See docs/spec/access-control.md § Type-level grants.
    */
-  async listTypeGrants(query?: GrantQuery): Promise<StackRecord[]> {
+  async listTypeGrants(query?: GrantQuery): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
     if (query !== undefined) validateGrantTarget(query, true);
     const all = await loadGrantRecords((q) => this.query(q));
     if (query === undefined) return all;
     if (query.kind !== 'entity') {
-      return all.filter((r) => matchesGrantTarget(r.content as GrantContent, query));
+      return all.filter((r) => matchesGrantTarget(r.content, query));
     }
 
     // An entity query resolves group rosters, since a grant naming a group
@@ -2514,9 +2517,9 @@ export class Stack implements StackClient {
     // grantCoversGrantee() with the access checks, so a listing can't
     // disagree with them about who a grant covers.
     const groupRoles = new Map<string, GroupRole | null>();
-    const result: StackRecord[] = [];
+    const result: (StackRecord & { content: GrantContent })[] = [];
     for (const r of all) {
-      const covers = await grantCoversGrantee(r.content as GrantContent, query.entityId, {
+      const covers = await grantCoversGrantee(r.content, query.entityId, {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
@@ -2540,14 +2543,17 @@ export class Stack implements StackClient {
    * revocation has to stay safe. See
    * docs/spec/access-control.md § Listing and revoking.
    */
-  async revokeType(typeOrBaseId: TypeId | BaseId, grant: TypeGrant): Promise<StackRecord[]> {
+  async revokeType(
+    typeOrBaseId: TypeId | BaseId,
+    grant: TypeGrant,
+  ): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
     const familyId = baseIdOf(typeOrBaseId);
     const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
     const matches = all.filter((r) => {
-      const c = r.content as GrantContent;
+      const c = r.content;
       // Establishes the family and that `actions` is a list, so the exact
       // match below reads a real one. Matched against the stored list
       // rather than the reach, so a grant carrying an action this

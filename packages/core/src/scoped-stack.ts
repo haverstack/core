@@ -66,7 +66,7 @@ import {
   StackError,
   StackNotFoundError,
   StackPermissionError,
-  StackRelayScopeError,
+  RelayScopeError,
   StackValidationError,
 } from './errors.js';
 import {
@@ -1478,7 +1478,7 @@ export class ScopedStack implements StackClient {
   ): Promise<Unsubscribe> {
     this.assertStackOpen();
     if (this.relaysChanges) {
-      throw new StackRelayScopeError(
+      throw new RelayScopeError(
         'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
           'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
           'no record to re-check. Subscribe with a session-scoped stack instead.',

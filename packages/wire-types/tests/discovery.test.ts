@@ -7,7 +7,7 @@ import {
 } from '../src/index.js';
 import type { DiscoveryCapabilities } from '../src/index.js';
 import { NATIVE_SORT_FIELDS } from '@haverstack/core';
-import type { StackCapabilities } from '@haverstack/core/adapter';
+import type { StackCapabilities } from '@haverstack/core';
 
 describe('parseProtocolVersion', () => {
   it('splits a MAJOR.MINOR version', () => {

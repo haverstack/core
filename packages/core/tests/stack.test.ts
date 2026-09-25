@@ -11,8 +11,8 @@ import {
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
-  StackClosedError,
-  StackMisconfigurationError,
+  UseAfterCloseError,
+  InvalidAdapterError,
 } from '../src/errors.js';
 import {
   generateId,
@@ -85,12 +85,12 @@ describe('Stack.open', () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('an adapter with no ownerEntityId is a StackMisconfigurationError, outside StackError', async () => {
+  test('an adapter with no ownerEntityId is an InvalidAdapterError, outside StackError', async () => {
     const emptyAdapter = new MemoryAdapter();
     const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(StackMisconfigurationError);
+    expect(err).toBeInstanceOf(InvalidAdapterError);
     expect(err).not.toBeInstanceOf(StackError);
-    expect((err as Error).name).toBe('StackMisconfigurationError');
+    expect((err as Error).name).toBe('InvalidAdapterError');
     expect((err as Error).message).toContain('adapter has no ownerEntityId');
   });
 
@@ -3574,29 +3574,29 @@ describe('use after close', () => {
     await stack.close();
   });
 
-  test('reads throw StackClosedError', async () => {
-    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
-    await expect(stack.query()).rejects.toBeInstanceOf(StackClosedError);
-    await expect(stack.listTypes()).rejects.toBeInstanceOf(StackClosedError);
+  test('reads throw UseAfterCloseError', async () => {
+    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(UseAfterCloseError);
+    await expect(stack.query()).rejects.toBeInstanceOf(UseAfterCloseError);
+    await expect(stack.listTypes()).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
-  test('writes throw StackClosedError', async () => {
-    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(StackClosedError);
+  test('writes throw UseAfterCloseError', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(UseAfterCloseError);
     await expect(stack.patchContent('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
-      StackClosedError,
+      UseAfterCloseError,
     );
-    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
   test('flush() throws, since flushing is work — only close() is idempotent', async () => {
-    await expect(stack.flush()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.flush()).rejects.toBeInstanceOf(UseAfterCloseError);
     await expect(stack.close()).resolves.toBeUndefined();
   });
 
-  test('attachment uploads throw StackClosedError', async () => {
+  test('attachment uploads throw UseAfterCloseError', async () => {
     await expect(
       stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
-    ).rejects.toBeInstanceOf(StackClosedError);
+    ).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
   test('identity getters still read — they touch no storage', () => {
@@ -3604,8 +3604,8 @@ describe('use after close', () => {
     expect(stack.capabilities).toBeDefined();
   });
 
-  test('StackClosedError stays outside the wire taxonomy', () => {
-    expect(new StackClosedError()).not.toBeInstanceOf(StackError);
+  test('UseAfterCloseError stays outside the wire taxonomy', () => {
+    expect(new UseAfterCloseError()).not.toBeInstanceOf(StackError);
   });
 });
 
@@ -3616,13 +3616,13 @@ describe('use after close — scoped views', () => {
 
     await expect(
       scoped.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
-    ).rejects.toBeInstanceOf(StackClosedError);
+    ).rejects.toBeInstanceOf(UseAfterCloseError);
     expect(await adapter.listBlobs!()).toHaveLength(0);
   });
 
   test('asEntity() itself refuses once closed', async () => {
     await stack.close();
-    expect(() => stack.asEntity('owner-123')).toThrow(StackClosedError);
+    expect(() => stack.asEntity('owner-123')).toThrow(UseAfterCloseError);
   });
 });
 
@@ -6727,7 +6727,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     const meta = await stack.query({ filter: { typeId: '_attachment@1', includeDeleted: true } });
     expect(meta.records).toHaveLength(0);
   });
@@ -6745,7 +6745,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // Soft-deleted records are recoverable via undelete()
@@ -6764,7 +6764,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // a file-ref content field is a real reference too, same as an
@@ -6785,7 +6785,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   test('default grace period protects a fresh unreferenced upload', async () => {
@@ -6793,7 +6793,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage();
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
     const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(meta.records).toHaveLength(1);
   });
@@ -6805,7 +6805,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   test('reports reclaimedBytes summed across deleted files', async () => {
@@ -6818,7 +6818,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted.sort()).toEqual([fileId1, fileId2].sort());
+    expect(result.deletedFileIds.sort()).toEqual([fileId1, fileId2].sort());
     expect(result.reclaimedBytes).toBe(8);
   });
 
@@ -6829,7 +6829,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0, dryRun: true });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     expect(result.reclaimedBytes).toBe(3);
     const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(meta.records).toHaveLength(1);
@@ -6844,7 +6844,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     expect(result.reclaimedBytes).toBe(3);
   });
 
@@ -6861,7 +6861,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   // Without listBlobs() the sweep's only way to discover a file is its
@@ -6883,7 +6883,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   test('adapter without listBlobs() cannot find bare-bytes orphans', async () => {
@@ -6899,7 +6899,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // A concurrent associate() landing between the sweep's own scan and its
@@ -6922,7 +6922,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([okFileId]);
+    expect(result.deletedFileIds).toEqual([okFileId]);
     expect(result.reclaimedBytes).toBe(2);
   });
 });

@@ -28,12 +28,9 @@ import type {
   QueryResult,
   Association,
   RecordChangeSet,
-} from '@haverstack/core';
-import type {
-  StackRecordAdapter,
   StackCapabilities,
-  JournalOptions,
-} from '@haverstack/core/adapter';
+} from '@haverstack/core';
+import type { StackRecordAdapter, JournalOptions } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import type { StackConfig } from './config.js';
 import { SharedSqlRecordLogic } from './record-logic.js';

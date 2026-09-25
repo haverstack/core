@@ -12,8 +12,8 @@
  * SqlExecutor interface.
  */
 
-import type { Actor, TokenSession } from '@haverstack/core';
-import type { StackTokenStore, TokenInfo } from '@haverstack/core/wire';
+import type { Actor } from '@haverstack/core';
+import type { TokenSession, StackTokenStore, TokenInfo } from '@haverstack/core/wire';
 import {
   TOKENS_SCHEMA_SQL,
   PRAGMA_JOURNAL_MODE_WAL,
@@ -27,7 +27,7 @@ import { NativeSqliteExecutor } from './executor.js';
 /** Conventional sibling path for a token store beside a stack's main .db file. */
 export const defaultTokenStorePath = (dbPath: string): string => `${dbPath}.tokens`;
 
-export type NativeTokenStoreOptions = {
+export type NativeTokenStoreOpenOptions = {
   /** Absolute path to the token store file. Created if it doesn't exist. */
   path: string;
   /** Bypass the storage-ownership lock check. See docs/spec/adapters.md § Concurrency & storage ownership. */
@@ -41,7 +41,7 @@ export class NativeTokenStore implements StackTokenStore {
   private constructor(private readonly path: string) {}
 
   /** Opens the token store, creating the file and schema if needed. */
-  static async open(opts: NativeTokenStoreOptions): Promise<NativeTokenStore> {
+  static async open(opts: NativeTokenStoreOpenOptions): Promise<NativeTokenStore> {
     acquireLock(opts.path, opts.force);
     const store = new NativeTokenStore(opts.path);
     store.db = new DatabaseSync(opts.path);

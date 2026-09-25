@@ -29,8 +29,8 @@ export class TestRecordAdapterDO extends DurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ready = ctx.blockConcurrencyWhile(async () => {
-      this.adapter = await DoSQLiteRecordAdapter.create(ctx.storage, {
-        entityId: 'entity-test',
+      this.adapter = await DoSQLiteRecordAdapter.openOrInitialize(ctx.storage, {
+        ownerEntityId: 'entity-test',
         timezone: 'America/New_York',
       });
     });

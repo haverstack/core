@@ -42,18 +42,18 @@ import { NativeSqliteExecutor } from './executor.js';
 // Types
 // -------------------------------------------------------
 
-export type NativeRecordInitializeOptions = {
+export type NativeSQLiteRecordAdapterInitializeOptions = {
   /** Absolute path to the .db file. Must not already exist. */
   path: string;
   /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
   timezone?: string;
   /** Entity ID of the stack owner. */
-  entityId: string;
-  /** Bypass the storage-ownership lock check. See NativeRecordOpenOptions.force. */
+  ownerEntityId: string;
+  /** Bypass the storage-ownership lock check. See NativeSQLiteRecordAdapterOpenOptions.force. */
   force?: boolean;
 };
 
-export type NativeRecordOpenOptions = {
+export type NativeSQLiteRecordAdapterOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
   /**
@@ -100,7 +100,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
    * Initialize a new stack database. Fails if the file already exists —
    * use open() for existing databases.
    */
-  static async initialize(opts: NativeRecordInitializeOptions): Promise<NativeSQLiteRecordAdapter> {
+  static async initialize(
+    opts: NativeSQLiteRecordAdapterInitializeOptions,
+  ): Promise<NativeSQLiteRecordAdapter> {
     if (existsSync(opts.path)) {
       throw new Error(
         `Cannot initialize: database already exists at "${opts.path}". ` +
@@ -108,7 +110,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
       );
     }
     const [db, exec] = NativeSQLiteRecordAdapter.attach(opts.path, opts.force);
-    const config = insertConfigRecord(exec, opts.entityId, opts.timezone);
+    const config = insertConfigRecord(exec, opts.ownerEntityId, opts.timezone);
     return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
   }
 
@@ -116,7 +118,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
    * Open an existing stack database. Fails if the file does not exist —
    * use initialize() for new databases.
    */
-  static async open(opts: NativeRecordOpenOptions): Promise<NativeSQLiteRecordAdapter> {
+  static async open(
+    opts: NativeSQLiteRecordAdapterOpenOptions,
+  ): Promise<NativeSQLiteRecordAdapter> {
     if (!existsSync(opts.path)) {
       throw new Error(
         `Cannot open: no database found at "${opts.path}". ` +
@@ -145,5 +149,5 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
 export {
   NativeTokenStore,
   defaultTokenStorePath,
-  type NativeTokenStoreOptions,
+  type NativeTokenStoreOpenOptions,
 } from './token-store.js';

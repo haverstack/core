@@ -28,8 +28,11 @@ import type {
   QueryResult,
   Association,
   ActorOptions,
+  IfVersionOptions,
+  ScalarFieldKind,
 } from '@haverstack/core';
-import type { JournalEntryInput, JournalOptions, IfVersionOptions } from '@haverstack/core/adapter';
+import type { JournalEntryInput, JournalOptions } from '@haverstack/core/adapter';
+import { contentSortEntry } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
@@ -44,8 +47,6 @@ import {
   associationKeyColumns,
 } from './mappers.js';
 import { makeCursor } from './cursor.js';
-import { contentSortEntry } from '@haverstack/core/adapter';
-import type { ScalarFieldKind } from '@haverstack/core';
 
 /**
  * Run a query statement, restating an engine parse error as the wire

@@ -27,9 +27,17 @@ const assertFileId = (fileId: string): void => {
   }
 };
 
+export type DiskBlobAdapterOptions = {
+  /** Directory to store blobs in. Created if it doesn't exist. */
+  dir: string;
+};
+
 export class DiskBlobAdapter implements StackBlobAdapter {
-  constructor(private readonly dir: string) {
-    mkdirSync(dir, { recursive: true });
+  private readonly dir: string;
+
+  constructor(options: DiskBlobAdapterOptions) {
+    this.dir = options.dir;
+    mkdirSync(this.dir, { recursive: true });
   }
 
   async putBlob(data: Uint8Array): Promise<FileId> {

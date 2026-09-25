@@ -11,7 +11,7 @@ let adapter: DiskBlobAdapter;
 beforeEach(() => {
   testDir = join(tmpdir(), `blob-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
-  adapter = new DiskBlobAdapter(testDir);
+  adapter = new DiskBlobAdapter({ dir: testDir });
 });
 
 afterEach(() => {
@@ -108,7 +108,7 @@ describe('DiskBlobAdapter', () => {
   test('constructor creates the directory if it does not exist', () => {
     const newDir = join(testDir, 'nested', 'blobs');
     expect(existsSync(newDir)).toBe(false);
-    new DiskBlobAdapter(newDir);
+    new DiskBlobAdapter({ dir: newDir });
     expect(existsSync(newDir)).toBe(true);
   });
 

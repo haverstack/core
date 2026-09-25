@@ -1,10 +1,22 @@
-import { NATIVE_SORT_FIELDS } from '@haverstack/core';
+import {
+  NATIVE_SORT_FIELDS,
+  StackError,
+  StackValidationError,
+  StackPermissionError,
+  StackNotFoundError,
+  StackConflictError,
+  StackVersionConflictError,
+  StackMigrationError,
+  StackBadRequestError,
+  StackSchemaDriftError,
+  StackPayloadTooLargeError,
+  StackTimeoutError,
+} from '@haverstack/core';
 import type {
   NativeSortField,
   StackRecord,
   StackType,
   RecordVersion,
-  Association,
   AssociationChange,
   AuthorityAssociation,
   DataAssociation,
@@ -17,20 +29,8 @@ import type {
   ChangeOp,
   RecordChange,
   RecordJournalEntry,
-} from '@haverstack/core';
-import type { StackCapabilities, ContentFilterReach } from '@haverstack/core/adapter';
-import {
-  StackError,
-  StackValidationError,
-  StackPermissionError,
-  StackNotFoundError,
-  StackConflictError,
-  StackVersionConflictError,
-  StackMigrationError,
-  StackBadRequestError,
-  StackSchemaDriftError,
-  StackPayloadTooLargeError,
-  StackTimeoutError,
+  StackCapabilities,
+  ContentFilterReach,
 } from '@haverstack/core';
 
 /** An Actor on the wire — the same two fields, spelled the same way. */
@@ -655,9 +655,9 @@ export type WireRecordChange = {
   parentId?: string;
   actor?: WireChangeActor;
   /** Present when `ops` includes `associate`. See RecordChange.associationsAdded. */
-  associationsAdded?: Association[];
+  associationsAdded?: DataAssociation[];
   /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
-  associationsRemoved?: Association[];
+  associationsRemoved?: DataAssociation[];
   record?: WireRecord;
   cursor?: string;
 };

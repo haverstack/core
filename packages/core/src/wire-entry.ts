@@ -1,9 +1,10 @@
 /**
  * @haverstack/core/wire
  * -------------------------------------------------------
- * The request encoding, the handshake and the attachment-download policy
- * shared by both sides of a client/server connection — building a payload
- * identically on both ends is the whole point, so this is imported by
+ * The request encoding, the handshake, the token store a server issues
+ * from, and the attachment-download policy shared by both sides of a
+ * client/server connection — building a payload identically on both
+ * ends is the whole point, so this is imported by
  * clients (e.g. adapter-api) and servers alike. The request encoding is
  * carried here as both halves: adapter-api builds a query, and the parsers
  * below decode it, so a server inherits the grammar rather than
@@ -47,7 +48,7 @@ export { firstRecordedAttachment, resolveReferencedAttachment } from './attachme
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.
-export type { StackTokenStore, TokenInfo } from './types.js';
+export type { StackTokenStore, TokenInfo, TokenSession } from './types.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,
@@ -74,15 +75,6 @@ export type { ParsedChangeParams } from './wire-request.js';
 // Re-exported by @haverstack/wire-types for the response side: one wire
 // date decoding, used by both halves.
 export { parseDate } from './wire-request.js';
-
-// Thrown by every parser above on malformed input, which a server maps to
-// 400 — already exported from @haverstack/core, and named here so the wire
-// entry point stands alone. See docs/spec/wire-format.md § Error responses.
-export { StackBadRequestError } from './errors.js';
-
-// Thrown alongside it by createOptionsFromWireRecord() below, which maps to
-// 422 and carries the field path that distinction exists to report.
-export { StackValidationError } from './errors.js';
 
 // No in-repo caller: the create half of the same contract, so a server
 // inherits which half of a record body it may trust rather than deciding

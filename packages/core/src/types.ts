@@ -204,7 +204,7 @@ export type AssociationChange =
  */
 export type RecordChangeSet = {
   contentPatch?: Record<string, unknown | null>;
-  parentId?: string | null;
+  parentId?: RecordId | null;
   permissions?: AuthorityAssociation[];
   associations?: DataAssociation[];
   unlisted?: boolean;
@@ -230,7 +230,12 @@ export type StackRecord = {
   createdAt: Date;
   updatedAt: Date;
   content: Record<string, unknown>;
-  version: number; // Increments on each write
+  /**
+   * Ordinal of the snapshot history, not a count of changes: associations,
+   * permissions, parent and listing moves leave it alone. See
+   * docs/spec/versioning.md § Version history.
+   */
+  version: number;
 
   // Optional native fields
   parentId?: RecordId; // Parent record (hierarchy/folders)
@@ -604,7 +609,7 @@ export type RecordFilter = {
    * (`'emails.value'`). An array anywhere along the path is matched
    * element-wise, so the motivating question — which contact holds this
    * email address — is one filter. A multi-segment key needs the
-   * `filter.content: 'path'` capability. POST /query only.
+   * `filter.content: 'path'` capability. POST /records/query only.
    * See docs/spec/data-model.md § Filter.
    */
   content?: Record<string, unknown>;
@@ -614,7 +619,7 @@ export type RecordFilter = {
    * since a filter value matches what is there rather than whether
    * anything is. Element-wise like `content`, so a path holds a value
    * when at least one non-null value is reachable at it. Needs the
-   * filter.contentPresent capability. POST /query only.
+   * filter.contentPresent capability. POST /records/query only.
    * See docs/spec/data-model.md § Filter.
    */
   contentPresent?: string[];
@@ -921,7 +926,7 @@ export type JournalQuery = {
 /**
  * The coarse branch every subscriber makes, closed at four values. A
  * handler covering exactly these is complete, not merely adequate:
- * `changed` is an upsert signal carrying seven distinct verbs.
+ * `changed` is an upsert signal carrying nine distinct verbs.
  * See docs/spec/events.md § The event shape.
  */
 export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
@@ -995,14 +1000,14 @@ export type RecordChange = {
   typeId: TypeId;
   /**
    * The version this change produced; on `purged`, the version destroyed.
-   * Unchanged from the record's prior version on `associate`/`dissociate`,
-   * which don't bump.
+   * Unchanged from the record's prior version on every op that doesn't
+   * bump — see ChangeOp.
    */
   version: number;
   /**
    * As persisted by this change; on `purged`, when the delete ran.
-   * Unchanged from the record's prior `updatedAt` on `associate`/
-   * `dissociate`, which don't touch it.
+   * Unchanged from the record's prior `updatedAt` on every op that
+   * doesn't bump.
    */
   updatedAt: Date;
   parentId?: RecordId;
@@ -1013,14 +1018,14 @@ export type RecordChange = {
    * `attachmentRecordId`. Present whenever `ops` includes `associate`, on
    * the same "as of this change" convention as every other field here.
    */
-  associationsAdded?: Association[];
+  associationsAdded?: DataAssociation[];
   /**
    * Associations no longer present, identity only — kind and label, plus
    * `fileId` for an attachment — present whenever `ops` includes
    * `dissociate`. An attachment's `attachmentRecordId` is never repeated
    * here, the same way a `purged` frame never carries what it destroyed.
    */
-  associationsRemoved?: Association[];
+  associationsRemoved?: DataAssociation[];
   /**
    * The record as of this change — present only when asked for and
    * available, never on `purged`. Shared with every other subscriber on
