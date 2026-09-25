@@ -341,6 +341,19 @@ describe('queryRecords fixtures', () => {
       'query-related-to-external-namespace',
       { relatedTo: { target: { kind: 'external' as const, ns: 'atproto' } } },
     ],
+    [
+      'query-attachment-label-and-file',
+      {
+        attachment: {
+          label: 'cover',
+          fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+        },
+      },
+    ],
+    [
+      'query-references-file',
+      { referencesFileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d' },
+    ],
   ] as const) {
     test(name, async () => {
       const fixture = queryRecordsFixtures.find((f) => f.name === name)!;

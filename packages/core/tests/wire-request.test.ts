@@ -120,6 +120,24 @@ describe('parseQueryParams', () => {
       });
     });
   });
+
+  describe('attachment', () => {
+    test('attachmentLabel and attachmentFileId decode into one filter', () => {
+      expect(
+        parseQueryParams(url('?attachmentLabel=cover&attachmentFileId=f1')).filter?.attachment,
+      ).toEqual({ label: 'cover', fileId: 'f1' });
+    });
+
+    test('an empty value passes through raw rather than as absent', () => {
+      expect(parseQueryParams(url('?attachmentLabel=')).filter?.attachment).toEqual({ label: '' });
+    });
+
+    test('referencesFileId is its own filter, not an attachment half', () => {
+      expect(parseQueryParams(url('?referencesFileId=f1')).filter).toEqual({
+        referencesFileId: 'f1',
+      });
+    });
+  });
 });
 
 // -------------------------------------------------------
@@ -156,6 +174,12 @@ describe('parseQueryBody', () => {
 
   test('a large limit is reported as requested, not clamped', () => {
     expect(parseQueryBody({ limit: 5000 }).limit).toBe(5000);
+  });
+
+  test('a non-string attachment half is refused', () => {
+    expect(() => parseQueryBody({ filter: { attachment: { fileId: 7 } } })).toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('an unrecognized relatedTo target kind is refused', () => {

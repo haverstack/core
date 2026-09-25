@@ -785,6 +785,32 @@ export const queryRecordsFixtures: ConformanceFixture<
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
+  {
+    name: 'query-attachment-label-and-file',
+    description:
+      'An attachment filter travels as attachmentLabel and attachmentFileId, either alone or ' +
+      'both. Together they match a single attachment association — a Record whose cover is ' +
+      'one file and whose thumbnail is another does not match cover plus the thumbnail file. ' +
+      'attachmentFileId matches associations only; a server MUST NOT also count a file-ref ' +
+      'content field, which is what referencesFileId asks. ' +
+      'See docs/spec/wire-format.md § Records.',
+    method: 'GET',
+    path: '/records?attachmentLabel=cover&attachmentFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null },
+  },
+  {
+    name: 'query-references-file',
+    description:
+      'referencesFileId matches every Record that references the file: through an attachment ' +
+      'association under any label, or through a top-level file-ref content field. It is the ' +
+      "question deleteAttachment()'s reference check and garbage collection ask. " +
+      'See docs/spec/wire-format.md § Records.',
+    method: 'GET',
+    path: '/records?referencesFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null },
+  },
 ];
 
 // -------------------------------------------------------

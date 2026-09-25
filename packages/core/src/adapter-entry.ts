@@ -26,7 +26,7 @@ export {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidSort,
-  assertValidRelatedTo,
+  assertValidAssociationFilters,
   assertValidJournalQuery,
   filtersContent,
   parseContentFilterKey,

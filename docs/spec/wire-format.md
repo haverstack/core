@@ -254,8 +254,9 @@ This is what lets a client report a mutation's outcome without a second read, an
 ?updatedBefore=
 ?updatedAfter=
 ?tag=                (repeatable: ?tag=starred&tag=important)
-?hasAttachment=
+?attachmentLabel=    (with ?attachmentFileId, matches one attachment association; either valid alone)
 ?attachmentFileId=
+?referencesFileId=   (an attachment association or a top-level file-ref field)
 ?relatedTo=          (a Record id — the `record` target)
 ?relatedToStack=     (only alongside ?relatedTo; that Record's stack URL)
 ?relatedToEntity=    (a DID — the `entity` target)
@@ -273,6 +274,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 ```
 
 **The relationship filter's target kind is implied by which parameters appear**, and the three sets are mutually exclusive: a request mixing `relatedTo`, `relatedToEntity` or `relatedToNs` is rejected with `400`, since there is no correct way to guess which the caller meant. At least one of these parameters is always present when the filter is used — [`relatedTo` names a label, a target, or both](./data-model.md#filter), never neither — so the filter cannot encode to an empty query string and silently widen the query. Omitting `relatedToStack` means the target has no `stackUrl`; the server MUST NOT treat it as a wildcard matching targets that carry one. `relatedToStack` MUST be omitted rather than sent empty — this stack is named one way — and a server MUST reject an empty one with `400` rather than reading it as either a local target or a wildcard. The same holds for `relatedToId`: omit it to match a whole namespace.
+
+**The attachment filter travels as `attachmentLabel` and `attachmentFileId`**, and both together name a single association, as [`filter.attachment`](./data-model.md#filter) does. `attachmentFileId` matches associations only; a server MUST NOT also count a `file-ref` content field, which is what `referencesFileId` asks. An empty value is sent and matched as the empty string, never read as absent.
 
 **`filter.contentPresent` travels in the `POST /records/query` body only**, like `filter.content` itself — there is no `GET /records` spelling, since a server exposing that endpoint alone declares `filter.content: "none"` and offers neither. A server declaring `filter.contentPresent: false` MUST refuse the filter with `400` rather than answer without it.
 

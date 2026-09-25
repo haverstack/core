@@ -150,7 +150,7 @@ export class MemoryAdapter implements StackAdapter {
   /**
    * True if any top-level file-ref field in the record's registered type
    * schema currently holds this fileId — the content-reference half of
-   * attachmentFileId matching. Mirrors sqlite-shared's content_index,
+   * referencesFileId matching. Mirrors sqlite-shared's content_index,
    * computed on the fly since MemoryAdapter has no persisted index.
    */
   private hasFileRefTo(record: StackRecord, fileId: string): boolean {
@@ -304,13 +304,19 @@ export class MemoryAdapter implements StackAdapter {
         ),
       );
     }
-    if (f.hasAttachment) {
+    if (f.attachment) {
+      const { label, fileId } = f.attachment;
       results = results.filter((r) =>
-        (r.associations ?? []).some((a) => a.kind === 'attachment' && a.label === f.hasAttachment),
+        (r.associations ?? []).some(
+          (a) =>
+            a.kind === 'attachment' &&
+            (label === undefined || a.label === label) &&
+            (fileId === undefined || a.fileId === fileId),
+        ),
       );
     }
-    if (f.attachmentFileId) {
-      const fileId = f.attachmentFileId;
+    if (f.referencesFileId) {
+      const fileId = f.referencesFileId;
       results = results.filter(
         (r) =>
           (r.associations ?? []).some((a) => a.kind === 'attachment' && a.fileId === fileId) ||

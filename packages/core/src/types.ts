@@ -67,7 +67,7 @@ export type TagAssociation = {
 /**
  * `attachmentRecordId` names the `_attachment` record whose upload
  * established this reference — annotation, not identity, since `fileId`
- * alone is what GC, the `attachmentFileId` filter and file access ask
+ * alone is what GC, the `referencesFileId` filter and file access ask
  * about. See docs/spec/attachments.md § Naming the upload a reference came from.
  */
 export type AttachmentAssociation = {
@@ -538,12 +538,21 @@ export type RelationshipTargetPattern =
 /**
  * A relationship query names a label, a target, or both — never neither.
  * "Carries any relationship at all" is deliberately not expressible, in
- * line with `tags` and `hasAttachment`, which likewise have no match-any
+ * line with `tags` and `attachment`, which likewise have no match-any
  * form. See docs/spec/data-model.md § Filter.
  */
 export type RelatedToFilter =
   | { label: string; target?: RelationshipTargetPattern }
   | { label?: string; target: RelationshipTargetPattern };
+
+/**
+ * An attachment query names a label, a file, or both — never neither —
+ * and both halves together match one association. See
+ * docs/spec/data-model.md § Filter.
+ */
+export type AttachmentFilter =
+  | { label: string; fileId?: FileId }
+  | { label?: string; fileId: FileId };
 
 export type DateRange = {
   before?: Date;
@@ -573,7 +582,8 @@ export type RecordFilter = {
 
   // Association filters
   tags?: string[]; // Records that have ALL of these tags
-  hasAttachment?: string; // Records with an attachment of this label
+  /** Records carrying a matching attachment association. See docs/spec/data-model.md § Filter. */
+  attachment?: AttachmentFilter;
   /**
    * Records carrying a matching relationship association. Either half may
    * be given alone and each is a pattern: a bare `label` matches every
@@ -582,7 +592,12 @@ export type RecordFilter = {
    * only local targets. See docs/spec/data-model.md § Filter.
    */
   relatedTo?: RelatedToFilter;
-  attachmentFileId?: FileId; // Records that reference this attachment file ID
+  /**
+   * Records that reference this file, through an attachment association
+   * or a top-level `file-ref` content field — the question GC and
+   * `deleteAttachment()` ask. See docs/spec/attachments.md § Deleting attachments.
+   */
+  referencesFileId?: FileId;
 
   /**
    * Exact match on content fields, keyed by a dot-separated path

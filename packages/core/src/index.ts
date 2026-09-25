@@ -99,6 +99,7 @@ export type {
   StackQuery,
   RecordFilter,
   RelatedToFilter,
+  AttachmentFilter,
   RelationshipTargetPattern,
   QuerySort,
   NativeSortField,

@@ -35,6 +35,7 @@ import type {
   QuerySort,
   RecordFilter,
   RelatedToFilter,
+  AttachmentFilter,
   RelationshipTargetPattern,
   StackQuery,
 } from './types.js';
@@ -278,6 +279,29 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
   } as RelatedToFilter;
 }
 
+/**
+ * The `attachment*` URL params; both halves together match one association.
+ * An empty value passes through rather than reading as absent, so it
+ * narrows to nothing instead of silently widening the query.
+ */
+function parseAttachmentParams(url: URL): AttachmentFilter | undefined {
+  const label = url.searchParams.get('attachmentLabel');
+  const fileId = url.searchParams.get('attachmentFileId');
+  if (label === null && fileId === null) return undefined;
+  return {
+    ...(label !== null && { label }),
+    ...(fileId !== null && { fileId }),
+  } as AttachmentFilter;
+}
+
+function parseAttachmentBody(raw: unknown): AttachmentFilter {
+  const a = requirePlainObject(raw, 'filter.attachment');
+  return {
+    ...(a.label !== undefined && { label: requireString(a.label, 'filter.attachment.label') }),
+    ...(a.fileId !== undefined && { fileId: requireString(a.fileId, 'filter.attachment.fileId') }),
+  } as AttachmentFilter;
+}
+
 // -------------------------------------------------------
 // GET /records
 // -------------------------------------------------------
@@ -322,11 +346,11 @@ export function parseQueryParams(url: URL): StackQuery {
   const tags = url.searchParams.getAll('tag');
   if (tags.length) filter.tags = tags;
 
-  const hasAttachment = url.searchParams.get('hasAttachment');
-  if (hasAttachment) filter.hasAttachment = hasAttachment;
+  const attachment = parseAttachmentParams(url);
+  if (attachment) filter.attachment = attachment;
 
-  const attachmentFileId = url.searchParams.get('attachmentFileId');
-  if (attachmentFileId) filter.attachmentFileId = attachmentFileId;
+  const referencesFileId = url.searchParams.get('referencesFileId');
+  if (referencesFileId) filter.referencesFileId = referencesFileId;
 
   const relatedTo = parseRelatedToParams(url);
   if (relatedTo) filter.relatedTo = relatedTo;
@@ -418,10 +442,9 @@ export function parseQueryBody(raw: unknown): StackQuery {
       };
     }
     if (f.tags !== undefined) filter.tags = requireStringArray(f.tags, 'filter.tags');
-    if (f.hasAttachment !== undefined)
-      filter.hasAttachment = requireString(f.hasAttachment, 'filter.hasAttachment');
-    if (f.attachmentFileId !== undefined)
-      filter.attachmentFileId = requireString(f.attachmentFileId, 'filter.attachmentFileId');
+    if (f.attachment !== undefined) filter.attachment = parseAttachmentBody(f.attachment);
+    if (f.referencesFileId !== undefined)
+      filter.referencesFileId = requireString(f.referencesFileId, 'filter.referencesFileId');
     if (f.relatedTo !== undefined) filter.relatedTo = parseRelatedToBody(f.relatedTo);
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
     if (f.contentPresent !== undefined)

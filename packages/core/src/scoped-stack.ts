@@ -73,7 +73,7 @@ import {
   assertAuthorityAssociations,
   assertDataAssociations,
   assertSortCapability,
-  assertValidRelatedTo,
+  assertValidAssociationFilters,
   assertValidSort,
   filtersContent,
 } from './query-validation.js';
@@ -693,7 +693,7 @@ export class ScopedStack implements StackClient {
       (q) => this.stack.query(q),
       // Reach, not enumeration: a record readable by ID conveys the file it
       // references. See docs/spec/unlisted.md.
-      { filter: { attachmentFileId: fileId, includeUnlisted: true } },
+      { filter: { referencesFileId: fileId, includeUnlisted: true } },
       (record) =>
         baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT &&
         this.canRead(record, prefetchedGrants, groupRoles),
@@ -752,7 +752,7 @@ export class ScopedStack implements StackClient {
         ).some((r) => (r.content as AttachmentContent).fileId === fileId);
   }
 
-  /** Names of the type's top-level file-ref fields — the content-reference half of attachmentFileId matching. */
+  /** Names of the type's top-level file-ref fields — the content-reference half of referencesFileId matching. */
   private async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
     const type = await this.stack.getType(typeId);
     if (!type) return [];
@@ -950,7 +950,7 @@ export class ScopedStack implements StackClient {
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.stack.capabilities);
-    assertValidRelatedTo(query.filter?.relatedTo);
+    assertValidAssociationFilters(query.filter);
     if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }

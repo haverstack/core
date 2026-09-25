@@ -1212,25 +1212,25 @@ describe('file-ref indexing', () => {
     createdAt: new Date(),
   };
 
-  test('attachmentFileId filter matches a record via a top-level file-ref field', async () => {
+  test('referencesFileId filter matches a record via a top-level file-ref field', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(FILE_REF_TYPE);
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
-  test('attachmentFileId filter does not match a plain string field holding the same value', async () => {
+  test('referencesFileId filter does not match a plain string field holding the same value', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(STRING_TYPE);
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: STRING_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1245,9 +1245,9 @@ describe('file-ref indexing', () => {
     await adapter.createRecord(record);
     await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-2' } });
 
-    const oldMatch = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    const oldMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(oldMatch.records).toEqual([]);
-    const newMatch = await adapter.queryRecords({ filter: { attachmentFileId: 'file-2' } });
+    const newMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-2' } });
     expect(newMatch.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1259,7 +1259,7 @@ describe('file-ref indexing', () => {
     );
     await adapter.deleteRecord('r1', { hard: true });
 
-    const result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1290,14 +1290,14 @@ describe('file-ref indexing', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
-    let result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    let result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
 
     // Redefine the same typeId so coverFileId is no longer a file-ref field.
     await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
     await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-1' } });
 
-    result = await adapter.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1313,7 +1313,7 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await reopened.queryRecords({ filter: { attachmentFileId: 'file-1' } });
+    const result = await reopened.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 });
@@ -1630,6 +1630,42 @@ describe('records — relatedTo filter', () => {
       },
     });
     expect(ids(scoped)).toEqual(['rec-remote']);
+  });
+});
+
+describe('records — attachment filter', () => {
+  const seed = async (adapter: Awaited<ReturnType<typeof initAdapter>>) => {
+    const both = makeRecord({ id: 'rec-both' });
+    const cover = makeRecord({ id: 'rec-cover' });
+    for (const r of [both, cover]) await adapter.createRecord(r);
+    await adapter.associate(both.id, { kind: 'attachment', label: 'cover', fileId: 'file-1' });
+    await adapter.associate(both.id, { kind: 'attachment', label: 'thumb', fileId: 'file-2' });
+    await adapter.associate(cover.id, { kind: 'attachment', label: 'cover', fileId: 'file-2' });
+  };
+
+  const ids = (result: { records: StackRecord[] }) => result.records.map((r) => r.id).sort();
+
+  test('a label and a fileId together match one association', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({
+      filter: { attachment: { label: 'cover', fileId: 'file-2' } },
+    });
+    expect(ids(result)).toEqual(['rec-cover']);
+  });
+
+  test('a label alone matches every file under it', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({ filter: { attachment: { label: 'cover' } } });
+    expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
+  });
+
+  test('a fileId alone matches every label holding it', async () => {
+    const adapter = await initAdapter();
+    await seed(adapter);
+    const result = await adapter.queryRecords({ filter: { attachment: { fileId: 'file-2' } } });
+    expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
   });
 });
 
