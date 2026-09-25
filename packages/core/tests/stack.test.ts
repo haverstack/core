@@ -85,7 +85,7 @@ describe('Stack.open', () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('an adapter with no ownerEntityId is a InvalidAdapterError, outside StackError', async () => {
+  test('an adapter with no ownerEntityId is an InvalidAdapterError, outside StackError', async () => {
     const emptyAdapter = new MemoryAdapter();
     const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvalidAdapterError);

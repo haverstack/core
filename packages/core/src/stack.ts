@@ -523,8 +523,8 @@ export class Stack implements StackClient {
   static async open(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
       throw new InvalidAdapterError(
-        'Stack misconfiguration: adapter has no ownerEntityId. ' +
-          'Initialise the adapter with an entityId before calling Stack.open().',
+        'Invalid adapter: adapter has no ownerEntityId. ' +
+          'Initialize the adapter with an ownerEntityId before calling Stack.open().',
       );
     }
     const stack = new Stack(

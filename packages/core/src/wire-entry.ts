@@ -2,8 +2,9 @@
  * @haverstack/core/wire
  * -------------------------------------------------------
  * The request encoding, the handshake, the token store a server issues
- * from, and the attachment-download policy shared by both sides of a client/server connection — building a payload
- * identically on both ends is the whole point, so this is imported by
+ * from, and the attachment-download policy shared by both sides of a
+ * client/server connection — building a payload identically on both
+ * ends is the whole point, so this is imported by
  * clients (e.g. adapter-api) and servers alike. The request encoding is
  * carried here as both halves: adapter-api builds a query, and the parsers
  * below decode it, so a server inherits the grammar rather than
