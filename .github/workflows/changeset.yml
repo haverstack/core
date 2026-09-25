@@ -22,6 +22,7 @@ on:
           - '@haverstack/record-adapter-do-sqlite'
           - '@haverstack/adapter-local'
           - '@haverstack/adapter-api'
+          - '@haverstack/adapter-conformance'
       bump:
         description: 'patch = no consumer can observe it; minor = one could. Every package is 0.x, so minor is the breaking slot.'
         required: true

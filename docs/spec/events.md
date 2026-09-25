@@ -68,7 +68,7 @@ type RecordChange = {
 | `deleted` | `delete` (soft), `unlist`                                                                           |
 | `purged`  | `purge`                                                                                             |
 
-**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
+**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this change.
 
 **Every op is a verb, named after the call that produced it.** Most share the method's name. Three don't, because the method covers more than one op:
 
@@ -176,7 +176,7 @@ The one adapter-side hook is the inverse direction:
 subscribeChanges?(
   opts: SubscribeChangesOptions,
   handler: (change: RecordChange) => void,
-): Promise<() => void>;
+): Promise<Unsubscribe>; // Unsubscribe = () => void, as below
 
 type SubscribeChangesOptions = {
   filter?: ChangeFilter;
@@ -281,7 +281,7 @@ A `parentId` filter is answered by the record, not the envelope, so a record tha
 
 **Kind is `changed`, not `deleted`.** `unlist` maps to `deleted` because the record genuinely leaves the subscriber's view and must be dropped. A moved record is still there and still readable; only its container moved, and the same frame reaches the destination's subscribers, for whom "drop your copy" would be exactly wrong. A subscriber maintaining a list of one container's children therefore has to read `parentId` rather than treating every `changed` as an upsert — the one place where kind alone under-determines what to do, and the reason a filtered subscription is [guaranteed `parentId` in the stub](#the-event-shape).
 
-An unscoped `parentId` filter (`null`, for root records) participates on the same terms: a record moved to the root is an arrival there, and one moved off it a departure.
+A `parentId: null` filter (root records) participates on the same terms: a record moved to the root is an arrival there, and one moved off it a departure.
 
 ## The type-change transition
 

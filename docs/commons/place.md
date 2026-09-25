@@ -79,8 +79,3 @@ stop from some richer app type — can appear on a map consumer's map.
   app sidecar territory; the commons place is the _user's_ place, not a mirror of
   someone's database row.
 - Visit history, ratings, favorites — perspectives; tags and sidecars.
-
-## Changelog
-
-- **Draft** — initial definition: `latitude`, `longitude` (required), `name`,
-  `address`, `url`.

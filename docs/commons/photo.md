@@ -56,10 +56,3 @@ await stack.defineType({
 ```ts
 { image: { kind: 'file-ref', required: true } }
 ```
-
-## Changelog
-
-- **Draft** — graduated from Staged: the `file-ref` field kind now exists, so `image`
-  is schema-enforced as specified, unchanged from the staged design.
-- **Staged** — design recorded; registration blocked on the `file-ref` field kind not
-  yet existing.

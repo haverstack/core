@@ -1,6 +1,6 @@
 # Identity
 
-Everywhere the system means "who" — a permission element's `grantee`, `GrantContent.grantee`, group membership associations, `StackTokenStore`, `record.entityId`, `_config.entityId` — the value is a **DID** ([Decentralized Identifier](https://www.w3.org/TR/did-core/)) string, e.g. `did:key:z6Mk...`.
+Everywhere the system means "who" — a permission element's `grantee`, `GrantContent.grantee`, group membership associations, a token's session, every [Actor](./data-model.md#actor) (`createdBy`, `updatedBy`, a change's `actor`), `_config.entityId` — the value is a **DID** ([Decentralized Identifier](https://www.w3.org/TR/did-core/)) string, e.g. `did:key:z6Mk...`.
 
 **Why DIDs, why no provider.** Stacks are for individuals and small groups with cohesive identity, not a global directory of principals. Identity must be _verifiable without a provider_, but doesn't need global discovery infrastructure. Once central providers are ruled out and a domain is undesirable as a hard requirement (a domain is rented identity with a renewal-date failure mode), one primitive remains: cryptographic self-certification. An identity is a keypair; claims are signatures; anyone can verify without asking anyone.
 
@@ -38,7 +38,7 @@ type EntityContent = {
 
 An app that wants handle lookup anyway builds it on `query({ filter: { content: { handle } } })` and must handle duplicates itself. Note that filtering on `content` requires the adapter to declare a `filter.content` reach, which a server behind `adapter-api` may decline (see [Adapters](./adapters.md#adapter-capabilities)) — another reason not to design a lookup around it.
 
-The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.open(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. Anything the [binding rules](#did-bindings) count as holding the owner's `did` counts as existing here too, or the bootstrap would mint a card those rules then refuse and reopening with `ownerProfile` would fail: a soft-deleted card still reserves the `did`, and so does one migrated to a later `_entity` version, since uniqueness spans the whole type family. Restoring a deleted owner card is `undelete()`'s job, not reopening's. An Entity record's `entityId` (author) may point to itself but doesn't have to; `Stack.open()`'s bootstrap leaves it unset, matching the owner-attributed, no-`entityId` convention used elsewhere.
+The Stack has a designated owner, identified by `_config.entityId` (a DID) — not by pointing at any particular `_entity` record's `RecordId`. The owner's own `_entity` record (`content.did === ownerEntityId`) is created automatically by `Stack.open(adapter, { ownerProfile })` if one doesn't exist yet — idempotent, safe to pass on every open. Anything the [binding rules](#did-bindings) count as holding the owner's `did` counts as existing here too, or the bootstrap would mint a card those rules then refuse and reopening with `ownerProfile` would fail: a soft-deleted card still reserves the `did`, and so does one migrated to a later `_entity` version, since uniqueness spans the whole type family. Restoring a deleted owner card is `undelete()`'s job, not reopening's. `Stack.open()`'s bootstrap writes the card unscoped, so it carries no `createdBy` — the same convention as every other Record an unscoped `Stack` writes.
 
 ## App
 
@@ -122,7 +122,7 @@ Note the contrast with `handle`, where duplicates are explicitly fine on both `_
 
 **One DID is reserved: the owner's own.** A card claiming `ownerEntityId` is refused to everyone but the owner acting alone, on create and on adoption, with `StackPermissionError`. The reservation exists because this is the one binding that feeds back into the stack's own identity: `ownerProfile` adopts whichever card holds the owner's DID rather than minting a second one, so a card written by someone else would _become_ the owner's profile, and uniqueness would then make that permanent. Every other DID stays open, which is the reach `_entity` is grantable for.
 
-**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for any other DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. The card is attributed to whoever wrote it — `entityId` names the grantee, not the owner — so a petname's provenance is always checkable. `_app` has no equivalent gap, being ungrantable.
+**Residual, stated rather than fixed:** the rules bind an _existing_ card, so a grantee holding `create` on `_entity@1` can still mint the _first_ card for any other DID no card names yet, with whatever display name they like. That is inherent to letting apps write contact cards at all; an owner who wants every petname to be their own choice should not grant `create` on `_entity`. The card is attributed to whoever wrote it — `createdBy.subjectId` names the grantee, not the owner — so a petname's provenance is always checkable. `_app` has no equivalent gap, being ungrantable.
 
 The uniqueness check reads before it writes, so two creates racing on one value can both pass. Closing that properly means a unique index over a JSON field that each adapter would enforce separately, which is a decision about where uniqueness lives rather than a fix belonging to this rule.
 
@@ -185,7 +185,7 @@ This is the same rule the family check states, at the other end of the Record's 
 
 **Management is the exception, and it is what makes the withdrawal recoverable.** The admin rule above reads the roster off the `_group` Record the request already named, rather than resolving it from elsewhere, so an `admin` still manages a Group they have deleted and can `undelete()` it. Were that not so, a Group would be recoverable only by the stack owner, and an admin deleting one would be discarding it rather than withdrawing it.
 
-A **hard** delete needs no rule of its own: it destroys the Record, so there is nothing left to resolve.
+A **purge** needs no rule of its own: it destroys the Record, so there is nothing left to resolve.
 
 **Taken together the three rules close the invariant by construction**: every `_group` Record holds an `admin` from its first version, no write moves the roster to zero, and no restore moves the roster at all. An admin-less roster is therefore not a state the API can reach — only a direct adapter write, which is [full trust](./access-control.md#the-write-bit-a-recoverability-trust-model) and outside every invariant, can manufacture one. Because the check reads the post-state it still does the right thing if one ever appears — a roster-replacing write naming an incoming `admin` is permitted, one that leaves it admin-less is refused — but that is a property falling out of the framing, not a repair path the rules promise.
 
@@ -201,7 +201,7 @@ Token issuance is not an out-of-band secret handoff, and the handshake that repl
 
 1. Client requests a nonce for its DID: `POST /auth/challenge { did }` → server responds `{ nonce, expiresAt }`.
 2. Client signs a domain-separated payload binding the server's origin, its DID and the nonce — `buildAuthChallengePayload()` builds it, `signAuthChallenge()` signs it — and sends the signature back: `POST /auth/token { did, nonce, signature }`.
-3. Server verifies against the payload it builds itself (`verifyAuthChallenge()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken(did)` and returns the bearer token.
+3. Server verifies against the payload it builds itself (`verifyAuthChallenge()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string) and, on success, calls `StackTokenStore.createToken({ subjectId: did })` and returns the bearer token.
 
 `@haverstack/core/wire` supplies both halves of steps 2 and 3 and runs no server; a server implementation brings the endpoints, nonce storage and single-use enforcement.
 

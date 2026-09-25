@@ -75,7 +75,3 @@ consumers wanting real folders filter by `typeId`.)
   feature.
 - Paths/slugs — folders are display structure, not addresses; [`page`](./page.md) is
   the type whose tree builds URLs.
-
-## Changelog
-
-- **Proposed** — initial definition: `name` (required), `description`.

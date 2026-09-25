@@ -97,12 +97,3 @@ lead — can be listed by a contacts consumer.
 - `birthday` and dates — see conventions.
 - Any identity/key material — that is `_entity` territory; a contact asserts nothing
   cryptographic.
-
-## Changelog
-
-- **Draft** — initial definition: `name` (required), `emails`, `phones`, `urls`, `org`,
-  `note`.
-- **Draft, reshaped in place** — `emails`/`phones`/`urls` items changed from bare
-  strings to `{ value, label? }` objects (vCard `TYPE`, humanized). An in-place item
-  reshape is legal exactly once: pre-install-base, per the project's evolution stance —
-  the cheap window this project's own doctrine says to use.

@@ -16,11 +16,13 @@ npm install @haverstack/wire-types
 
 Each wire type mirrors a domain type from `@haverstack/core` with `Date` fields replaced by ISO 8601 strings.
 
-| Wire type     | Domain type     |
-| ------------- | --------------- |
-| `WireRecord`  | `StackRecord`   |
-| `WireType`    | `StackType`     |
-| `WireVersion` | `RecordVersion` |
+| Wire type          | Domain type          | Serializer                |
+| ------------------ | -------------------- | ------------------------- |
+| `WireRecord`       | `StackRecord`        | `serializeRecord()`       |
+| `WireType`         | `StackType`          | `serializeType()`         |
+| `WireVersion`      | `RecordVersion`      | `serializeVersion()`      |
+| `WireJournalEntry` | `RecordJournalEntry` | `serializeJournalEntry()` |
+| `WireRecordChange` | `RecordChange`       | `serializeChange()`       |
 
 ## Serialization
 
@@ -40,6 +42,13 @@ const createdAt = parseDate(raw.createdAt); // Date | undefined
 ```
 
 `parseDate` accepts `unknown` and returns `undefined` for missing or unparseable values, making it safe to use directly on unvalidated response fields.
+
+## The rest of the contract
+
+- **Errors** — `WireErrorCode`, `WIRE_ERROR_STATUS`, `serializeError()` and `deserializeError()` map the `StackError` taxonomy to and from a status and body; `errorForStatus()` recovers a class from a bodyless response. See [Wire format § Error responses](https://github.com/haverstack/core/blob/main/docs/spec/wire-format.md#error-responses).
+- **Discovery** — `DiscoveryResponse`, `normalizeCapabilities()`, `WIRE_PROTOCOL_VERSION` and `isProtocolCompatible()`, so a client and a server read `GET /.well-known/stack` the same way.
+- **Authentication** — the handshake's request/response types and its own error vocabulary (`WireAuthErrorCode`, `isRetryableAuthError()`).
+- **Change feed** — frame names, `WireReadyFrame`/`WireResetFrame`, and `isValidCursor()`. See [Change feed](https://github.com/haverstack/core/blob/main/docs/spec/change-feed.md).
 
 ## License
 

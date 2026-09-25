@@ -9,16 +9,16 @@ A **Record** is the fundamental unit of data in a Stack.
 ```ts
 type StackRecord = {
   // --- Core (always present) ---
-  id: string; // Crockford base-32, time-sortable, unique within a stack
-  typeId: string; // Versioned Type ID e.g. "com.example.myapp/note@2"
+  id: RecordId; // Crockford base-32, time-sortable, unique within a stack
+  typeId: TypeId; // Versioned Type ID e.g. "com.example.myapp/note@2"
   createdAt: Date;
   updatedAt: Date;
   content: Record<string, unknown>; // Validated against the Type's schema
   version: number; // Ordinal of the snapshot history. Powers rollback and soft-delete recovery; can optionally gate writes via ifVersion (see Versioning & deletion)
 
   // --- Optional native fields ---
-  parentId?: string; // ID of a parent Record (for hierarchy/folders)
-  appId?: string; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
+  parentId?: RecordId; // ID of a parent Record (for hierarchy/folders)
+  appId?: AppId; // Software that created this Record, reverse-DNS e.g. "com.example.myapp". Self-reported; never a permission input (see Identity)
   createdBy?: Actor; // The author. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Authorship and attribution)
   updatedBy?: Actor; // Who performed the most recent mutation. Unlike createdBy, it moves with every write
   deletedAt?: Date; // Present if soft-deleted
@@ -29,6 +29,8 @@ type StackRecord = {
 ```
 
 **Design principle:** native fields are things the library needs to operate (routing, querying, syncing, hierarchy). Everything semantic and domain-specific goes in `content`.
+
+`RecordId`, `TypeId`, `BaseId`, `FileId`, `AppId` and `EntityId` are all `string` at runtime. The aliases name which identifier space a value belongs to, and the spec's type blocks use them in the same places the exported types do.
 
 ### Actor
 
@@ -88,7 +90,7 @@ The same rules are enforced locally, so a client-minted ID behaves identically w
 - **Unconditional on unscoped `Stack.create()`** — the same full-trust context as the `id` option above.
 - **Owner-only on `ScopedStack.create()`.** Refused to everyone but the stack owner acting alone (undelegated, authenticated as themselves — the same `ownerActingAlone` tier that already gates purge, `commitMigration()`, and `includeUnlisted`): a grantee, or a delegated app acting for the owner, could otherwise forge a sort position through `createdAt` the same way the `id` skew check exists to stop it forging one through `id`. `ScopedStack.create()` refuses both fields outright for anyone else.
 - **Owner-authenticated only, over the wire.** `POST /records` may carry `createdAt`/`updatedAt` when the request authenticates as the stack owner acting alone. Unlike `createdBy`, this is **not** inherited from `ScopedStack` for free: that is silently overridden, while `createdAt`/`updatedAt` are refused outright, and every client sends both fields on every create (a record body is a whole record). A server must therefore drop them from a non-owner body itself — forwarding one unfiltered turns an ordinary grantee create into a `StackPermissionError` rather than a create stamped with the current time. See [Wire format § Records](./wire-format.md#records).
-- **`id` and `createdAt` must agree.** Omit `id` and it's derived from `createdAt`'s timestamp, so the two can't diverge. Supply both, and they're checked against each other using the same `idTimestampSkewMs` tolerance the `id`-vs-current-time check above uses (default 24 hours; `null` disables this check too) — disagreement beyond that tolerance throws `StackValidationError` rather than silently diverging. Supplying `id` alone, with no `createdAt`, is unaffected: that stays a pure position choice, exactly as before this option existed — including for the owner, whose plain `id`-only creates through `ScopedStack` still get the ordinary `id`-vs-current-time check, not this one.
+- **`id` and `createdAt` must agree.** Omit `id` and it's derived from `createdAt`'s timestamp, so the two can't diverge. Supply both, and they're checked against each other using the same `idTimestampSkewMs` tolerance the `id`-vs-current-time check above uses (default 24 hours; `null` disables this check too) — disagreement beyond that tolerance throws `StackValidationError` rather than silently diverging. Supplying `id` alone, with no `createdAt`, is unaffected: it stays a pure position choice — including for the owner, whose plain `id`-only creates through `ScopedStack` still get the ordinary `id`-vs-current-time check, not this one.
 - **`updatedAt` defaults to `createdAt`**, not to the actual current time, so a plain import doesn't fabricate a fake edit and inflate version history. Supplying an `updatedAt` earlier than `createdAt` is a validation error — including when `createdAt` was left to default to now.
 - **Both fields must be valid, representable Dates.** An `Invalid Date` (what `new Date()` yields for a malformed date string, a common shape for a bad row in an imported corpus) is a `StackValidationError`, not a record: its `getTime()` is `NaN`, and every comparison against `NaN` is false, so an unchecked one would switch off the ordering and skew checks above rather than fail them. The representable range is the range a record ID's 9-character timestamp prefix can encode — `1970-01-01T00:00:00.000Z` through `3084-12-12T12:41:28.831Z` — since a `createdAt` outside it has no ID that can agree with it. Content genuinely dated outside that window belongs in the record's own content fields, not in `createdAt`.
 - **Backdated records are invisible to an `updatedAt` cursor.** A backdated record's `updatedAt` predates its import by construction, so a consumer syncing incrementally by `filter.updatedAt.after` never sees it arrive — which is the point (an import is not a recent edit), but it means an import is picked up by a full corpus read, not by a change cursor.
@@ -432,28 +434,28 @@ The escape-convention alternative — a filter key of `emails\.value` meaning th
 
 ## Queries
 
-Queries are expressed as a `Query` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.
+Queries are expressed as a `StackQuery` object passed to `stack.query()`. All adapters support the full query shape; performance guarantees differ.
 
 ### Filter
 
 ```ts
-type Filter = {
+type RecordFilter = {
   // Native fields
   typeId?: TypeId | TypeId[];
   baseId?: BaseId | BaseId[]; // matches every version of a type family
-  parentId?: string | null; // null = root records only
-  appId?: string | string[];
-  createdBy?: { subjectId?: string | string[]; principalId?: string | string[] }; // the author, never the latest actor
+  parentId?: RecordId | null; // null = root records only
+  appId?: AppId | AppId[];
+  createdBy?: { subjectId?: EntityId | EntityId[]; principalId?: EntityId | EntityId[] }; // the author, never the latest actor
   createdAt?: DateRange;
   updatedAt?: DateRange;
 
   // Association filters
   tags?: string[]; // records that have ALL of these tags
-  attachment?: { label: string; fileId?: string } | { label?: string; fileId: string };
+  attachment?: { label: string; fileId?: FileId } | { label?: string; fileId: FileId };
   relatedTo?:
     | { label: string; target?: RelationshipTargetPattern }
     | { label?: string; target: RelationshipTargetPattern };
-  referencesFileId?: string; // records that reference this file, via an `attachment` Association or a top-level `file-ref` content field
+  referencesFileId?: FileId; // records that reference this file, via an `attachment` Association or a top-level `file-ref` content field
 
   // Content fields (exact match; the key is a dot-separated path)
   content?: { [key: string]: unknown };
@@ -461,6 +463,10 @@ type Filter = {
 
   // Full-text search (capability varies by adapter)
   search?: string;
+
+  // Lifecycle states excluded by default
+  includeDeleted?: boolean; // see Versioning & deletion
+  includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
 };
 
 type DateRange = {
@@ -508,13 +514,19 @@ By default, `query()` (like `get()`) returns Records exactly as stored — see [
 ### Sorting and pagination
 
 ```ts
-type Query = {
-  filter?: Filter;
+type StackQuery = {
+  filter?: RecordFilter;
   sort?:
     | { field: 'createdAt' | 'updatedAt' | 'version'; direction?: 'asc' | 'desc' }
     | { contentField: string; direction?: 'asc' | 'desc' }; // see Sorting by a content field
   limit?: number;
   cursor?: string; // Opaque cursor for page-based pagination
+  presentAt?: 'stored' | 'latest'; // see Type migrations
+};
+
+type QueryResult = {
+  records: StackRecord[];
+  cursor: string | null; // null = no further pages
 };
 ```
 

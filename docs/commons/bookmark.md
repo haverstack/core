@@ -60,7 +60,3 @@ can be surfaced by a bookmark consumer.
   territory (the read-later apps' richer shape). An app that captures full articles
   keeps a paired bookmark record for bookmark-consumer reach and links it to the
   article with `{ kind: 'relationship', label: 'capture', recordId }`.
-
-## Changelog
-
-- **Draft** — initial definition: `url` (required), `title`, `description`.

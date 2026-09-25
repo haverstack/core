@@ -39,7 +39,7 @@ import { MyBlobAdapter } from './my-blob-adapter.js';
 runBlobAdapterConformance({
   name: 'MyBlobAdapter',
   listBlobs: true, // omit or set false if you don't implement the optional listBlobs()
-  open: () => new MyBlobAdapter(tempDir()),
+  open: () => new MyBlobAdapter({ dir: tempDir() }),
 });
 ```
 
@@ -47,7 +47,7 @@ Errors are asserted against `.code` (the `StackErrorCode` every `StackError` sub
 
 ## What's covered
 
-**Record adapters:** CRUD and not-found/conflict errors, the `_config` singleton's reserved-id exclusion from queries, associations (idempotent, never bump version), version snapshots and `restoreVersion` (content + `parentId` restored, associations untouched), `commitMigration`, cursor pagination (a cursor minted under one sort refused when replayed under another), content-path filtering (array spread, nested objects, `contentPresent`, null-matches-absent), sort by content field, and full-text search (including that a content patch is reflected — no stale matches under the old content).
+**Record adapters:** CRUD and not-found/conflict errors, the `_config` singleton's reserved-id exclusion from queries, associations (idempotent, never bump version), version snapshots and `restoreVersion` (content restored; containment and associations left where they stand), the change journal, `commitMigration`, cursor pagination (a cursor minted under one sort refused when replayed under another), content-path filtering (array spread, nested objects, `contentPresent`, null-matches-absent), sort by content field, and full-text search (including that a content patch is reflected — no stale matches under the old content).
 
 **Blob adapters:** content-addressed `putBlob` (fileId is the SHA-256 hex of the bytes, identical bytes dedupe), byte-exact `getBlob`, the `not_found`/`bad_request` fileId error contract, `deleteBlob`, and the optional `listBlobs()`.
 

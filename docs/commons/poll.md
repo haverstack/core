@@ -134,8 +134,3 @@ await stack.defineType({
   data.
 - Delegation/proxy voting (liquid democracy) — real prior art (Loomio, LiquidFeedback)
   but a method + trust model, not a field; future proposal.
-
-## Changelog
-
-- **Proposed** — initial definition: `poll@1` (`question`, `options` required;
-  `method`, `closesAt`, `details`), `vote@1` (`pollId`, `choices` required).

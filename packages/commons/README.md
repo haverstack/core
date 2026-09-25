@@ -35,7 +35,7 @@ const note = await stack.create(NOTE.id, { text: 'Hello, Haverstack!' });
 ```
 
 Each export (`NOTE`, `BOOKMARK`, `TASK`, `CONTACT`, `ARTICLE`, `PLACE`, `PAGE`, `PHOTO`,
-`POST`) is a `{ id, name, schema }` triple mirroring its type's `stack.defineType(...)` block in
+`POST`, `SITE`) is a `{ id, name, schema }` triple mirroring its type's `stack.defineType(...)` block in
 [`docs/commons/`](https://github.com/haverstack/core/tree/main/docs/commons) exactly.
 `defineCommonsTypes()` is a thin loop over `stack.defineType()` — calling it again with
 types already registered is the ordinary idempotent no-op path (see `defineType`'s own

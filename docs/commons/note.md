@@ -65,7 +65,3 @@ readable under `isCompatible()`, so short-string types also qualify.
 - Rich-text formats beyond markdown/plain (HTML in particular) — HTML notes are an
   XSS-shaped liability the dangerous-type safeguards exist to avoid; apps holding HTML
   should convert on write.
-
-## Changelog
-
-- **Draft** — initial definition: `text` (required), `title`, `format`.

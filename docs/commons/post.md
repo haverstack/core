@@ -115,7 +115,3 @@ honor it.
   bridge/adapter territory, not properties of the utterance itself.
 - `lexiconId` mapping, content addressing, tombstone semantics — bridge machinery
   (`adapter-atproto` and friends), not a content schema concern.
-
-## Changelog
-
-- **Draft** — initial definition: `text` (required), `format`, `url`.

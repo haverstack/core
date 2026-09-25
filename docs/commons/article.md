@@ -113,8 +113,3 @@ keep the paired bookmark record described above.
   whose `parentId` is the article (sent into a shared space, moment-indexed,
   tamper-evident), while a reader's private marginalia is a `note` with an `about`
   relationship. See [Choosing a text type](./text-types.md) for the ruling.
-
-## Changelog
-
-- **Draft** — initial definition: `title`, `text` (required), `format`, `summary`,
-  `url`, `author`, `publishedAt`.

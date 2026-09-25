@@ -208,8 +208,9 @@ never be heavier than the work it governs.
   bookmarks, todo.txt, ATProto lexicons…). We steal proven shapes; we don't invent.
 - **Evaluation against the design rules above.**
 
-Discussion happens on the issue; the accepted result is a PR to this directory. Each
-type file carries a changelog so decisions stay attached to the schema they shaped.
+Discussion happens on the issue; the accepted result is a PR to this directory. A type
+file states what the type is and why, never how it got there — the reasoning behind a
+decision lives in the section it shaped, and its history lives in git.
 
 **Changing an existing type.** Additive optional fields follow the same process and land
 in place. Anything that would bump a version is an `RFC:` issue, per the project's

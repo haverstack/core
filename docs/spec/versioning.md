@@ -4,9 +4,9 @@ Version history is managed by the library as a side channel — apps do not mana
 
 ## Version history
 
-**Two tiers.** Every mutation of a Record that touches content — a [change set](./data-model.md#mutations) naming `contentPatch`, a soft delete, an undelete, a migration commit, a restore — snapshots the Record's prior full state and bumps `version` exactly once. A mutation that changes nothing (restating the content a Record already holds, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Purge is the one exception among these — it destroys the Record and its version history outright, so there's nothing to snapshot.
+**Two kinds of write.** Every mutation of a Record that touches content — a [change set](./data-model.md#mutations) naming `contentPatch`, a soft delete, an undelete, a migration commit, a restore — snapshots the Record's prior full state and bumps `version` exactly once. A mutation that changes nothing (restating the content a Record already holds, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Purge is the one exception among these — it destroys the Record and its version history outright, so there's nothing to snapshot.
 
-Everything else a Record carries — containment, listing, `associations` and `permissions` alike — bumps nothing and snapshots nothing. Those writes are the second tier, spelled out below.
+Everything else a Record carries — containment, listing, `associations` and `permissions` alike — bumps nothing and snapshots nothing. Those are the no-bump writes, spelled out below.
 
 **A change set is atomic, not a version batch.** `mutate()` is the only multi-aspect atomic write a Record has, and that is what it is for: a publish — content, container, `anyone` read, listing — is one act that must not half-land. Where it names `contentPatch` it produces one version, however many other aspects ride along; where it doesn't, it produces none.
 
@@ -14,7 +14,7 @@ Everything else a Record carries — containment, listing, `associations` and `p
 
 The field is **not** a content hash under another name: a restore creates a new version holding old content, so two versions can be byte-identical, and `ifVersion`/`If-Match` guard the whole Record rather than its content.
 
-**The second tier: four aspects that never bump.** `associate()`/`dissociate()`, `grantAccess()`/`revokeAccess()` — and a change set naming only `associations`, `permissions`, `parentId` and/or `unlisted` — never bump `version`, touch `updatedAt`, or snapshot. Each of those four aspects is a write whose prior state [the change journal](./journal.md) keeps in full, so a snapshot would preserve nothing a reader cannot already reach: a move's origin is the entry's `previousParentId`, a listing transition's inverse is the `unlist`/`list` op's own opposite, and an association delta — the authority half included — is the entry's `associations`. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and none of the four needs it.
+**The no-bump writes: four aspects that never bump.** `associate()`/`dissociate()`, `grantAccess()`/`revokeAccess()` — and a change set naming only `associations`, `permissions`, `parentId` and/or `unlisted` — never bump `version`, touch `updatedAt`, or snapshot. Each of those four aspects is a write whose prior state [the change journal](./journal.md) keeps in full, so a snapshot would preserve nothing a reader cannot already reach: a move's origin is the entry's `previousParentId`, a listing transition's inverse is the `unlist`/`list` op's own opposite, and an association delta — the authority half included — is the entry's `associations`. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and none of the four needs it.
 
 Filing them here anyway would cost a full duplicate copy of `content` apiece for state the entry already holds, and in `unlisted`'s case would bump `version` while storing nothing about the aspect that caused the bump.
 
@@ -99,7 +99,7 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 - **Omitting `ifVersion` keeps last-writer-wins** — the unconditional default. Apps that don't care about races don't pay for this.
 - On a mismatch, the call throws `StackVersionConflictError` carrying `recordId`, `expectedVersion`, and `actualVersion`, so a caller can re-fetch, inspect what actually won the race, and decide whether to retry. It is a distinct error type from `StackConflictError` — the two have different recovery stories (fix your input vs. retry after re-reading) and different HTTP statuses.
 - **The check is atomic at the adapter**, not a read-then-write in `Stack`: adapters implement it as part of the same write (e.g. `UPDATE ... WHERE id = ? AND version = ?`, inspecting the affected-row count). Doing the check in `Stack` alone would just move the race down a layer.
-- This covers every version-bumping mutation path: a lost race on a permissions change is caught exactly like a lost race on content.
+- This covers every version-bumping mutation path: a lost race on a delete, undelete, restore or migration commit is caught exactly like a lost race on content.
 - `StackRecordAdapter` takes the same `ifVersion` option (`IfVersionOptions`) on the same methods — one name from app code through the adapter to the wire.
 - Over the wire, this is the `If-Match` header (see [Wire format § Records](./wire-format.md#records)) — local and remote behave identically.
 
@@ -109,7 +109,7 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 ## Storage per adapter
 
-- JSON: sibling files `{id}.versions.json` and `{id}.journal.json`
+- JSON _(planned)_: sibling files `{id}.versions.json` and `{id}.journal.json`
 - SQLite: `versions` and `journal` tables
 - API: **the server is the only writer of both tiers** — `saveVersion()` is a deliberate no-op over `APIAdapter` and a journal entry travels on no request, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. Both tiers are read back over the wire: [Wire format § Versions](./wire-format.md#versions) for that list, and [§ Journal](./wire-format.md#journal) for the endpoint serving this one.
 
@@ -117,11 +117,15 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 Records are never purged by default. Two levels of deletion are supported:
 
-**Soft delete** — the default. A deleted Record is flagged with a `deletedAt` timestamp and excluded from normal queries, but remains recoverable. Version history is preserved. A soft-deleted Record is a tombstone — its current state is gone but its history is not.
+**Soft delete** — the default. A deleted Record is flagged with a `deletedAt` timestamp and excluded from normal queries, but remains recoverable. Version history is preserved. A soft-deleted Record is a tombstone — its current state is gone but its history is not. A query opts back in with:
+
+```ts
+stack.query({ filter: { includeDeleted: true } });
+```
 
 ### The tombstone is literal
 
-Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get()` and `query({ includeDeleted: true })` return:
+Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get()` and `query({ filter: { includeDeleted: true } })` return:
 
 ```ts
 {
@@ -146,7 +150,9 @@ A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent
 
 The refusal is asked **after** the authority decision, never before. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
 
-`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see `migrateAll()` below), and it is owner-acting-alone only.
+`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see [Undelete](#undelete)), and it is owner-acting-alone only.
+
+### Purge
 
 **Purge** — permanent and explicit. Removes the Record, all its version history and [its journal](./journal.md#a-purge-destroys-the-journal). Requires deliberate intent via a flag. The escape hatch for sensitive, secret, or harmful content **the Record itself holds** — see the caveat below for what it does not reach.
 
@@ -164,13 +170,9 @@ for (const fileId of referencedFileIds) await stack.deleteAttachment(fileId);
 
 `referencedFileIds` is empty on a soft delete, which strands nothing. A purge for harmful content that skips the second step leaves the bytes reachable to whoever can already name the hash — what the field names, and why naming it deletes nothing, is [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
 
-**Purge is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ purge: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary. Non-owners are always limited to soft delete. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to the `asEntity()` wrapper.)
+**Purge is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ purge: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary. Non-owners are always limited to soft delete. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to `ScopedStack`.)
 
-Queries exclude soft-deleted Records by default. Opt in with:
-
-```ts
-stack.query({ filter: { includeDeleted: true } });
-```
+### Undelete
 
 **Undelete** reverses a soft delete. It's idempotent — calling it on a Record that isn't deleted succeeds and returns the Record unchanged, so a retried call after a network blip never fails. A missing Record throws `StackNotFoundError`; a purged Record is simply missing, so it throws the same way.
 

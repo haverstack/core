@@ -53,7 +53,7 @@ Group permissions reference a `_group` Record by ID. The group may be a simple p
 
 - no elements — owner only
 - `anyone` — any requester can read
-- a `permission` whose grantee is an `entity` — check the requester's entityId directly
+- a `permission` whose grantee is an `entity` — compare its `entityId` to the requester's DID directly
 - a `permission` whose grantee is a `group` — fetch the referenced `_group` Record; where it is live and in the family, walk its `relationship` associations to determine the requester's role, and the element is satisfied if `role: 'admin'` is set and the requester is an admin, or if `role: 'member'` is set and the requester is a member or admin
 
 **Only a live `_group` Record carries a roster.** A `groupId` naming a Record outside the `_group` family, or one naming a soft-deleted Group, resolves to no role and the element confers nothing — the same rule [type-level grants](#type-level-grants) apply to a `group` grantee. Rosters are read from ordinary `relationship` associations, which any Record may carry: without the family check, an app modelling its own `member` or `admin` links (a project and the people on it, say) would turn every Record a permission was pointed at into an ACL, and a Record migrated out of `_group` would keep resolving after it stopped being a group. The tombstone check is the same rule at the other end of a Group's life: deleting a Group is how a Group is withdrawn, so one that stands deleted reaches nobody until it is undeleted — see [Identity § Deleting a Group withdraws it](./identity.md#deleting-a-group-withdraws-it). The `groupId` is still not format-checked, unlike a caller-named [`parentId`](./data-model.md#reparenting): it is read on the permission path rather than asserted on a write, and one that resolves to nothing simply denies.
@@ -90,7 +90,7 @@ Record-level `write` stays a single coarse bit — no per-verb fencing (`update`
 | A change set's `parentId`, a change set's `unlisted`      | Yes                         | Directly invertible — the journal entry names where the Record came from, and the opposite call puts it back, with no version history involved — see [Versioning § Version history](./versioning.md#version-history)            |
 | `restoreVersion`                                          | Yes                         | Update-shaped; itself creates a new, restorable version                                                                                                                                                                         |
 | `delete` (soft)                                           | Yes                         | `undelete()` reverses it — the owner can always undelete, regardless of who deleted                                                                                                                                             |
-| `delete` (hard)                                           | Never reachable via `write` | Owner-only, unconditionally — see below                                                                                                                                                                                         |
+| Purge                                                     | Never reachable via `write` | Owner-only, unconditionally — see below                                                                                                                                                                                         |
 
 Operations that sit outside the `write` bit entirely, regardless of grants:
 
@@ -134,7 +134,7 @@ What this buys is an invariant the mutate gate already assumed: **anything that 
 - **Parenting into a container needs read on the container** — `parentId` is a reference, gated like any other, at creation and on a later move alike (see [Reference-creation gating](#reference-creation-gating)). Share the container Record with a `read` element and no `write` (it holds no submissions; each is its own private Record), or use no parent and correlate through a content field or tag.
 - **The contributor keeps no sent copy.** That's the federated shape — a sender who wants one writes it to their own stack — not something the box can hand back.
 
-What is _not_ offered is blind mutation of an existing Record. a content patch is defined over content the requester would not be able to see, `ifVersion` needs a version number that comes from a read, and the write bit's recoverability argument requires prior content by construction. A write-only surface is a total write; nothing in this model is one.
+What is _not_ offered is blind mutation of an existing Record. A content patch is defined over content the requester would not be able to see, `ifVersion` needs a version number that comes from a read, and the write bit's recoverability argument requires prior content by construction. A write-only surface is a total write; nothing in this model is one.
 
 ## Type-level grants
 
@@ -165,7 +165,7 @@ type GrantAction =
   | 'delete-any'; // Delete all records of this type
 ```
 
-The grantee lives in `content.grantee`, not `record.entityId`. `entityId` means "author" on every other Record in the system, and a `_grant` Record is always authored by the stack owner (the only caller of `grantType()`) — never by the entity or group it names. A grant Record therefore carries no `entityId` of its own, and "everything this entity authored" queries (`filter: { entityId }`) don't pick up grants that merely name that entity.
+The grantee lives in `content.grantee`, not in `createdBy`. `createdBy` means "author" on every Record in the system, and a `_grant` Record is written by the stack owner through `grantType()` on an unscoped `Stack` — never by the entity or group it names. So "everything this entity authored" queries (`filter: { createdBy: { subjectId } }`) don't pick up grants that merely name that entity.
 
 `Stack.grantType(typeOrBaseId, { actions, grantee })` is the owner-facing helper for creating a grant record; `Stack.listTypeGrants(query?)` and `Stack.revokeType(typeOrBaseId, { actions, grantee })` are the read/undo counterparts. Every type-level verb carries `Type` in its name and the record-level verbs carry `Access`, so a call site says which layer it touches. `typeOrBaseId` is either a versioned TypeId (`com.example/comment@1`) or a bare baseId (`com.example/comment`); both name the same family (see [What a grant covers](#what-a-grant-covers)), and anything else is refused with `StackValidationError`. The shape mirrors the record-level verbs: `grantAccess(id, permission)` names the subject first and carries the grantee inside the element, and so does `grantType()` — the type is the subject. A `grantee` is a `GrantGrantee` — the same union a stored grant carries, so the argument _is_ the grantee it writes. A `query` is a `GrantQuery`: the same union, widened by one listing-only value described below.
 

@@ -86,8 +86,3 @@ time slot promoted to a real event — can appear on a calendar consumer's calen
 - Timezone-per-event — @1 events are absolute instants plus the stack-timezone rule
   for `allDay`; floating times and cross-timezone display are app concerns until a real
   writer demonstrates the need.
-
-## Changelog
-
-- **Proposed** — initial definition: `title`, `startsAt` (required), `endsAt`,
-  `allDay`, `description`, `url`.

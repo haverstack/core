@@ -99,8 +99,3 @@ await stack.defineType({
 - Navigation/menu structure, theme, layout — sidecar territory, same posture as `page`.
 - `unlisted`/hidden-from-feeds state — governed per-record by the permission model (see
   `docs/spec/access-control.md`), orthogonal to which site a record belongs to.
-
-## Changelog
-
-- **Draft** — initial definition: `title`, `baseUrl` (required), `description`,
-  `handle`.

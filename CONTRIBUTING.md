@@ -134,7 +134,7 @@ Renaming the workflow file breaks every trusted publisher at once; each matches 
 
 Under **Settings → Actions → General**, _Allow GitHub Actions to create and approve pull requests_ must stay on, or the version PR is never opened.
 
-**A tenth package** needs one manual publish (trusted publishing configures only on a package that exists), then its own trusted publisher and an entry in the `package` dropdown in `.github/workflows/changeset.yml`.
+**A new package** needs one manual publish (trusted publishing configures only on a package that exists), then its own trusted publisher and an entry in the `package` dropdown in `.github/workflows/changeset.yml`.
 
 **To gate the publish on a human:** create a GitHub environment with required reviewers, add `environment:` to the release job, and name it in every trusted publisher. All three must agree.
 
@@ -258,7 +258,7 @@ Tests use [Vitest](https://vitest.dev/) and live in each package's `tests/` dire
 `@haverstack/core/testing` exports the shared test doubles:
 
 - **`MemoryAdapter`** — an in-memory `StackAdapter` implementing the full `RecordFilter` shape, so permission logic under test exercises real predicates rather than an adapter that quietly ignores filters. It declares `filter.content: 'path'`, as every local adapter must.
-- **`IncapableMemoryAdapter`** — declares both content-query capabilities `false`, simulating the one legitimate case (a wire adapter whose server declined them). Use it to exercise capability-gated fallback paths; don't reach for a `false` override on `MemoryAdapter`.
+- **`IncapableMemoryAdapter`** — declares `filter.content: 'none'` and `filter.contentPresent: false`, simulating the one legitimate case (a wire adapter whose server declined content queries). Use it to exercise capability-gated fallback paths; don't reach for an override on `MemoryAdapter`.
 
 Name tests after the behavior they pin, not the defect that prompted them. `'a grant beyond the first page (>50 _grant records) is still honored'` survives refactoring; `'regression for #50'` doesn't.
 
@@ -268,18 +268,22 @@ Name tests after the behavior they pin, not the defect that prompted them. `'a g
 
 ```
 docs/
-  spec.md                 # Design spec — overview and index
-  spec/                   # Data model, identity, access control, versioning,
-                          #   attachments, adapters, wire format
-  commons/                # Schema Commons — shared, app-neutral record types
+  spec.md                    # Design spec — overview and index
+  spec/                      # Data model, identity, access control, versioning, journal,
+                             #   attachments, events, adapters, wire format, change feed
+  commons/                   # Schema Commons — shared, app-neutral record types
 packages/
-  core/                   # Stack, ScopedStack, types, schema, validation, MemoryAdapter
-  sqlite-shared/          # Internal: shared SQL logic, bundled into consumers, not published
-  record-adapter-sqlite/  # Node native SQLite (node:sqlite), FTS5, WAL
-  blob-adapter-disk/      # Content-addressed blobs on disk
-  blob-adapter-s3/        # Content-addressed blobs on S3 / S3-compatible stores
-  adapter-local/          # Convenience: SQLite records + disk blobs
-  adapter-api/            # HTTP client for stack servers
-  wire-types/             # Wire serialization shapes and error mapping
-  conformance-fixtures/   # Wire-format fixtures shared by client and server
+  core/                      # Stack, ScopedStack, types, schema, validation, MemoryAdapter
+                             #   Entry points: . | ./adapter | ./wire | ./did | ./testing
+  sqlite-shared/             # Internal: shared SQL logic, bundled into consumers, not published
+  record-adapter-sqlite/     # Node native SQLite (node:sqlite), FTS5, WAL; NativeTokenStore
+  record-adapter-do-sqlite/  # Cloudflare Durable Objects SQLite storage, FTS5
+  blob-adapter-disk/         # Content-addressed blobs on disk
+  blob-adapter-s3/           # Content-addressed blobs on S3 / S3-compatible stores
+  adapter-local/             # Convenience: SQLite records + disk blobs
+  adapter-api/               # HTTP client for stack servers
+  adapter-conformance/       # Runnable conformance suite for adapter implementations
+  wire-types/                # Wire serialization shapes and error mapping
+  conformance-fixtures/      # Wire-format fixtures shared by client and server
+  commons/                   # Schema Commons type constants + defineCommonsTypes()
 ```
