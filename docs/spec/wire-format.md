@@ -193,7 +193,26 @@ Three things sit outside it:
 - **Headers.** A request carries headers the application never sees — proxies and browsers add them — so an unrecognized one is ignored, as is `If-Match` on the association endpoints (see [Records](#records)).
 - **Responses.** A client reading a server's response ignores what it doesn't recognize, the way it ignores an [unrecognized frame](./change-feed.md). Strictness is the server's side of the contract, where the input is the client's intent.
 
-A server built on core reaches this through the wire parsers in `@haverstack/core/wire` — `parseQueryParams()`, `parseQueryBody()`, `parseChangeParams()`, `parseJournalParams()`, `createOptionsFromWireRecord()` and `changesFromWireBody()` — each of which refuses what its endpoint does not define. Endpoints a server parses itself — `/auth/token` among them — owe the same refusal.
+A server built on core reaches this through the wire parsers in `@haverstack/core/wire`, one per endpoint that takes input, each of which refuses what its endpoint does not define:
+
+| Endpoint                        | Parser                          |
+| ------------------------------- | ------------------------------- |
+| `GET /records`                  | `parseQueryParams()`            |
+| `POST /records/query`           | `parseQueryBody()`              |
+| `POST /records`                 | `createOptionsFromWireRecord()` |
+| `PATCH /records/:id`            | `changesFromWireBody()`         |
+| `DELETE /records/:id`           | `parseDeleteParams()`           |
+| `POST /records/:id/migrate`     | `parseMigrationBody()`          |
+| `GET /records/:id/journal`      | `parseJournalParams()`          |
+| `GET /records/:id/associations` | `parseAssociationParams()`      |
+| `GET /changes`                  | `parseChangeParams()`           |
+| `GET /attachments/:fileId`      | `parseDownloadParams()`         |
+| `POST /types`                   | `parseTypeBody()`               |
+| `PATCH /entity`                 | `parseEntityPatchBody()`        |
+| `POST /auth/challenge`          | `parseAuthChallengeBody()`      |
+| `POST /auth/token`              | `parseAuthTokenBody()`          |
+
+The body parsers split errors the way [Records](#records) does for a create: a body that is not an object, carries a key its endpoint does not define, or lacks a field the endpoint requires is not that request at all, so it is **400**; a known field whose value is the wrong type is **422**, carrying the field's path. Endpoints a server defines beyond this spec owe the same refusal, parsed by the server itself.
 
 ### The taxonomy root
 
@@ -576,6 +595,8 @@ GET  /types        — list all types known to this stack
 GET  /types/:id    — get one type definition (id is URL-encoded)
 POST /types        — register a type, or evolve an existing one in place
 ```
+
+**The body is a whole Type**, as `GET /types/:id` returns one. `id`, `name` and `schema` are read, as is `migratesFrom` when present; `baseId`, `version`, `schemaHash` and `createdAt` are accepted and ignored, since `defineType()` derives or stamps each of them. Any other key is refused (see [Unrecognized input](#unrecognized-input)).
 
 `POST /types` on an `id` that already has a stored Type runs the same [schema drift check](./data-model.md#schema-drift-detection) as `Stack.defineType()` — the server-side storage layer never blindly overwrites a Type definition; legality is decided once, in the same invariant layer both the local and wire paths share.
 

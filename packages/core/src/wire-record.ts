@@ -12,7 +12,8 @@
  */
 
 import { isOwnerActingAlone } from './access.js';
-import { StackBadRequestError, StackValidationError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
+import { fieldError, requireBody } from './wire-body.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
 import { RECORD_CHANGE_SET_KEYS } from './types.js';
 import type {
@@ -59,21 +60,6 @@ const WIRE_RECORD_KEYS: readonly string[] = Object.keys({
   associations: true,
 } satisfies Record<keyof StackRecord, true>);
 
-function requireBody(body: unknown): Record<string, unknown> {
-  if (typeof body !== 'object' || body === null || Array.isArray(body))
-    throw new StackBadRequestError('Invalid record body: expected an object');
-  return body as Record<string, unknown>;
-}
-
-/**
- * The refusal a present field earns when its value is the wrong shape.
- * `StackValidationError` because the failure names a field of the record
- * being written, and only that class carries the path.
- */
-function fieldError(path: string, message: string): never {
-  throw new StackValidationError([{ path, message }]);
-}
-
 function optionalString(body: Record<string, unknown>, key: string): string | undefined {
   const value = body[key];
   if (value === undefined) return undefined;
@@ -117,7 +103,7 @@ export function createOptionsFromWireRecord(
   session: TokenSession,
   ownerEntityId: EntityId,
 ): WireCreateRequest {
-  const record = requireBody(body);
+  const record = requireBody(body, 'record body');
   const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
   if (unknown.length > 0)
     throw new StackBadRequestError(
@@ -174,7 +160,7 @@ export function createOptionsFromWireRecord(
  * See docs/spec/wire-format.md § Records.
  */
 export function changesFromWireBody(body: unknown): RecordChangeSet {
-  const envelope = requireBody(body);
+  const envelope = requireBody(body, 'record body');
 
   const unknown = Object.keys(envelope).filter(
     (key) => !(RECORD_CHANGE_SET_KEYS as readonly string[]).includes(key),

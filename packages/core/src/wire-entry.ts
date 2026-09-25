@@ -52,8 +52,9 @@ export type { StackTokenStore, TokenInfo, TokenSession } from './types.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,
-// GET /changes and GET /records/:id/journal with these rather than
-// transcribing the parameter table.
+// GET /changes, GET /records/:id/journal, DELETE /records/:id,
+// GET /attachments/:fileId and GET /records/:id/associations with these
+// rather than transcribing the parameter table.
 // Contract, not internal — and the round trip against the builders is
 // pinned by a test, which is what having both halves here buys.
 export {
@@ -61,6 +62,9 @@ export {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseDeleteParams,
+  parseDownloadParams,
+  parseAssociationParams,
   parseIfMatch,
   parseUploadFilename,
   parsePositiveInt,
@@ -70,7 +74,11 @@ export {
 // them before encoding, so which encoding a server's content reach selects
 // never decides whether a family query widens or is refused.
 export { assertQueryTravels } from './wire-request.js';
-export type { ParsedChangeParams } from './wire-request.js';
+export type {
+  ParsedChangeParams,
+  ParsedDownloadParams,
+  ParsedAssociationParams,
+} from './wire-request.js';
 
 // Re-exported by @haverstack/wire-types for the response side: one wire
 // date decoding, used by both halves.
@@ -81,6 +89,23 @@ export { parseDate } from './wire-request.js';
 // field by field. See docs/spec/wire-format.md § Records.
 export { createOptionsFromWireRecord, changesFromWireBody } from './wire-record.js';
 export type { WireCreateRequest } from './wire-record.js';
+
+// No in-repo caller: the bodies of the remaining endpoints core specifies,
+// so a server refuses a key they do not define without keeping its own
+// list of the ones they do. See docs/spec/wire-format.md § Unrecognized input.
+export {
+  parseAuthChallengeBody,
+  parseAuthTokenBody,
+  parseEntityPatchBody,
+  parseTypeBody,
+  parseMigrationBody,
+} from './wire-body.js';
+export type {
+  WireAuthChallengeRequest,
+  WireAuthTokenRequest,
+  WireEntityPatch,
+  WireMigrationRequest,
+} from './wire-body.js';
 
 // The tier gating purge, commitMigration() and includeUnlisted, which
 // a server must decide for those routes itself. Computing it as "is the

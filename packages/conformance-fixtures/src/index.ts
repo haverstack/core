@@ -2197,6 +2197,40 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: { error: { code: 'bad_request', message: 'Unknown record key: title' } },
   },
   {
+    name: 'error-bad-request-non-boolean-purge',
+    description:
+      'DELETE /records/:id takes purge only as "true" or "false"; any other value returns 400 ' +
+      'with code "bad_request" and deletes nothing. Read as false, a purge the caller meant ' +
+      'becomes a soft delete that answers 200. See docs/spec/wire-format.md § Unrecognized input.',
+    method: 'DELETE',
+    path: '/records/1hk153x00001?purge=1',
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Invalid purge: expected true or false, got "1"' },
+    },
+  },
+  {
+    name: 'error-bad-request-unknown-auth-token-key',
+    description:
+      'POST /auth/token takes did, nonce and signature and nothing else; any other key — here ' +
+      'a subjectId naming whom the token should act for — returns 400 with code "bad_request" ' +
+      'and issues no token. Ignoring it would answer with a token the client did not ask for. ' +
+      'See docs/spec/wire-format.md § Unrecognized input.',
+    method: 'POST',
+    path: '/auth/token',
+    requestBody: {
+      did: 'did:key:z6Mkfsz9oK6i2355mvEwtDYdAmqCN6kmQETThJtARfj9iGum',
+      nonce: 'k7Qm2ZxRt9vLbNc4Hy8Wf3',
+      signature:
+        'CIvHvqS75hEpPDZi7hwLFOMM44-UCMuF5HzZ9_OIAMQvsGAYGsvXXpXQTP3KaPH2qKnQxl2j3xcB_v-axIx8Bg',
+      subjectId: 'did:key:z6Mktp5FtRqj2M7JxnPz9JWGMCUTE5o3XGt1br11TczKGp7B',
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Unknown key in auth token body: subjectId' },
+    },
+  },
+  {
     name: 'error-validation-failed',
     description:
       'PATCH content that fails the target type schema returns 422 with code "validation" and ' +

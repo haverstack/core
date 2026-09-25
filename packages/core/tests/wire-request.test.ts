@@ -4,6 +4,9 @@ import {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseDeleteParams,
+  parseDownloadParams,
+  parseAssociationParams,
   parseIfMatch,
   parseUploadFilename,
   parsePositiveInt,
@@ -496,5 +499,73 @@ describe('parseDate', () => {
     expect(parseDate('not-a-date')).toBeUndefined();
     expect(parseDate(1718452800000)).toBeUndefined();
     expect(parseDate(undefined)).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// DELETE /records/:id, GET /attachments/:fileId, GET /records/:id/associations
+// -------------------------------------------------------
+
+describe('parseDeleteParams', () => {
+  const del = (qs: string): URL => new URL(`https://stack.example.com/records/rec-1${qs}`);
+
+  test('purge is false unless it is "true"', () => {
+    expect(parseDeleteParams(del(''))).toEqual({ purge: false });
+    expect(parseDeleteParams(del('?purge=false'))).toEqual({ purge: false });
+    expect(parseDeleteParams(del('?purge=true'))).toEqual({ purge: true });
+  });
+
+  test('a non-boolean, misspelled or repeated purge is refused rather than read as a soft delete', () => {
+    expect(() => parseDeleteParams(del('?purge=1'))).toThrow(
+      new StackBadRequestError('Invalid purge: expected true or false, got "1"'),
+    );
+    expect(() => parseDeleteParams(del('?purg=true'))).toThrow(StackBadRequestError);
+    expect(() => parseDeleteParams(del('?purge=true&purge=false'))).toThrow(StackBadRequestError);
+  });
+});
+
+describe('parseDownloadParams', () => {
+  const dl = (qs: string): URL => new URL(`https://stack.example.com/attachments/abc${qs}`);
+
+  test('reads contentType and filename under the names the resolution takes', () => {
+    expect(parseDownloadParams(dl(''))).toEqual({});
+    expect(parseDownloadParams(dl('?contentType=image%2Fpng&filename=photo.png'))).toEqual({
+      contentTypeParam: 'image/png',
+      filenameParam: 'photo.png',
+    });
+  });
+
+  test('an unknown or repeated param is refused', () => {
+    expect(() => parseDownloadParams(dl('?attachmentRecordId=1hk153x00001'))).toThrow(
+      StackBadRequestError,
+    );
+    expect(() => parseDownloadParams(dl('?filename=a&filename=b'))).toThrow(StackBadRequestError);
+  });
+});
+
+describe('parseAssociationParams', () => {
+  const assoc = (qs: string): URL =>
+    new URL(`https://stack.example.com/records/rec-1/associations${qs}`);
+
+  test('reads kind and label', () => {
+    expect(parseAssociationParams(assoc(''))).toEqual({});
+    expect(parseAssociationParams(assoc('?kind=tag'))).toEqual({ kind: 'tag' });
+    expect(parseAssociationParams(assoc('?label=avatar'))).toEqual({ label: 'avatar' });
+  });
+
+  test('a kind that names no data association is refused rather than read as every kind', () => {
+    expect(() => parseAssociationParams(assoc('?kind=grant'))).toThrow(
+      new StackBadRequestError('Invalid kind: "grant"'),
+    );
+  });
+
+  test('kind names one value here, so a repeat is refused', () => {
+    expect(() => parseAssociationParams(assoc('?kind=tag&kind=attachment'))).toThrow(
+      new StackBadRequestError('Repeated query param: kind'),
+    );
+  });
+
+  test('an unknown param is refused', () => {
+    expect(() => parseAssociationParams(assoc('?type=tag'))).toThrow(StackBadRequestError);
   });
 });
