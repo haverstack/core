@@ -14,13 +14,9 @@
  * by a concrete intended writer) stay docs-only until they graduate.
  */
 
-import type { Stack, StackType, TypeId, TypeSchema } from '@haverstack/core';
+import type { DefineTypeOptions, Stack, StackType } from '@haverstack/core';
 
-export type CommonsType = {
-  readonly id: TypeId;
-  readonly name: string;
-  readonly schema: TypeSchema;
-};
+export type CommonsType = Readonly<Omit<DefineTypeOptions, 'migratesFrom'>>;
 
 const labeledValue = {
   kind: 'object',
