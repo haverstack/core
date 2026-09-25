@@ -56,6 +56,76 @@ const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
+const TARGET_KEYS: Record<RelationshipTargetPattern['kind'], readonly string[]> = {
+  record: ['kind', 'recordId', 'stackUrl'],
+  entity: ['kind', 'entityId'],
+  external: ['kind', 'ns', 'id'],
+};
+
+/** Every param `GET /records` defines. See docs/spec/wire-format.md § Records. */
+const RECORD_QUERY_PARAMS = [
+  'typeId',
+  'parentId',
+  'appId',
+  'createdBySubject',
+  'createdByPrincipal',
+  'tag',
+  'attachmentLabel',
+  'attachmentFileId',
+  'referencesFileId',
+  'relatedTo',
+  'relatedToStack',
+  'relatedToEntity',
+  'relatedToNs',
+  'relatedToId',
+  'relatedToLabel',
+  'search',
+  'createdBefore',
+  'createdAfter',
+  'updatedBefore',
+  'updatedAfter',
+  'includeDeleted',
+  'includeUnlisted',
+  'sort',
+  'sortContent',
+  'direction',
+  'limit',
+  'cursor',
+] as const;
+
+const QUERY_BODY_FILTER_KEYS = [
+  'typeId',
+  'parentId',
+  'appId',
+  'createdBy',
+  'tags',
+  'attachment',
+  'referencesFileId',
+  'relatedTo',
+  'content',
+  'contentPresent',
+  'search',
+  'includeDeleted',
+  'includeUnlisted',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+/**
+ * Every param `GET /changes` defines. `since` is the resume cursor, which
+ * the server reads itself — see parseChangeParams().
+ */
+const CHANGE_PARAMS = [
+  'typeId',
+  'baseId',
+  'parentId',
+  'createdBySubject',
+  'createdByPrincipal',
+  'kind',
+  'include',
+  'includeUnlisted',
+  'since',
+] as const;
 
 /**
  * Strict positive-integer parse for a URL param — rejects "1abc", "2.7",
@@ -138,6 +208,71 @@ function requirePlainObject(raw: unknown, label: string): Record<string, unknown
   return raw as Record<string, unknown>;
 }
 
+/**
+ * A plain object carrying only `keys`. An unrecognized key is refused
+ * rather than ignored, since ignoring it answers a different request than
+ * the one sent. See docs/spec/wire-format.md § Unrecognized input.
+ */
+function requireKnownKeys(
+  raw: unknown,
+  keys: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  const obj = requirePlainObject(raw, label);
+  const unknown = Object.keys(obj).filter((key) => !keys.includes(key));
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown key${unknown.length > 1 ? 's' : ''} in ${label}: ${unknown.join(', ')}`,
+    );
+  return obj;
+}
+
+/**
+ * Params a filter repeats to name several values. Any other param names
+ * one value, so a repeat of it is refused rather than read as its first.
+ */
+const REPEATABLE_PARAMS: ReadonlySet<string> = new Set([
+  'typeId',
+  'baseId',
+  'appId',
+  'createdBySubject',
+  'createdByPrincipal',
+  'tag',
+  'kind',
+]);
+
+/** The URL-param form of requireKnownKeys(), which also refuses a repeat. */
+function requireKnownParams(url: URL, names: readonly string[]): void {
+  const present = [...new Set(url.searchParams.keys())];
+  const unknown = present.filter((name) => !names.includes(name));
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown query param${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`,
+    );
+  const repeated = present.filter(
+    (name) => !REPEATABLE_PARAMS.has(name) && url.searchParams.getAll(name).length > 1,
+  );
+  if (repeated.length > 0)
+    throw new StackBadRequestError(
+      `Repeated query param${repeated.length > 1 ? 's' : ''}: ${repeated.join(', ')}`,
+    );
+}
+
+/** A boolean URL param: absent is false, and only `true`/`false` are values. */
+function booleanParam(url: URL, name: string): boolean {
+  const value = url.searchParams.get(name);
+  if (value === null || value === 'false') return false;
+  if (value === 'true') return true;
+  throw new StackBadRequestError(`Invalid ${name}: expected true or false, got "${value}"`);
+}
+
+function optionalBoolean(raw: unknown, label: string): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'boolean')
+    throw new StackBadRequestError(`Invalid ${label}: expected a boolean`);
+  return raw;
+}
+
 // -------------------------------------------------------
 // Filter fields that never travel
 // -------------------------------------------------------
@@ -190,11 +325,11 @@ export function assertQueryTravels(query: StackQuery): void {
  * a kind it does not recognize.
  */
 function parseRelatedToTarget(raw: unknown): RelationshipTargetPattern {
-  const t = requirePlainObject(raw, 'filter.relatedTo.target');
-  if (typeof t.kind !== 'string' || !TARGET_KINDS.has(t.kind))
-    throw new StackBadRequestError(
-      `Invalid filter.relatedTo.target.kind: ${JSON.stringify(t.kind)}`,
-    );
+  const label = 'filter.relatedTo.target';
+  const kind = requirePlainObject(raw, label).kind;
+  if (typeof kind !== 'string' || !TARGET_KINDS.has(kind))
+    throw new StackBadRequestError(`Invalid filter.relatedTo.target.kind: ${JSON.stringify(kind)}`);
+  const t = requireKnownKeys(raw, TARGET_KEYS[kind as RelationshipTargetPattern['kind']], label);
   if (t.kind === 'record') {
     return {
       kind: 'record',
@@ -219,7 +354,7 @@ function parseRelatedToTarget(raw: unknown): RelationshipTargetPattern {
 
 /** A label, a target, or both — the body form of the same filter. */
 function parseRelatedToBody(raw: unknown): RelatedToFilter {
-  const r = requirePlainObject(raw, 'filter.relatedTo');
+  const r = requireKnownKeys(raw, ['label', 'target'], 'filter.relatedTo');
   const label =
     r.label !== undefined ? requireString(r.label, 'filter.relatedTo.label') : undefined;
   const target = r.target !== undefined ? parseRelatedToTarget(r.target) : undefined;
@@ -295,7 +430,7 @@ function parseAttachmentParams(url: URL): AttachmentFilter | undefined {
 }
 
 function parseAttachmentBody(raw: unknown): AttachmentFilter {
-  const a = requirePlainObject(raw, 'filter.attachment');
+  const a = requireKnownKeys(raw, ['label', 'fileId'], 'filter.attachment');
   return {
     ...(a.label !== undefined && { label: requireString(a.label, 'filter.attachment.label') }),
     ...(a.fileId !== undefined && { fileId: requireString(a.fileId, 'filter.attachment.fileId') }),
@@ -328,6 +463,7 @@ function parseCreatedByParams(url: URL): RecordFilter['createdBy'] {
  */
 export function parseQueryParams(url: URL): StackQuery {
   assertNoUntravelableFields(url.searchParams.has('baseId'), url.searchParams.has('presentAt'));
+  requireKnownParams(url, RECORD_QUERY_PARAMS);
 
   const filter: RecordFilter = {};
 
@@ -376,8 +512,8 @@ export function parseQueryParams(url: URL): StackQuery {
     };
   }
 
-  if (url.searchParams.get('includeDeleted') === 'true') filter.includeDeleted = true;
-  if (url.searchParams.get('includeUnlisted') === 'true') filter.includeUnlisted = true;
+  if (booleanParam(url, 'includeDeleted')) filter.includeDeleted = true;
+  if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
 
   const query: StackQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
@@ -413,13 +549,17 @@ function parseLimitValue(raw: unknown): number {
  * Build a `StackQuery` from a `POST /records/query` JSON body — the
  * superset form, which additionally carries `filter.content`. Dates arrive
  * as the ISO strings `JSON.stringify` made of them and are decoded back to
- * `Date`. See docs/spec/wire-format.md § Records.
+ * `Date`. `undefined` is the absent body; `null` or any other non-object
+ * is refused, so a server hands over no body as `undefined`.
+ * See docs/spec/wire-format.md § Records.
  */
 export function parseQueryBody(raw: unknown): StackQuery {
-  if (!raw || typeof raw !== 'object') return {};
-  const body = raw as Record<string, unknown>;
+  if (raw === undefined) return {};
+  const body = requirePlainObject(raw, 'query body');
   const f = body.filter !== undefined ? requirePlainObject(body.filter, 'filter') : undefined;
   assertNoUntravelableFields(f !== undefined && 'baseId' in f, 'presentAt' in body);
+  requireKnownKeys(body, ['filter', 'sort', 'limit', 'cursor'], 'query body');
+  if (f) requireKnownKeys(f, QUERY_BODY_FILTER_KEYS, 'filter');
 
   const query: StackQuery = {};
 
@@ -431,7 +571,7 @@ export function parseQueryBody(raw: unknown): StackQuery {
       filter.parentId = f.parentId === null ? null : requireString(f.parentId, 'filter.parentId');
     if (f.appId !== undefined) filter.appId = requireStringOrArray(f.appId, 'filter.appId');
     if (f.createdBy !== undefined) {
-      const by = requirePlainObject(f.createdBy, 'filter.createdBy');
+      const by = requireKnownKeys(f.createdBy, ['subjectId', 'principalId'], 'filter.createdBy');
       filter.createdBy = {
         ...(by.subjectId !== undefined && {
           subjectId: requireStringOrArray(by.subjectId, 'filter.createdBy.subjectId'),
@@ -450,18 +590,18 @@ export function parseQueryBody(raw: unknown): StackQuery {
     if (f.contentPresent !== undefined)
       filter.contentPresent = requireStringArray(f.contentPresent, 'filter.contentPresent');
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
-    if (f.includeDeleted) filter.includeDeleted = true;
-    if (f.includeUnlisted) filter.includeUnlisted = true;
+    if (optionalBoolean(f.includeDeleted, 'filter.includeDeleted')) filter.includeDeleted = true;
+    if (optionalBoolean(f.includeUnlisted, 'filter.includeUnlisted')) filter.includeUnlisted = true;
 
-    if (f.createdAt) {
-      const r = requirePlainObject(f.createdAt, 'filter.createdAt');
+    if (f.createdAt !== undefined) {
+      const r = requireKnownKeys(f.createdAt, ['before', 'after'], 'filter.createdAt');
       filter.createdAt = {
         ...(r.before !== undefined && { before: requireDate(r.before, 'filter.createdAt.before') }),
         ...(r.after !== undefined && { after: requireDate(r.after, 'filter.createdAt.after') }),
       };
     }
-    if (f.updatedAt) {
-      const r = requirePlainObject(f.updatedAt, 'filter.updatedAt');
+    if (f.updatedAt !== undefined) {
+      const r = requireKnownKeys(f.updatedAt, ['before', 'after'], 'filter.updatedAt');
       filter.updatedAt = {
         ...(r.before !== undefined && { before: requireDate(r.before, 'filter.updatedAt.before') }),
         ...(r.after !== undefined && { after: requireDate(r.after, 'filter.updatedAt.after') }),
@@ -471,15 +611,15 @@ export function parseQueryBody(raw: unknown): StackQuery {
     query.filter = filter;
   }
 
-  if (body.sort) {
-    const s = requirePlainObject(body.sort, 'sort');
+  if (body.sort !== undefined) {
+    const s = requireKnownKeys(body.sort, ['field', 'contentField', 'direction'], 'sort');
     const sort = buildSort(s.field, s.contentField, s.direction);
     if (!sort) throw new StackBadRequestError('Invalid sort: expected a field or a contentField.');
     query.sort = sort;
   }
 
   if (body.limit !== undefined) query.limit = parseLimitValue(body.limit);
-  if (typeof body.cursor === 'string') query.cursor = body.cursor;
+  if (body.cursor !== undefined) query.cursor = requireString(body.cursor, 'cursor');
 
   return query;
 }
@@ -506,6 +646,7 @@ export type ParsedChangeParams = {
  * the server's own resumption machinery rather than request encoding.
  */
 export function parseChangeParams(url: URL): ParsedChangeParams {
+  requireKnownParams(url, CHANGE_PARAMS);
   const filter: ChangeFilter = {};
 
   const typeIds = url.searchParams.getAll('typeId');
@@ -536,7 +677,7 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   return {
     filter,
     includeRecords: include === 'record',
-    includeUnlisted: url.searchParams.get('includeUnlisted') === 'true',
+    includeUnlisted: booleanParam(url, 'includeUnlisted'),
   };
 }
 
@@ -550,6 +691,7 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
  * change feed's opaque cursor. See docs/spec/wire-format.md § Journal.
  */
 export function parseJournalParams(url: URL): JournalQuery {
+  requireKnownParams(url, ['afterSeq', 'limit']);
   const query: JournalQuery = {};
   const afterSeq = url.searchParams.get('afterSeq');
   if (afterSeq !== null) query.afterSeq = parsePositiveInt(afterSeq, 'afterSeq');

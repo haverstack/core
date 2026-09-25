@@ -183,6 +183,18 @@ Empty is not an encoding of anything — nor is a literal `null`. Absence is `40
 
 The distinction between **400** and **422** matters for write endpoints (`POST /records`, `PATCH /records/:id`, `POST /records/:id/migrate`, `POST /types`): a 400 covers a request that couldn't be parsed at all, or that is well-formed but addresses something that doesn't exist (an undefined `typeId`, a malformed TypeId, search text the engine cannot parse); a 422 means the server understood the request and what it addressed, but the content didn't satisfy the type schema. The distinguishing question is whether there was a schema to fail against: `StackValidationError.details` names the fields that broke, and an unknown type has no such detail to report — `Stack.create()` resolves the type and throws before the validation block runs for exactly this reason.
 
+### Unrecognized input
+
+**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target. The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
+
+Three things sit outside it:
+
+- **Keys an endpoint defines as ignored are not unrecognized.** A create body is a whole record, so it may carry every key a wire record has, and the server-assigned ones are dropped as [Records](#records) requires rather than refused.
+- **Headers.** A request carries headers the application never sees — proxies and browsers add them — so an unrecognized one is ignored, as is `If-Match` on the association endpoints (see [Records](#records)).
+- **Responses.** A client reading a server's response ignores what it doesn't recognize, the way it ignores an [unrecognized frame](./change-feed.md). Strictness is the server's side of the contract, where the input is the client's intent.
+
+A server built on core reaches this through the wire parsers in `@haverstack/core/wire` — `parseQueryParams()`, `parseQueryBody()`, `parseChangeParams()`, `parseJournalParams()`, `createOptionsFromWireRecord()` and `changesFromWireBody()` — each of which refuses what its endpoint does not define. Endpoints a server parses itself — `/auth/token` among them — owe the same refusal.
+
 ### The taxonomy root
 
 Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `UseAfterCloseError`, `InvalidAdapterError`, `RelayScopeError`) stay outside the hierarchy for that reason.

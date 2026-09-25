@@ -20,6 +20,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   RecordChangeSet,
+  StackRecord,
   TokenSession,
   TypeId,
 } from './types.js';
@@ -34,6 +35,29 @@ export type WireCreateRequest = {
   /** Omitted, not optional: a caller cannot forward what the type lacks. */
   options: Omit<BackdatableCreateRecordOptions, 'createdBy'>;
 };
+
+/**
+ * Every top-level key a wire record carries — a `StackRecord`'s, so a new
+ * field fails to compile here until it is listed. A create body is a whole
+ * record, so each of these is accepted — stamped ones are then dropped —
+ * and anything else is refused. See docs/spec/wire-format.md § Unrecognized input.
+ */
+const WIRE_RECORD_KEYS: readonly string[] = Object.keys({
+  id: true,
+  typeId: true,
+  createdAt: true,
+  updatedAt: true,
+  content: true,
+  version: true,
+  parentId: true,
+  appId: true,
+  createdBy: true,
+  updatedBy: true,
+  deletedAt: true,
+  unlistedAt: true,
+  permissions: true,
+  associations: true,
+} satisfies Record<keyof StackRecord, true>);
 
 function requireBody(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))
@@ -94,6 +118,11 @@ export function createOptionsFromWireRecord(
   ownerEntityId: EntityId,
 ): WireCreateRequest {
   const record = requireBody(body);
+  const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown record key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`,
+    );
 
   const typeId = record.typeId;
   if (typeof typeId !== 'string' || typeId === '')
