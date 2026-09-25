@@ -546,13 +546,13 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
  * omitting `limit` reads the whole log by contract, so supplying a page
  * size here would truncate exactly the caller that omitted it.
  *
- * `sinceSeq` is a journal `seq` — a dense per-record integer, never the
+ * `afterSeq` is a journal `seq` — a dense per-record integer, never the
  * change feed's opaque cursor. See docs/spec/wire-format.md § Journal.
  */
 export function parseJournalParams(url: URL): JournalQuery {
   const query: JournalQuery = {};
-  const sinceSeq = url.searchParams.get('sinceSeq');
-  if (sinceSeq !== null) query.sinceSeq = parsePositiveInt(sinceSeq, 'sinceSeq');
+  const afterSeq = url.searchParams.get('afterSeq');
+  if (afterSeq !== null) query.afterSeq = parsePositiveInt(afterSeq, 'afterSeq');
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
   return query;

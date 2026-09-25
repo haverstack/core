@@ -24,7 +24,7 @@ An object rather than a boolean, for the same reason [`auth`](./wire-format.md#a
 GET /changes
 Accept: text/event-stream
 Authorization: Bearer <token>
-Last-Event-ID: <seq>          (equivalently ?since=<seq>)
+Last-Event-ID: <cursor>       (equivalently ?since=<cursor>)
 
 ?typeId=             (repeatable; exact match, as GET /records)
 ?baseId=             (repeatable; the whole type family)
@@ -46,7 +46,7 @@ Response: `200 text/event-stream`, a stream of frames.
 
 ```
 event: ready
-data: {"seq":"AA3f1Q"}
+data: {"cursor":"AA3f1Q"}
 
 id: AA3f1R
 event: record
@@ -76,7 +76,7 @@ event: reset
 data: {"reason":"cursor_expired"}
 ```
 
-- **`ready` is sent first, always.** It carries the head cursor, and it is what makes subscribe-then-query gap-free: a client that awaits it before querying knows every later change is in one or the other. A server that mints no cursors sends it with no `seq`.
+- **`ready` is sent first, always.** It carries the head cursor, and it is what makes subscribe-then-query gap-free: a client that awaits it before querying knows every later change is in one or the other. A server that mints no cursors sends it with no `cursor`.
 - **`record`** carries one change. `ops` is every aspect the change moved and is never empty — a list, because [one mutation can move several aspects](./data-model.md#mutations); `updatedAt` is an ISO string; `record`, when included, is a `WireRecord`. The envelope describes the change and carries no record provenance — `actor` is who performed it, never who authored the record. See [Change events § Attribution](./events.md#attribution).
 - **`associationsAdded`/`associationsRemoved`** ride the same frame, present exactly when `ops` names `associate`/`dissociate`, and carry what [Change events § The event shape](./events.md#the-event-shape) says they carry. The frame's `version` and `updatedAt` are whatever they were before the call, so these two lists are its only account of what moved. A subscriber that missed the frame recovers the delta from [the change journal](./journal.md), served by [`GET /records/:id/journal`](./wire-format.md#journal) — per record, so a reconnect still reconciles **which** records moved by query, and reads what moved on each from there.
 - **`reset`** means _your cursor cannot be honored; resynchronize by query_. A server with no buffer at all sends it on every connection and is fully conformant. `reason` is informational (`cursor_expired`, `not_supported`, `overflow`) — the client's repair is the same for all three.
@@ -86,7 +86,7 @@ data: {"reason":"cursor_expired"}
 
 **A client MUST ignore a frame whose name it does not recognize.** That is what makes a new frame an additive, minor change under [version negotiation](./wire-format.md#version-negotiation) rather than a break — type events, batch frames and anything else arrive that way.
 
-**`seq` is opaque and restricted to the unreserved base64url alphabet (`A-Za-z0-9_-`)**, for the same reason [a nonce is](./wire-format.md#the-handshake): it travels in a line-oriented protocol, where an unconstrained value would span fields and truncate the frame carrying it. A client echoes a cursor back and never computes with one, so a server is free to implement it as a WAL offset, a timestamp-counter pair, or anything else. `isValidSeq()` in `@haverstack/wire-types` applies the rule on both sides, and `@haverstack/core` applies it again to a `since` handed to `subscribe()` — so a cursor that could not be framed is refused the same way whatever adapter is underneath, rather than reaching one as a header it would truncate.
+**A cursor is opaque and restricted to the unreserved base64url alphabet (`A-Za-z0-9_-`)**, for the same reason [a nonce is](./wire-format.md#the-handshake): it travels in a line-oriented protocol, where an unconstrained value would span fields and truncate the frame carrying it. A client echoes a cursor back and never computes with one, so a server is free to implement it as a WAL offset, a timestamp-counter pair, or anything else. `isValidCursor()` in `@haverstack/wire-types` applies the rule on both sides, and `@haverstack/core` applies it again to a `since` handed to `subscribe()` — so a cursor that could not be framed is refused the same way whatever adapter is underneath, rather than reaching one as a header it would truncate.
 
 ## Backpressure and reconnection
 

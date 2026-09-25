@@ -628,7 +628,7 @@ export class MemoryAdapter implements StackAdapter {
     // See docs/spec/journal.md § Reading it.
     if (!this.records.has(id)) throw new StackNotFoundError(`Record not found: "${id}"`);
     const log = this.journals.get(id) ?? [];
-    const after = query.sinceSeq === undefined ? log : log.filter((e) => e.seq > query.sinceSeq!);
+    const after = query.afterSeq === undefined ? log : log.filter((e) => e.seq > query.afterSeq!);
     return query.limit === undefined ? after : after.slice(0, query.limit);
   }
 

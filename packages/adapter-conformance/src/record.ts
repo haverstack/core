@@ -589,7 +589,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(log[1]!.parentId).toBe(parent.id);
       });
 
-      test('sinceSeq is exclusive, limit bounds, and omitting both reads the whole log', async () => {
+      test('afterSeq is exclusive, limit bounds, and omitting both reads the whole log', async () => {
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         for (const label of ['a', 'b', 'c']) {
@@ -601,16 +601,16 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         }
 
         expect(await adapter.getJournal(record.id)).toHaveLength(4);
-        expect((await adapter.getJournal(record.id, { sinceSeq: 2 })).map((e) => e.seq)).toEqual([
+        expect((await adapter.getJournal(record.id, { afterSeq: 2 })).map((e) => e.seq)).toEqual([
           3, 4,
         ]);
         expect((await adapter.getJournal(record.id, { limit: 2 })).map((e) => e.seq)).toEqual([
           1, 2,
         ]);
         expect(
-          (await adapter.getJournal(record.id, { sinceSeq: 1, limit: 2 })).map((e) => e.seq),
+          (await adapter.getJournal(record.id, { afterSeq: 1, limit: 2 })).map((e) => e.seq),
         ).toEqual([2, 3]);
-        expect(await adapter.getJournal(record.id, { sinceSeq: 99 })).toEqual([]);
+        expect(await adapter.getJournal(record.id, { afterSeq: 99 })).toEqual([]);
       });
 
       test('a failed mutation leaves no entry behind', async () => {

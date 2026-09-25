@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CHANGE_TRANSPORT_SSE,
   WIRE_PROTOCOL_VERSION,
-  isValidSeq,
+  isValidCursor,
   serializeChange,
   supportsChangeFeed,
 } from '../src/index.js';
@@ -125,7 +125,7 @@ describe('serializeChange', () => {
   });
 
   it('carries a server-minted cursor when the frame has one', () => {
-    expect(serializeChange(change({ seq: 'AA3f1R' })).seq).toBe('AA3f1R');
+    expect(serializeChange(change({ cursor: 'AA3f1R' })).cursor).toBe('AA3f1R');
   });
 });
 
@@ -207,10 +207,10 @@ describe('supportsChangeFeed', () => {
   });
 });
 
-describe('isValidSeq', () => {
+describe('isValidCursor', () => {
   it('accepts unreserved base64url characters', () => {
     for (const good of ['AA3f1Q', 'a-b_c', '0', 'A'.repeat(64)]) {
-      expect(isValidSeq(good)).toBe(true);
+      expect(isValidCursor(good)).toBe(true);
     }
   });
 
@@ -218,7 +218,7 @@ describe('isValidSeq', () => {
   // a field ends the frame carrying it instead.
   it('rejects anything that could span a frame', () => {
     for (const bad of ['', 'a b', 'a\nb', 'a\rb', 'a:b', 'a+b', 'a/b', 'AA==', '../etc']) {
-      expect(isValidSeq(bad)).toBe(false);
+      expect(isValidCursor(bad)).toBe(false);
     }
   });
 });

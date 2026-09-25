@@ -8,7 +8,7 @@
  * See docs/spec/change-feed.md.
  */
 import { describe, it, expect } from 'vitest';
-import { isValidSeq } from '@haverstack/wire-types';
+import { isValidCursor } from '@haverstack/wire-types';
 import type { WireRecordChange } from '@haverstack/wire-types';
 import { changeFeedFixtures, changeFeedSequenceFixtures } from '../src/index.js';
 import type { ChangeFeedFixture, ChangeFeedFrame } from '../src/index.js';
@@ -67,7 +67,7 @@ describe('every connection', () => {
   it('mints every frame id in the framable charset', () => {
     for (const c of connections) {
       for (const f of framesOf(c)) {
-        if (f.id !== undefined) expect(isValidSeq(f.id), `${c.name}: ${f.id}`).toBe(true);
+        if (f.id !== undefined) expect(isValidCursor(f.id), `${c.name}: ${f.id}`).toBe(true);
       }
     }
   });

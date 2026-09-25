@@ -50,7 +50,7 @@ const remoteChange = (overrides: Partial<RecordChange> = {}): RecordChange => ({
   version: 4,
   updatedAt: new Date('2024-01-02T00:00:00.000Z'),
   actor: { subjectId: REMOTE_EDITOR },
-  seq: 'AA3f1R',
+  cursor: 'AA3f1R',
   ...overrides,
 });
 
@@ -87,7 +87,7 @@ describe('a stack whose adapter relays', () => {
     adapter.relays[0]!.push(remoteChange());
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ recordId: '1hk153x00001', version: 4, seq: 'AA3f1R' });
+    expect(seen[0]).toMatchObject({ recordId: '1hk153x00001', version: 4, cursor: 'AA3f1R' });
   });
 
   // The far end applied the filter against the record it held. Re-deriving

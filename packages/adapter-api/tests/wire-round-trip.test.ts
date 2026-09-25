@@ -82,7 +82,7 @@ async function roundTripChanges(
     new Response(
       new ReadableStream<Uint8Array>({
         start(c) {
-          c.enqueue(encoder.encode('event: ready\ndata: {"seq":"AA3f1Q"}\n\n'));
+          c.enqueue(encoder.encode('event: ready\ndata: {"cursor":"AA3f1Q"}\n\n'));
         },
       }),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },

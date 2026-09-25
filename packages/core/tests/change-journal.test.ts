@@ -472,14 +472,14 @@ describe('the journal and the feed report the same change', () => {
 // -------------------------------------------------------
 
 describe('the read surface', () => {
-  test('sinceSeq resumes after an entry already seen', async () => {
+  test('afterSeq resumes after an entry already seen', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
     await stack.associate(note.id, { kind: 'tag', label: 'a' });
     await stack.associate(note.id, { kind: 'tag', label: 'b' });
 
-    const tail = await stack.getJournal(note.id, { sinceSeq: 1 });
+    const tail = await stack.getJournal(note.id, { afterSeq: 1 });
     expect(tail.map((e) => e.seq)).toEqual([2, 3]);
-    expect(await stack.getJournal(note.id, { sinceSeq: 3 })).toEqual([]);
+    expect(await stack.getJournal(note.id, { afterSeq: 3 })).toEqual([]);
   });
 
   test('limit bounds a page from the oldest end', async () => {
@@ -559,8 +559,8 @@ describe('JournalQuery is validated at the surface', () => {
   test.each([
     ['limit', { limit: -1 }],
     ['limit', { limit: 1.5 }],
-    ['sinceSeq', { sinceSeq: -1 }],
-    ['sinceSeq', { sinceSeq: 2.5 }],
+    ['afterSeq', { afterSeq: -1 }],
+    ['afterSeq', { afterSeq: 2.5 }],
   ])('refuses a non-integer or negative %s', async (_key, query) => {
     const note = await stack.create(NOTE, { text: 'hello' });
     await expect(stack.getJournal(note.id, query)).rejects.toThrow(StackBadRequestError);

@@ -677,10 +677,10 @@ describe('getJournal fixtures', () => {
       }
 
       const query = new URL(`${BASE_URL}${fixture.path}`).searchParams;
-      const sinceSeq = query.get('sinceSeq');
+      const afterSeq = query.get('afterSeq');
       const limit = query.get('limit');
       const log = await adapter.getJournal(idFromPath(fixture.path), {
-        ...(sinceSeq !== null && { sinceSeq: Number(sinceSeq) }),
+        ...(afterSeq !== null && { afterSeq: Number(afterSeq) }),
         ...(limit !== null && { limit: Number(limit) }),
       });
 

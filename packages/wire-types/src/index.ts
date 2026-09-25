@@ -165,10 +165,9 @@ export function serializeVersion(v: RecordVersion): WireVersion {
  * change recoverable — an envelope with a verb, an actor and a delta, and
  * no `content`, which lives on a snapshot.
  *
- * `seq` is a dense integer from 1, per record. It is not the change feed's
- * `seq`, which is an opaque server-minted cursor over the whole stack:
- * they share a name because both order a stream, and nothing may be
- * carried from one to the other. See docs/spec/wire-format.md § Journal.
+ * `seq` is a dense integer from 1, per record — never the change feed's
+ * opaque `cursor`, and nothing may be carried from one to the other. See
+ * docs/spec/wire-format.md § Journal.
  */
 export type WireJournalEntry = {
   seq: number;
@@ -201,7 +200,7 @@ export type WireJournalEntry = {
  * `cursor` is the only end-of-log signal, as it is on a query: a server
  * may cap a page below the `limit` asked for, so a short page does not
  * mean an exhausted log. It carries the `seq` to send as the next
- * `sinceSeq`, and is null once nothing follows.
+ * `afterSeq`, and is null once nothing follows.
  */
 export type WireJournalResponse = {
   entries: WireJournalEntry[];
@@ -660,7 +659,7 @@ export type WireRecordChange = {
   /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
   associationsRemoved?: Association[];
   record?: WireRecord;
-  seq?: string;
+  cursor?: string;
 };
 
 /** Who performed a change. Never who authored the record. */
@@ -699,7 +698,7 @@ export function serializeChange(c: RecordChange): WireRecordChange {
     updatedAt: c.updatedAt.toISOString(),
   };
   if (c.actor !== undefined) w.actor = serializeChangeActor(c.actor);
-  if (c.seq !== undefined) w.seq = c.seq;
+  if (c.cursor !== undefined) w.cursor = c.cursor;
   if (c.kind === 'purged') return w;
   if (c.parentId !== undefined) w.parentId = c.parentId;
   if (c.associationsAdded !== undefined) w.associationsAdded = c.associationsAdded;
@@ -723,7 +722,7 @@ export const CHANGE_FRAME_RESET = 'reset';
  */
 export type WireReadyFrame = {
   /** The head cursor. Absent from a server that mints none (`resume: false`). */
-  seq?: string;
+  cursor?: string;
 };
 
 /**
@@ -742,11 +741,11 @@ export type WireResetFrame = {
  * truncate the frame carrying it. Same charset and same reason as the auth
  * nonce — see docs/spec/wire-format.md § The handshake.
  */
-const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
+const CURSOR_FORMAT = /^[A-Za-z0-9_-]+$/;
 
 /** Whether a cursor is framable: unreserved base64url characters only. */
-export function isValidSeq(seq: string): boolean {
-  return SEQ_FORMAT.test(seq);
+export function isValidCursor(cursor: string): boolean {
+  return CURSOR_FORMAT.test(cursor);
 }
 
 /** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */

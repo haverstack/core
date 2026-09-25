@@ -479,7 +479,7 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
  * Same charset and same reason as the auth nonce — see
  * docs/spec/change-feed.md § Frames.
  */
-const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
+const CURSOR_FORMAT = /^[A-Za-z0-9_-]+$/;
 
 /**
  * `since` only means something where a relay exists: a stack with no
@@ -499,14 +499,14 @@ export function assertSinceUsable(since: string | undefined, relaysChanges: bool
     throw new StackBadRequestError(
       'subscribe() was passed `since`, but this stack relays no changes from elsewhere and so ' +
         'has no cursor it could ever have minted. Omit `since` — or, for a stack that relays ' +
-        'from a server, use the seq off a previously delivered RecordChange.',
+        'from a server, use the cursor off a previously delivered RecordChange.',
     );
   }
-  if (!SEQ_FORMAT.test(since)) {
+  if (!CURSOR_FORMAT.test(since)) {
     throw new StackBadRequestError(
-      `subscribe() was passed the resume cursor "${since}", which is not a valid seq: a cursor ` +
+      `subscribe() was passed the resume cursor "${since}", which cannot be framed: a cursor ` +
         'carries unreserved base64url characters only, because it travels in a frame id. Use ' +
-        'the seq off a previously delivered RecordChange, unaltered.',
+        'the cursor off a previously delivered RecordChange, unaltered.',
     );
   }
 }
