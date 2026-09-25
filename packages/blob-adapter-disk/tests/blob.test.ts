@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { StackNotFoundError, StackQueryError } from '@haverstack/core';
+import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import { DiskBlobAdapter } from '../src/index.js';
 
 let testDir: string;
@@ -48,8 +48,8 @@ describe('DiskBlobAdapter', () => {
     await expect(adapter.getAttachment(validHash)).rejects.toThrow(StackNotFoundError);
   });
 
-  test('getAttachment throws StackQueryError for invalid fileId format', async () => {
-    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackQueryError);
+  test('getAttachment throws StackBadRequestError for invalid fileId format', async () => {
+    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackBadRequestError);
     await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(/Invalid fileId/);
   });
 

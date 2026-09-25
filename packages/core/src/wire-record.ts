@@ -12,7 +12,7 @@
  */
 
 import { isOwnerActingAlone } from './access.js';
-import { StackQueryError, StackValidationError } from './errors.js';
+import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
 import { RECORD_CHANGE_KEYS } from './types.js';
 import type {
@@ -37,7 +37,7 @@ export type WireCreateRequest = {
 
 function requireBody(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))
-    throw new StackQueryError('Invalid record body: expected an object');
+    throw new StackBadRequestError('Invalid record body: expected an object');
   return body as Record<string, unknown>;
 }
 
@@ -97,10 +97,10 @@ export function createOptionsFromWireRecord(
 
   const typeId = record.typeId;
   if (typeof typeId !== 'string' || typeId === '')
-    throw new StackQueryError('Invalid record body: typeId is required');
+    throw new StackBadRequestError('Invalid record body: typeId is required');
   const content = record.content;
   if (typeof content !== 'object' || content === null || Array.isArray(content))
-    throw new StackQueryError('Invalid record body: content is required');
+    throw new StackBadRequestError('Invalid record body: content is required');
 
   const options: WireCreateRequest['options'] = {};
 
@@ -137,7 +137,7 @@ export function createOptionsFromWireRecord(
  * since a dropped `permissions` silently fails to share and a dropped
  * `unlisted` silently fails to publish.
  *
- * `StackQueryError` (400) for a key that addresses nothing and
+ * `StackBadRequestError` (400) for a key that addresses nothing and
  * `StackValidationError` (422) for one whose value is the wrong shape —
  * the same split every other write endpoint makes. Content keys are
  * `Stack`'s to judge, so `contentPatch` is checked for being an object and
@@ -151,7 +151,7 @@ export function changesFromWireBody(body: unknown): RecordChanges {
     (key) => !(RECORD_CHANGE_KEYS as readonly string[]).includes(key),
   );
   if (unknown.length > 0) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Unknown change-set key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
         `A change set names one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
     );
@@ -190,7 +190,7 @@ export function changesFromWireBody(body: unknown): RecordChanges {
   // server answers 400 without a storage round trip; mutate() refuses it
   // again for callers that never went through the wire.
   if (Object.keys(changes).length === 0) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `An empty change set addresses nothing. Name one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
     );
   }

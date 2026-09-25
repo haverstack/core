@@ -18,7 +18,7 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 
 **`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
 
-**`StackBlobAdapter` error contract:** `getAttachment(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackQueryError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
+**`StackBlobAdapter` error contract:** `getAttachment(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
 
 ```ts
 type StackAdapter = StackRecordAdapter &

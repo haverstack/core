@@ -27,7 +27,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackMigrationError,
-  StackQueryError,
+  StackBadRequestError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
@@ -391,7 +391,7 @@ export function deserializeError(body: WireError): Error {
         versionConflict?.actualVersion ?? -1,
       );
     case 'bad_request':
-      return new StackQueryError(message);
+      return new StackBadRequestError(message);
     case 'migration':
       return new StackMigrationError(message);
     case 'schema_drift':

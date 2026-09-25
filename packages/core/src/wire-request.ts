@@ -20,12 +20,12 @@
  *   `Stack`'s to judge, and judging it twice would let the two answers
  *   drift.
  *
- * Everything here throws `StackQueryError` on malformed input, which
+ * Everything here throws `StackBadRequestError` on malformed input, which
  * servers already map to 400 — see docs/spec/wire-format.md § Error
  * responses.
  */
 
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   ChangeFilter,
@@ -62,19 +62,19 @@ const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external
  * "malformed, don't silently coerce" requirement.
  */
 export function parsePositiveInt(raw: string, label: string): number {
-  if (!POSITIVE_INTEGER.test(raw)) throw new StackQueryError(`Invalid ${label}: "${raw}"`);
+  if (!POSITIVE_INTEGER.test(raw)) throw new StackBadRequestError(`Invalid ${label}: "${raw}"`);
   return parseInt(raw, 10);
 }
 
 function requireDate(raw: unknown, label: string): Date {
   const d = parseDate(raw);
-  if (!d) throw new StackQueryError(`Invalid ${label}: ${JSON.stringify(raw)}`);
+  if (!d) throw new StackBadRequestError(`Invalid ${label}: ${JSON.stringify(raw)}`);
   return d;
 }
 
 function requireSortField(raw: unknown): NativeSortField {
   if (typeof raw !== 'string' || !SORT_FIELDS.has(raw as NativeSortField))
-    throw new StackQueryError(`Invalid sort field: ${JSON.stringify(raw)}`);
+    throw new StackBadRequestError(`Invalid sort field: ${JSON.stringify(raw)}`);
   return raw as NativeSortField;
 }
 
@@ -90,7 +90,9 @@ function buildSort(
   direction: unknown,
 ): QuerySort | undefined {
   if (field !== undefined && field !== null && contentField !== undefined && contentField !== null)
-    throw new StackQueryError('A sort names either a native field or a content field, never both.');
+    throw new StackBadRequestError(
+      'A sort names either a native field or a content field, never both.',
+    );
   const dir =
     direction === undefined || direction === null ? undefined : requireSortDirection(direction);
   if (contentField !== undefined && contentField !== null) {
@@ -107,30 +109,31 @@ function buildSort(
 
 function requireSortDirection(raw: unknown): NonNullable<QuerySort['direction']> {
   if (typeof raw !== 'string' || !SORT_DIRECTIONS.has(raw as NonNullable<QuerySort['direction']>))
-    throw new StackQueryError(`Invalid sort direction: ${JSON.stringify(raw)}`);
+    throw new StackBadRequestError(`Invalid sort direction: ${JSON.stringify(raw)}`);
   return raw as NonNullable<QuerySort['direction']>;
 }
 
 function requireString(raw: unknown, label: string): string {
-  if (typeof raw !== 'string') throw new StackQueryError(`Invalid ${label}: expected a string`);
+  if (typeof raw !== 'string')
+    throw new StackBadRequestError(`Invalid ${label}: expected a string`);
   return raw;
 }
 
 function requireStringOrArray(raw: unknown, label: string): string | string[] {
   if (typeof raw === 'string') return raw;
   if (Array.isArray(raw) && raw.every((v) => typeof v === 'string')) return raw as string[];
-  throw new StackQueryError(`Invalid ${label}: expected a string or array of strings`);
+  throw new StackBadRequestError(`Invalid ${label}: expected a string or array of strings`);
 }
 
 function requireStringArray(raw: unknown, label: string): string[] {
   if (!Array.isArray(raw) || !raw.every((v) => typeof v === 'string'))
-    throw new StackQueryError(`Invalid ${label}: expected an array of strings`);
+    throw new StackBadRequestError(`Invalid ${label}: expected an array of strings`);
   return raw as string[];
 }
 
 function requirePlainObject(raw: unknown, label: string): Record<string, unknown> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
-    throw new StackQueryError(`Invalid ${label}: expected an object`);
+    throw new StackBadRequestError(`Invalid ${label}: expected an object`);
   return raw as Record<string, unknown>;
 }
 
@@ -155,8 +158,8 @@ const PRESENT_AT_REFUSAL =
  * capability-gated filter. See docs/spec/wire-format.md § Records.
  */
 function assertNoUntravelableFields(hasBaseId: boolean, hasPresentAt: boolean): void {
-  if (hasBaseId) throw new StackQueryError(BASE_ID_REFUSAL);
-  if (hasPresentAt) throw new StackQueryError(PRESENT_AT_REFUSAL);
+  if (hasBaseId) throw new StackBadRequestError(BASE_ID_REFUSAL);
+  if (hasPresentAt) throw new StackBadRequestError(PRESENT_AT_REFUSAL);
 }
 
 /**
@@ -188,7 +191,9 @@ export function assertQueryTravels(query: StackQuery): void {
 function parseRelatedToTarget(raw: unknown): RelationshipTargetPattern {
   const t = requirePlainObject(raw, 'filter.relatedTo.target');
   if (typeof t.kind !== 'string' || !TARGET_KINDS.has(t.kind))
-    throw new StackQueryError(`Invalid filter.relatedTo.target.kind: ${JSON.stringify(t.kind)}`);
+    throw new StackBadRequestError(
+      `Invalid filter.relatedTo.target.kind: ${JSON.stringify(t.kind)}`,
+    );
   if (t.kind === 'record') {
     return {
       kind: 'record',
@@ -240,13 +245,14 @@ function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
   const label = url.searchParams.get('relatedToLabel');
 
   if ([hasRecord, hasEntity, hasNs].filter(Boolean).length > 1) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       'relatedTo, relatedToEntity and relatedToNs name different target kinds and are mutually exclusive',
     );
   }
   if (hasStack && !hasRecord)
-    throw new StackQueryError('relatedToStack is only valid alongside relatedTo');
-  if (hasId && !hasNs) throw new StackQueryError('relatedToId is only valid alongside relatedToNs');
+    throw new StackBadRequestError('relatedToStack is only valid alongside relatedTo');
+  if (hasId && !hasNs)
+    throw new StackBadRequestError('relatedToId is only valid alongside relatedToNs');
 
   let target: RelationshipTargetPattern | undefined;
   if (hasRecord) {
@@ -375,7 +381,7 @@ export function parseQueryParams(url: URL): StackQuery {
 /** Validate a limit that already arrived as a JSON number. */
 function parseLimitValue(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0)
-    throw new StackQueryError(`Invalid limit: ${JSON.stringify(raw)}`);
+    throw new StackBadRequestError(`Invalid limit: ${JSON.stringify(raw)}`);
   return raw;
 }
 
@@ -445,7 +451,7 @@ export function parseQueryBody(raw: unknown): StackQuery {
   if (body.sort) {
     const s = requirePlainObject(body.sort, 'sort');
     const sort = buildSort(s.field, s.contentField, s.direction);
-    if (!sort) throw new StackQueryError('Invalid sort: expected a field or a contentField.');
+    if (!sort) throw new StackBadRequestError('Invalid sort: expected a field or a contentField.');
     query.sort = sort;
   }
 
@@ -495,14 +501,14 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   if (kinds.length) {
     for (const kind of kinds) {
       if (!CHANGE_KINDS.has(kind as ChangeKind))
-        throw new StackQueryError(`Invalid kind: "${kind}"`);
+        throw new StackBadRequestError(`Invalid kind: "${kind}"`);
     }
     filter.kinds = kinds as ChangeKind[];
   }
 
   const include = url.searchParams.get('include');
   if (include !== null && include !== 'record')
-    throw new StackQueryError(`Invalid include: "${include}"`);
+    throw new StackBadRequestError(`Invalid include: "${include}"`);
 
   return {
     filter,

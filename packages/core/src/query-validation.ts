@@ -17,7 +17,7 @@
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
@@ -48,7 +48,7 @@ export function assertQueryCapabilities(
 ): void {
   const { content: reach, contentPresent, search } = capabilities.filter;
   if (filter?.search && !search) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
       'filter.search',
     );
@@ -58,14 +58,14 @@ export function assertQueryCapabilities(
   if (reach === 'none') {
     // Named as `filter.content` whichever key the query used: the reach
     // is what is absent, and it is the entry to look at in discovery.
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
         'but this adapter declares filter.content: "none".',
       'filter.content',
     );
   }
   if (present && !contentPresent) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
         'filter.contentPresent capability.',
       'filter.contentPresent',
@@ -73,7 +73,7 @@ export function assertQueryCapabilities(
   }
   for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
     if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Query uses the nested content path "${key}", but this adapter declares ` +
           `filter.content: "${reach}".`,
         'filter.content',
@@ -108,18 +108,18 @@ export function parseContentFilterKey(key: string): string[] {
   // 64-table join limit, so a path past the cap is one the engine could
   // not execute. See docs/spec/data-model.md § Nested content paths.
   if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
     );
   }
   for (const segment of segments) {
     if (segment === '') {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Invalid content filter path "${key}": a path segment cannot be empty.`,
       );
     }
     if (SEGMENT_METACHARACTER_RE.test(segment)) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Invalid content filter path "${key}": a segment cannot contain any of ` +
           `${CONTENT_SEGMENT_METACHARACTERS.join(' ')}.`,
       );
@@ -152,10 +152,12 @@ const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 export function assertValidSort(sort: QuerySort | undefined): void {
   if (!sort) return;
   if (sort.field !== undefined && sort.contentField !== undefined) {
-    throw new StackQueryError('A sort names either a native field or a content field, never both.');
+    throw new StackBadRequestError(
+      'A sort names either a native field or a content field, never both.',
+    );
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid sort field "${sort.field}": expected one of ${NATIVE_SORT_FIELDS.join(', ')}.`,
     );
   }
@@ -166,13 +168,13 @@ export function assertValidSort(sort: QuerySort | undefined): void {
     // position to order its record by (docs/spec/data-model.md
     // § Sorting by a content field).
     if (parseContentFilterKey(sort.contentField).length > 1) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
       );
     }
   }
   if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
     );
   }
@@ -192,7 +194,7 @@ export function assertSortCapability(
   if (!sort) return;
   if (sort.contentField !== undefined) {
     if (!capabilities.sort.contentField) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         'Query uses sort.contentField, but this adapter does not declare the sort.contentField ' +
           'capability.',
         'sort.contentField',
@@ -202,7 +204,7 @@ export function assertSortCapability(
   }
   const field = sort.field ?? 'createdAt';
   if (!capabilities.sort.fields.includes(field)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
       'sort.fields',
     );
@@ -365,7 +367,7 @@ export function assertDataAssociations(
 ): asserts associations is DataAssociation[] {
   const authority = associations.find((a) => namesKind(a) && isAuthorityAssociation(a));
   if (!authority) return;
-  throw new StackQueryError(
+  throw new StackBadRequestError(
     `${surface} does not carry authority: a "${authority.kind}" association belongs to the ` +
       '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
   );
@@ -382,7 +384,7 @@ export function assertAuthorityAssociations(
 ): asserts permissions is AuthorityAssociation[] {
   const data = permissions.find((a) => namesKind(a) && !isAuthorityAssociation(a));
   if (!data) return;
-  throw new StackQueryError(
+  throw new StackBadRequestError(
     `${surface} carries authority alone: a "${data.kind}" association belongs to the ` +
       '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
   );
@@ -429,7 +431,7 @@ export function validateAssociations(
 export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void {
   if (!relatedTo) return;
   if (relatedTo.label === undefined && relatedTo.target === undefined) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       'filter.relatedTo must name a label, a target, or both — "any relationship at all" is not a filter.',
     );
   }
@@ -437,7 +439,7 @@ export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void
   const errors = targetErrors(relatedTo.target, 'filter.relatedTo.target', {
     externalIdOptional: true,
   });
-  if (errors.length > 0) throw new StackQueryError(errors[0].message);
+  if (errors.length > 0) throw new StackBadRequestError(errors[0].message);
 }
 
 /**
@@ -459,7 +461,7 @@ export function assertValidJournalQuery(query: JournalQuery | undefined): void {
     const value = query[key];
     if (value === undefined) continue;
     if (!Number.isInteger(value) || value < 0) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
       );
     }

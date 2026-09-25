@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { NATIVE_SORT_FIELDS, StackQueryError } from '@haverstack/core';
+import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
 import { encodeCursor, decodeCursor, makeCursor, SORT_FIELDS } from '../src/cursor.js';
 import type { ScalarFieldKind, StackRecord } from '@haverstack/core';
 
@@ -51,29 +51,29 @@ describe('encodeCursor / decodeCursor', () => {
     }
   });
 
-  test('throws StackQueryError for non-base64 garbage', () => {
-    expect(() => decodeCursor('!!!not-a-cursor!!!')).toThrow(StackQueryError);
+  test('throws StackBadRequestError for non-base64 garbage', () => {
+    expect(() => decodeCursor('!!!not-a-cursor!!!')).toThrow(StackBadRequestError);
   });
 
-  test('throws StackQueryError for base64 that is not a cursor payload', () => {
-    expect(() => decodeCursor(btoa('createdAt|12345|rec01'))).toThrow(StackQueryError);
-    expect(() => decodeCursor(btoa('{}'))).toThrow(StackQueryError);
-    expect(() => decodeCursor(btoa('[1,2,3]'))).toThrow(StackQueryError);
+  test('throws StackBadRequestError for base64 that is not a cursor payload', () => {
+    expect(() => decodeCursor(btoa('createdAt|12345|rec01'))).toThrow(StackBadRequestError);
+    expect(() => decodeCursor(btoa('{}'))).toThrow(StackBadRequestError);
+    expect(() => decodeCursor(btoa('[1,2,3]'))).toThrow(StackBadRequestError);
   });
 
-  test('throws StackQueryError for an unknown native sort field', () => {
+  test('throws StackBadRequestError for an unknown native sort field', () => {
     expect(() =>
       decodeCursor(btoa(JSON.stringify({ k: 'native', f: 'bogus', i: 'r1', v: 1 }))),
-    ).toThrow(StackQueryError);
+    ).toThrow(StackBadRequestError);
   });
 
-  test('throws StackQueryError for a value of the wrong shape for its partition', () => {
+  test('throws StackBadRequestError for a value of the wrong shape for its partition', () => {
     expect(() =>
       decodeCursor(btoa(JSON.stringify({ k: 'native', f: 'createdAt', i: 'r1', v: 'soon' }))),
-    ).toThrow(StackQueryError);
+    ).toThrow(StackBadRequestError);
     expect(() =>
       decodeCursor(btoa(JSON.stringify({ k: 'text', f: 'title', i: 'r1', v: 7 }))),
-    ).toThrow(StackQueryError);
+    ).toThrow(StackBadRequestError);
   });
 });
 

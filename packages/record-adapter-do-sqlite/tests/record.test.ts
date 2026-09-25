@@ -365,7 +365,7 @@ describe('records — queries', () => {
     expect(page2.cursor).toBeNull();
   });
 
-  test('malformed cursor throws StackQueryError', async () => {
+  test('malformed cursor throws StackBadRequestError', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1' }));
     const err = await stub.queryRecords({ cursor: '!!!not-a-cursor!!!' }).catch((e: unknown) => e);

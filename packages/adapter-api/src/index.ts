@@ -24,7 +24,7 @@
  * adapter.
  */
 
-import { StackError, StackQueryError } from '@haverstack/core';
+import { StackError, StackBadRequestError } from '@haverstack/core';
 import type {
   JournalQuery,
   RecordJournalEntry,
@@ -1144,16 +1144,16 @@ export class APIAdapter implements StackAdapter {
       assertSortCapability(query.sort, this.capabilities);
     } catch (err) {
       // The refusal names the capability it was refused for. A
-      // StackQueryError carrying none is about the query's own shape — a
+      // StackBadRequestError carrying none is about the query's own shape — a
       // malformed content path, which is the caller's error at any
-      // capability level — and travels as the StackQueryError it is.
-      if (err instanceof StackQueryError && err.capability) {
+      // capability level — and travels as the StackBadRequestError it is.
+      if (err instanceof StackBadRequestError && err.capability) {
         throw new APIAdapterCapabilityError(err.capability, err.message);
       }
       throw err;
     }
     // A malformed relationship filter is a caller error, not a missing
-    // capability, so this one travels as the StackQueryError it is —
+    // capability, so this one travels as the StackBadRequestError it is —
     // refused here rather than encoded into query params a server would
     // have to reject.
     assertValidRelatedTo(query.filter?.relatedTo);

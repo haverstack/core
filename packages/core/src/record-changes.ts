@@ -14,7 +14,7 @@
  */
 
 import { baseIdOf } from './schema.js';
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { SYSTEM_TYPES, RECORD_CHANGE_KEYS } from './types.js';
 import type {
   Association,
@@ -188,7 +188,7 @@ export function assertNonEmptyChangeSet(changes: RecordChanges): void {
   // Presence, not truthiness: `unlisted: false` and `parentId: null` are
   // aspects this call names.
   if (RECORD_CHANGE_KEYS.some((key) => changes[key] !== undefined)) return;
-  throw new StackQueryError(
+  throw new StackBadRequestError(
     'A change set names at least one of: ' + RECORD_CHANGE_KEYS.join(', ') + '.',
   );
 }

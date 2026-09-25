@@ -10,7 +10,7 @@
  */
 
 import { baseIdOf } from './schema.js';
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import { carriesRoster, groupRoleFromAssociations } from './access.js';
 import type {
@@ -127,15 +127,15 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
       return;
     case 'entity':
       if (typeof t.entityId !== 'string' || t.entityId.length === 0) {
-        throw new StackQueryError('An entity grant target requires a non-empty entityId.');
+        throw new StackBadRequestError('An entity grant target requires a non-empty entityId.');
       }
       return;
     case 'group':
       if (typeof t.groupId !== 'string' || t.groupId.length === 0) {
-        throw new StackQueryError('A group grant target requires a non-empty groupId.');
+        throw new StackBadRequestError('A group grant target requires a non-empty groupId.');
       }
       if (t.role !== 'member' && t.role !== 'admin' && !(allowAny && t.role === 'any')) {
-        throw new StackQueryError(
+        throw new StackBadRequestError(
           allowAny
             ? "A group grant target requires role 'member', 'admin' or 'any'."
             : "A group grant target requires role 'member' or 'admin'.",
@@ -145,7 +145,7 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
       // association's recordId. One that resolves to nothing simply denies.
       return;
     default:
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         "A grant target must name its tier: { kind: 'entity' }, { kind: 'group' } or { kind: 'authenticated' }.",
       );
   }

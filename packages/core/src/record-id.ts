@@ -10,7 +10,7 @@
  */
 
 import { isValidIdFormat, idTimestamp, MAX_ID_TIMESTAMP } from './id.js';
-import { StackQueryError, StackValidationError } from './errors.js';
+import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { ValidationError } from './validate.js';
 
 // -------------------------------------------------------
@@ -28,12 +28,12 @@ export const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
  */
 export function validateParentId(parentId: string): void {
   if (parentId.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid parentId "${parentId}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
     );
   }
   if (!isValidIdFormat(parentId)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid parentId "${parentId}": expected 12 lowercase Crockford base-32 characters.`,
     );
   }
@@ -45,18 +45,18 @@ export function validateParentId(parentId: string): void {
  * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
  * as a generic format error instead of a specific, actionable one.
  *
- * Throws StackQueryError, not StackValidationError: a malformed id is
+ * Throws StackBadRequestError, not StackValidationError: a malformed id is
  * structurally bad input the request never gets past — it doesn't reach
  * type-schema validation — the same reasoning that makes an undecodable
- * pagination cursor a StackQueryError rather than a content-validation
- * failure. See StackQueryError's doc comment.
+ * pagination cursor a StackBadRequestError rather than a content-validation
+ * failure. See StackBadRequestError's doc comment.
  */
 export function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackQueryError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
+    throw new StackBadRequestError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
   }
   if (!isValidIdFormat(id)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
     );
   }

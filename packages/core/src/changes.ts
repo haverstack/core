@@ -26,7 +26,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types.js';
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { bumpsVersion, feedAssociationDelta, movesAuthority } from './record-changes.js';
 
 /**
@@ -496,14 +496,14 @@ const SEQ_FORMAT = /^[A-Za-z0-9_-]+$/;
 export function assertSinceUsable(since: string | undefined, relaysChanges: boolean): void {
   if (since === undefined) return;
   if (!relaysChanges) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       'subscribe() was passed `since`, but this stack relays no changes from elsewhere and so ' +
         'has no cursor it could ever have minted. Omit `since` — or, for a stack that relays ' +
         'from a server, use the seq off a previously delivered RecordChange.',
     );
   }
   if (!SEQ_FORMAT.test(since)) {
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `subscribe() was passed the resume cursor "${since}", which is not a valid seq: a cursor ` +
         'carries unreserved base64url characters only, because it travels in a frame id. Use ' +
         'the seq off a previously delivered RecordChange, unaltered.',

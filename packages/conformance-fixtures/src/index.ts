@@ -2651,7 +2651,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +
       'structurally malformed request, distinct from a 422 content-validation failure. ' +
-      'Reconstructed as StackQueryError. "not-a-valid-cursor" is not valid base64 ' +
+      'Reconstructed as StackBadRequestError. "not-a-valid-cursor" is not valid base64 ' +
       "(the hyphens aren't in the alphabet), so decoding fails before the sort-field is ever " +
       'inspected — the message names the malformed input itself, not a sort field. See ' +
       'error-bad-request-unknown-sort-field-cursor for the distinct, decodable-but-invalid case.',
@@ -2857,7 +2857,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'POST /records with a client-supplied id containing a character outside ' +
       'lowercase Crockford base-32 (0-9, a-z excluding i/l/o/u) returns 400 with code ' +
       '"bad_request" — structurally malformed input, not a 422 content-validation failure (the ' +
-      'id never reaches type-schema validation). Reconstructed as StackQueryError.',
+      'id never reaches type-schema validation). Reconstructed as StackBadRequestError.',
     method: 'POST',
     path: '/records',
     requestBody: {

@@ -30,7 +30,7 @@
  *
  * The rewrite is best-effort and makes no completeness claim against
  * FTS5's grammar — which is why the caller wraps execution as well, so a
- * case this misses surfaces as a StackQueryError rather than a raw engine
+ * case this misses surfaces as a StackBadRequestError rather than a raw engine
  * error. Search text is what a person typed into a box: an unbalanced
  * quote or a trailing "AND" is ordinary input, not a malformed request.
  *

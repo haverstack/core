@@ -42,7 +42,7 @@ export {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
-  StackQueryError,
+  StackBadRequestError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,

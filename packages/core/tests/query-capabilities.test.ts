@@ -11,7 +11,7 @@
  */
 import { describe, test, expect } from 'vitest';
 import { assertQueryCapabilities, assertSortCapability } from '../src/query-validation.js';
-import { StackQueryError } from '../src/errors.js';
+import { StackBadRequestError } from '../src/errors.js';
 import type { MissingCapability, RecordFilter, StackFeatures } from '../src/types.js';
 
 const ALL: StackFeatures = {
@@ -34,8 +34,8 @@ const refusalFor = (run: () => void): MissingCapability | undefined => {
   try {
     run();
   } catch (err) {
-    expect(err).toBeInstanceOf(StackQueryError);
-    return (err as StackQueryError).capability;
+    expect(err).toBeInstanceOf(StackBadRequestError);
+    return (err as StackBadRequestError).capability;
   }
   throw new Error('expected a refusal');
 };

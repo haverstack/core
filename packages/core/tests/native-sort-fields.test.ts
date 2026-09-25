@@ -15,7 +15,7 @@ import { describe, test, expect } from 'vitest';
 import { NATIVE_SORT_FIELDS } from '../src/types.js';
 import { assertValidSort } from '../src/query-validation.js';
 import { parseQueryParams } from '../src/wire-request.js';
-import { StackQueryError } from '../src/errors.js';
+import { StackBadRequestError } from '../src/errors.js';
 
 const url = (search: string) => new URL(`https://example.com/records${search}`);
 
@@ -24,7 +24,7 @@ describe('NATIVE_SORT_FIELDS', () => {
     for (const field of NATIVE_SORT_FIELDS) {
       expect(() => assertValidSort({ field })).not.toThrow();
     }
-    expect(() => assertValidSort({ field: 'name' as never })).toThrow(StackQueryError);
+    expect(() => assertValidSort({ field: 'name' as never })).toThrow(StackBadRequestError);
   });
 
   test('names itself in the error a rejected sort field gets', () => {
@@ -44,6 +44,6 @@ describe('NATIVE_SORT_FIELDS', () => {
     for (const field of NATIVE_SORT_FIELDS) {
       expect(parseQueryParams(url(`?sort=${field}`)).sort).toEqual({ field });
     }
-    expect(() => parseQueryParams(url('?sort=name'))).toThrow(StackQueryError);
+    expect(() => parseQueryParams(url('?sort=name'))).toThrow(StackBadRequestError);
   });
 });

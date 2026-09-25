@@ -7,7 +7,7 @@ import {
   StackValidationError,
   StackConflictError,
   StackPayloadTooLargeError,
-  StackQueryError,
+  StackBadRequestError,
 } from '../src/errors.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
@@ -1284,7 +1284,7 @@ describe('ScopedStack.create — client-supplied id', () => {
   test('rejects a malformed id from a grantee', async () => {
     await expect(
       stack.asEntity(MEMBER).create(COMMENT, { text: 'hello' }, { id: 'too-short' }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('rejects a reserved-prefix id from a grantee', async () => {
@@ -1292,7 +1292,7 @@ describe('ScopedStack.create — client-supplied id', () => {
       stack
         .asEntity(MEMBER)
         .create(COMMENT, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('rejects an id whose timestamp is far outside the clock-skew tolerance', async () => {
@@ -1449,7 +1449,7 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
       stack
         .asEntity(OWNER)
         .create(COMMENT, { text: 'hello' }, { id: 'too-short', createdAt: new Date('2020-01-01') }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 });
 
@@ -3361,12 +3361,12 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     const record = await shared();
     await expect(
       stack.asEntity(MEMBER).mutate(record.id, { associations: [asData(readFor(STRANGER))] }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(
       stack
         .asEntity(MEMBER)
         .mutate(record.id, { associations: [asData({ kind: 'anyone', label: 'read' })] }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
   });
 
@@ -3375,13 +3375,13 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     const scoped = stack.asEntity(MEMBER);
 
     await expect(scoped.associate(record.id, asData(readFor(STRANGER)))).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(
       scoped.associate(record.id, asData({ kind: 'anyone', label: 'read' })),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(scoped.dissociate(record.id, asData(readFor(MEMBER)))).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
   });
@@ -3392,10 +3392,10 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     const record = await shared();
     const tag = asAuthority({ kind: 'tag', label: 'draft' });
     await expect(stack.asEntity(OWNER).grantAccess(record.id, tag)).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(stack.asEntity(OWNER).revokeAccess(record.id, tag)).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -4449,7 +4449,7 @@ describe('ScopedStack.create — relationship association and parentId gating', 
   test('the owner naming a malformed parentId gets the format error, not a refusal', async () => {
     await expect(
       stack.asEntity(OWNER).create(COMMENT, { text: 'hi' }, { parentId: '' }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('the owner may name a relationship target that does not exist', async () => {
@@ -4563,7 +4563,7 @@ describe('ScopedStack.mutate — the `parentId` key', () => {
 
   test('the owner naming a malformed destination gets the format error', async () => {
     await expect(stack.asEntity(OWNER).mutate(writable.id, { parentId: '' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -6014,7 +6014,7 @@ describe('ScopedStack.mutate — authority resolves per key', () => {
     const stranger = stack.asEntity(STRANGER);
     // Refused as a bad change set rather than as a permission denial, so
     // every requester gets the same answer to the same malformed call.
-    await expect(stranger.mutate(note.id, {})).rejects.toThrow(StackQueryError);
+    await expect(stranger.mutate(note.id, {})).rejects.toThrow(StackBadRequestError);
   });
 
   test('patchContent carries the same gate as a content-only change set', async () => {

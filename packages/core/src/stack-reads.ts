@@ -10,7 +10,7 @@
  * None of these is a public API.
  */
 
-import { StackQueryError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { SYSTEM_TYPES } from './types.js';
 import type { EntityContent, EntityId, QueryResult, StackQuery, StackRecord } from './types.js';
 
@@ -21,7 +21,7 @@ export const MAX_QUERY_LIMIT = 1000;
 /**
  * Walks `cursor` to exhaustion for the internal call sites that need every
  * match (grant checks, attachment cleanup) — query() itself always
- * paginates. Throws StackQueryError past `max` rather than silently
+ * paginates. Throws StackBadRequestError past `max` rather than silently
  * truncating a runaway scan. Not a public API.
  */
 export async function queryAllPages(
@@ -35,7 +35,7 @@ export async function queryAllPages(
     const page = await run({ ...query, cursor });
     records.push(...page.records);
     if (records.length > max) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `queryAllPages: exceeded max of ${max} records without exhausting the cursor`,
       );
     }
@@ -51,7 +51,7 @@ const QUERY_ALL_MAX = 10_000;
  * Cursor-walks `run(query)` looking for the first record matching
  * `predicate`, short-circuiting on a match. Same bounded-scan discipline
  * as queryAllPages(): a match past page one is still found, and a
- * non-terminating scan throws StackQueryError.
+ * non-terminating scan throws StackBadRequestError.
  */
 export async function findFirstMatch(
   run: (query: StackQuery) => Promise<QueryResult>,
@@ -65,7 +65,7 @@ export async function findFirstMatch(
     const page = await run({ ...query, cursor });
     totalFetched += page.records.length;
     if (totalFetched > max) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `findFirstMatch: exceeded max of ${max} records without exhausting the cursor`,
       );
     }

@@ -9,7 +9,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackSchemaDriftError,
-  StackQueryError,
+  StackBadRequestError,
   StackPayloadTooLargeError,
   StackClosedError,
   StackMisconfigurationError,
@@ -573,20 +573,20 @@ describe('create — client-supplied id', () => {
 
   test('rejects an id with the wrong length', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'too-short' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
   test('rejects an id with characters outside the Crockford charset', async () => {
     await expect(stack.create(NOTE_V1, { text: 'hello' }, { id: 'UPPERCASE123' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
   test('rejects an id using the reserved "_" prefix', async () => {
     await expect(
       stack.create(NOTE_V1, { text: 'hello' }, { id: '_' + generateId().slice(1) }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('rejects a duplicate id with StackConflictError', async () => {
@@ -909,7 +909,7 @@ describe('query — content filter null semantics', () => {
     const beyond = await stack.create(NOTE_V1, { text: 'b', ...deep(33) });
     const path = [...Array(33).fill('n'), 'bad', 'name'].join('.');
     await expect(stack.query({ filter: { content: { [path]: 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     expect(beyond.id).toBeDefined();
   });
@@ -1000,10 +1000,10 @@ describe('query — contentPresent', () => {
 
   test('a malformed path is refused, as a content filter key is', async () => {
     await expect(stack.query({ filter: { contentPresent: ['a..b'] } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(stack.query({ filter: { contentPresent: ['title[0]'] } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 });
@@ -1017,7 +1017,9 @@ describe('query — contentPresent', () => {
 describe('query — capability fail-loud', () => {
   test('filter.search against an adapter without filter.search throws, not returns everything', async () => {
     await stack.create(NOTE_V1, { text: 'findable' });
-    await expect(stack.query({ filter: { search: 'findable' } })).rejects.toThrow(StackQueryError);
+    await expect(stack.query({ filter: { search: 'findable' } })).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('filter.content against an adapter reaching no content throws, not returns everything', async () => {
@@ -1031,7 +1033,7 @@ describe('query — capability fail-loud', () => {
     await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
 
     await expect(incapableStack.query({ filter: { content: { priority: 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -1047,7 +1049,7 @@ describe('query — capability fail-loud', () => {
 
     await expect(
       incapableStack.query({ filter: { contentPresent: ['priority'] } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a query with neither filter still works against an incapable adapter', async () => {
@@ -1090,13 +1092,13 @@ describe('query — sort validation', () => {
 
   test('a direction outside asc/desc is refused, not interpolated', async () => {
     await expect(inject({ field: 'createdAt', direction: 'ASC, (SELECT 1)' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
   test('a sort field outside the closed set is refused', async () => {
     await expect(inject({ field: 'content); DROP TABLE records --' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -1105,17 +1107,17 @@ describe('query — sort validation', () => {
   });
 
   test('a content field is held to one segment', async () => {
-    await expect(inject({ contentField: 'author.name' })).rejects.toThrow(StackQueryError);
+    await expect(inject({ contentField: 'author.name' })).rejects.toThrow(StackBadRequestError);
   });
 
   test('a content field may not carry a filter-path metacharacter', async () => {
-    await expect(inject({ contentField: 'title[0]' })).rejects.toThrow(StackQueryError);
-    await expect(inject({ contentField: '' })).rejects.toThrow(StackQueryError);
+    await expect(inject({ contentField: 'title[0]' })).rejects.toThrow(StackBadRequestError);
+    await expect(inject({ contentField: '' })).rejects.toThrow(StackBadRequestError);
   });
 
   test('naming both a native and a content field is refused, not resolved', async () => {
     await expect(inject({ field: 'createdAt', contentField: 'version' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -1225,7 +1227,7 @@ describe('query — sorting by a content field', () => {
   test('an adapter without sort.contentField refuses rather than reordering', async () => {
     const incapable = await Stack.open(new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }));
     await expect(incapable.query({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -1233,7 +1235,9 @@ describe('query — sorting by a content field', () => {
     const adapter = new MemoryAdapter({ ownerEntityId: 'owner-123' });
     adapter.capabilities.sort.fields = ['createdAt'];
     const limited = await Stack.open(adapter);
-    await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(StackQueryError);
+    await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(
+      StackBadRequestError,
+    );
     await expect(limited.query({ sort: { field: 'createdAt' } })).resolves.toBeDefined();
   });
 });
@@ -1492,7 +1496,9 @@ describe('Stack.mutate — the `parentId` key', () => {
     ['createdBy.principalId', { createdBy: { subjectId: 'did:key:zAuthor', principalId: '' } }],
     ['appId', { appId: '' }],
   ] as const)('creating with an empty-string %s is refused', async (_field, opts) => {
-    await expect(stack.create(NOTE_V1, { text: 'note' }, opts)).rejects.toThrow(StackQueryError);
+    await expect(stack.create(NOTE_V1, { text: 'note' }, opts)).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('parenting to a record that does not exist is refused', async () => {
@@ -1516,9 +1522,9 @@ describe('Stack.mutate — the `parentId` key', () => {
     ['a reserved id', '_config'],
   ])('parenting to %s is refused as malformed', async (_name, bad) => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.mutate(note.id, { parentId: bad })).rejects.toThrow(StackQueryError);
+    await expect(stack.mutate(note.id, { parentId: bad })).rejects.toThrow(StackBadRequestError);
     await expect(stack.create(NOTE_V1, { text: 'other' }, { parentId: bad })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -2118,7 +2124,7 @@ describe('Stack.commitMigration', () => {
 
     await expect(
       stack.commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
@@ -3720,7 +3726,7 @@ describe('grant', () => {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '', role: 'member' },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
@@ -3730,7 +3736,7 @@ describe('grant', () => {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
@@ -3740,21 +3746,21 @@ describe('grant', () => {
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: 'group-abc' } as unknown as GrantGrantee,
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects a target naming no tier', async () => {
     await expect(
       stack.grant(NOTE_V1, { actions: ['read-any'], grantee: null as unknown as GrantGrantee }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
   test('rejects an empty entityId target', async () => {
     await expect(
       stack.grant(NOTE_V1, { actions: ['read-any'], grantee: { kind: 'entity', entityId: '' } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(0);
   });
 
@@ -3951,7 +3957,7 @@ describe('listGrants', () => {
 
   test("a group listing with role 'any' still requires a non-empty groupId", async () => {
     await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'any' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -3961,7 +3967,7 @@ describe('listGrants', () => {
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
     await expect(stack.listGrants({ kind: 'group', groupId: '', role: 'member' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -4066,13 +4072,13 @@ describe('revoke', () => {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(
       stack.revoke(NOTE_V1, {
         actions: ['create'],
         grantee: { kind: 'group', groupId: 'group-abc', role: 'any' } as never,
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('revocation is a soft delete — the owner can undelete it like any other mutation', async () => {
@@ -4185,7 +4191,7 @@ describe('revoke', () => {
         actions: ['create'],
         grantee: { kind: 'group', groupId: undefined as unknown as string, role: 'member' },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(await stack.listGrants()).toHaveLength(2);
   });
 });
@@ -4294,41 +4300,41 @@ describe('Stack — authority and data never share a call', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(
       stack.mutate(record.id, { associations: [asData(readFor('entity-abc'))] }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(
       stack.mutate(record.id, { associations: [asData({ kind: 'anyone', label: 'read' })] }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect((await stack.get(record.id))?.permissions).toBeUndefined();
   });
 
   test('create() refuses the same misrouting', async () => {
     await expect(
       stack.create(NOTE_V1, { text: 'hello' }, { associations: [asData(readFor('entity-abc'))] }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(
       stack.create(
         NOTE_V1,
         { text: 'hello' },
         { permissions: [asAuthority({ kind: 'tag', label: 'draft' })] },
       ),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('associate()/dissociate() refuse an authority kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(stack.associate(record.id, asData(readFor('entity-abc')))).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(
       stack.dissociate(record.id, asData({ kind: 'anyone', label: 'read' })),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('grantAccess()/revokeAccess() refuse a data kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const tag = asAuthority({ kind: 'tag', label: 'draft' });
-    await expect(stack.grantAccess(record.id, tag)).rejects.toThrow(StackQueryError);
-    await expect(stack.revokeAccess(record.id, tag)).rejects.toThrow(StackQueryError);
+    await expect(stack.grantAccess(record.id, tag)).rejects.toThrow(StackBadRequestError);
+    await expect(stack.revokeAccess(record.id, tag)).rejects.toThrow(StackBadRequestError);
   });
 });
 
@@ -5342,10 +5348,10 @@ describe('nested content paths', () => {
     await seed();
 
     await expect(stack.query({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(stack.query({ filter: { content: { 'emails[0]': 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -5377,7 +5383,7 @@ describe('nested content paths', () => {
       narrowStack.query({ filter: { content: { name: 'ada' } } }),
     ).resolves.toBeDefined();
     await expect(narrowStack.query({ filter: { content: { 'a.b': 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 });
@@ -6686,7 +6692,7 @@ const everyStackError = (): StackError[] => [
   new StackNotFoundError('Record "1hk153x0a00b" not found.'),
   new StackConflictError('Attachment is still referenced.'),
   new StackVersionConflictError('Version mismatch.', '1hk153x0a00b', 3, 5),
-  new StackQueryError('Undecodable pagination cursor.'),
+  new StackBadRequestError('Undecodable pagination cursor.'),
   new StackSchemaDriftError(NOTE_V1, [{ path: 'text', message: 'type changed' }]),
   new StackPayloadTooLargeError('Attachment exceeds the limit.'),
 ];
@@ -6707,7 +6713,7 @@ describe('error taxonomy', () => {
       StackNotFoundError,
       StackConflictError,
       StackVersionConflictError,
-      StackQueryError,
+      StackBadRequestError,
       StackSchemaDriftError,
       StackPayloadTooLargeError,
     ];
@@ -7231,7 +7237,7 @@ describe('query — relatedTo filter', () => {
   test('a filter naming neither a label nor a target is refused', async () => {
     await expect(
       stack.query({ filter: { relatedTo: {} as NonNullable<RecordFilter['relatedTo']> } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a filter target outside the three kinds is refused', async () => {
@@ -7245,7 +7251,7 @@ describe('query — relatedTo filter', () => {
           },
         },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a filter naming this stack omits stackUrl rather than emptying it', async () => {
@@ -7253,7 +7259,7 @@ describe('query — relatedTo filter', () => {
       stack.query({
         filter: { relatedTo: { target: { kind: 'record', recordId: subject.id, stackUrl: '' } } },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('matches a record target', async () => {
@@ -7333,14 +7339,14 @@ describe('undefined types stay inside the error taxonomy', () => {
 
   test('create() with an unknown typeId raises a bad_request', async () => {
     const err = await typeStack.create('com.example.test/nope@1', { text: 'x' }).catch((e) => e);
-    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err).toBeInstanceOf(StackBadRequestError);
     expect(err.code).toBe('bad_request');
     expect(err.message).toContain('defineType');
   });
 
   test('defineType() with a malformed typeId raises a bad_request', async () => {
     const err = await typeStack.defineType('not-a-type-id', 'Nope', {}).catch((e) => e);
-    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err).toBeInstanceOf(StackBadRequestError);
     expect(err.code).toBe('bad_request');
   });
 
@@ -7350,7 +7356,7 @@ describe('undefined types stay inside the error taxonomy', () => {
     const err = await typeStack
       .commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' })
       .catch((e) => e);
-    expect(err).toBeInstanceOf(StackQueryError);
+    expect(err).toBeInstanceOf(StackBadRequestError);
     expect(err.code).toBe('bad_request');
   });
 });
@@ -7436,7 +7442,7 @@ describe('Stack.mutate — one call, one version', () => {
   });
 
   test('a change set naming no key at all is refused', async () => {
-    await expect(stack.mutate(note.id, {})).rejects.toThrow(StackQueryError);
+    await expect(stack.mutate(note.id, {})).rejects.toThrow(StackBadRequestError);
   });
 
   // Presence, not truthiness: both of these name an aspect.
@@ -7472,7 +7478,7 @@ describe('Stack.mutate — one call, one version', () => {
     // neither lets the content patch beside it land.
     await expect(
       stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: 'nosuchrecord' }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(
       stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: generateId() }),
     ).rejects.toThrow(StackConflictError);
