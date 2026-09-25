@@ -11,6 +11,7 @@
 
 import { baseIdOf } from './schema.js';
 import { StackBadRequestError } from './errors.js';
+import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
 import { carriesRoster, groupRoleFromAssociations } from './access.js';
 import type {
@@ -117,11 +118,14 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
  * empty groupId or entityId reaches no one, so storing it would leave a
  * grant that can only ever deny while looking like a share that worked.
  * Read as data, not as the type: a target reaching Stack from a request
- * body or an import has whatever shape it arrived with. `allowAny` admits
+ * body or an import has whatever shape it arrived with, so a key its tier
+ * does not define is refused too. `allowAny` admits
  * the listing-only `role: 'any'`, which grantType() and revokeType() refuse.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
   const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  if (t?.kind === 'authenticated' || t?.kind === 'entity' || t?.kind === 'group')
+    assertKnownKeys(t, GRANTEE_KEYS[t.kind], 'grant target');
   switch (t?.kind) {
     case 'authenticated':
       return;
@@ -163,6 +167,14 @@ export function validateGrantee(typeId: TypeId, content: unknown): ValidationErr
   const g = c?.grantee as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
   // An absent or non-object grantee is the schema's to refuse, and it does.
   if (!g || typeof g !== 'object') return [];
+  if (g.kind === 'authenticated' || g.kind === 'entity' || g.kind === 'group') {
+    const unknown = unknownKeys(g, GRANTEE_KEYS[g.kind]);
+    if (unknown.length > 0)
+      return unknown.map((key) => ({
+        path: `grantee.${key}`,
+        message: `A ${String(g.kind)} grantee does not carry ${key}`,
+      }));
+  }
   switch (g.kind) {
     case 'authenticated':
       return [];

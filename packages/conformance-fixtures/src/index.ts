@@ -2197,6 +2197,25 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: { error: { code: 'bad_request', message: 'Unknown record key: title' } },
   },
   {
+    name: 'error-bad-request-unknown-grantee-key',
+    description:
+      'A permission element carries only the keys its grantee kind defines; any other — here a ' +
+      'scope on an entity grantee — returns 400 with code "bad_request" and grants nothing. ' +
+      'Ignored, it would store a narrower-looking grant than the one that applies. See ' +
+      'docs/spec/data-model.md § Associations.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember', scope: 'comments' },
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Unknown key in permission.grantee: scope' },
+    },
+  },
+  {
     name: 'error-bad-request-non-boolean-purge',
     description:
       'DELETE /records/:id takes purge only as "true" or "false"; any other value returns 400 ' +

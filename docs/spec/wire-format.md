@@ -185,7 +185,7 @@ The distinction between **400** and **422** matters for write endpoints (`POST /
 
 ### Unrecognized input
 
-**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target. The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
+**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target, an association or permission element (see [Data model § Associations](./data-model.md#associations)). The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
 
 Three things sit outside it:
 

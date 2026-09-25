@@ -751,6 +751,7 @@ const SERVER_ONLY_ERROR_FIXTURES = new Set([
   'error-bad-request-non-boolean-param',
   'error-bad-request-unknown-query-body-key',
   'error-bad-request-unknown-record-key',
+  'error-bad-request-unknown-grantee-key',
   'error-bad-request-non-boolean-purge',
   'error-bad-request-unknown-auth-token-key',
 ]);

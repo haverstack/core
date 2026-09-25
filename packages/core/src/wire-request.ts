@@ -26,6 +26,7 @@
  */
 
 import { StackBadRequestError } from './errors.js';
+import { TARGET_KEYS } from './query-validation.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   DataAssociation,
@@ -58,11 +59,6 @@ const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Se
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 const ASSOCIATION_KINDS: ReadonlySet<string> = new Set(['tag', 'attachment', 'relationship']);
 const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
-const TARGET_KEYS: Record<RelationshipTargetPattern['kind'], readonly string[]> = {
-  record: ['kind', 'recordId', 'stackUrl'],
-  entity: ['kind', 'entityId'],
-  external: ['kind', 'ns', 'id'],
-};
 
 /** Every param `GET /records` defines. See docs/spec/wire-format.md § Records. */
 const RECORD_QUERY_PARAMS = [
