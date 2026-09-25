@@ -194,7 +194,7 @@ describe('a journal entry lands in the same write as its mutation', () => {
 // Erasure
 // -------------------------------------------------------
 
-describe('a hard delete leaves no journal rows', () => {
+describe('a purge leaves no journal rows', () => {
   test('the rows go with the record', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
@@ -205,7 +205,7 @@ describe('a hard delete leaves no journal rows', () => {
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
 
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
     await adapter.close();
 
     // Read the table directly: an empty answer through getJournal() would
@@ -220,7 +220,7 @@ describe('a hard delete leaves no journal rows', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
 
     await expect(
       adapter.associate(

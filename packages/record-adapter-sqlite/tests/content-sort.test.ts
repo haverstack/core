@@ -301,7 +301,7 @@ describe('the sort index tracks the record', () => {
 
   test('a purged record leaves no index rows behind', async () => {
     const record = await create(ARTICLE, { title: 'gone', order: 1 });
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
 
     const db = new DatabaseSync(dbPath);
     const rows = db

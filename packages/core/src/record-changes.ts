@@ -216,7 +216,7 @@ export function changeSetOps(
     changes.permissions &&
     associationDelta(existing.permissions ?? [], changes.permissions).length > 0
   ) {
-    ops.push('permissions');
+    ops.push('reshare');
   }
 
   if (changes.associations) {
@@ -241,7 +241,7 @@ export function changeSetOps(
 const NO_BUMP_OPS: ReadonlySet<ChangeOp> = new Set<ChangeOp>([
   'associate',
   'dissociate',
-  'permissions',
+  'reshare',
   'reparent',
   'unlist',
   'list',
@@ -291,7 +291,7 @@ export function effectiveChanges(changes: RecordChangeSet, ops: ChangeOp[]): Rec
   const effective: RecordChangeSet = {};
   if (ops.includes('patch')) effective.contentPatch = changes.contentPatch;
   if (ops.includes('reparent')) effective.parentId = changes.parentId;
-  if (ops.includes('permissions')) effective.permissions = changes.permissions;
+  if (ops.includes('reshare')) effective.permissions = changes.permissions;
   if (ops.includes('associate') || ops.includes('dissociate')) {
     effective.associations = changes.associations;
   }
@@ -374,7 +374,7 @@ export function movesAuthority(change: AssociationChange): boolean {
 
 /**
  * A journal entry as a reader who cannot reshare sees it: the authority
- * half of its delta dropped, the `permissions` op left standing, so the
+ * half of its delta dropped, the `reshare` op left standing, so the
  * entry still names *that* the ACL moved. Passing the mutate-surface gate
  * buys the record's content history, which is not a route to its sharing
  * graph. See docs/spec/journal.md § Reading it.

@@ -61,7 +61,7 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.mutateRecord(id, { contentPatch: patch }, opts);
   }
 
-  async deleteRecord(id: string, opts?: { hard?: boolean } & MutationOpts) {
+  async deleteRecord(id: string, opts?: { purge?: boolean } & MutationOpts) {
     await this.ready;
     return this.adapter.deleteRecord(id, opts);
   }

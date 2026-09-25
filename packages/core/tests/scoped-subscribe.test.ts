@@ -92,7 +92,7 @@ describe('a record the subscriber cannot read produces no event', () => {
     });
     await settle();
 
-    expect(reader.seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['permissions']]]);
+    expect(reader.seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['reshare']]]);
   });
 
   test('losing access is silent — no event, and no signal that one was withheld', async () => {
@@ -129,8 +129,8 @@ describe('a record the subscriber cannot read produces no event', () => {
     const reader = collector();
     await stack.asEntity(READER).subscribe(reader.handler, { filter: { typeId: NOTE } });
 
-    await stack.delete(visible.id, { hard: true });
-    await stack.delete(hidden.id, { hard: true });
+    await stack.delete(visible.id, { purge: true });
+    await stack.delete(hidden.id, { purge: true });
     await settle();
 
     expect(reader.seen.map((c) => c.recordId)).toEqual([visible.id]);

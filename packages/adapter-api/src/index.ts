@@ -1099,28 +1099,28 @@ export class APIAdapter implements StackAdapter {
   }
 
   /**
-   * A soft delete answers with the record it produced; a hard delete bumps
+   * A soft delete answers with the record it produced; a purge bumps
    * no version and answers with the record it destroyed, which is where
    * the files the purge stranded are read from. Null is reserved for a
    * purge that found nothing, the same shape a local adapter reports.
    */
   async deleteRecord(
     id: RecordId,
-    opts: { hard?: boolean; ifVersion?: number } = {},
+    opts: { purge?: boolean; ifVersion?: number } = {},
   ): Promise<StackRecord | null> {
-    const path = opts.hard ? `/records/${id}?hard=true` : `/records/${id}`;
+    const path = opts.purge ? `/records/${id}?purge=true` : `/records/${id}`;
     const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
       ifMatch: opts.ifVersion,
-      // An unconditional hard delete of a record that isn't there purged
+      // An unconditional purge of a record that isn't there purged
       // nothing, which is not an error — the same answer the local
       // adapters give by returning null. A CAS is a real precondition, so
       // its 404 is left to throw.
-      ...(opts.hard && opts.ifVersion === undefined && { nullOn404: true }),
+      ...(opts.purge && opts.ifVersion === undefined && { nullOn404: true }),
     });
     // The purge answers with the record it destroyed: it is the only
     // report of what it referenced, and every other row naming those files
     // is gone. See docs/spec/wire-format.md § Records.
-    if (opts.hard) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
+    if (opts.purge) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
     return requireRecordBody(raw ?? undefined, `DELETE /records/${id}`);
   }
 

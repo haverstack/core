@@ -317,15 +317,15 @@ describe('records — CRUD', () => {
     expect(retrieved?.deletedAt).toBeInstanceOf(Date);
   });
 
-  test('hard deleteRecord removes record entirely', async () => {
+  test('purging deleteRecord removes record entirely', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
-  test('hard deleteRecord removes version history', async () => {
+  test('purging deleteRecord removes version history', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
@@ -335,7 +335,7 @@ describe('records — CRUD', () => {
       content: record.content,
       updatedAt: record.updatedAt,
     });
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
     expect(await adapter.getVersions(record.id)).toEqual([]);
   });
 
@@ -461,17 +461,17 @@ describe('ifVersion', () => {
     expect(migrated.version).toBe(3);
   });
 
-  test('hard deleteRecord enforces ifVersion and leaves the record untouched on mismatch', async () => {
+  test('purging deleteRecord enforces ifVersion and leaves the record untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(
-      adapter.deleteRecord(record.id, { hard: true, ifVersion: 1 }),
+      adapter.deleteRecord(record.id, { purge: true, ifVersion: 1 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
     expect(await adapter.getRecord(record.id)).not.toBeNull();
 
-    await adapter.deleteRecord(record.id, { hard: true, ifVersion: 2 });
+    await adapter.deleteRecord(record.id, { purge: true, ifVersion: 2 });
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
@@ -489,7 +489,7 @@ describe('ifVersion', () => {
   // caller passes for an associations-only change set) re-checks
   // ifVersion against a fresh read inside its own transaction,
   // since there is no version-bumping UPDATE for the guard to ride in.
-  // That read can come back null if a concurrent hard delete lands
+  // That read can come back null if a concurrent purge lands
   // between mutateRecord's own read and this re-check; the adapter must
   // report that as StackNotFoundError like every other write path here,
   // not crash on it.
@@ -505,7 +505,7 @@ describe('ifVersion', () => {
     const originalGetRecord = logic.getRecord.bind(logic);
     vi.spyOn(logic, 'getRecord').mockImplementationOnce(async (id: string) => {
       const found = await originalGetRecord(id);
-      await adapter.deleteRecord(id, { hard: true }); // races mutateRecord's own no-bump re-read
+      await adapter.deleteRecord(id, { purge: true }); // races mutateRecord's own no-bump re-read
       return found;
     });
 
@@ -1116,11 +1116,11 @@ describe('records — queries', () => {
     expect(freshSearch.records.map((r) => r.id)).toEqual([record.id]);
   });
 
-  test('full-text search no longer finds hard-deleted records', async () => {
+  test('full-text search no longer finds purged records', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ content: { text: 'findme unique token' } });
     await adapter.createRecord(record);
-    await adapter.deleteRecord(record.id, { hard: true });
+    await adapter.deleteRecord(record.id, { purge: true });
 
     const result = await adapter.queryRecords({ filter: { search: 'findme' } });
     expect(result.records).toEqual([]);
@@ -1251,13 +1251,13 @@ describe('file-ref indexing', () => {
     expect(newMatch.records.map((r) => r.id)).toEqual(['r1']);
   });
 
-  test('hard delete removes the record from file-ref matching', async () => {
+  test('purge removes the record from file-ref matching', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(FILE_REF_TYPE);
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
-    await adapter.deleteRecord('r1', { hard: true });
+    await adapter.deleteRecord('r1', { purge: true });
 
     const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
     expect(result.records).toEqual([]);

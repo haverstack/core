@@ -4,7 +4,7 @@ Version history is managed by the library as a side channel — apps do not mana
 
 ## Version history
 
-**Two tiers.** Every mutation of a Record that touches content — a [change set](./data-model.md#mutations) naming `contentPatch`, a soft delete, an undelete, a migration commit, a restore — snapshots the Record's prior full state and bumps `version` exactly once. A mutation that changes nothing (restating the content a Record already holds, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Hard delete is the one exception among these — it destroys the Record and its version history outright, so there's nothing to snapshot.
+**Two tiers.** Every mutation of a Record that touches content — a [change set](./data-model.md#mutations) naming `contentPatch`, a soft delete, an undelete, a migration commit, a restore — snapshots the Record's prior full state and bumps `version` exactly once. A mutation that changes nothing (restating the content a Record already holds, deleting an already-deleted Record) is a no-op: no bump, no snapshot. Purge is the one exception among these — it destroys the Record and its version history outright, so there's nothing to snapshot.
 
 Everything else a Record carries — containment, listing, `associations` and `permissions` alike — bumps nothing and snapshots nothing. Those writes are the second tier, spelled out below.
 
@@ -20,7 +20,7 @@ Filing them here anyway would cost a full duplicate copy of `content` apiece for
 
 A change set that names any of the four alongside a version-bumping aspect still produces exactly one version covering everything it moved; they just aren't among the aspects that decide whether the call bumps at all. The same completeness is why a restore leaves all four where they stand and why the no-bump verbs take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
 
-**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a hard delete leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
+**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a purge leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
 
 ```ts
 type RecordVersion = {
@@ -75,7 +75,7 @@ A Record's sharing history is the [journal's](./journal.md#reading-it) to tell, 
 
 Restoring a pre-migration snapshot therefore also restores its old `typeId`, leaving the Record legitimately **stale** rather than mislabeled. No forward-migration happens at restore time — migration functions are app code (see [Type migrations](./data-model.md#type-migrations)), so restore behaves the same locally as through the server-side restore endpoint, which cannot run them either. A stale restored Record self-heals the same way any other stale Record does: on the owning app's next `migrateAll()` sweep.
 
-**A restore never moves the Record.** Containment is [the journal's to keep](#version-history), not the snapshot's, so a restore settles nothing about it: the Record comes back in whatever container it is in now, whichever one it sat in when the snapshot was taken. Undoing a move is a change set's `parentId`, reading the entry's `previousParentId` for where it came from. That is what keeps a restore off every containment rule: it adds no edge, so there is no ancestor chain to walk and no destination to gate, and a container hard-deleted since the snapshot was taken costs the Record nothing. **Listing state is settled the same way — which is to say not at all.** A restore never lists or unlists a Record; `unlist`/`list` is a change set's `unlisted`.
+**A restore never moves the Record.** Containment is [the journal's to keep](#version-history), not the snapshot's, so a restore settles nothing about it: the Record comes back in whatever container it is in now, whichever one it sat in when the snapshot was taken. Undoing a move is a change set's `parentId`, reading the entry's `previousParentId` for where it came from. That is what keeps a restore off every containment rule: it adds no edge, so there is no ancestor chain to walk and no destination to gate, and a container purged since the snapshot was taken costs the Record nothing. **Listing state is settled the same way — which is to say not at all.** A restore never lists or unlists a Record; `unlist`/`list` is a change set's `unlisted`.
 
 **A restore can put back a reference to bytes that are gone.** A `file-ref` content field in a snapshot is not a reference for [`deleteAttachment()`](./attachments.md#deleting-attachments) or [the sweep](./attachments.md#garbage-collection) — counting version history would make a file undeletable for the lifetime of any snapshot mentioning it — so a file deleted while a snapshot names it, and then restored, leaves a dangling file reference. That is the stance restore takes everywhere: history is put back, not re-litigated, the same way it honors the snapshot's own `typeId` rather than validating against the current one. Content's file refs are the only reference a restore can create at all, which is why they are the only thing the gate below asks about.
 
@@ -115,7 +115,7 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 ## Deletion
 
-Records are never hard-deleted by default. Two levels of deletion are supported:
+Records are never purged by default. Two levels of deletion are supported:
 
 **Soft delete** — the default. A deleted Record is flagged with a `deletedAt` timestamp and excluded from normal queries, but remains recoverable. Version history is preserved. A soft-deleted Record is a tombstone — its current state is gone but its history is not.
 
@@ -148,23 +148,23 @@ The refusal is asked **after** the authority decision, never before. It names a 
 
 `commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see `migrateAll()` below), and it is owner-acting-alone only.
 
-**Hard delete** — permanent and explicit. Removes the Record, all its version history and [its journal](./journal.md#a-hard-delete-destroys-the-journal). Requires deliberate intent via a flag. The escape hatch for sensitive, secret, or harmful content **the Record itself holds** — see the caveat below for what it does not reach.
+**Purge** — permanent and explicit. Removes the Record, all its version history and [its journal](./journal.md#a-purge-destroys-the-journal). Requires deliberate intent via a flag. The escape hatch for sensitive, secret, or harmful content **the Record itself holds** — see the caveat below for what it does not reach.
 
 ```ts
 stack.delete(recordId); // soft delete — reversible
-stack.delete(recordId, { hard: true }); // hard delete — permanent
+stack.delete(recordId, { purge: true }); // purge — permanent
 ```
 
 **It does not reach attachment bytes, and erasing those is a second step.** The purge destroys the only rows naming those files, so `delete()` reports them and the caller finishes the job:
 
 ```ts
-const { referencedFileIds } = await stack.delete(recordId, { hard: true });
+const { referencedFileIds } = await stack.delete(recordId, { purge: true });
 for (const fileId of referencedFileIds) await stack.deleteAttachment(fileId);
 ```
 
 `referencedFileIds` is empty on a soft delete, which strands nothing. A purge for harmful content that skips the second step leaves the bytes reachable to whoever can already name the hash — what the field names, and why naming it deletes nothing, is [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
 
-**Hard delete is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ hard: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary. Non-owners are always limited to soft delete. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to the `asEntity()` wrapper.)
+**Purge is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ purge: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary. Non-owners are always limited to soft delete. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to the `asEntity()` wrapper.)
 
 Queries exclude soft-deleted Records by default. Opt in with:
 
@@ -172,13 +172,13 @@ Queries exclude soft-deleted Records by default. Opt in with:
 stack.query({ filter: { includeDeleted: true } });
 ```
 
-**Undelete** reverses a soft delete. It's idempotent — calling it on a Record that isn't deleted succeeds and returns the Record unchanged, so a retried call after a network blip never fails. A missing Record throws `StackNotFoundError`; a hard-deleted Record is simply missing, so it throws the same way.
+**Undelete** reverses a soft delete. It's idempotent — calling it on a Record that isn't deleted succeeds and returns the Record unchanged, so a retried call after a network blip never fails. A missing Record throws `StackNotFoundError`; a purged Record is simply missing, so it throws the same way.
 
 ```ts
 const record = await stack.undelete(recordId); // clears deletedAt, returns the record
 ```
 
-Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `write` bit or a `delete-own`/`delete-any` grant. Undelete is the inverse of soft delete, so the same capability governs both directions; granting one without the other would be backwards. (Hard delete's owner-only carve-out is unaffected — it has no inverse.)
+Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `write` bit or a `delete-own`/`delete-any` grant. Undelete is the inverse of soft delete, so the same capability governs both directions; granting one without the other would be backwards. (Purge's owner-only carve-out is unaffected — it has no inverse.)
 
 Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing the next time it's written or `migrateAll()` sweeps it. `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
 

@@ -90,7 +90,7 @@ export { StackValidationError } from './errors.js';
 export { createOptionsFromWireRecord, changesFromWireBody } from './wire-record.js';
 export type { WireCreateRequest } from './wire-record.js';
 
-// The tier gating hard delete, commitMigration() and includeUnlisted, which
+// The tier gating purge, commitMigration() and includeUnlisted, which
 // a server must decide for those routes itself. Computing it as "is the
 // owner" is a privilege bug with no symptom.
 export { isOwnerActingAlone } from './access.js';

@@ -107,10 +107,10 @@ describe('a stack whose adapter relays', () => {
     await stack.subscribe((c) => void seen.push(c), { filter: { typeId: NOTE } });
 
     adapter.relays[0]!.push(
-      remoteChange({ kind: 'purged', ops: ['hard-delete'], actor: { subjectId: OWNER } }),
+      remoteChange({ kind: 'purged', ops: ['purge'], actor: { subjectId: OWNER } }),
     );
 
-    expect(seen[0]).toMatchObject({ kind: 'purged', ops: ['hard-delete'] });
+    expect(seen[0]).toMatchObject({ kind: 'purged', ops: ['purge'] });
     expect(seen[0]).not.toHaveProperty('record');
   });
 

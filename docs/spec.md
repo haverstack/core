@@ -15,7 +15,7 @@ The spec is split into focused documents:
 | [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement       |
 | [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it         |
 | [Refusals & disclosure](./spec/disclosure.md) | Which refusal a Record answers with, and what a refusal is allowed to reveal |
-| [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft/hard delete           |
+| [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft delete/purge          |
 | [Change journal](./spec/journal.md)           | The durable log of what each change moved, and the deltas nothing else keeps |
 | [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection       |
 | [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery     |
@@ -80,7 +80,7 @@ const adapter = await LocalAdapter.openOrInitialize({
 
 - **Addressable only by ID.** `get('_config')` works; a generic `query()` never returns it, regardless of filter — matching every other reserved-ID system record, but load-bearing here since `_config` is read at open and consulted by every permission check.
 - **`entityId` is immutable.** `patchContent('_config', { entityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Other fields (`timezone` today) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `entityId` disagrees with the live record's cannot be restored. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
-- **Never deletable**, soft or hard. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a hard-deleted one leaves nothing to reopen the stack against.
+- **Never deletable**, soft or hard. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a purged one leaves nothing to reopen the stack against.
 
 ## Open questions
 

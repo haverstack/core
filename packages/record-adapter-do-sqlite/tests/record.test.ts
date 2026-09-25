@@ -58,7 +58,7 @@ type TestStub = {
   ): Promise<StackRecord>;
   deleteRecord(
     id: string,
-    opts?: { hard?: boolean } & Record<string, unknown>,
+    opts?: { purge?: boolean } & Record<string, unknown>,
   ): Promise<StackRecord | null>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
@@ -161,11 +161,11 @@ describe('records — CRUD', () => {
     expect(updated.version).toBe(2);
   });
 
-  test('hard deleteRecord removes the record entirely', async () => {
+  test('purging deleteRecord removes the record entirely', async () => {
     const stub = getStub();
     const record = makeRecord();
     await stub.createRecord(record);
-    await stub.deleteRecord(record.id, { hard: true });
+    await stub.deleteRecord(record.id, { purge: true });
     expect(await stub.getRecord(record.id)).toBeNull();
   });
 });

@@ -212,7 +212,7 @@ export class MemoryAdapter implements StackAdapter {
   async deleteRecord(
     id: string,
     opts: {
-      hard?: boolean;
+      purge?: boolean;
       ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
@@ -220,15 +220,15 @@ export class MemoryAdapter implements StackAdapter {
   ) {
     const record = this.records.get(id);
     if (!record) {
-      // A hard delete with nothing to fence is the one case the SQL
+      // A purge with nothing to fence is the one case the SQL
       // adapters answer silently; every other shape of this call reports a
       // record that isn't there, and a fixture that shrugged instead would
       // pass tests the real adapters fail.
-      if (opts.hard && opts.ifVersion === undefined) return null;
+      if (opts.purge && opts.ifVersion === undefined) return null;
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
     this.checkExpectedVersion(record, opts.ifVersion);
-    if (opts.hard) {
+    if (opts.purge) {
       this.records.delete(id);
       this.order.splice(this.order.indexOf(id), 1);
       // A purge takes the version history and the journal with it: what a

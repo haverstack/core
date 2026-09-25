@@ -259,7 +259,7 @@ export type ScopedStackInit = {
  *
  * Which identity each gate keys on follows the module comment's rule.
  * Grant lookup and the privilege-bearing gates no grant reaches
- * (resharing, group management, hard delete, widening access at create
+ * (resharing, group management, purge, widening access at create
  * time) key on `principalId`; authorship, `-own` matching,
  * record-level permission resolution and "files I uploaded" lookups key on
  * `subjectId`. Unconditional owner access splits the same way: an
@@ -1267,7 +1267,7 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Hard delete is owner-only: it is irreversible and destroys version
+   * Purge is owner-only: it is irreversible and destroys version
    * history, so neither the write bit nor delete-own/delete-any grants
    * reach it, and delegation doesn't carry it either. Everyone else is
    * limited to soft delete.
@@ -1289,8 +1289,8 @@ export class ScopedStack implements StackClient {
     opts: DeleteRecordOptions = {},
   ): Promise<DeleteAndReturnResult> {
     await this.requireDeletable(id);
-    if (opts.hard && !this.ownerActingAlone) {
-      throw new StackPermissionError('Hard delete is owner-only');
+    if (opts.purge && !this.ownerActingAlone) {
+      throw new StackPermissionError('Purge is owner-only');
     }
     return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
   }
@@ -1322,7 +1322,7 @@ export class ScopedStack implements StackClient {
    *
    * The journal is where a Record's sharing history lives, and that half
    * is the resharer's: a reader who could not have moved the ACL is served
-   * the `permissions` op without the elements beneath it, so the entry
+   * the `reshare` op without the elements beneath it, so the entry
    * still names that it moved. Asked of both identities, so delegation is
    * no route to it either. See docs/spec/journal.md § Reading it.
    */

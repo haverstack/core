@@ -4,11 +4,11 @@ Apps observe record changes by subscribing, rather than by polling `query()`. A 
 
 This section is the model and the local API. Its wire encoding — discovery, `GET /changes`, the frames and the obligations that fall on a server — is [Change feed](./change-feed.md).
 
-**A change event announces that something changed; a version records what a rollback could put back.** The two usually coincide — every mutation that bumps `version` and snapshots prior state emits exactly one event. Where they part, it is because the feed asks the broader question. Hard delete emits and ends the record's stream while snapshotting nothing: there is no prior state to keep once the record is destroyed, but a subscriber still has to learn it is gone. `associate()`/`dissociate()`, `grantAccess()`/`revokeAccess()`, a move and a listing transition all emit without bumping `version` or snapshotting: each is recoverable from [its journal entry](./journal.md), so none needs rollback history (see [Versioning § Version history](./versioning.md#version-history)), but a subscriber watching a tag, a roster or a container still has to hear that it moved.
+**A change event announces that something changed; a version records what a rollback could put back.** The two usually coincide — every mutation that bumps `version` and snapshots prior state emits exactly one event. Where they part, it is because the feed asks the broader question. Purge emits and ends the record's stream while snapshotting nothing: there is no prior state to keep once the record is destroyed, but a subscriber still has to learn it is gone. `associate()`/`dissociate()`, `grantAccess()`/`revokeAccess()`, a move and a listing transition all emit without bumping `version` or snapshotting: each is recoverable from [its journal entry](./journal.md), so none needs rollback history (see [Versioning § Version history](./versioning.md#version-history)), but a subscriber watching a tag, a roster or a container still has to hear that it moved.
 
 Two things follow immediately:
 
-- **The event set is closed.** These writes emit and no others: create, hard delete, the association and permission endpoints, every endpoint that bumps `version`, and a change set naming any [no-bump key](./versioning.md#version-history). A server has nothing to decide for itself about which verbs are reportable.
+- **The event set is closed.** These writes emit and no others: create, purge, the association and permission endpoints, every endpoint that bumps `version`, and a change set naming any [no-bump key](./versioning.md#version-history). A server has nothing to decide for itself about which verbs are reportable.
 - **A no-op mutation emits nothing.** What decides is `ops`, not `version`. Re-adding an association the record already holds, setting a deep-equal permission set, or deleting an already-deleted record produces no `ops` at all, and no `ops` means no event. A subscriber never sees a phantom change.
 
 ## What a feed is not
@@ -16,12 +16,12 @@ Two things follow immediately:
 **A feed is a change notification, not a replication log.** It answers "something you can read changed"; it does not promise that a subscriber can reconstruct stack state from events alone. Three things make the stronger promise unavailable at this price:
 
 - Permission changes move records into and out of a subscriber's view, and a revocation is deliberately invisible (see [Known limitations](#known-limitations)).
-- Hard delete destroys history, so no reconcile-by-query can discover it afterwards.
+- Purge destroys history, so no reconcile-by-query can discover it afterwards.
 - History is gated on the mutate surface rather than read access, so a stream rich enough to replay would route around [History access](./versioning.md#history-access).
 
 So the pattern is **notify-then-reconcile**: the feed says _when_ to run a `query()`, and the query — already permission-filtered, already paginated — says _what_.
 
-**A feed is also not a history, and widening it into one is not the way to get one.** Replaying a stored feed from the beginning would have to decide readability against an ACL that has moved on since — the retroactive exposure [history access](./versioning.md#history-access) is gated on the mutate surface to prevent — and would go on naming records a hard delete destroyed, which is the [one thing a purged frame is shaped to avoid](#purged-records-carry-nothing). The durable question is answered a tier down, by [the change journal](./journal.md), which is gated and erased like the history it sits beside.
+**A feed is also not a history, and widening it into one is not the way to get one.** Replaying a stored feed from the beginning would have to decide readability against an ACL that has moved on since — the retroactive exposure [history access](./versioning.md#history-access) is gated on the mutate surface to prevent — and would go on naming records a purge destroyed, which is the [one thing a purged frame is shaped to avoid](#purged-records-carry-nothing). The durable question is answered a tier down, by [the change journal](./journal.md), which is gated and erased like the history it sits beside.
 
 ## The event shape
 
@@ -33,12 +33,12 @@ type ChangeOp =
   | 'patch'
   | 'associate'
   | 'dissociate'
-  | 'permissions'
+  | 'reshare'
   | 'migrate'
   | 'restore'
   | 'delete'
   | 'undelete'
-  | 'hard-delete'
+  | 'purge'
   | 'unlist'
   | 'list'
   | 'reparent';
@@ -61,18 +61,28 @@ type RecordChange = {
 
 `kind` and `ops` map deterministically:
 
-| `kind`    | `ops`                                                                                                   |
-| --------- | ------------------------------------------------------------------------------------------------------- |
-| `created` | `create`                                                                                                |
-| `changed` | `patch`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
-| `deleted` | `delete` (soft), `unlist`                                                                               |
-| `purged`  | `hard-delete`                                                                                           |
+| `kind`    | `ops`                                                                                               |
+| --------- | --------------------------------------------------------------------------------------------------- |
+| `created` | `create`                                                                                            |
+| `changed` | `patch`, `associate`, `dissociate`, `reshare`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
+| `deleted` | `delete` (soft), `unlist`                                                                           |
+| `purged`  | `purge`                                                                                             |
 
 **Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this version.
 
+**Every op is a verb, named after the call that produced it.** Most share the method's name. Three don't, because the method covers more than one op:
+
+| op        | produced by                                                                       |
+| --------- | --------------------------------------------------------------------------------- |
+| `patch`   | `mutate()`'s `contentPatch` key, or `patchContent()`                              |
+| `reshare` | `grantAccess()`/`revokeAccess()`, or `mutate()`'s `permissions` key               |
+| `purge`   | `delete(id, { purge: true })`, which is also where `kind: 'purged'` gets its name |
+
+`delete` is the soft delete, and `reparent`, `unlist` and `list` are `mutate()`'s `parentId` and `unlisted` keys. One word means one thing everywhere it appears: the option you pass, the op in `ops`, the entry in [the journal](./journal.md#the-entry) and the `kind`.
+
 **`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
 
-Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `hard-delete`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
+Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `purge`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **`associationsAdded`/`associationsRemoved` are the live report of what an `associate()`/`dissociate()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./journal.md), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
 
@@ -81,11 +91,11 @@ Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `u
 
 Neither list is ever present on an op other than `associate`/`dissociate`, and a `mutate()` change set that swaps one association for another (`ops: ['associate', 'dissociate']`) carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
 
-**Both lists carry the data half alone.** Permission elements share the association delta in storage and in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `permissions` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op, the journal entry and [the reshare gate](./access-control.md#storage-unifies-the-api-does-not) cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
+**Both lists carry the data half alone.** Permission elements share the association delta in storage and in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `reshare` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op, the journal entry and [the reshare gate](./access-control.md#storage-unifies-the-api-does-not) cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
 
 **Both lists are derived from the [journal's tagged list](./journal.md#the-entry), not computed beside it.** One write names what it moved once; the durable half takes that list as it stands and the frame is flattened out of it. So a frame can never report an edit an entry doesn't, and the two shapes are a difference in what each tier is read for rather than two comparisons that might disagree.
 
-**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `permissions`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
+**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
 Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other ten verbs, and the bug is invisible until an index drifts from the records it describes.
 
@@ -109,7 +119,7 @@ The record's own provenance — `createdBy` and `appId` as stored — is deliber
 
 **`actor` is absent when unknown**, which means a write by an unscoped `Stack` — it has no requester to name. **Absent means unknown; it never means "the author"**, and a consumer must not substitute one for the other.
 
-**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` is stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Hard delete and the no-bump verbs are the exceptions.** Hard delete destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it. `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` don't bump either, so they don't stamp `updatedBy` on the record — but unlike hard delete they aren't owner-only, so their actor still has to reflect whoever actually made the call. It travels the same way a purge's does: read off the request rather than off the record, which in this case simply was never touched.
+**Where it comes from.** For every mutation that bumps a version, the record carries it: `updatedBy` is stamped in the same write (see [Data model § Authorship and attribution](./data-model.md#authorship-and-attribution)), so reading them back after the write matches what was persisted by construction. **Purge and the no-bump verbs are the exceptions.** Purge destroys the record and bumps no version, so nothing is stamped and there is nothing left to read — a `purged` frame's actor comes from the request that performed the delete. That verb is owner-acting-alone and refuses delegation, so the actor there is always the owner, with no principal beside it. `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` don't bump either, so they don't stamp `updatedBy` on the record — but unlike purge they aren't owner-only, so their actor still has to reflect whoever actually made the call. It travels the same way a purge's does: read off the request rather than off the record, which in this case simply was never touched.
 
 `appId` rides a `created` frame only. It is self-reported at create and never recorded per mutation, so on any later version the record's `appId` is the _creating_ app — record provenance, not this change's actor.
 
@@ -119,7 +129,7 @@ The record's own provenance — `createdBy` and `appId` as stored — is deliber
 
 **A `purged` frame carries `kind`, `ops`, `recordId`, `typeId`, `version`, `updatedAt` and `actor` — nothing else.** No `parentId`, no record provenance, and `record` is never present, whatever the subscriber asked for.
 
-Hard delete is the erasure primitive: it destroys the record and its version history, and the reason to reach for it over soft delete is that no trace should remain (see [Versioning § Deletion](./versioning.md#deletion)).
+Purge is the erasure primitive: it destroys the record and its version history, and the reason to reach for it over soft delete is that no trace should remain (see [Versioning § Deletion](./versioning.md#deletion)).
 
 The hazard is not disclosure at emission, which is already bounded — a subscriber who cannot read a record receives no event, so anyone holding a purge frame was entitled to its author anyway. **The hazard is durability.** A frame naming the author would hand every subscriber a permanent, un-erasable note — "this DID had a record here, and it was destroyed" — written into their logs at the moment the stack finished erasing its own copy. The stack cannot un-emit. An erasure primitive that seeds durable records of what was erased defeats itself.
 
@@ -253,9 +263,9 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Listed → unlisted (`unlist`) |            **Yes**             | Subscribers already know it and must drop it                        |
 | Any change while unlisted    |               No               | The ongoing case the feature exists for                             |
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
-| Hard delete while unlisted   |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
+| Purge while unlisted         |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `permissions`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 
@@ -296,6 +306,6 @@ An unscoped `parentId` filter (`null`, for root records) participates on the sam
 - **Gaining access arrives as `changed`, not `created`.** Hence upsert semantics.
 - **A restart against a local stack, or with no cursor held, is a full resync.** Local stacks have no `cursor` to have held. A restart against a stack that relays is not: persist the last `cursor` that was **present** — a relaying stack delivers its own local writes through the same handler, and those carry none, so a consumer that stores every change's `cursor` unconditionally erases its own cursor on its next write — pass it back as `since`, and let `(recordId, version, kind)` dedupe absorb whatever the resumed feed replays.
 - **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events. A scoped subscription serializes its permission checks, so a fan-out that outpaces them queues: pending events are held, with the record each describes, until their check runs.
-- **A hard delete over the wire is announced twice, and deduped.** The verb answers with the record it destroyed, so a `Stack` driving a remote adapter emits its own `purged` frame exactly as it does for every other write, and the far end emits one too, which arrives through the relay a round trip later. `(recordId, version, kind)` absorbs the pair, the same way it absorbs a relayed copy of any other local write.
-- **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.
+- **A purge over the wire is announced twice, and deduped.** The verb answers with the record it destroyed, so a `Stack` driving a remote adapter emits its own `purged` frame exactly as it does for every other write, and the far end emits one too, which arrives through the relay a round trip later. `(recordId, version, kind)` absorbs the pair, the same way it absorbs a relayed copy of any other local write.
+- **Purge is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.
 - **`actor` can be absent, and a purge carries only an outline.** Absent means unknown — never the record's author, which is a different fact ([Attribution](#attribution)) — and a purged frame names neither author nor content ([Purged records carry nothing](#purged-records-carry-nothing)).
