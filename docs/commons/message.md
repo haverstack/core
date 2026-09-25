@@ -94,11 +94,3 @@ discussion.
 - Chat features (presence, ephemerality, delivery/read receipts) — out of scope by
   design posture, not by omission.
 - `to`/`cc` addressing — presence in the group's stack is the addressing.
-
-## Changelog
-
-- **Proposed** — initial definition: `text` (required), `subject`, `format`.
-- **Proposed, amended** — threads may be anchored by any record (comments on articles,
-  photos, polls); text-type contract guide cross-referenced.
-- **Proposed, amended** — [`post@1`](./post.md) landed, discharging the broadcast-shape
-  cross-reference this file previously carried as a forward pointer only.

@@ -64,8 +64,3 @@ await stack.defineType({
 - `assignee` — `createdBy` is the author; assignment semantics inside a shared stack are
   a future proposal building on the existing grant/group model (`_group`, type-level
   grants), not guessed at now.
-
-## Changelog
-
-- **Draft** — initial definition: `title`, `done` (required), `notes`, `due`,
-  `completedAt`.

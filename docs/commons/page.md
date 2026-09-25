@@ -122,14 +122,3 @@ your site's about page in your notes app is a legitimate and intended consequenc
   and collision rules local; a denormalized full path would go stale.
 - Redirects/aliases — future additive candidate once a real generator needs it
   (`aliases: array<string>` is the likely shape, prior art in Hugo/Jekyll).
-
-## Changelog
-
-- **Draft** — initial definition: `slug`, `text` (required), `title`, `format`,
-  `publishedAt`.
-- **Draft, amended** — optional `collection` field added (additive, in place):
-  collection roots carry their selection rule so site structure survives switching
-  generators.
-- **Draft, amended** — convention text only, no schema change: the site container is
-  now [`site@1`](./site.md) rather than unspecified app territory, and collection
-  scoping by site is documented as a derived `relatedTo` clause.
