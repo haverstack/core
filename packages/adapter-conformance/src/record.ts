@@ -24,7 +24,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { AuthorityAssociation } from '@haverstack/core';
-import type { StackRecordAdapter, AdapterCapabilities } from '@haverstack/core/adapter';
+import type { StackRecordAdapter, StackCapabilities } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
 
@@ -41,7 +41,7 @@ export interface RecordAdapterConformanceOptions {
    * an opened instance so suite registration stays synchronous; see the
    * module doc above.
    */
-  capabilities: AdapterCapabilities;
+  capabilities: StackCapabilities;
 }
 
 export function runRecordAdapterConformance(options: RecordAdapterConformanceOptions): void {
@@ -71,7 +71,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // Capabilities
     // -----------------------------------------------------------------
     describe('capabilities', () => {
-      test('declares a well-formed AdapterCapabilities object', () => {
+      test('declares a well-formed StackCapabilities object', () => {
         expect(['none', 'field', 'path']).toContain(capabilities.filter.content);
         expect(typeof capabilities.filter.contentPresent).toBe('boolean');
         expect(typeof capabilities.filter.search).toBe('boolean');

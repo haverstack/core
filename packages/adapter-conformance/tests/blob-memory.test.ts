@@ -8,5 +8,5 @@ import { runBlobAdapterConformance } from '../src/blob.js';
 runBlobAdapterConformance({
   name: 'MemoryAdapter',
   open: () => new MemoryAdapter(),
-  listFiles: true,
+  listBlobs: true,
 });

@@ -31,7 +31,7 @@ import type {
 } from '@haverstack/core';
 import type {
   StackRecordAdapter,
-  AdapterCapabilities,
+  StackCapabilities,
   JournalOptions,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
@@ -44,7 +44,7 @@ import { SharedSqlRecordLogic } from './record-logic.js';
  * of them — an engine whose SQLite build lacked FTS5 would override
  * `filter.search` rather than restate the whole declaration.
  */
-export const SQLITE_RECORD_CAPABILITIES: AdapterCapabilities = {
+export const SQLITE_RECORD_CAPABILITIES: StackCapabilities = {
   filter: {
     content: 'path',
     contentPresent: true,
@@ -61,7 +61,7 @@ export const SQLITE_RECORD_CAPABILITIES: AdapterCapabilities = {
 };
 
 export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
-  readonly capabilities: AdapterCapabilities = SQLITE_RECORD_CAPABILITIES;
+  readonly capabilities: StackCapabilities = SQLITE_RECORD_CAPABILITIES;
 
   readonly ownerEntityId: string;
   readonly timezone: string | undefined;
@@ -90,7 +90,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     id: string,
     changes: RecordChangeSet,
     opts?: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
     } & ActorOptions &
@@ -101,7 +101,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   deleteRecord(
     id: string,
-    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
+    opts?: { hard?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions &
       JournalOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
@@ -109,7 +109,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   undeleteRecord(
     id: string,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
@@ -117,7 +117,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   restoreVersion(
     id: string,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -126,7 +126,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }

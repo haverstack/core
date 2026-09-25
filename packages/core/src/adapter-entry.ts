@@ -4,17 +4,17 @@
  * The interfaces a storage adapter implements — record storage, blob
  * storage, and the capabilities an adapter declares. Audience: adapter
  * implementers (see the in-repo adapters), not app or plugin code, which
- * reads `stack.features` instead of these directly.
+ * reads `stack.capabilities` instead of these directly.
  */
 
 export type {
   StackRecordAdapter,
   StackBlobAdapter,
-  AdapterCapabilities,
+  StackCapabilities,
   ContentFilterReach,
   MissingCapability,
-  BlobFileInfo,
-  ExpectedVersionOptions,
+  BlobInfo,
+  IfVersionOptions,
   BumpVersionOptions,
   SnapshotOptions,
   JournalEntryInput,

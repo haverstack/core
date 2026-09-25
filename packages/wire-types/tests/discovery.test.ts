@@ -7,7 +7,7 @@ import {
 } from '../src/index.js';
 import type { DiscoveryCapabilities } from '../src/index.js';
 import { NATIVE_SORT_FIELDS } from '@haverstack/core';
-import type { AdapterCapabilities } from '@haverstack/core/adapter';
+import type { StackCapabilities } from '@haverstack/core/adapter';
 
 describe('parseProtocolVersion', () => {
   it('splits a MAJOR.MINOR version', () => {
@@ -52,7 +52,7 @@ describe('isProtocolCompatible', () => {
 // unrecognized alike, so no call site defaults a key of its own.
 // -------------------------------------------------------
 
-const NONE: AdapterCapabilities = {
+const NONE: StackCapabilities = {
   filter: { content: 'none', contentPresent: false, search: false },
   sort: { fields: [], contentField: false },
   limits: { attachmentBytes: null, contentBytes: null },

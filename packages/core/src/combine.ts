@@ -71,11 +71,11 @@ export function combineAdapters(parts: {
     // synthesized here: glued backends have no shared transaction to honor
     // its atomicity promise (docs/spec/adapters.md § Interface split).
     // Stack.putAttachment() falls back to bytes-then-create().
-    putAttachment: (data) => parts.blob.putAttachment(data),
-    getAttachment: (id) => parts.blob.getAttachment(id),
-    deleteAttachment: (id) => parts.blob.deleteAttachment(id),
-    ...(parts.blob.listFiles && {
-      listFiles: () => parts.blob.listFiles!(),
+    putBlob: (data) => parts.blob.putBlob(data),
+    getBlob: (id) => parts.blob.getBlob(id),
+    deleteBlob: (id) => parts.blob.deleteBlob(id),
+    ...(parts.blob.listBlobs && {
+      listBlobs: () => parts.blob.listBlobs!(),
     }),
 
     async flush() {

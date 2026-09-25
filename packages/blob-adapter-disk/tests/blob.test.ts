@@ -19,92 +19,90 @@ afterEach(() => {
 });
 
 describe('DiskBlobAdapter', () => {
-  test('putAttachment returns a fileId', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('hello'));
+  test('putBlob returns a fileId', async () => {
+    const fileId = await adapter.putBlob(Buffer.from('hello'));
     expect(typeof fileId).toBe('string');
     expect(fileId.length).toBeGreaterThan(0);
   });
 
-  test('putAttachment returns SHA-256 hex string', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('hello'));
+  test('putBlob returns SHA-256 hex string', async () => {
+    const fileId = await adapter.putBlob(Buffer.from('hello'));
     expect(fileId).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test('getAttachment returns the stored data', async () => {
+  test('getBlob returns the stored data', async () => {
     const data = Buffer.from('hello attachment');
-    const fileId = await adapter.putAttachment(data);
-    const retrieved = await adapter.getAttachment(fileId);
+    const fileId = await adapter.putBlob(data);
+    const retrieved = await adapter.getBlob(fileId);
     expect((retrieved as Buffer).toString()).toBe('hello attachment');
   });
 
   test('attachment file exists on disk', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('test'));
+    const fileId = await adapter.putBlob(Buffer.from('test'));
     const files = readdirSync(testDir);
     expect(files).toContain(fileId);
   });
 
-  test('getAttachment throws StackNotFoundError for unknown fileId', async () => {
+  test('getBlob throws StackNotFoundError for unknown fileId', async () => {
     const validHash = 'a'.repeat(64);
-    await expect(adapter.getAttachment(validHash)).rejects.toThrow(StackNotFoundError);
+    await expect(adapter.getBlob(validHash)).rejects.toThrow(StackNotFoundError);
   });
 
-  test('getAttachment throws StackBadRequestError for invalid fileId format', async () => {
-    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackBadRequestError);
-    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(/Invalid fileId/);
+  test('getBlob throws StackBadRequestError for invalid fileId format', async () => {
+    await expect(adapter.getBlob('nonexistent')).rejects.toThrow(StackBadRequestError);
+    await expect(adapter.getBlob('nonexistent')).rejects.toThrow(/Invalid fileId/);
   });
 
-  test('putAttachment stores binary data correctly', async () => {
+  test('putBlob stores binary data correctly', async () => {
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
-    const fileId = await adapter.putAttachment(binary);
-    const retrieved = await adapter.getAttachment(fileId);
+    const fileId = await adapter.putBlob(binary);
+    const retrieved = await adapter.getBlob(fileId);
     expect(retrieved as Buffer).toEqual(binary);
   });
 
-  test('putAttachment deduplicates identical content', async () => {
+  test('putBlob deduplicates identical content', async () => {
     const data = Buffer.from('same content');
-    const id1 = await adapter.putAttachment(data);
-    const id2 = await adapter.putAttachment(data);
+    const id1 = await adapter.putBlob(data);
+    const id2 = await adapter.putBlob(data);
     expect(id1).toBe(id2);
     const files = readdirSync(testDir);
     expect(files.filter((f) => f === id1).length).toBe(1);
   });
 
-  test('putAttachment leaves no temp file behind on success', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('clean write'));
+  test('putBlob leaves no temp file behind on success', async () => {
+    const fileId = await adapter.putBlob(Buffer.from('clean write'));
     const files = readdirSync(testDir);
     expect(files).toEqual([fileId]);
   });
 
-  test('concurrent putAttachment of identical content never produces a torn file', async () => {
+  test('concurrent putBlob of identical content never produces a torn file', async () => {
     const data = Buffer.from('concurrent payload');
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () => adapter.putAttachment(data)),
-    );
+    const results = await Promise.all(Array.from({ length: 10 }, () => adapter.putBlob(data)));
     expect(new Set(results).size).toBe(1);
 
     const [fileId] = results;
     const files = readdirSync(testDir);
     expect(files).toEqual([fileId]);
 
-    const stored = await adapter.getAttachment(fileId);
+    const stored = await adapter.getBlob(fileId);
     expect((stored as Buffer).equals(data)).toBe(true);
   });
 
-  test('getAttachment throws StackNotFoundError after deleteAttachment', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('bye'));
-    await adapter.deleteAttachment(fileId);
-    await expect(adapter.getAttachment(fileId)).rejects.toThrow(StackNotFoundError);
+  test('getBlob throws StackNotFoundError after deleteBlob', async () => {
+    const fileId = await adapter.putBlob(Buffer.from('bye'));
+    await adapter.deleteBlob(fileId);
+    await expect(adapter.getBlob(fileId)).rejects.toThrow(StackNotFoundError);
   });
 
-  test('deleteAttachment removes file from disk', async () => {
-    const fileId = await adapter.putAttachment(Buffer.from('gone'));
-    await adapter.deleteAttachment(fileId);
+  test('deleteBlob removes file from disk', async () => {
+    const fileId = await adapter.putBlob(Buffer.from('gone'));
+    await adapter.deleteBlob(fileId);
     expect(existsSync(join(testDir, fileId))).toBe(false);
   });
 
-  test('deleteAttachment is non-fatal for missing file', async () => {
+  test('deleteBlob is non-fatal for missing file', async () => {
     const validHash = 'b'.repeat(64);
-    await expect(adapter.deleteAttachment(validHash)).resolves.toBeUndefined();
+    await expect(adapter.deleteBlob(validHash)).resolves.toBeUndefined();
   });
 
   test('constructor creates the directory if it does not exist', () => {
@@ -114,16 +112,16 @@ describe('DiskBlobAdapter', () => {
     expect(existsSync(newDir)).toBe(true);
   });
 
-  describe('listFiles', () => {
+  describe('listBlobs', () => {
     test('returns an empty array for an empty store', async () => {
-      expect(await adapter.listFiles()).toEqual([]);
+      expect(await adapter.listBlobs()).toEqual([]);
     });
 
     test('lists every stored blob with fileId and size', async () => {
-      const id1 = await adapter.putAttachment(Buffer.from('hello'));
-      const id2 = await adapter.putAttachment(Buffer.from('a longer blob body'));
+      const id1 = await adapter.putBlob(Buffer.from('hello'));
+      const id2 = await adapter.putBlob(Buffer.from('a longer blob body'));
 
-      const files = await adapter.listFiles();
+      const files = await adapter.listBlobs();
       expect(files.map((f) => f.fileId).sort()).toEqual([id1, id2].sort());
       expect(files.find((f) => f.fileId === id1)?.size).toBe(Buffer.from('hello').byteLength);
       expect(files.find((f) => f.fileId === id2)?.size).toBe(
@@ -132,23 +130,23 @@ describe('DiskBlobAdapter', () => {
     });
 
     test('each entry carries a modifiedAt date', async () => {
-      const fileId = await adapter.putAttachment(Buffer.from('timestamped'));
-      const [file] = await adapter.listFiles();
+      const fileId = await adapter.putBlob(Buffer.from('timestamped'));
+      const [file] = await adapter.listBlobs();
       expect(file.modifiedAt).toBeInstanceOf(Date);
       expect(file.fileId).toBe(fileId);
     });
 
     test('deleted blobs no longer appear', async () => {
-      const fileId = await adapter.putAttachment(Buffer.from('temporary'));
-      await adapter.deleteAttachment(fileId);
-      expect(await adapter.listFiles()).toEqual([]);
+      const fileId = await adapter.putBlob(Buffer.from('temporary'));
+      await adapter.deleteBlob(fileId);
+      expect(await adapter.listBlobs()).toEqual([]);
     });
 
     test('ignores non-fileId entries in the storage directory', async () => {
-      const fileId = await adapter.putAttachment(Buffer.from('real blob'));
+      const fileId = await adapter.putBlob(Buffer.from('real blob'));
       writeFileSync(join(testDir, '.DS_Store'), 'stray file');
 
-      const files = await adapter.listFiles();
+      const files = await adapter.listBlobs();
       expect(files.map((f) => f.fileId)).toEqual([fileId]);
     });
   });

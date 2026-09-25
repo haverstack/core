@@ -38,7 +38,7 @@ import { MyBlobAdapter } from './my-blob-adapter.js';
 
 runBlobAdapterConformance({
   name: 'MyBlobAdapter',
-  listFiles: true, // omit or set false if you don't implement the optional listFiles()
+  listBlobs: true, // omit or set false if you don't implement the optional listBlobs()
   open: () => new MyBlobAdapter(tempDir()),
 });
 ```
@@ -49,7 +49,7 @@ Errors are asserted against `.code` (the `StackErrorCode` every `StackError` sub
 
 **Record adapters:** CRUD and not-found/conflict errors, the `_config` singleton's reserved-id exclusion from queries, associations (idempotent, never bump version), version snapshots and `restoreVersion` (content + `parentId` restored, associations untouched), `commitMigration`, cursor pagination (a cursor minted under one sort refused when replayed under another), content-path filtering (array spread, nested objects, `contentPresent`, null-matches-absent), sort by content field, and full-text search (including that a content patch is reflected — no stale matches under the old content).
 
-**Blob adapters:** content-addressed `putAttachment` (fileId is the SHA-256 hex of the bytes, identical bytes dedupe), byte-exact `getAttachment`, the `not_found`/`bad_request` fileId error contract, `deleteAttachment`, and the optional `listFiles()`.
+**Blob adapters:** content-addressed `putBlob` (fileId is the SHA-256 hex of the bytes, identical bytes dedupe), byte-exact `getBlob`, the `not_found`/`bad_request` fileId error contract, `deleteBlob`, and the optional `listBlobs()`.
 
 See `docs/spec/adapters.md` for the full prose contract this suite checks.
 

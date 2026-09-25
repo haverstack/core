@@ -2856,7 +2856,7 @@ describe('ScopedStack.putAttachment', () => {
         limits: { ...adapter.capabilities.limits, attachmentBytes: 2 },
       },
     });
-    const putAttachmentSpy = vi.spyOn(adapter, 'putAttachment');
+    const putAttachmentSpy = vi.spyOn(adapter, 'putBlob');
 
     await expect(
       stack.asEntity(MEMBER).putAttachment(data, { mimeType: 'image/png' }),

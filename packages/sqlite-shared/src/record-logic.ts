@@ -29,11 +29,7 @@ import type {
   Association,
   ActorOptions,
 } from '@haverstack/core';
-import type {
-  JournalEntryInput,
-  JournalOptions,
-  ExpectedVersionOptions,
-} from '@haverstack/core/adapter';
+import type { JournalEntryInput, JournalOptions, IfVersionOptions } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
@@ -179,7 +175,7 @@ export class SharedSqlRecordLogic {
   /**
    * The one shape every mutating UPDATE in this class has: whatever columns
    * the caller is changing, then the version bump and the actor/timestamp
-   * stamp that every mutation owes, gated on the opt-in `expectedVersion`
+   * stamp that every mutation owes, gated on the opt-in `ifVersion`
    * precondition and failing loudly when nothing matched.
    *
    * The guard rides in the WHERE clause even where the caller has already
@@ -191,10 +187,10 @@ export class SharedSqlRecordLogic {
     id: string,
     sets: string[],
     values: unknown[],
-    opts: ExpectedVersionOptions & ActorOptions,
+    opts: IfVersionOptions & ActorOptions,
     now = toMs(new Date()),
   ): void {
-    const guarded = opts.expectedVersion !== undefined;
+    const guarded = opts.ifVersion !== undefined;
     const changed = this.exec.run(
       `UPDATE records SET ${[...sets, 'version = version + 1', 'updated_at = ?', 'updated_by = ?', 'updated_via = ?'].join(', ')}` +
         ` WHERE id = ?${guarded ? ' AND version = ?' : ''}`,
@@ -204,10 +200,10 @@ export class SharedSqlRecordLogic {
         opts.actor?.subjectId ?? null,
         opts.actor?.principalId ?? null,
         id,
-        ...(guarded ? [opts.expectedVersion] : []),
+        ...(guarded ? [opts.ifVersion] : []),
       ],
     );
-    if (changed === 0) this.throwVersionConflict(id, opts.expectedVersion);
+    if (changed === 0) this.throwVersionConflict(id, opts.ifVersion);
   }
 
   /**
@@ -322,13 +318,13 @@ export class SharedSqlRecordLogic {
    * `associations`, `parentId` and/or `unlisted` — Stack computes this from
    * which ops the set actually moves. Such a write still lands its columns,
    * but leaves `version`, `updatedAt` and the actor stamps exactly as they
-   * stood and takes no snapshot. `expectedVersion`, if given, is re-checked
+   * stood and takes no snapshot. `ifVersion`, if given, is re-checked
    * synchronously inside the transaction — the CAS guard the bumping path
    * gets from its UPDATE's WHERE clause, restated as a read because the
    * UPDATE here carries no version predicate. See
    * docs/spec/versioning.md § Version history.
    *
-   * The expectedVersion check for a bumping write is standalone rather than
+   * The ifVersion check for a bumping write is standalone rather than
    * folded into the UPDATE alone, because a content change needs
    * fts.remove() to run *before* the records-table content changes. The
    * guard is still in the UPDATE's WHERE, so a writer that slipped in
@@ -338,7 +334,7 @@ export class SharedSqlRecordLogic {
     id: string,
     changes: RecordChangeSet,
     opts: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
     } & ActorOptions &
@@ -346,7 +342,7 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.expectedVersion);
+    this.checkExpectedVersion(existing, opts.ifVersion);
 
     const now = toMs(new Date());
 
@@ -373,7 +369,7 @@ export class SharedSqlRecordLogic {
       this.exec.transaction(() => {
         const current = this.readRecord(id);
         if (!current) throw new StackNotFoundError(`Record not found: "${id}"`);
-        this.checkExpectedVersion(current, opts.expectedVersion);
+        this.checkExpectedVersion(current, opts.ifVersion);
         if (sets.length > 0) {
           this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
         }
@@ -413,13 +409,13 @@ export class SharedSqlRecordLogic {
     id: string,
     opts: {
       hard?: boolean;
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
       JournalOptions = {},
   ): Promise<StackRecord | null> {
     if (opts.hard) {
-      return this.exec.transaction(() => this.hardDeleteRecord(id, opts.expectedVersion));
+      return this.exec.transaction(() => this.hardDeleteRecord(id, opts.ifVersion));
     }
 
     // One timestamp for both columns: a soft delete is a single event, and
@@ -440,20 +436,20 @@ export class SharedSqlRecordLogic {
    * index rows, and row, returning the record as it stood — the last copy that will ever
    * exist, read here so that nothing can overtake it between the read and
    * the deletes. Null when there was no such record. No write() call —
-   * callers batch it. expectedVersion is checked first so a lost CAS race
+   * callers batch it. ifVersion is checked first so a lost CAS race
    * leaves nothing touched (children reference the row, so the check can't
    * fold into the final DELETE).
    */
-  private hardDeleteRecord(id: string, expectedVersion?: number): StackRecord | null {
+  private hardDeleteRecord(id: string, ifVersion?: number): StackRecord | null {
     const purged = this.readRecord(id);
     if (!purged) {
       // A CAS against a record that isn't there is a failed precondition,
       // not the "nothing to delete" that an unconditional hard delete
       // reports by returning null.
-      if (expectedVersion !== undefined) throw new StackNotFoundError(`Record not found: "${id}"`);
+      if (ifVersion !== undefined) throw new StackNotFoundError(`Record not found: "${id}"`);
       return null;
     }
-    this.checkExpectedVersion(purged, expectedVersion);
+    this.checkExpectedVersion(purged, ifVersion);
     fts5Strategy.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
@@ -468,8 +464,7 @@ export class SharedSqlRecordLogic {
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions = {},
+    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
   ): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
@@ -484,14 +479,14 @@ export class SharedSqlRecordLogic {
     id: string,
     version: number,
     opts: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
       JournalOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.expectedVersion);
+    this.checkExpectedVersion(existing, opts.ifVersion);
 
     const target = await this.getVersion(id, version);
     if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
@@ -512,8 +507,7 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions = {},
+    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
   ): Promise<StackRecord> {
     // Checked against a read record first, rather than left to the
     // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before
@@ -523,7 +517,7 @@ export class SharedSqlRecordLogic {
     // — same shape as mutateRecord() and restoreVersion().
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.expectedVersion);
+    this.checkExpectedVersion(existing, opts.ifVersion);
 
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
@@ -548,7 +542,7 @@ export class SharedSqlRecordLogic {
     id: string,
     typeId: TypeId,
     content: Record<string, unknown>,
-    opts: ExpectedVersionOptions & ActorOptions,
+    opts: IfVersionOptions & ActorOptions,
   ): void {
     const json = JSON.stringify(content);
     fts5Strategy.remove(this.exec, id);

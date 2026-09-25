@@ -32,7 +32,7 @@ import type {
   RecordFilter,
   RelationshipTarget,
   RelationshipTargetPattern,
-  StackFeatures,
+  StackCapabilities,
 } from './types.js';
 
 /**
@@ -44,7 +44,7 @@ import type {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<StackFeatures, 'filter'>,
+  capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
   const { content: reach, contentPresent, search } = capabilities.filter;
   if (filter?.search && !search) {
@@ -89,7 +89,7 @@ export function assertQueryCapabilities(
  * adapter that reaches no content at all — the rung comparison lives here
  * rather than at each of them.
  */
-export function filtersContent(features: Pick<StackFeatures, 'filter'>): boolean {
+export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boolean {
   return features.filter.content !== 'none';
 }
 
@@ -189,7 +189,7 @@ export function assertValidSort(sort: QuerySort | undefined): void {
  */
 export function assertSortCapability(
   sort: QuerySort | undefined,
-  capabilities: Pick<StackFeatures, 'sort'>,
+  capabilities: Pick<StackCapabilities, 'sort'>,
 ): void {
   if (!sort) return;
   if (sort.contentField !== undefined) {

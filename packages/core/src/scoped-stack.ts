@@ -52,7 +52,8 @@ import type {
   RecordJournalEntry,
   JournalQuery,
   StackAdapter,
-  StackFeatures,
+  StackCapabilities,
+  IfVersionOptions,
   StackQuery,
   StackRecord,
   SubscribeOptions,
@@ -113,7 +114,6 @@ import type {
   DeleteRecordOptions,
   DeleteResult,
   GetRecordOptions,
-  IfVersionOptions,
   StackClient,
 } from './stack.js';
 
@@ -307,8 +307,8 @@ export class ScopedStack implements StackClient {
     return this.#subjectId;
   }
 
-  get features(): StackFeatures {
-    return this.stack.features;
+  get capabilities(): StackCapabilities {
+    return this.stack.capabilities;
   }
 
   private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
@@ -729,7 +729,7 @@ export class ScopedStack implements StackClient {
     // `includeUnlisted`, as hasReadableReference() above: withholding a
     // record from enumeration decides nothing about what it conveys, and
     // the uploader clause does not lapse. See docs/spec/unlisted.md.
-    return filtersContent(this.stack.features)
+    return filtersContent(this.stack.capabilities)
       ? (
           await this.stack.query({
             filter: {
@@ -932,7 +932,7 @@ export class ScopedStack implements StackClient {
     return lookupEntityByDid(
       (q) => this.query(q),
       did,
-      filtersContent(this.stack.features),
+      filtersContent(this.stack.capabilities),
       this.ownerActingAlone,
     );
   }
@@ -949,7 +949,7 @@ export class ScopedStack implements StackClient {
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.stack.features);
+    assertSortCapability(query.sort, this.stack.capabilities);
     assertValidRelatedTo(query.filter?.relatedTo);
     if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
@@ -1183,7 +1183,7 @@ export class ScopedStack implements StackClient {
           baseId: SYSTEM_TYPES.APP,
           includeDeleted: true,
           includeUnlisted: true,
-          ...(filtersContent(this.stack.features) && {
+          ...(filtersContent(this.stack.capabilities) && {
             content: { did: this.#principalId },
           }),
         },
@@ -1418,8 +1418,8 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
     }
     await this.requireAppIdMatchesPrincipal(appId);
-    assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
-    const fileId = await this.adapter.putAttachment(data);
+    assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
+    const fileId = await this.adapter.putBlob(data);
     return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {

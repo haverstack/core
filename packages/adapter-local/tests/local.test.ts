@@ -153,39 +153,39 @@ describe('openOrInitialize', () => {
 // -------------------------------------------------------
 
 describe('attachments', () => {
-  test('putAttachment returns a SHA-256 fileId', async () => {
+  test('putBlob returns a SHA-256 fileId', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello'));
+    const fileId = await adapter.putBlob(Buffer.from('hello'));
     expect(fileId).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test('getAttachment returns stored data', async () => {
+  test('getBlob returns stored data', async () => {
     const adapter = await initAdapter();
     const data = Buffer.from('hello attachment');
-    const fileId = await adapter.putAttachment(data);
-    const retrieved = await adapter.getAttachment(fileId);
+    const fileId = await adapter.putBlob(data);
+    const retrieved = await adapter.getBlob(fileId);
     expect((retrieved as Buffer).toString()).toBe('hello attachment');
   });
 
   test('attachment file is stored in the attachments directory', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('test'));
+    const fileId = await adapter.putBlob(Buffer.from('test'));
     const attachmentsDir = join(testDir, 'attachments');
     expect(readdirSync(attachmentsDir)).toContain(fileId);
   });
 
-  test('deleteAttachment removes the file', async () => {
+  test('deleteBlob removes the file', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('gone'));
-    await adapter.deleteAttachment(fileId);
-    await expect(adapter.getAttachment(fileId)).rejects.toThrow();
+    const fileId = await adapter.putBlob(Buffer.from('gone'));
+    await adapter.deleteBlob(fileId);
+    await expect(adapter.getBlob(fileId)).rejects.toThrow();
   });
 
-  test('listFiles reports stored blobs with size and modifiedAt', async () => {
+  test('listBlobs reports stored blobs with size and modifiedAt', async () => {
     const adapter = await initAdapter();
-    const fileId = await adapter.putAttachment(Buffer.from('hello attachment'));
+    const fileId = await adapter.putBlob(Buffer.from('hello attachment'));
 
-    const files = await adapter.listFiles();
+    const files = await adapter.listBlobs();
 
     expect(files).toHaveLength(1);
     expect(files[0].fileId).toBe(fileId);

@@ -21,7 +21,7 @@ import type {
   RecordVersion,
   StackType,
 } from '@haverstack/core';
-import type { AdapterCapabilities } from '@haverstack/core/adapter';
+import type { StackCapabilities } from '@haverstack/core/adapter';
 
 /**
  * A Durable Object is a separate JS realm from the test file's own — even
@@ -47,7 +47,7 @@ import type { AdapterCapabilities } from '@haverstack/core/adapter';
  * inference rather than fighting it.
  */
 type TestStub = {
-  getCapabilities(): Promise<AdapterCapabilities>;
+  getCapabilities(): Promise<StackCapabilities>;
   getOwnerEntityId(): Promise<string>;
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: string): Promise<StackRecord | null>;
@@ -170,14 +170,14 @@ describe('records — CRUD', () => {
   });
 });
 
-describe('expectedVersion / transactional rollback', () => {
+describe('ifVersion / transactional rollback', () => {
   test('patchContent throws StackVersionConflictError and changes nothing when stale', async () => {
     const stub = getStub();
     const record = await stub.createRecord(makeRecord());
     await stub.patchContent(record.id, { text: 'first' }); // -> v2
 
     const err = await stub
-      .patchContent(record.id, { text: 'second' }, { expectedVersion: 1 })
+      .patchContent(record.id, { text: 'second' }, { ifVersion: 1 })
       .catch((e: unknown) => e);
     expect(
       (
@@ -200,7 +200,7 @@ describe('expectedVersion / transactional rollback', () => {
 
   /**
    * Guards the FTS index against a rejected patch, but note what it does
-   * NOT prove: patchContent validates expectedVersion *before* opening
+   * NOT prove: patchContent validates ifVersion *before* opening
    * exec.transaction(), so this case throws ahead of the first write and
    * passes even if transaction() provides no atomicity at all. Rollback
    * itself is covered by the mid-transaction-failure test above, which
@@ -208,16 +208,16 @@ describe('expectedVersion / transactional rollback', () => {
    */
   /**
    * The rollback test with a failure that actually occurs *inside* the
-   * transaction callback. patchContent's expectedVersion check runs before
+   * transaction callback. patchContent's ifVersion check runs before
    * exec.transaction() is ever entered, so a stale-version patch throws
    * before the first write and proves nothing about atomicity.
    *
-   * deleteRecord({ snapshot, expectedVersion }) is the shape that does
+   * deleteRecord({ snapshot, ifVersion }) is the shape that does
    * reach it: unlike patchContent/mutateRecord, a soft delete has no
-   * pre-transaction expectedVersion check of its own — it goes straight
+   * pre-transaction ifVersion check of its own — it goes straight
    * into exec.transaction(), where snapshotBeforeMutation() writes a real
    * row into `versions` and versionedUpdate()'s CAS then fails on the
-   * stale expectedVersion and throws — both inside the same transaction
+   * stale ifVersion and throws — both inside the same transaction
    * callback. (associate()/dissociate() cannot stand in for this: they
    * never bump and never snapshot, so they touch neither `versions` nor the
    * CAS path — see docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
@@ -237,9 +237,9 @@ describe('expectedVersion / transactional rollback', () => {
     };
 
     // snapshotBeforeMutation writes a versions row, then versionedUpdate's
-    // CAS rejects the stale expectedVersion and throws inside the transaction.
+    // CAS rejects the stale ifVersion and throws inside the transaction.
     const err = await stub
-      .deleteRecord(record.id, { snapshot, expectedVersion: 999 })
+      .deleteRecord(record.id, { snapshot, ifVersion: 999 })
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('version_conflict');
 
@@ -256,7 +256,7 @@ describe('expectedVersion / transactional rollback', () => {
       makeRecord({ content: { text: 'searchable original' } }),
     );
     await stub
-      .patchContent(record.id, { text: 'rejected update' }, { expectedVersion: 999 })
+      .patchContent(record.id, { text: 'rejected update' }, { ifVersion: 999 })
       .catch(() => {});
 
     const stillFindsOriginal = await stub.queryRecords({ filter: { search: 'original' } });

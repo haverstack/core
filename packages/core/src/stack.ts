@@ -54,7 +54,8 @@ import type {
   Migration,
   MigrationFn,
   RecordVersion,
-  StackFeatures,
+  StackCapabilities,
+  IfVersionOptions,
   GrantAction,
   GrantContent,
   TypeGrant,
@@ -294,16 +295,6 @@ export type GetRecordOptions = {
   presentAt?: 'stored' | 'latest';
 };
 
-/**
- * Opt-in optimistic-concurrency precondition, accepted by every mutation
- * that bumps a record's version. On mismatch the mutation throws
- * StackVersionConflictError and changes nothing; omit to keep
- * last-writer-wins. See docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
- */
-export type IfVersionOptions = {
-  ifVersion?: number;
-};
-
 export type DeleteRecordOptions = IfVersionOptions & {
   /** If true, permanently remove the record and all its history. Default: false */
   hard?: boolean;
@@ -360,7 +351,7 @@ export type DefineTypeOptions = {
  * and work equally well with a full Stack or a permission-scoped view.
  */
 export interface StackClient {
-  readonly features: StackFeatures;
+  readonly capabilities: StackCapabilities;
   create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
@@ -573,7 +564,7 @@ export class Stack implements StackClient {
   }
 
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid((q) => this.query(q), did, filtersContent(this.features), true);
+    return lookupEntityByDid((q) => this.query(q), did, filtersContent(this.capabilities), true);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {
@@ -584,7 +575,7 @@ export class Stack implements StackClient {
     return this.adapter.timezone;
   }
 
-  get features(): StackFeatures {
+  get capabilities(): StackCapabilities {
     return this.adapter.capabilities;
   }
 
@@ -902,7 +893,7 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
-    assertContentSize(content, this.features.limits.contentBytes, 'Content');
+    assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
     if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
       await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
@@ -1168,7 +1159,7 @@ export class Stack implements StackClient {
     if (contentPatch) {
       // The patch is what travels, so the patch is what's measured — a
       // small patch against a large record is not an oversized request.
-      assertContentSize(contentPatch, this.features.limits.contentBytes, 'Patch');
+      assertContentSize(contentPatch, this.capabilities.limits.contentBytes, 'Patch');
 
       const type = await this.getTypeCached(existing.typeId);
       if (!type) {
@@ -1506,7 +1497,7 @@ export class Stack implements StackClient {
       const change = new PendingChange('hard-delete', { actor: normalizeActor(opts.actor) });
       const purged = await this.adapter.deleteRecord(id, {
         hard: true,
-        expectedVersion: opts.ifVersion,
+        ifVersion: opts.ifVersion,
         journal: change.journal,
       });
       if (!purged) return { record: null, referencedFileIds: [] };
@@ -1798,7 +1789,7 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
-    assertContentSize(content, this.features.limits.contentBytes, 'Content');
+    assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
     const fromFamily = baseIdOf(existing.typeId);
     const toFamily = baseIdOf(toTypeId);
@@ -1949,7 +1940,7 @@ export class Stack implements StackClient {
           baseId: family,
           includeDeleted: true,
           includeUnlisted: true,
-          ...(filtersContent(this.features) && { content: { [field]: value } }),
+          ...(filtersContent(this.capabilities) && { content: { [field]: value } }),
         },
       },
       (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
@@ -2129,7 +2120,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord & { content: AttachmentContent }> {
     const { mimeType, filename, appId } = opts;
     this.assertOpen();
-    assertAttachmentSize(data.byteLength, this.features.limits.attachmentBytes);
+    assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
       // The metadata record is written inside the adapter, so create()
       // never sees it and this is the only place it can be announced.
@@ -2141,7 +2132,7 @@ export class Stack implements StackClient {
       this.announce(new PendingChange('create'), record);
       return record as StackRecord & { content: AttachmentContent };
     }
-    const fileId = await this.adapter.putAttachment(data);
+    const fileId = await this.adapter.putBlob(data);
     return this.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
       {
@@ -2156,7 +2147,7 @@ export class Stack implements StackClient {
 
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
     this.assertOpen();
-    return this.adapter.getAttachment(fileId);
+    return this.adapter.getBlob(fileId);
   }
 
   /**
@@ -2180,7 +2171,7 @@ export class Stack implements StackClient {
         baseId: SYSTEM_TYPES.ATTACHMENT,
         includeDeleted: true,
         includeUnlisted: true,
-        ...(filtersContent(this.features) && { content: { fileId } }),
+        ...(filtersContent(this.capabilities) && { content: { fileId } }),
       },
     });
     return results
@@ -2229,13 +2220,13 @@ export class Stack implements StackClient {
 
     if (!deletedRecords.length) {
       try {
-        await this.adapter.getAttachment(fileId);
+        await this.adapter.getBlob(fileId);
       } catch {
         throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
       }
     }
 
-    await this.adapter.deleteAttachment(fileId);
+    await this.adapter.deleteBlob(fileId);
   }
 
   /**
@@ -2301,10 +2292,10 @@ export class Stack implements StackClient {
     }
 
     // Bare-bytes orphans: blobs with zero metadata records, only
-    // discoverable if the blob adapter implements listFiles().
+    // discoverable if the blob adapter implements listBlobs().
     const blobByFile = new Map<string, { modifiedAt: number; size: number }>();
-    if (this.adapter.listFiles) {
-      for (const file of await this.adapter.listFiles()) {
+    if (this.adapter.listBlobs) {
+      for (const file of await this.adapter.listBlobs()) {
         blobByFile.set(file.fileId, { modifiedAt: file.modifiedAt.getTime(), size: file.size });
       }
     }
@@ -2720,7 +2711,7 @@ export class Stack implements StackClient {
    */
   private writeOptions(existing: StackRecord, opts: IfVersionOptions & ActorOptions) {
     return {
-      expectedVersion: opts.ifVersion,
+      ifVersion: opts.ifVersion,
       snapshot: this.buildVersionSnapshot(existing),
       actor: normalizeActor(opts.actor),
     };
