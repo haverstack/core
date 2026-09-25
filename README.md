@@ -89,6 +89,7 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | [`@haverstack/commons`](./packages/commons)                                   | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
 | [`@haverstack/wire-types`](./packages/wire-types)                             | HTTP wire types, error mapping and serialization — for server implementers        |
 | [`@haverstack/conformance-fixtures`](./packages/conformance-fixtures)         | Request/response fixtures a server can test its wire implementation against       |
+| [`@haverstack/adapter-conformance`](./packages/adapter-conformance)           | Runnable vitest suite an adapter implementation can test itself against           |
 
 Planned:
 
@@ -308,65 +309,9 @@ pnpm build
 pnpm typecheck
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, comment and commit conventions, and the architecture conventions this codebase follows.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, comment and commit conventions, the architecture conventions this codebase follows, and [where things live](./CONTRIBUTING.md#where-things-live).
 
 Versions and npm publishes are automated with [Changesets](https://github.com/changesets/changesets): a change that ships to npm carries a `pnpm changeset` file, and CI turns pending changesets into a release PR whose merge publishes. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).
-
-### Project structure
-
-```
-docs/
-  spec.md                 # Design spec — overview and index
-  spec/                   # Spec sub-documents — data model, identity, access control, wire format, …
-packages/
-  core/                   # @haverstack/core
-    src/
-      index.ts            # Root public exports — Stack, data types, general-purpose utilities
-      did-entry.ts         # ./did public exports — keygen, custody, signing (did:key)
-      wire-entry.ts        # ./wire public exports — auth handshake, attachment-download policy
-      adapter-entry.ts     # ./adapter public exports — the interfaces a storage adapter implements
-      types.ts            # All type definitions (StackRecordAdapter, StackBlobAdapter, StackAdapter, …)
-      stack.ts            # Stack class
-      combine.ts          # combineAdapters() — compose record + blob adapters
-      access.ts           # Permission and grant checking
-      id.ts               # Crockford base-32 ID generation
-      schema.ts           # Schema hashing and type compatibility
-      validate.ts         # Content validation
-      did.ts              # did:key implementation
-      auth.ts              # Auth handshake implementation
-      attachment-download.ts # Attachment download content-type resolution
-      testing.ts          # MemoryAdapter test helper — exported as @haverstack/core/testing
-    tests/
-  adapter-local/          # @haverstack/adapter-local
-    src/
-      index.ts            # LocalAdapter (StackAdapter) — wraps record + blob adapters below
-    tests/
-  record-adapter-sqlite/  # @haverstack/record-adapter-sqlite
-    src/
-      index.ts            # NativeSQLiteRecordAdapter (StackRecordAdapter), node:sqlite
-      token-store.ts       # NativeTokenStore (StackTokenStore), separate file from records
-    tests/
-  record-adapter-do-sqlite/ # @haverstack/record-adapter-do-sqlite
-    src/
-      index.ts            # DoSQLiteRecordAdapter (StackRecordAdapter), Cloudflare Durable Objects
-    tests/
-  blob-adapter-disk/      # @haverstack/blob-adapter-disk
-    src/
-      index.ts            # DiskBlobAdapter (StackBlobAdapter)
-    tests/
-  blob-adapter-s3/        # @haverstack/blob-adapter-s3
-    src/
-      index.ts            # S3BlobAdapter (StackBlobAdapter)
-    tests/
-  adapter-api/            # @haverstack/adapter-api
-    src/
-      index.ts            # APIAdapter (StackAdapter)
-    tests/
-  commons/                # @haverstack/commons
-    src/
-      index.ts            # Canonical Schema Commons type constants + defineCommonsTypes()
-    tests/
-```
 
 ---
 

@@ -25,7 +25,7 @@ import { LocalAdapter } from '@haverstack/adapter-local';
 import { writeFile } from 'node:fs/promises';
 
 const dbPath = './my-stack.db';
-const keyPath = './my-stack.key.json'; // see "Key custody" below for where this really belongs
+const keyPath = './my-stack.key.json'; // see "Key custody" under Identity for where this really belongs
 
 // First run: neither file exists yet, so this generates an identity
 // keypair and persists the private key before initializing. Every run
@@ -118,7 +118,7 @@ Tags, attachments, and relationships are unified under a single model:
 ```ts
 { kind: 'tag',          label: 'favourite' }
 { kind: 'attachment',   label: 'avatar',   fileId: '...' }
-{ kind: 'relationship', label: 'reply-to', recordId: '...' }
+{ kind: 'relationship', label: 'reply-to', target: { kind: 'record', recordId: '...' } }
 ```
 
 ### Migrations

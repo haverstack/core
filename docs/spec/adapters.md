@@ -12,10 +12,6 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`getJournal()` refuses a record that isn't there.** `StackNotFoundError`, never an empty log — a purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
 
-### Associations are keyed by identity
-
-Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
-
 **`StackBlobAdapter`** — binary storage: `putBlob`, `getBlob`, `deleteBlob`, an optional `listBlobs()` capability, and optional lifecycle hooks. The names are deliberately not `*Attachment`: an attachment is the managed, record-backed concept at the `Stack` layer — permission-checked, reference-checked, carrying metadata — while a blob is the raw bytes beneath it. `putAttachmentWithMetadata()` (below) keeps its name because it really is the attachment operation.
 
 **`StackBlobAdapter` error contract:** `getBlob(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
@@ -24,17 +20,17 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 type StackAdapter = StackRecordAdapter &
   StackBlobAdapter & {
     // Optional: bytes + _attachment@1 record as one atomic operation
-    putAttachmentWithMetadata?(
-      data: Uint8Array,
-      mimeType: string,
-      filename?: string,
-    ): Promise<StackRecord>;
+    putAttachmentWithMetadata?(data: Uint8Array, opts: PutAttachmentOptions): Promise<StackRecord>;
   };
 ```
 
 **Optional capabilities** follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check — see [Attachments](./attachments.md#deleting-attachments)), `StackBlobAdapter.listBlobs()` (blob enumeration, used by [garbage collection](./attachments.md#garbage-collection) to find bare-bytes orphans), `StackRecordAdapter.subscribeChanges()` (relaying a feed that originates elsewhere — see [Change events § Where events come from](./events.md#where-events-come-from)), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
 
-`StackAdapter.putAttachmentWithMetadata(data, { mimeType, filename?, appId? })` stores bytes and creates the accompanying `_attachment@1` record as **one atomic operation**, returning the created record. It is declared on the composed `StackAdapter` type rather than on either half, because neither half can ever have it: "bytes + record in one operation" is a property only a whole adapter can offer. Today exactly one does: the API adapter, backed by a single `POST /attachments` request the server fulfills atomically. Local storage adapters don't implement it, and `combineAdapters()` never synthesizes it from parts (a record backend and a blob backend glued together have no shared transaction). `Stack.putAttachment()` checks for it — present means delegate the whole operation and trust the returned record as backend-authoritative; absent means the bytes-then-`create()` fallback sequence. See [Wire format § Attachments](./wire-format.md#attachments) for why the atomic form is a correctness requirement, not an efficiency optimization.
+`StackAdapter.putAttachmentWithMetadata(data, { mimeType, filename?, appId? })` stores bytes and creates the accompanying `_attachment@1` record as **one atomic operation**, returning the created record. It is declared on the composed `StackAdapter` type rather than on either half, because neither half can ever have it: "bytes + record in one operation" is a property only a whole adapter can offer. Exactly one adapter does: the API adapter, backed by a single `POST /attachments` request the server fulfills atomically. Local storage adapters don't implement it, and `combineAdapters()` never synthesizes it from parts (a record backend and a blob backend glued together have no shared transaction). `Stack.putAttachment()` checks for it — present means delegate the whole operation and trust the returned record as backend-authoritative; absent means the bytes-then-`create()` fallback sequence. See [Wire format § Attachments](./wire-format.md#attachments) for why the atomic form is a correctness requirement, not an efficiency optimization.
+
+### Associations are keyed by identity
+
+Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
 
 ## Package naming convention
 
@@ -71,7 +67,7 @@ const adapter = combineAdapters({ record, blob });
 const stack = await Stack.open(adapter);
 ```
 
-`limits.attachmentBytes` lives on `StackCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
+`limits.attachmentBytes` lives on `StackCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per [the local-adapter rule](#adapter-capabilities) below: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
@@ -151,7 +147,7 @@ Two things this does not refuse. A query naming no sort asks for the server's ow
 
 - **JSON adapter** — supports all filter fields via O(n) scan; may maintain `_index.json` to speed up native field lookups; `filter.search: false` in v1 (local adapters may decline search; `filter.content: 'path'` is the required one)
 - **Native SQLite adapter** (`record-adapter-sqlite`) — indexes all native fields and association labels; supports content field queries and full-text search via FTS5
-- **Durable Object SQLite adapter** (`record-adapter-do-sqlite`) — same capabilities as the native SQLite adapter (shares `SharedSqlRecordLogic`); DO's SQLite storage ships FTS5
+- **Durable Object SQLite adapter** (`record-adapter-do-sqlite`) — same capabilities as the native SQLite adapter (both extend `SharedSqlRecordAdapter`); DO's SQLite storage ships FTS5
 - **API adapter** — capabilities determined by the server; declared in a discovery endpoint; the one adapter kind allowed to declare a `filter.content` rung below `'path'`
 
 Local, embedded adapters (JSON, native SQLite, Durable Object SQLite) declare both limits `null` — nothing at the storage layer imposes a ceiling, and a caller with in-process access to the database can spend its own memory however it likes. Only a server behind the API adapter declares one, since it's the only adapter carrying bytes over a connection with its own limits.
