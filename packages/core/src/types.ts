@@ -419,7 +419,7 @@ export type GroupContent = {
 /**
  * Actions that can be granted via a _grant record. The array is the source
  * of truth — GrantAction is derived from it so runtime validation (see
- * Stack.grant()) can't drift from the type.
+ * Stack.grantType()) can't drift from the type.
  */
 export const GRANT_ACTIONS = [
   'create',
@@ -451,7 +451,7 @@ export type GrantAction = (typeof GRANT_ACTIONS)[number];
 export type GrantGrantee = Grantee | { kind: 'authenticated' };
 
 /**
- * What `Stack.grant()` and `Stack.revoke()` take beside the type they act
+ * What `Stack.grantType()` and `Stack.revokeType()` take beside the type they act
  * on — the type-level counterpart of the `AuthorityAssociation`
  * `grantAccess()` takes beside a record id.
  */

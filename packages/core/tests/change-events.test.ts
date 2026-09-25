@@ -215,7 +215,7 @@ describe('every record emits, including the ones a query hides', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: '_grant@1' } });
 
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: AUTHOR },
     });
@@ -311,7 +311,7 @@ describe('actor names who performed the change', () => {
   });
 
   test('the actor moves with each write while the author stays put', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -331,7 +331,7 @@ describe('actor names who performed the change', () => {
   // explicit opt instead of being read off the record. See
   // docs/spec/versioning.md § Version history.
   test('associate()/dissociate() name the acting identity in the event even though they never restamp the record', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -354,7 +354,7 @@ describe('actor names who performed the change', () => {
   // this is, which can be a stranger to the association change. Absence
   // means unknown, never "the last editor".
   test('an actorless associate()/dissociate() names nobody, even after an unrelated bumping edit', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -372,11 +372,11 @@ describe('actor names who performed the change', () => {
   });
 
   test('a delegated write names the principal beside the subject', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'entity', entityId: APP },
     });
@@ -402,7 +402,7 @@ describe('actor names who performed the change', () => {
   });
 
   test('appId rides a create and never a later version', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -602,7 +602,7 @@ describe('a purged frame carries nothing about the record', () => {
   });
 
   test('no author, so no durable note of whose record was erased', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -871,7 +871,7 @@ describe('filtering is exact', () => {
   });
 
   test('createdBy filters on the record author, not the actor', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -888,11 +888,11 @@ describe('filtering is exact', () => {
   });
 
   test('createdBy matches a list of authors and the principal behind them', async () => {
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any'],
       grantee: { kind: 'authenticated' },
     });
-    await stack.grant(NOTE, {
+    await stack.grantType(NOTE, {
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: APP },
     });

@@ -2361,7 +2361,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       "POST /records creating a _grant@1 record whose group grantee carries role 'any' returns " +
       '422 with code "validation". `any` is a widening a *query* can ask for — ' +
-      "listGrants({ kind: 'group', groupId, role: 'any' }) returns every grant naming that " +
+      "listTypeGrants({ kind: 'group', groupId, role: 'any' }) returns every grant naming that " +
       'group, whichever role — and it is not a role an entity can hold, so it can never reach ' +
       'storage. A stored grant carrying it would match a roster question nobody can answer. ' +
       'This is the one grantee value that is well-formed in one API and refused in the other, ' +
@@ -2492,7 +2492,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'storage some other way confers nothing at evaluation. Assumes a stored _grant@1 Record ' +
       "naming `_app@1` with actions ['create', 'read-any'] and this requester as its entity " +
       'grantee — reachable because a server mapping a request body, an import and a foreign ' +
-      "server's response all produce grant Records that grant() never vetted. The create below " +
+      "server's response all produce grant Records that grantType() never vetted. The create below " +
       'MUST still return 403 with code "permission". Each of the three families hands the ' +
       'grantee the machinery the model rests on; `_app` is the sharpest, since an app card ' +
       'claiming a DID that is not its own is what verified attribution rests on. ' +
