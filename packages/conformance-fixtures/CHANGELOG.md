@@ -1,5 +1,36 @@
 # @haverstack/conformance-fixtures
 
+## 0.32.0
+
+### Minor Changes
+
+- [#328](https://github.com/haverstack/core/pull/328) [`ce4ac6d`](https://github.com/haverstack/core/commit/ce4ac6da617549745aee4b7ccc1aacad3d8007b7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - "Who did this, and through which principal" is one `Actor` type — `{ subjectId, principalId? }` — everywhere it appears. `StackRecord` and `RecordVersion` carry `createdBy: Actor` (replacing `entityId` + `principalId`) and `updatedBy: Actor` (replacing `updatedBy` + `updatedVia`), on the wire as in memory. `ChangeActor` is `Actor & { appId? }`, `TokenSession` is an `Actor` with `principalId` always set, and `ActorOptions` is `{ actor?: Actor }`. `RecordFilter.createdBy` and `ChangeFilter.createdBy` replace the author filters (query params `createdBySubject` / `createdByPrincipal`). `Stack.asActor(actor)` replaces `forSession()` and `asEntity()`'s `onBehalfOf` option, and `StackTokenStore.createToken()` takes an `Actor`. The SQLite `versions` table gains a `principal_id` column so a snapshot keeps its author's principal.
+
+- [#348](https://github.com/haverstack/core/pull/348) [`147bbdf`](https://github.com/haverstack/core/commit/147bbdf8e8ce50c5865875b0c56e410fee01994f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Replace the `hasAttachment` and `attachmentFileId` filters with `attachment: { label?, fileId? }`, shaped like `relatedTo`: at least one half is required, and both halves together match a single association. The wider "does this record reference the file" question — attachment associations plus top-level `file-ref` fields, used by `deleteAttachment()` and garbage collection — moves to `referencesFileId`. On the wire, `GET /records` takes `attachmentLabel`, `attachmentFileId` and `referencesFileId`. `assertValidRelatedTo` becomes `assertValidAssociationFilters(filter)`, which also refuses an empty `attachment` filter.
+
+- [#343](https://github.com/haverstack/core/pull/343) [`83ded9c`](https://github.com/haverstack/core/commit/83ded9c2274d5e1ca29e8de4fa714a9da5eff2d1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename `StackQueryError` to `StackBadRequestError`, matching its wire code `bad_request`. It is thrown for any malformed request — bad record IDs, empty change sets, malformed TypeIds, unknown types, unusable `since` cursors, and every `./wire` parser — not only queries. The wire code and HTTP status are unchanged.
+
+- [#329](https://github.com/haverstack/core/pull/329) [`e36923c`](https://github.com/haverstack/core/commit/e36923cf3799f8d3a13176c23b293f4967e4928b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `ChangeFilter` is a subset of `RecordFilter`, and every key means the same thing in both, so one filter drives `query()` and `subscribe()` alike. `typeId` is now an exact match; a subscriber that wants the whole type family passes `baseId`, which `GET /changes` carries as `?baseId=`. `createdBy` accepts lists and `principalId`, as on `RecordFilter` (`?createdByPrincipal=` on the wire). A `migrate` or `restore` that changes a record's type is delivered to subscribers of the type it left as well as the one it entered.
+
+- [#350](https://github.com/haverstack/core/pull/350) [`987d533`](https://github.com/haverstack/core/commit/987d53303099fc9478a5f6708651c8a898c3008d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Make every `ChangeOp` a verb and spell permanent deletion one way. The record-level ACL op `'permissions'` is now `'reshare'`. Permanent deletion is `purge` everywhere: `delete(id, { purge: true })` (was `{ hard: true }`), `deleteRecord(id, { purge: true })` on every adapter, `DELETE /records/:id?purge=true` on the wire (was `?hard=true`), and the op `'purge'` (was `'hard-delete'`), matching the existing `'purged'` kind.
+
+- [#349](https://github.com/haverstack/core/pull/349) [`ad14212`](https://github.com/haverstack/core/commit/ad142122b11c74aee921e61441691c1914425ed2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the change feed's resume cursor from `seq` to `cursor`, so it no longer shares a name with the journal's per-record `seq`. `RecordChange.seq` is now `RecordChange.cursor`, the `ready` frame carries `{"cursor": …}`, and `isValidSeq()` is now `isValidCursor()`. The journal window's exclusive bound `JournalQuery.sinceSeq` (and the `?sinceSeq=` query param) is now `afterSeq`.
+
+- [#326](https://github.com/haverstack/core/pull/326) [`4caed17`](https://github.com/haverstack/core/commit/4caed174a242fac5698018a63762a53f9b642ff6) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Record-level permission grantees now discriminate on `kind` instead of `scope`, matching type-level grant grantees: `{ kind: 'entity', entityId }` and `{ kind: 'group', groupId, role }`. The shared arms are exported as `Grantee`, which replaces `PermissionGrantee`, with `GroupRole` naming `'member' | 'admin'`; `GrantGrantee` is `Grantee` plus `{ kind: 'authenticated' }`. The `GrantTarget` alias is removed in favor of `GrantGrantee`. Relationship targets (`RelationshipTarget`, `RelationshipTargetPattern`) move to `kind` too — `{ kind: 'record' | 'entity' | 'external', … }` — so an entity target and an entity grantee are the same value.
+
+### Patch Changes
+
+- [#345](https://github.com/haverstack/core/pull/345) [`7cffb1d`](https://github.com/haverstack/core/commit/7cffb1dc8e33993082aaa83599ba2e031a1c5cde) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Reshape the type-level grant methods to mirror the record-level `grantAccess(id, permission)`, and put their layer in their names:
+  - `Stack.grant(target, [{ typeId, actions }])` is `Stack.grantType(typeOrBaseId, { actions, grantee })`: subject first, grantee inside the element. It creates and returns one `_grant` record; the batch form is removed, so call it once per type. The element type is exported as `TypeGrant`.
+  - `Stack.revoke(target, [{ typeId, actions }])` is `Stack.revokeType(typeOrBaseId, { actions, grantee })`, returning the grants it withdrew.
+  - `Stack.listGrants()` is `Stack.listTypeGrants()`.
+  - All three return records typed with `content: GrantContent`.
+
+  `typeOrBaseId` accepts a bare baseId as well as a versioned TypeId. The record-level `grantAccess()`/`revokeAccess()` are unchanged.
+
+- Updated dependencies [[`ce4ac6d`](https://github.com/haverstack/core/commit/ce4ac6da617549745aee4b7ccc1aacad3d8007b7), [`cd467d9`](https://github.com/haverstack/core/commit/cd467d90cab977001bc4b097f9291c6c49fae226), [`2f12d0a`](https://github.com/haverstack/core/commit/2f12d0a6ed6adab7d04cf858f566bad18826cdc9), [`546e28c`](https://github.com/haverstack/core/commit/546e28cf1d78f3a088d7962272a7d3bd70a9ff62), [`83ded9c`](https://github.com/haverstack/core/commit/83ded9c2274d5e1ca29e8de4fa714a9da5eff2d1), [`ad14212`](https://github.com/haverstack/core/commit/ad142122b11c74aee921e61441691c1914425ed2)]:
+  - @haverstack/wire-types@0.37.0
+
 ## 0.31.0
 
 ### Minor Changes
