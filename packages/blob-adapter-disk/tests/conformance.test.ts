@@ -20,7 +20,7 @@ runBlobAdapterConformance({
       `conformance-blob-disk-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     mkdirSync(currentDir, { recursive: true });
-    return new DiskBlobAdapter(currentDir);
+    return new DiskBlobAdapter({ dir: currentDir });
   },
   close: () => {
     if (currentDir) rmSync(currentDir, { recursive: true, force: true });

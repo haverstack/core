@@ -185,7 +185,9 @@ The distinction between **400** and **422** matters for write endpoints (`POST /
 
 ### The taxonomy root
 
-Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `StackClosedError`, `StackMisconfigurationError`, `StackRelayScopeError`) stay outside the hierarchy for that reason.
+Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `UseAfterCloseError`, `InvalidAdapterError`, `RelayScopeError`) stay outside the hierarchy for that reason.
+
+**The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 
 The root adds no other structure. `StackVersionConflictError` remains a sibling of `StackConflictError` rather than a subtype (see the 409/412 rows above), and no other pair is related either, so catching a leaf class never catches a different failure by accident.
 

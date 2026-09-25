@@ -80,8 +80,8 @@ import type {
 } from './types.js';
 
 import {
-  StackClosedError,
-  StackMisconfigurationError,
+  UseAfterCloseError,
+  InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
@@ -522,7 +522,7 @@ export class Stack implements StackClient {
    */
   static async open(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
-      throw new StackMisconfigurationError(
+      throw new InvalidAdapterError(
         'Stack misconfiguration: adapter has no ownerEntityId. ' +
           'Initialise the adapter with an entityId before calling Stack.open().',
       );
@@ -2449,7 +2449,7 @@ export class Stack implements StackClient {
 
   /** Throws once close() has run. */
   private assertOpen(): void {
-    if (this.closed) throw new StackClosedError();
+    if (this.closed) throw new UseAfterCloseError();
   }
 
   // -------------------------------------------------------

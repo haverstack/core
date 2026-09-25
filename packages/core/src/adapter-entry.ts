@@ -1,20 +1,18 @@
 /**
  * @haverstack/core/adapter
  * -------------------------------------------------------
- * The interfaces a storage adapter implements — record storage, blob
- * storage, and the capabilities an adapter declares. Audience: adapter
- * implementers (see the in-repo adapters), not app or plugin code, which
- * reads `stack.capabilities` instead of these directly.
+ * The interfaces a storage adapter implements — the full StackAdapter,
+ * its record and blob halves, and the options Stack hands them — plus the
+ * helpers adapters share. Audience: adapter implementers (see the in-repo
+ * adapters). Types an app reads too, such as StackCapabilities, live in
+ * the root entry point instead: every export has exactly one home.
  */
 
 export type {
+  StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,
-  StackCapabilities,
-  ContentFilterReach,
-  MissingCapability,
   BlobInfo,
-  IfVersionOptions,
   BumpVersionOptions,
   SnapshotOptions,
   JournalEntryInput,

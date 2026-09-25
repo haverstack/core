@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
-import { StackBadRequestError, StackRelayScopeError } from '../src/errors.js';
+import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
 
@@ -226,7 +226,7 @@ describe('a stack whose adapter does not relay', () => {
 describe('a scoped view of a stack that relays', () => {
   test('refuses to subscribe rather than narrow a feed it cannot re-scope', async () => {
     const scoped = stack.asEntity(REMOTE_EDITOR);
-    await expect(scoped.subscribe(() => {})).rejects.toBeInstanceOf(StackRelayScopeError);
+    await expect(scoped.subscribe(() => {})).rejects.toBeInstanceOf(RelayScopeError);
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {

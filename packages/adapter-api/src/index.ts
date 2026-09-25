@@ -28,7 +28,6 @@ import { StackError, StackBadRequestError } from '@haverstack/core';
 import type {
   JournalQuery,
   RecordJournalEntry,
-  StackAdapter,
   Actor,
   ChangeActor,
   StackRecord,
@@ -47,17 +46,15 @@ import type {
   RecordFilter,
   RecordChange,
   RecordChangeSet,
+  StackCapabilities,
+  MissingCapability,
 } from '@haverstack/core';
+import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidAssociationFilters,
   filtersContent,
-} from '@haverstack/core/adapter';
-import type {
-  StackCapabilities,
-  MissingCapability,
-  SubscribeChangesOptions,
 } from '@haverstack/core/adapter';
 import {
   assertQueryTravels,
@@ -110,7 +107,7 @@ import {
  * second package. Core owns the definition, next to the capabilities it
  * names.
  */
-export type { MissingCapability } from '@haverstack/core/adapter';
+export type { MissingCapability } from '@haverstack/core';
 
 export type APIAdapterOpenOptions = {
   /** Base URL of the stack server e.g. "https://example.com". Trailing slash is stripped. */
@@ -216,7 +213,7 @@ export class APIAdapterVersionError extends APIAdapterError {
 export class APIAdapterOwnerMismatchError extends APIAdapterError {
   constructor(
     public readonly expectedOwnerEntityId: EntityId,
-    public readonly actualOwner: EntityId | undefined,
+    public readonly actualOwnerEntityId: EntityId | undefined,
     message: string,
   ) {
     super(message);

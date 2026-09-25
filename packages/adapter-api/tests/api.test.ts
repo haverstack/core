@@ -306,7 +306,7 @@ describe('open — expectedOwnerEntityId', () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(APIAdapterOwnerMismatchError);
     expect((err as APIAdapterOwnerMismatchError).expectedOwnerEntityId).toBe(OWNER_DID);
-    expect((err as APIAdapterOwnerMismatchError).actualOwner).toBe(OTHER_DID);
+    expect((err as APIAdapterOwnerMismatchError).actualOwnerEntityId).toBe(OTHER_DID);
   });
 
   test('refuses discovery carrying no owner at all — absence is not a match', async () => {

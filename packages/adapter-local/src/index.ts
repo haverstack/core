@@ -18,7 +18,6 @@ import { existsSync } from 'fs';
 import type {
   JournalQuery,
   RecordJournalEntry,
-  StackAdapter,
   StackRecord,
   StackType,
   TypeId,
@@ -30,16 +29,17 @@ import type {
   Association,
   RecordId,
   FileId,
-  TokenSession,
   RecordChangeSet,
+  EntityId,
+  StackCapabilities,
 } from '@haverstack/core';
 import type {
-  StackCapabilities,
+  StackAdapter,
   BlobInfo,
   StackBlobAdapter,
   JournalOptions,
 } from '@haverstack/core/adapter';
-import type { TokenInfo } from '@haverstack/core/wire';
+import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,
   NativeTokenStore,
@@ -57,9 +57,32 @@ export type {
   NativeSQLiteRecordAdapterOpenOptions,
   NativeTokenStoreOpenOptions,
 } from '@haverstack/record-adapter-sqlite';
-export type { TokenSession } from '@haverstack/core';
-export type { TokenInfo } from '@haverstack/core/wire';
+export type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
+export type { DiskBlobAdapterOptions } from '@haverstack/blob-adapter-disk';
+
+// -------------------------------------------------------
+// Errors
+// -------------------------------------------------------
+
+/**
+ * Thrown by openOrInitialize() when a plain-string `ownerEntityId`
+ * disagrees with the owner of the stack already at `path` — the local
+ * counterpart of adapter-api's APIAdapterOwnerMismatchError.
+ */
+export class LocalAdapterOwnerMismatchError extends Error {
+  constructor(
+    public readonly expectedOwnerEntityId: EntityId,
+    public readonly actualOwnerEntityId: EntityId,
+    public readonly path: string,
+  ) {
+    super(
+      `Cannot open: stack at "${path}" is owned by "${actualOwnerEntityId}", ` +
+        `but openOrInitialize() was called with ownerEntityId "${expectedOwnerEntityId}".`,
+    );
+    this.name = 'LocalAdapterOwnerMismatchError';
+  }
+}
 
 // -------------------------------------------------------
 // Option types
@@ -142,7 +165,7 @@ export class LocalAdapter implements StackAdapter {
       timezone: opts.timezone,
       force: opts.force,
     });
-    const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
+    const blob = new DiskBlobAdapter({ dir: join(dirname(opts.path), 'attachments') });
     return new LocalAdapter(record, blob, opts.path, opts.force);
   }
 
@@ -152,7 +175,7 @@ export class LocalAdapter implements StackAdapter {
    */
   static async open(opts: LocalAdapterOpenOptions): Promise<LocalAdapter> {
     const record = await NativeSQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
-    const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
+    const blob = new DiskBlobAdapter({ dir: join(dirname(opts.path), 'attachments') });
     return new LocalAdapter(record, blob, opts.path, opts.force);
   }
 
@@ -167,9 +190,13 @@ export class LocalAdapter implements StackAdapter {
     if (existsSync(opts.path)) {
       const adapter = await LocalAdapter.open({ path: opts.path, force: opts.force });
       if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== adapter.ownerEntityId) {
-        throw new Error(
-          `Cannot open: stack at "${opts.path}" is owned by "${adapter.ownerEntityId}", ` +
-            `but openOrInitialize() was called with ownerEntityId "${opts.ownerEntityId}".`,
+        // Released first: the caller never receives this adapter, so
+        // nothing else could free its lock.
+        await adapter.close();
+        throw new LocalAdapterOwnerMismatchError(
+          opts.ownerEntityId,
+          adapter.ownerEntityId,
+          opts.path,
         );
       }
       return adapter;

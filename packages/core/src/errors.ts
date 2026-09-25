@@ -6,11 +6,14 @@
  * `instanceof StackError` — before serializing a wire body, and each
  * subclass carries its wire discriminator as an instance `code`.
  *
- * Several errors sit deliberately outside that root (StackClosedError,
- * StackMisconfigurationError, StackRelayScopeError, and — in their own
+ * Several errors sit deliberately outside that root (UseAfterCloseError,
+ * InvalidAdapterError, RelayScopeError, and — in their own
  * modules — IdGenerationError and InvalidDidError): they report a local
  * programming error or an assembled topology, not a state a request can be
  * in, so no server ever responds with one.
+ *
+ * The `Stack` prefix is reserved for the taxonomy: a class named
+ * `Stack…Error` extends StackError, and nothing else carries the prefix.
  */
 
 import { baseIdOf, parseTypeId } from './schema.js';
@@ -225,30 +228,30 @@ export class StackSchemaDriftError extends StackError {
  * error with no wire representation — no server ever responds with it.
  * See docs/spec/adapters.md § Lifecycle.
  */
-export class StackClosedError extends Error {
+export class UseAfterCloseError extends Error {
   constructor(message = 'This Stack has been closed.') {
     super(message);
-    this.name = 'StackClosedError';
+    this.name = 'UseAfterCloseError';
   }
 }
 
 /**
  * Thrown when Stack.open() is handed an adapter that cannot back a stack.
- * Outside the StackError taxonomy for the same reason StackClosedError is:
+ * Outside the StackError taxonomy for the same reason UseAfterCloseError is:
  * it reports a local setup mistake, not a state a request can be in.
  * See docs/spec.md § Stack initialization.
  */
-export class StackMisconfigurationError extends Error {
+export class InvalidAdapterError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'StackMisconfigurationError';
+    this.name = 'InvalidAdapterError';
   }
 }
 
 /**
  * Thrown when a scoped view is asked to observe a stack whose adapter
  * relays a remote feed. Outside the StackError taxonomy for the same
- * reason StackClosedError is: it reports a topology the caller assembled,
+ * reason UseAfterCloseError is: it reports a topology the caller assembled,
  * not a state a request can be in.
  *
  * A relayed frame is scoped by the authority that opened the feed, and a
@@ -259,9 +262,9 @@ export class StackMisconfigurationError extends Error {
  * failure that looks fine in testing. So it refuses.
  * See docs/spec/events.md § Permission scoping.
  */
-export class StackRelayScopeError extends Error {
+export class RelayScopeError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'StackRelayScopeError';
+    this.name = 'RelayScopeError';
   }
 }

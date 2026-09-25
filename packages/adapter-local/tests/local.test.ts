@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { LocalAdapter } from '../src/index.js';
+import { LocalAdapter, LocalAdapterOwnerMismatchError } from '../src/index.js';
 import type { StackRecord } from '@haverstack/core';
 
 let testDir: string;
@@ -139,9 +139,21 @@ describe('openOrInitialize', () => {
 
   test('throws if a plain-string ownerEntityId does not match the existing owner', async () => {
     await initAdapter({ ownerEntityId: 'owner-abc' });
+    const err = await LocalAdapter.openOrInitialize({
+      path: dbPath,
+      ownerEntityId: 'owner-xyz',
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LocalAdapterOwnerMismatchError);
+    expect((err as LocalAdapterOwnerMismatchError).expectedOwnerEntityId).toBe('owner-xyz');
+    expect((err as LocalAdapterOwnerMismatchError).actualOwnerEntityId).toBe('owner-abc');
+  });
+
+  test('releases the storage lock when the owner does not match', async () => {
+    await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();
     await expect(
       LocalAdapter.openOrInitialize({ path: dbPath, ownerEntityId: 'owner-xyz' }),
-    ).rejects.toThrow(/owned by "owner-abc"/);
+    ).rejects.toThrow(LocalAdapterOwnerMismatchError);
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
   });
 
   test('passes timezone through on the initialize path only', async () => {

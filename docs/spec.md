@@ -50,7 +50,7 @@ stack.ownerEntityId; // from adapter.ownerEntityId
 stack.timezone; // from adapter.timezone — string | undefined
 ```
 
-`Stack.open()` throws `StackMisconfigurationError` when the adapter has no `ownerEntityId`. Like `StackClosedError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
+`Stack.open()` throws `InvalidAdapterError` when the adapter has no `ownerEntityId`. Like `UseAfterCloseError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
@@ -67,6 +67,8 @@ const adapter = await LocalAdapter.openOrInitialize({
   },
 });
 ```
+
+A plain-string `ownerEntityId` is also checked against the owner of an existing database: a mismatch releases the file and throws `LocalAdapterOwnerMismatchError`, the local counterpart of `APIAdapter`'s `APIAdapterOwnerMismatchError` (see [Wire format § Identity is trusted on transport](./spec/wire-format.md#identity-is-trusted-on-transport)). A function is never invoked just to compare.
 
 **`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `getEntityByDid`, `getOwnerEntity`, `mutate`, `patchContent`, `delete`, `undelete`, `associate`, `dissociate`, `grantAccess`, `revokeAccess`, `commitMigration`, `getVersions`, `getVersion`, `restoreVersion`, `getJournal`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`), `subscribe()` for [change events](./spec/events.md#subscribing), and a `capabilities` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted — see [Versioning § Version history](./spec/versioning.md#version-history).
 

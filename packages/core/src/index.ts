@@ -5,10 +5,12 @@
  *
  * Exports the Stack class, the app/plugin-facing data types, and the
  * general-purpose utilities every caller needs. Audience-specific surfaces
- * live behind their own subpaths, which this root does not re-export:
+ * live behind their own subpaths, and every export has exactly one home —
+ * nothing here is repeated in a subpath, or the reverse:
  *   ./did      — key generation, custody and signing (did:key)
- *   ./wire     — the auth handshake and attachment-download policy shared
- *                by both sides of a client/server connection
+ *   ./wire     — the request encoding, auth handshake, token store and
+ *                attachment-download policy shared by both sides of a
+ *                client/server connection
  *   ./adapter  — the interfaces a storage adapter implements
  *   ./testing  — the in-memory MemoryAdapter for tests
  * Storage adapters are published as separate packages — adapter-local,
@@ -46,10 +48,10 @@ export {
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
-  StackClosedError,
-  StackMisconfigurationError,
-  StackRelayScopeError,
 } from './errors.js';
+// Local errors outside the taxonomy — no wire representation, and no
+// `Stack` prefix. See docs/spec/wire-format.md § The taxonomy root.
+export { UseAfterCloseError, InvalidAdapterError, RelayScopeError } from './errors.js';
 export type { StackErrorCode } from './errors.js';
 
 // Types
@@ -108,10 +110,10 @@ export type {
   DateRange,
   Migration,
   MigrationFn,
-  StackAdapter,
   StackCapabilities,
+  ContentFilterReach,
+  MissingCapability,
   IfVersionOptions,
-  TokenSession,
   EntityContent,
   AppContent,
   GroupContent,

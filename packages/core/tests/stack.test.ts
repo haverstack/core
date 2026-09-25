@@ -11,8 +11,8 @@ import {
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
-  StackClosedError,
-  StackMisconfigurationError,
+  UseAfterCloseError,
+  InvalidAdapterError,
 } from '../src/errors.js';
 import {
   generateId,
@@ -85,12 +85,12 @@ describe('Stack.open', () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('an adapter with no ownerEntityId is a StackMisconfigurationError, outside StackError', async () => {
+  test('an adapter with no ownerEntityId is a InvalidAdapterError, outside StackError', async () => {
     const emptyAdapter = new MemoryAdapter();
     const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(StackMisconfigurationError);
+    expect(err).toBeInstanceOf(InvalidAdapterError);
     expect(err).not.toBeInstanceOf(StackError);
-    expect((err as Error).name).toBe('StackMisconfigurationError');
+    expect((err as Error).name).toBe('InvalidAdapterError');
     expect((err as Error).message).toContain('adapter has no ownerEntityId');
   });
 
@@ -3574,29 +3574,29 @@ describe('use after close', () => {
     await stack.close();
   });
 
-  test('reads throw StackClosedError', async () => {
-    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
-    await expect(stack.query()).rejects.toBeInstanceOf(StackClosedError);
-    await expect(stack.listTypes()).rejects.toBeInstanceOf(StackClosedError);
+  test('reads throw UseAfterCloseError', async () => {
+    await expect(stack.get('1hk153x0a00b')).rejects.toBeInstanceOf(UseAfterCloseError);
+    await expect(stack.query()).rejects.toBeInstanceOf(UseAfterCloseError);
+    await expect(stack.listTypes()).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
-  test('writes throw StackClosedError', async () => {
-    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(StackClosedError);
+  test('writes throw UseAfterCloseError', async () => {
+    await expect(stack.create(NOTE_V1, { text: 'x' })).rejects.toBeInstanceOf(UseAfterCloseError);
     await expect(stack.patchContent('1hk153x0a00b', { text: 'x' })).rejects.toBeInstanceOf(
-      StackClosedError,
+      UseAfterCloseError,
     );
-    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.delete('1hk153x0a00b')).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
   test('flush() throws, since flushing is work — only close() is idempotent', async () => {
-    await expect(stack.flush()).rejects.toBeInstanceOf(StackClosedError);
+    await expect(stack.flush()).rejects.toBeInstanceOf(UseAfterCloseError);
     await expect(stack.close()).resolves.toBeUndefined();
   });
 
-  test('attachment uploads throw StackClosedError', async () => {
+  test('attachment uploads throw UseAfterCloseError', async () => {
     await expect(
       stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
-    ).rejects.toBeInstanceOf(StackClosedError);
+    ).rejects.toBeInstanceOf(UseAfterCloseError);
   });
 
   test('identity getters still read — they touch no storage', () => {
@@ -3604,8 +3604,8 @@ describe('use after close', () => {
     expect(stack.capabilities).toBeDefined();
   });
 
-  test('StackClosedError stays outside the wire taxonomy', () => {
-    expect(new StackClosedError()).not.toBeInstanceOf(StackError);
+  test('UseAfterCloseError stays outside the wire taxonomy', () => {
+    expect(new UseAfterCloseError()).not.toBeInstanceOf(StackError);
   });
 });
 
@@ -3616,13 +3616,13 @@ describe('use after close — scoped views', () => {
 
     await expect(
       scoped.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
-    ).rejects.toBeInstanceOf(StackClosedError);
+    ).rejects.toBeInstanceOf(UseAfterCloseError);
     expect(await adapter.listBlobs!()).toHaveLength(0);
   });
 
   test('asEntity() itself refuses once closed', async () => {
     await stack.close();
-    expect(() => stack.asEntity('owner-123')).toThrow(StackClosedError);
+    expect(() => stack.asEntity('owner-123')).toThrow(UseAfterCloseError);
   });
 });
 

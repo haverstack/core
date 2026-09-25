@@ -20,8 +20,8 @@ import type {
   Association,
   RecordVersion,
   StackType,
+  StackCapabilities,
 } from '@haverstack/core';
-import type { StackCapabilities } from '@haverstack/core/adapter';
 
 /**
  * A Durable Object is a separate JS realm from the test file's own — even
