@@ -34,7 +34,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackValidationError,
-  StackQueryError,
+  StackBadRequestError,
   StackMigrationError,
   StackPayloadTooLargeError,
 } from '@haverstack/core';
@@ -1046,12 +1046,12 @@ describe('queryRecords', () => {
   });
 
   // A malformed relationship filter is a caller error, not a missing
-  // capability, so it travels as StackQueryError — and is refused before a
+  // capability, so it travels as StackBadRequestError — and is refused before a
   // request the server would only have to reject goes out.
   test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
     const adapter = await openAdapter();
     await expect(adapter.queryRecords({ filter: { relatedTo: {} as never } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
@@ -1062,7 +1062,7 @@ describe('queryRecords', () => {
       adapter.queryRecords({
         filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
@@ -1078,7 +1078,7 @@ describe('queryRecords', () => {
   ] as const)('refuses filter.baseId without sending %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
     await expect(adapter.queryRecords({ filter: { baseId: 'com.example/note' } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
@@ -1088,7 +1088,9 @@ describe('queryRecords', () => {
     ["at reach 'none', which queries by search params", 'none'],
   ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(adapter.queryRecords({ presentAt: 'latest' })).rejects.toThrow(StackQueryError);
+    await expect(adapter.queryRecords({ presentAt: 'latest' })).rejects.toThrow(
+      StackBadRequestError,
+    );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
@@ -1165,10 +1167,10 @@ describe('queryRecords', () => {
   test.each([
     ["at reach 'path'", 'path'],
     ["at reach 'field'", 'field'],
-  ] as const)('a malformed content path stays a StackQueryError %s', async (_label, reach) => {
+  ] as const)('a malformed content path stays a StackBadRequestError %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
       APIAdapterCapabilityError,
@@ -2090,12 +2092,12 @@ describe('error taxonomy reconstruction', () => {
     ]);
   });
 
-  test('reconstructs StackQueryError from a 400 wire error body', async () => {
+  test('reconstructs StackBadRequestError from a 400 wire error body', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'bad_request', message: 'Invalid cursor' } }, 400),
     );
-    await expect(adapter.queryRecords({ cursor: 'garbage' })).rejects.toThrow(StackQueryError);
+    await expect(adapter.queryRecords({ cursor: 'garbage' })).rejects.toThrow(StackBadRequestError);
   });
 
   test('falls back to status-based reconstruction when the body is not a wire error', async () => {

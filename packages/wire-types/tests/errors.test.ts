@@ -7,7 +7,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
-  StackQueryError,
+  StackBadRequestError,
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
@@ -28,7 +28,7 @@ const everyStackError = [
   new StackNotFoundError('Record "1hk153x0a00b" not found.'),
   new StackConflictError('Attachment is still referenced.'),
   new StackVersionConflictError('Version mismatch.', '1hk153x0a00b', 3, 5),
-  new StackQueryError('Undecodable pagination cursor.'),
+  new StackBadRequestError('Undecodable pagination cursor.'),
   new StackSchemaDriftError('note@1', [{ path: 'title', message: 'type changed' }]),
   new StackPayloadTooLargeError('Attachment exceeds the 50000000-byte limit.'),
   new StackTimeoutError('Query exceeded the server time limit'),
@@ -120,7 +120,7 @@ describe('errorForStatus', () => {
     expect(errorForStatus(412, 'nope')).toBeInstanceOf(StackVersionConflictError);
     expect(errorForStatus(413, 'nope')).toBeInstanceOf(StackPayloadTooLargeError);
     expect(errorForStatus(422, 'nope')).toBeInstanceOf(StackValidationError);
-    expect(errorForStatus(400, 'nope')).toBeInstanceOf(StackQueryError);
+    expect(errorForStatus(400, 'nope')).toBeInstanceOf(StackBadRequestError);
   });
 
   it('degrades a bodyless 409 to the generic conflict class', () => {

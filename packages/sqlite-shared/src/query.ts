@@ -13,7 +13,7 @@
  * fact, which costs a full pass over the table for every page.
  */
 
-import { StackQueryError, type StackQuery } from '@haverstack/core';
+import { StackBadRequestError, type StackQuery } from '@haverstack/core';
 import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
 import {
   decodeCursor,
@@ -51,7 +51,7 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
 const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
   const dir = query.sort?.direction ?? 'desc';
   if (dir !== 'asc' && dir !== 'desc') {
-    throw new StackQueryError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
+    throw new StackBadRequestError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
   }
   return dir === 'asc' ? 'ASC' : 'DESC';
 };
@@ -129,8 +129,8 @@ const SORT_ALIAS = 'cs';
  * against text values — so each ordering below accepts only the cursors
  * it can read, and rejecting the rest is what narrows the cursor to them.
  */
-const cursorMismatch = (cursor: DecodedCursor, field: string): StackQueryError =>
-  new StackQueryError(
+const cursorMismatch = (cursor: DecodedCursor, field: string): StackBadRequestError =>
+  new StackBadRequestError(
     `Cursor sort field "${cursor.field}" does not match query sort field "${field}"`,
   );
 

@@ -708,7 +708,7 @@ export type AdapterCapabilities = {
     /**
      * Required `'path'` for local/in-process adapters; a wire adapter may
      * report a shallower rung, driven by the server's discovery response.
-     * Stack.query() throws StackQueryError rather than silently widening.
+     * Stack.query() throws StackBadRequestError rather than silently widening.
      */
     content: ContentFilterReach;
     /**
@@ -1055,7 +1055,7 @@ export type SubscribeOptions = {
    * Forwarded to the adapter as `SubscribeChangesOptions.since`, so it
    * only means something where a relay exists: a stack with none has no
    * third-party writes to have missed, and therefore no cursor it could
-   * ever have minted. Passing `since` there throws `StackQueryError`
+   * ever have minted. Passing `since` there throws `StackBadRequestError`
    * rather than silently starting from the present, which would let the
    * caller believe it resumed when it did not. A cursor outside the
    * framable charset is refused the same way, so a malformed one reports

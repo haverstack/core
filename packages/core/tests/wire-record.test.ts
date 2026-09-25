@@ -5,7 +5,7 @@ import {
   isOwnerActingAlone,
 } from '../src/wire-entry.js';
 import { Stack } from '../src/stack.js';
-import { StackQueryError, StackValidationError } from '../src/errors.js';
+import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackRecord, TokenSession } from '../src/types.js';
 
@@ -169,7 +169,7 @@ describe('createOptionsFromWireRecord — refusals', () => {
     ['a body with no content', { typeId: NOTE }],
     ['a body whose content is an array', { typeId: NOTE, content: [] }],
   ])('%s is not a create request', (_label, body) => {
-    expect(() => parse(body)).toThrow(StackQueryError);
+    expect(() => parse(body)).toThrow(StackBadRequestError);
   });
 
   test('a null is not a spelling of absent', () => {
@@ -290,14 +290,18 @@ describe('changesFromWireBody', () => {
   });
 
   test('an empty envelope addresses nothing and is a bad request', () => {
-    expect(() => changesFromWireBody({})).toThrow(StackQueryError);
+    expect(() => changesFromWireBody({})).toThrow(StackBadRequestError);
   });
 
   // Dropped rather than refused, a stray key would let a client believe it
   // published something it did not.
   test('an unrecognized top-level key is refused rather than ignored', () => {
-    expect(() => changesFromWireBody({ contentPatch: {}, frobnicate: 1 })).toThrow(StackQueryError);
-    expect(() => changesFromWireBody({ typeId: 'com.example/note@2' })).toThrow(StackQueryError);
+    expect(() => changesFromWireBody({ contentPatch: {}, frobnicate: 1 })).toThrow(
+      StackBadRequestError,
+    );
+    expect(() => changesFromWireBody({ typeId: 'com.example/note@2' })).toThrow(
+      StackBadRequestError,
+    );
   });
 
   // A native field spelled at the top level is the envelope's; the same
@@ -316,7 +320,7 @@ describe('changesFromWireBody', () => {
   });
 
   test('a non-object body is a bad request', () => {
-    expect(() => changesFromWireBody(null)).toThrow(StackQueryError);
-    expect(() => changesFromWireBody([])).toThrow(StackQueryError);
+    expect(() => changesFromWireBody(null)).toThrow(StackBadRequestError);
+    expect(() => changesFromWireBody([])).toThrow(StackBadRequestError);
   });
 });

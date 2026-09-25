@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
-import { StackQueryError } from '@haverstack/core';
+import { StackBadRequestError } from '@haverstack/core';
 import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -230,12 +230,12 @@ describe('paginating a content sort', () => {
     const cursor = page.cursor as string;
 
     await expect(adapter.queryRecords({ sort: { contentField: 'title' }, cursor })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
     await expect(adapter.queryRecords({ sort: { field: 'createdAt' }, cursor })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
-    await expect(adapter.queryRecords({ cursor })).rejects.toThrow(StackQueryError);
+    await expect(adapter.queryRecords({ cursor })).rejects.toThrow(StackBadRequestError);
   });
 
   test('a native cursor is refused by a content sort', async () => {
@@ -245,7 +245,7 @@ describe('paginating a content sort', () => {
     const page = await adapter.queryRecords({ sort: { field: 'createdAt' }, limit: 1 });
     await expect(
       adapter.queryRecords({ sort: { contentField: 'title' }, cursor: page.cursor as string }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 });
 

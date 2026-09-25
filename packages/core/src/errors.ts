@@ -138,9 +138,9 @@ export class StackVersionConflictError extends StackError {
  * request whose *type* is undefined never addressed a record, so answering
  * 404 would say a record was missing when none was asked for.
  */
-export class StackQueryError extends StackError {
+export class StackBadRequestError extends StackError {
   static readonly code = 'bad_request' as const;
-  override readonly code = StackQueryError.code;
+  override readonly code = StackBadRequestError.code;
   constructor(
     message: string,
     /**
@@ -154,7 +154,7 @@ export class StackQueryError extends StackError {
     public readonly capability?: MissingCapability,
   ) {
     super(message);
-    this.name = 'StackQueryError';
+    this.name = 'StackBadRequestError';
   }
 }
 
@@ -183,7 +183,7 @@ export class StackPayloadTooLargeError extends StackError {
  * there is nothing to interrupt from inside the call. It exists so a
  * server that bounds query time has a class to serialize, and so the app
  * catching it can tell "too expensive, narrow it and retry" from
- * StackQueryError's "malformed, don't bother retrying" — the distinction
+ * StackBadRequestError's "malformed, don't bother retrying" — the distinction
  * that would be lost if a timeout reused `bad_request`.
  */
 export class StackTimeoutError extends StackError {

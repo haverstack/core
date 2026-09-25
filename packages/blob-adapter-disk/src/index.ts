@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
-import { StackNotFoundError, StackQueryError } from '@haverstack/core';
+import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
 import type { StackBlobAdapter, BlobFileInfo } from '@haverstack/core/adapter';
 
@@ -23,7 +23,7 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 const assertFileId = (fileId: string): void => {
   if (!SHA256_HEX_RE.test(fileId)) {
-    throw new StackQueryError(`Invalid fileId: expected 64-character lowercase hex string`);
+    throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
   }
 };
 

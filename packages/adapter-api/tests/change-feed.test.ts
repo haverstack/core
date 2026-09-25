@@ -17,7 +17,7 @@ import {
   useFetchMock,
 } from './helpers.js';
 import type { WireRecordChange } from '@haverstack/wire-types';
-import { StackQueryError, StackTimeoutError } from '@haverstack/core';
+import { StackBadRequestError, StackTimeoutError } from '@haverstack/core';
 import type { RecordChange } from '@haverstack/core';
 import { changeFeedFixtures, discoveryFixtures } from '@haverstack/conformance-fixtures';
 import type { ChangeFeedFrame } from '@haverstack/conformance-fixtures';
@@ -559,7 +559,7 @@ describe('reconnection', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
-    expect(onError.mock.calls[0]![0]).toBeInstanceOf(StackQueryError);
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(StackBadRequestError);
 
     // No further reconnect: the fetch count holds at discovery + first +
     // the refused reconnect, even after more time passes.

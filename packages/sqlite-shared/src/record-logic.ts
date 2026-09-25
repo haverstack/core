@@ -12,7 +12,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackNotFoundError,
-  StackQueryError,
+  StackBadRequestError,
   applyMergePatch,
 } from '@haverstack/core';
 import type {
@@ -62,12 +62,12 @@ import type { ScalarFieldKind } from '@haverstack/core';
  * is built from parameters, so a parse error in one is this module's bug —
  * rethrown untouched, where it belongs.
  */
-const asStackQueryError = <T>(query: StackQuery, run: () => T): T => {
+const asStackBadRequestError = <T>(query: StackQuery, run: () => T): T => {
   try {
     return run();
   } catch (err) {
     if (!query.filter?.search) throw err;
-    throw new StackQueryError(
+    throw new StackBadRequestError(
       `Search text could not be parsed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -573,7 +573,7 @@ export class SharedSqlRecordLogic {
       if (budget <= 0) break;
       const statement = atBudget(page, budget);
       rows.push(
-        ...asStackQueryError(query, () =>
+        ...asStackBadRequestError(query, () =>
           this.exec.all<Record<string, unknown>>(statement.sql, statement.params),
         ),
       );

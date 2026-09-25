@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
-import { StackQueryError, StackRelayScopeError } from '../src/errors.js';
+import { StackBadRequestError, StackRelayScopeError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
 
@@ -183,7 +183,7 @@ describe('a stack whose adapter relays', () => {
     ['a cursor carrying a newline', 'AA3f1R\nid: forged'],
     ['a cursor outside base64url', 'AA3f1R=='],
   ])('refuses %s, and opens no relay', async (_label, since) => {
-    await expect(stack.subscribe(() => {}, { since })).rejects.toBeInstanceOf(StackQueryError);
+    await expect(stack.subscribe(() => {}, { since })).rejects.toBeInstanceOf(StackBadRequestError);
 
     expect(adapter.relays).toHaveLength(0);
   });
@@ -194,7 +194,7 @@ describe('a stack whose adapter relays', () => {
     const seen: RecordChange[] = [];
 
     await expect(stack.subscribe((c) => void seen.push(c), { since: '' })).rejects.toBeInstanceOf(
-      StackQueryError,
+      StackBadRequestError,
     );
     await stack.create(NOTE, { text: 'after the refusal' });
 
@@ -208,7 +208,7 @@ describe('a stack whose adapter does not relay', () => {
     await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 
     await expect(local.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
-      StackQueryError,
+      StackBadRequestError,
     );
 
     await local.close();
@@ -238,7 +238,7 @@ describe('a scoped view of a stack that relays', () => {
 
     const scoped = local.asEntity(OWNER);
     await expect(scoped.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
-      StackQueryError,
+      StackBadRequestError,
     );
 
     await local.close();

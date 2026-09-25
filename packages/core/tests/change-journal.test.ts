@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { StackNotFoundError, StackPermissionError, StackQueryError } from '../src/errors.js';
+import { StackNotFoundError, StackPermissionError, StackBadRequestError } from '../src/errors.js';
 import type {
   Association,
   AuthorityAssociation,
@@ -551,7 +551,7 @@ describe('JournalQuery is validated at the surface', () => {
     ['sinceSeq', { sinceSeq: 2.5 }],
   ])('refuses a non-integer or negative %s', async (_key, query) => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await expect(stack.getJournal(note.id, query)).rejects.toThrow(StackQueryError);
+    await expect(stack.getJournal(note.id, query)).rejects.toThrow(StackBadRequestError);
   });
 
   test('limit 0 is a real window, not an invalid one', async () => {
@@ -570,7 +570,7 @@ describe('JournalQuery is validated at the surface', () => {
   test('the scoped surface is held to the same rule', async () => {
     const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
     await expect(stack.asEntity(OWNER).getJournal(note.id, { limit: -1 })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 });

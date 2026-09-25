@@ -7,7 +7,7 @@
  * stays runtime-agnostic and a non-Latin-1 value survives the round trip.
  */
 
-import { NATIVE_SORT_FIELDS, StackQueryError } from '@haverstack/core';
+import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
 import { contentSortEntry } from '@haverstack/core/adapter';
 import type { StackRecord, NativeSortField, QuerySort, ScalarFieldKind } from '@haverstack/core';
 
@@ -59,9 +59,9 @@ export const encodeCursor = (decoded: DecodedCursor): string =>
     ),
   );
 
-/** Throws StackQueryError for any malformed, corrupt, or unrecognized cursor. */
+/** Throws StackBadRequestError for any malformed, corrupt, or unrecognized cursor. */
 export const decodeCursor = (cursor: string): DecodedCursor => {
-  const malformed = () => new StackQueryError(`Invalid cursor: malformed "${cursor}"`);
+  const malformed = () => new StackBadRequestError(`Invalid cursor: malformed "${cursor}"`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(fromBase64(cursor));
@@ -79,11 +79,11 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
   }
   if (k === 'num' || k === 'native') {
     if (typeof v !== 'number' || !isFinite(v)) {
-      throw new StackQueryError(`Invalid cursor: non-numeric sort value`);
+      throw new StackBadRequestError(`Invalid cursor: non-numeric sort value`);
     }
     if (k === 'native') {
       if (!SORT_FIELDS.includes(f as SortField)) {
-        throw new StackQueryError(`Invalid cursor: unknown sort field "${f}"`);
+        throw new StackBadRequestError(`Invalid cursor: unknown sort field "${f}"`);
       }
       return { kind: 'native', field: f as SortField, value: v, id: i };
     }

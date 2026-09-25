@@ -11,7 +11,7 @@ import {
   NotFound,
   NoSuchKey,
 } from '@aws-sdk/client-s3';
-import { StackNotFoundError, StackQueryError } from '@haverstack/core';
+import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import { S3BlobAdapter } from '../src/index.js';
 
 const BUCKET = 'test-bucket';
@@ -112,8 +112,8 @@ describe('S3BlobAdapter', () => {
     await expect(adapter.getAttachment(validHash)).rejects.toThrow(StackNotFoundError);
   });
 
-  test('getAttachment throws StackQueryError for invalid fileId format', async () => {
-    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackQueryError);
+  test('getAttachment throws StackBadRequestError for invalid fileId format', async () => {
+    await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(StackBadRequestError);
     await expect(adapter.getAttachment('nonexistent')).rejects.toThrow(/Invalid fileId/);
   });
 
@@ -149,8 +149,8 @@ describe('S3BlobAdapter', () => {
     await expect(adapter.deleteAttachment(validHash)).resolves.toBeUndefined();
   });
 
-  test('deleteAttachment throws StackQueryError for invalid fileId format', async () => {
-    await expect(adapter.deleteAttachment('nonexistent')).rejects.toThrow(StackQueryError);
+  test('deleteAttachment throws StackBadRequestError for invalid fileId format', async () => {
+    await expect(adapter.deleteAttachment('nonexistent')).rejects.toThrow(StackBadRequestError);
   });
 
   describe('listFiles', () => {

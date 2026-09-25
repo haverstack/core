@@ -83,7 +83,7 @@ import {
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
-  StackQueryError,
+  StackBadRequestError,
   StackSchemaDriftError,
   StackValidationError,
   StackVersionConflictError,
@@ -171,7 +171,7 @@ export function normalizeActor(actor: Actor | undefined): Actor | undefined {
   if (!actor) return undefined;
   for (const field of ['subjectId', 'principalId'] as const) {
     if (actor[field] === '') {
-      throw new StackQueryError(`Invalid ${field}: the empty string is not an id.`);
+      throw new StackBadRequestError(`Invalid ${field}: the empty string is not an id.`);
     }
   }
   const { subjectId, principalId } = actor;
@@ -379,7 +379,7 @@ export interface StackClient {
    * producing one version where it names `contentPatch`, and none where it
    * doesn't. Keys are read for presence, so `unlisted: false`
    * and `parentId: null` are changes; a change set naming no key at all is
-   * a StackQueryError. Under ScopedStack each key carries its own gate and
+   * a StackBadRequestError. Under ScopedStack each key carries its own gate and
    * one refused key refuses the call.
    * See docs/spec/data-model.md § Mutations.
    */
@@ -641,7 +641,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const parsed = parseTypeId(id);
     if (!parsed) {
-      throw new StackQueryError(
+      throw new StackBadRequestError(
         `Invalid TypeId format: "${id}". Expected "namespace/name@version", e.g. "com.example.myapp/note@1".`,
       );
     }
@@ -861,7 +861,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
-      throw new StackQueryError(`Unknown type: "${typeId}". Call defineType() first.`);
+      throw new StackBadRequestError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
 
     // Copied, never aliased: an import loop that reuses one Date across rows
@@ -955,7 +955,7 @@ export class Stack implements StackClient {
     // empty string, which names nobody. Refused rather than dropped, so the
     // caller is never silently ignored.
     if (opts.appId === '') {
-      throw new StackQueryError('Invalid appId: the empty string is not an id.');
+      throw new StackBadRequestError('Invalid appId: the empty string is not an id.');
     }
 
     // Every create naming a parent owes the reference check, whether or not
@@ -1174,7 +1174,7 @@ export class Stack implements StackClient {
 
       const type = await this.getTypeCached(existing.typeId);
       if (!type) {
-        throw new StackQueryError(`Unknown type: "${existing.typeId}"`);
+        throw new StackBadRequestError(`Unknown type: "${existing.typeId}"`);
       }
       merged = applyMergePatch(existing.content, contentPatch);
 
@@ -1688,7 +1688,7 @@ export class Stack implements StackClient {
 
     const type = await this.getTypeCached(target.typeId);
     if (!type) {
-      throw new StackQueryError(`Unknown type: "${target.typeId}"`);
+      throw new StackBadRequestError(`Unknown type: "${target.typeId}"`);
     }
 
     const errors = [
@@ -1787,7 +1787,7 @@ export class Stack implements StackClient {
 
     const type = await this.getTypeCached(toTypeId);
     if (!type) {
-      throw new StackQueryError(`Unknown type: "${toTypeId}". Call defineType() first.`);
+      throw new StackBadRequestError(`Unknown type: "${toTypeId}". Call defineType() first.`);
     }
 
     const errors = [

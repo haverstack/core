@@ -8,7 +8,7 @@ import {
   StackConflictError,
   StackVersionConflictError,
   StackNotFoundError,
-  StackQueryError,
+  StackBadRequestError,
 } from '@haverstack/core';
 import type { AuthorityAssociation, StackRecord } from '@haverstack/core';
 
@@ -730,7 +730,7 @@ describe('records — queries', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('filters by typeId', async () => {
@@ -939,9 +939,9 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     await expect(
       adapter.queryRecords({ filter: { content: { 'emails[0]': 'x' } } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
     await expect(adapter.queryRecords({ filter: { content: { 'a..b': 'x' } } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -975,7 +975,7 @@ describe('records — queries', () => {
   });
 
   // A key carrying path syntax is a structural fault in the request,
-  // answered as StackQueryError (400) rather than reaching the engine as a
+  // answered as StackBadRequestError (400) rather than reaching the engine as a
   // malformed path and escaping as a raw error.
   test('a key that is not path-shaped is refused, never an engine error', async () => {
     const adapter = await initAdapter();
@@ -983,7 +983,7 @@ describe('records — queries', () => {
 
     for (const key of ['$.', '[', '"', 'a[0', '', 'a..b', '*', '#']) {
       await expect(adapter.queryRecords({ filter: { content: { [key]: 'x' } } })).rejects.toThrow(
-        StackQueryError,
+        StackBadRequestError,
       );
     }
   });
@@ -1004,7 +1004,7 @@ describe('records — queries', () => {
     ).resolves.toMatchObject({ records: [{ id: 'r1' }] });
     await expect(
       adapter.queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   // json_each exposes a stored object as its JSON text; a scalar filter
@@ -1086,7 +1086,7 @@ describe('records — queries', () => {
   // The backstop behind the sanitizer, which claims no completeness
   // against FTS5's grammar: whatever reaches the engine and fails to parse
   // is a bad_request, never a raw engine error a server has no code to map.
-  test('search text the engine cannot parse raises StackQueryError', async () => {
+  test('search text the engine cannot parse raises StackBadRequestError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
     // Reach past the sanitizer to stand in for a grammar case it misses.
@@ -1094,7 +1094,7 @@ describe('records — queries', () => {
       throw new Error('fts5: syntax error near ""');
     });
     await expect(adapter.queryRecords({ filter: { search: 'anything' } })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -1153,15 +1153,15 @@ describe('records — queries', () => {
     expect(page2.cursor).toBeNull();
   });
 
-  test('malformed cursor throws StackQueryError', async () => {
+  test('malformed cursor throws StackBadRequestError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
     await expect(adapter.queryRecords({ cursor: '!!!not-a-cursor!!!' })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
-  test('cursor minted under one sort field replayed with a different sort field throws StackQueryError', async () => {
+  test('cursor minted under one sort field replayed with a different sort field throws StackBadRequestError', async () => {
     const adapter = await initAdapter();
     for (let i = 0; i < 5; i++) {
       await adapter.createRecord(makeRecord({ id: `r${i}`, createdAt: new Date(i * 1000) }));
@@ -1178,7 +1178,7 @@ describe('records — queries', () => {
         limit: 3,
         cursor: page1.cursor!,
       }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('sort by createdAt descending (default)', async () => {

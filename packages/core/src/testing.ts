@@ -28,7 +28,7 @@ import {
   StackVersionConflictError,
   StackConflictError,
   StackNotFoundError,
-  StackQueryError,
+  StackBadRequestError,
 } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
 import { associationEqual } from './record-changes.js';
@@ -391,7 +391,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /**
-   * Throws StackQueryError for a cursor that doesn't decode at all, or one
+   * Throws StackBadRequestError for a cursor that doesn't decode at all, or one
    * minted under a different sort than `sort` names — the same refusal a
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
@@ -404,7 +404,7 @@ export class MemoryAdapter implements StackAdapter {
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       parsed = JSON.parse(new TextDecoder().decode(bytes));
     } catch {
-      throw new StackQueryError(`Malformed cursor: "${cursor}"`);
+      throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
     }
     const { d, o } = (parsed ?? {}) as { d?: unknown; o?: unknown };
     // `o >= 0` is part of being well-formed, not a nicety: a crafted
@@ -413,10 +413,12 @@ export class MemoryAdapter implements StackAdapter {
     // the wire uninspected (wire-request copies `?cursor=` verbatim), so
     // this is the only place the offset is checked at all.
     if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o) || o < 0) {
-      throw new StackQueryError(`Malformed cursor: "${cursor}"`);
+      throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
     }
     if (d !== this.sortDescriptor(sort)) {
-      throw new StackQueryError(`Cursor was minted under a different sort than this query names.`);
+      throw new StackBadRequestError(
+        `Cursor was minted under a different sort than this query names.`,
+      );
     }
     return o;
   }
@@ -649,7 +651,7 @@ export class MemoryAdapter implements StackAdapter {
   }
   async getAttachment(fileId: string): Promise<Uint8Array> {
     if (!SHA256_HEX_RE.test(fileId)) {
-      throw new StackQueryError(`Invalid fileId: expected 64-character lowercase hex string`);
+      throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
     }
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);

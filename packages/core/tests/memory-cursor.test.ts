@@ -8,7 +8,7 @@
  */
 import { describe, test, expect, beforeEach } from 'vitest';
 import { MemoryAdapter } from '../src/testing.js';
-import { StackQueryError } from '../src/errors.js';
+import { StackBadRequestError } from '../src/errors.js';
 import type { StackRecord } from '../src/types.js';
 
 const makeRecord = (id: string, priority: number): StackRecord => ({
@@ -47,7 +47,7 @@ describe('MemoryAdapter cursors', () => {
     // records as "page 2"; cursors reach the adapter straight off the
     // wire, so nothing upstream would have caught it.
     await expect(adapter.queryRecords({ limit: 3, cursor: forged })).rejects.toThrow(
-      StackQueryError,
+      StackBadRequestError,
     );
   });
 
@@ -55,6 +55,6 @@ describe('MemoryAdapter cursors', () => {
     const first = await adapter.queryRecords({ limit: 2, sort: { field: 'createdAt' } });
     await expect(
       adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort: { field: 'updatedAt' } }),
-    ).rejects.toThrow(StackQueryError);
+    ).rejects.toThrow(StackBadRequestError);
   });
 });
