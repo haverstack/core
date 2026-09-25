@@ -787,9 +787,9 @@ export class SharedSqlRecordLogic {
     }
     const conditions = ['record_id = ?'];
     const values: unknown[] = [id];
-    if (query.sinceSeq !== undefined) {
+    if (query.afterSeq !== undefined) {
       conditions.push('seq > ?');
-      values.push(query.sinceSeq);
+      values.push(query.afterSeq);
     }
     const rows = this.exec.all<Record<string, unknown>>(
       `SELECT * FROM journal WHERE ${conditions.join(' AND ')} ORDER BY seq ASC${

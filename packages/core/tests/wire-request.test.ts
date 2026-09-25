@@ -405,21 +405,21 @@ describe('parseJournalParams', () => {
   });
 
   test('round-trips a window', () => {
-    expect(parseJournalParams(journal('/records/r1/journal?sinceSeq=4&limit=10'))).toEqual({
-      sinceSeq: 4,
+    expect(parseJournalParams(journal('/records/r1/journal?afterSeq=4&limit=10'))).toEqual({
+      afterSeq: 4,
       limit: 10,
     });
   });
 
   test('accepts zero for either, which assertValidJournalQuery also allows', () => {
-    expect(parseJournalParams(journal('/records/r1/journal?sinceSeq=0&limit=0'))).toEqual({
-      sinceSeq: 0,
+    expect(parseJournalParams(journal('/records/r1/journal?afterSeq=0&limit=0'))).toEqual({
+      afterSeq: 0,
       limit: 0,
     });
   });
 
   test('refuses a value that is not a bare non-negative integer', () => {
-    for (const qs of ['?limit=-1', '?limit=1.5', '?limit=ten', '?sinceSeq=-1', '?sinceSeq=1e3']) {
+    for (const qs of ['?limit=-1', '?limit=1.5', '?limit=ten', '?afterSeq=-1', '?afterSeq=1e3']) {
       expect(() => parseJournalParams(journal(`/records/r1/journal${qs}`))).toThrow(
         StackBadRequestError,
       );

@@ -1638,7 +1638,7 @@ describe('getJournal', () => {
 
     expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
     const [second] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?sinceSeq=2`);
+    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?afterSeq=2`);
   });
 
   test('asks only for what a bounded read still needs, and stops at the limit', async () => {
@@ -1646,12 +1646,12 @@ describe('getJournal', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(1)], cursor: 1 }));
     mockFetch.mockResolvedValueOnce(jsonResponse({ entries: [entry(2)], cursor: 2 }));
 
-    const log = await adapter.getJournal('1hk153x00001', { limit: 2, sinceSeq: 0 });
+    const log = await adapter.getJournal('1hk153x00001', { limit: 2, afterSeq: 0 });
 
     expect(log.map((e) => e.seq)).toEqual([1, 2]);
     expect(mockFetch.mock.calls.filter(([u]) => String(u).includes('/journal'))).toHaveLength(2);
     const [second] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?sinceSeq=1&limit=1`);
+    expect(second).toBe(`${BASE_URL}/records/1hk153x00001/journal?afterSeq=1&limit=1`);
   });
 
   test('holds a bounded read to its limit even if a page overshoots it', async () => {

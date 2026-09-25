@@ -443,7 +443,7 @@ The wire encoding of [the change journal](./journal.md) — the second durable t
 
 ```
 GET /records/:id/journal             — the log, oldest first
-GET /records/:id/journal?sinceSeq=4  — entries after seq 4, exclusive
+GET /records/:id/journal?afterSeq=4  — entries after seq 4, exclusive
 GET /records/:id/journal?limit=50    — at most 50 entries
 ```
 
@@ -485,9 +485,9 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and the two that displace something carry `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
 
-**`seq` here is the entry's, not the feed's** — a dense integer from 1 per record, never [the feed's opaque whole-stack cursor](./change-feed.md#frames), and no value crosses between them. See [Journal § Ordering](./journal.md#ordering).
+**`seq` here is the entry's, not the feed's** — a dense integer from 1 per record, never [the feed's opaque whole-stack `cursor`](./change-feed.md#frames), and no value crosses between them. See [Journal § Ordering](./journal.md#ordering).
 
-**`cursor` is the only end-of-log signal**, exactly as it is on [a query](#response-envelope). A server MAY answer a page shorter than the `limit` asked for — this is the one read with no ceiling when `limit` is omitted, so it needs that freedom — which is why a short page must not be read as an exhausted log. `cursor` carries the `seq` to send back as `sinceSeq`, and is `null` once nothing follows. `APIAdapter.getJournal()` follows it to the end, so the library contract that omitting `limit` reads the whole log survives whatever page size a server picks.
+**`cursor` is the only end-of-log signal**, exactly as it is on [a query](#response-envelope). A server MAY answer a page shorter than the `limit` asked for — this is the one read with no ceiling when `limit` is omitted, so it needs that freedom — which is why a short page must not be read as an exhausted log. `cursor` carries the `seq` to send back as `afterSeq`, and is `null` once nothing follows. `APIAdapter.getJournal()` follows it to the end, so the library contract that omitting `limit` reads the whole log survives whatever page size a server picks.
 
 **`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Every other nullable field collapses both to absent — a record body spells the root that way — and doing so here would lose which of the two happened. Nothing else keeps a move's origin at all: [no snapshot captures containment](./versioning.md#version-history), so this entry is where an undo reads it from. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
 
@@ -497,7 +497,7 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **A hard delete destroys the journal**, so this endpoint answers `404` for a purged record like every other read of it. The [`404`-over-`403` rule](./disclosure.md) applies here as everywhere: a requester who cannot read the record gets `404`, never the `403` above.
 
-`@haverstack/core/wire` exports `parseJournalParams()`, so a server decodes `sinceSeq` and `limit` with the same grammar `APIAdapter` builds them with. Neither has a default: omitting `limit` reads the whole log by contract, so supplying a page size on the server's behalf would truncate exactly the caller that omitted it — a server bounds a page with `cursor` instead, which says so.
+`@haverstack/core/wire` exports `parseJournalParams()`, so a server decodes `afterSeq` and `limit` with the same grammar `APIAdapter` builds them with. Neither has a default: omitting `limit` reads the whole log by contract, so supplying a page size on the server's behalf would truncate exactly the caller that omitted it — a server bounds a page with `cursor` instead, which says so.
 
 ## Associations
 

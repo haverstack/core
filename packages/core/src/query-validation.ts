@@ -464,7 +464,7 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
  */
 export function assertValidJournalQuery(query: JournalQuery | undefined): void {
   if (!query) return;
-  for (const key of ['sinceSeq', 'limit'] as const) {
+  for (const key of ['afterSeq', 'limit'] as const) {
     const value = query[key];
     if (value === undefined) continue;
     if (!Number.isInteger(value) || value < 0) {

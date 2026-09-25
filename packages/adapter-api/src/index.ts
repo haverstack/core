@@ -75,6 +75,7 @@ import type {
   WireRecordChange,
   WireJournalEntry,
   WireJournalResponse,
+  WireReadyFrame,
   DiscoveryChanges,
   DiscoveryResponse,
   AuthChallengeResponse,
@@ -88,7 +89,7 @@ import {
   isProtocolCompatible,
   isWireAuthError,
   isRetryableAuthError,
-  isValidSeq,
+  isValidCursor,
   supportsChangeFeed,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
@@ -597,7 +598,7 @@ const parseChange = (raw: WireRecordChange): RecordChange => {
     updatedAt: new Date(raw.updatedAt),
   };
   if (raw.actor != null) change.actor = parseChangeActor(raw.actor);
-  if (raw.seq != null) change.seq = raw.seq;
+  if (raw.cursor != null) change.cursor = raw.cursor;
   // A purge carries nothing about the record it destroyed. A conformant
   // server sends neither field on one; dropping them here means a server
   // that does cannot hand a subscriber the copy the verb exists to erase.
@@ -1246,14 +1247,14 @@ export class APIAdapter implements StackAdapter {
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     const entries: RecordJournalEntry[] = [];
-    let sinceSeq = query.sinceSeq;
+    let afterSeq = query.afterSeq;
     for (;;) {
       // Asks only for what is still outstanding, so a server honoring the
       // limit exactly answers a bounded read in one request.
       const remaining = query.limit === undefined ? undefined : query.limit - entries.length;
       if (remaining !== undefined && remaining <= 0) break;
       const params = new URLSearchParams();
-      if (sinceSeq !== undefined) params.set('sinceSeq', String(sinceSeq));
+      if (afterSeq !== undefined) params.set('afterSeq', String(afterSeq));
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
       const path = `/records/${id}/journal${qs ? `?${qs}` : ''}`;
@@ -1267,10 +1268,10 @@ export class APIAdapter implements StackAdapter {
       // request somewhere new. A server that omits one, repeats one, or
       // mints one unconditionally ends the read here rather than spinning
       // on it. See docs/spec/wire-format.md § Journal.
-      if (typeof body.cursor !== 'number' || (sinceSeq !== undefined && body.cursor <= sinceSeq)) {
+      if (typeof body.cursor !== 'number' || (afterSeq !== undefined && body.cursor <= afterSeq)) {
         break;
       }
-      sinceSeq = body.cursor;
+      afterSeq = body.cursor;
     }
     // `limit` is this method's own ceiling, not a request the server is
     // trusted to have honored: a page longer than the one asked for would
@@ -1413,9 +1414,9 @@ export class APIAdapter implements StackAdapter {
     // inside the framable charset for the same reason a frame's own id
     // does: an out-of-charset value would span the header line. Refused
     // locally rather than handed to fetch, which rejects it opaquely.
-    if (opts.since !== undefined && !isValidSeq(opts.since)) {
+    if (opts.since !== undefined && !isValidCursor(opts.since)) {
       throw new APIAdapterError(
-        `Resume cursor "${opts.since}" is not a valid seq (unreserved base64url characters only).`,
+        `Resume cursor "${opts.since}" is not framable (unreserved base64url characters only).`,
       );
     }
 
@@ -1435,11 +1436,11 @@ export class APIAdapter implements StackAdapter {
       onFailed = reject;
     });
 
-    const dispatch = (frame: SseFrame, headSeq: () => string | undefined): void => {
+    const dispatch = (frame: SseFrame, headCursor: () => string | undefined): void => {
       // A frame id is a stream position whatever the frame says, so an
       // unrecognized name still advances the cursor. One outside the
       // framable charset is discarded rather than echoed into a header.
-      if (frame.id !== undefined && isValidSeq(frame.id)) cursor = frame.id;
+      if (frame.id !== undefined && isValidCursor(frame.id)) cursor = frame.id;
 
       switch (frame.event) {
         case CHANGE_FRAME_READY:
@@ -1466,7 +1467,7 @@ export class APIAdapter implements StackAdapter {
           // The cursor is worthless now, so the next reconnect starts from
           // this connection's head rather than replaying against a
           // position the server has already refused.
-          cursor = headSeq();
+          cursor = headCursor();
           opts.onReset?.();
           return;
         default:
@@ -1526,7 +1527,7 @@ export class APIAdapter implements StackAdapter {
     url: string,
     controller: AbortController,
     cursor: () => string | undefined,
-    dispatch: (frame: SseFrame, headSeq: () => string | undefined) => void,
+    dispatch: (frame: SseFrame, headCursor: () => string | undefined) => void,
   ): Promise<void> {
     const res = await this.send(url, (token) => {
       const headers = authHeaders(token, { Accept: 'text/event-stream' });
@@ -1543,7 +1544,7 @@ export class APIAdapter implements StackAdapter {
     // This connection's own head, as its ready frame reported it — the
     // position a reset falls back to.
     let head: string | undefined;
-    const headSeq = () => head;
+    const headCursor = () => head;
 
     const decoder = new SseDecoder();
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -1554,17 +1555,17 @@ export class APIAdapter implements StackAdapter {
         for (const frame of decoder.push(value)) {
           if (frame.event === CHANGE_FRAME_READY && head === undefined) {
             // A malformed ready payload costs the reset fallback its head
-            // cursor, not the connection: treat the head as unknown. The
-            // seq is charset-checked like a frame id, since it becomes the
+            // cursor, not the connection: treat the head as unknown. It is
+            // charset-checked like a frame id, since it becomes the
             // Last-Event-ID fetch would refuse on every reconnect.
             try {
-              const seq = (JSON.parse(frame.data || '{}') as { seq?: string }).seq;
-              head = seq !== undefined && isValidSeq(seq) ? seq : undefined;
+              const ready = (JSON.parse(frame.data || '{}') as WireReadyFrame).cursor;
+              head = ready !== undefined && isValidCursor(ready) ? ready : undefined;
             } catch {
               head = undefined;
             }
           }
-          dispatch(frame, headSeq);
+          dispatch(frame, headCursor);
         }
       }
     } finally {

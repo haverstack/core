@@ -910,7 +910,7 @@ export type JournalOptions = {
 /** Window into a record's journal. Omitting both reads the whole log, oldest first. */
 export type JournalQuery = {
   /** Entries after this seq, exclusive. */
-  sinceSeq?: number;
+  afterSeq?: number;
   limit?: number;
 };
 
@@ -1032,7 +1032,7 @@ export type RecordChange = {
    * stack's own writes included — so a consumer holding a cursor keeps
    * the last one that was present rather than the last change's.
    */
-  seq?: string;
+  cursor?: string;
 };
 
 /**
@@ -1062,10 +1062,10 @@ export type SubscribeOptions = {
    */
   includeUnlisted?: boolean;
   /**
-   * Resume from this cursor rather than the present — the last `seq` that
-   * was present on a delivered `RecordChange`. A relaying stack delivers
+   * Resume from this cursor rather than the present — the last `cursor`
+   * that was present on a delivered `RecordChange`. A relaying stack delivers
    * its own local writes through the same handler and those carry none, so
-   * a consumer that stores every change's `seq` unconditionally erases its
+   * a consumer that stores every change's `cursor` unconditionally erases its
    * own cursor on its next write.
    *
    * Forwarded to the adapter as `SubscribeChangesOptions.since`, so it

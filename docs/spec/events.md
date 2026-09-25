@@ -55,7 +55,7 @@ type RecordChange = {
   associationsAdded?: DataAssociation[]; // present when `ops` includes `associate`
   associationsRemoved?: DataAssociation[]; // present when `ops` includes `dissociate`
   record?: StackRecord;
-  seq?: string; // resume cursor, on a resumable feed only
+  cursor?: string; // resume cursor, on a resumable feed only
 };
 ```
 
@@ -201,7 +201,7 @@ type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
   includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
-  since?: string; // resume cursor — the last `seq` present on a delivered RecordChange
+  since?: string; // resume cursor — the last `cursor` present on a delivered RecordChange
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
@@ -288,13 +288,13 @@ An unscoped `parentId` filter (`null`, for root records) participates on the sam
 - **Across records, no causal ordering is promised.** Core has no multi-record transaction, so there is nothing to be ordered _about_.
 - **Nothing is silently skipped.** An emitter that cannot honor a resume cursor says so, rather than resuming from wherever it can.
 
-`seq` is an opaque resume cursor minted by a server, never computed with by a client — the same posture as query [pagination cursors](./data-model.md#sorting-and-pagination). Ordering and durability are storage concerns, and local events carry no `seq` at all.
+`cursor` is an opaque resume token minted by a server, never computed with by a client — the same posture as query [pagination cursors](./data-model.md#sorting-and-pagination), and `since` takes one back. Ordering and durability are storage concerns, and local events carry no `cursor` at all. It is unrelated to [the journal's `seq`](./journal.md#ordering), a per-record integer.
 
 ## Known limitations
 
 - **Losing access is invisible.** When a permission change revokes read access, the subscriber receives no event — they simply stop hearing about the record. There is no "removed from your view" signal, and adding one would disclose the revocation itself. A long-lived cache can therefore hold a record its holder may no longer read; consumers displaying shared data should revalidate on a schedule of their own.
 - **Gaining access arrives as `changed`, not `created`.** Hence upsert semantics.
-- **A restart against a local stack, or with no cursor held, is a full resync.** Local stacks have no `seq` to have held. A restart against a stack that relays is not: persist the last `seq` that was **present** — a relaying stack delivers its own local writes through the same handler, and those carry none, so a consumer that stores every change's `seq` unconditionally erases its own cursor on its next write — pass it back as `since`, and let `(recordId, version, kind)` dedupe absorb whatever the resumed feed replays.
+- **A restart against a local stack, or with no cursor held, is a full resync.** Local stacks have no `cursor` to have held. A restart against a stack that relays is not: persist the last `cursor` that was **present** — a relaying stack delivers its own local writes through the same handler, and those carry none, so a consumer that stores every change's `cursor` unconditionally erases its own cursor on its next write — pass it back as `since`, and let `(recordId, version, kind)` dedupe absorb whatever the resumed feed replays.
 - **`migrateAll()` fans out.** One event per migrated record, with no batch frame — a sweep over thousands of records emits thousands of events. A scoped subscription serializes its permission checks, so a fan-out that outpaces them queues: pending events are held, with the record each describes, until their check runs.
 - **A hard delete over the wire is announced twice, and deduped.** The verb answers with the record it destroyed, so a `Stack` driving a remote adapter emits its own `purged` frame exactly as it does for every other write, and the far end emits one too, which arrives through the relay a round trip later. `(recordId, version, kind)` absorbs the pair, the same way it absorbs a relayed copy of any other local write.
 - **Hard delete is unreconcilable by query.** Nothing distinguishes "purged" from "never existed" afterwards, so a consumer that missed a `purged` event finds it only by enumerating.

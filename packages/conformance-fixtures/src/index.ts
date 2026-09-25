@@ -1729,10 +1729,10 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
       'A server may answer a page shorter than the limit asked for — this endpoint is the one ' +
       'read with no ceiling when limit is omitted, so it needs that freedom. cursor is ' +
       'therefore the only end-of-log signal: a short page does not mean an exhausted log. Its ' +
-      'value is the seq to send back as sinceSeq. A client reconstructing a full history ' +
+      'value is the seq to send back as afterSeq. A client reconstructing a full history ' +
       'follows it rather than taking the first page for the answer.',
     method: 'GET',
-    path: '/records/1hk153x00001/journal?sinceSeq=0&limit=2',
+    path: '/records/1hk153x00001/journal?afterSeq=0&limit=2',
     responseStatus: 200,
     responseBody: {
       entries: [
@@ -1759,7 +1759,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
       'to join one list against another to find the pair. ' +
       'See docs/spec/attachments.md § Naming the upload a reference came from.',
     method: 'GET',
-    path: '/records/1hk153x00001/journal?sinceSeq=2',
+    path: '/records/1hk153x00001/journal?afterSeq=2',
     responseStatus: 200,
     responseBody: {
       entries: [
@@ -1803,7 +1803,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
       'feed says what happened, the journal says what it happened to. ' +
       'See docs/spec/journal.md § The entry.',
     method: 'GET',
-    path: '/records/1hk153x00001/journal?sinceSeq=3',
+    path: '/records/1hk153x00001/journal?afterSeq=3',
     responseStatus: 200,
     responseBody: {
       entries: [
@@ -1843,7 +1843,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
       'move, as it does across an association change. ' +
       'See docs/spec/wire-format.md § Journal.',
     method: 'GET',
-    path: '/records/1hk153x00001/journal?sinceSeq=3',
+    path: '/records/1hk153x00001/journal?afterSeq=3',
     responseStatus: 200,
     responseBody: {
       entries: [
@@ -3554,9 +3554,9 @@ const FEED_OWNER = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
 const FEED_CONTRIBUTOR = 'entity-contributor-789';
 
 /** The head cursor a server reports on connect, before anything has happened. */
-const FEED_HEAD_SEQ = 'AA3f1Q';
+const FEED_HEAD_CURSOR = 'AA3f1Q';
 
-const READY: ChangeFeedFrame = { event: 'ready', data: { seq: FEED_HEAD_SEQ } };
+const READY: ChangeFeedFrame = { event: 'ready', data: { cursor: FEED_HEAD_CURSOR } };
 
 export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
@@ -4377,7 +4377,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     description:
       'A server advertising resume:false answers every connection presenting a cursor with a ' +
       'reset, and is fully conformant in doing so. ready still leads — it carries the cursor ' +
-      'the client resumes from *after* reconciling — and its seq is absent here, since a server ' +
+      'the client resumes from *after* reconciling — and its cursor is absent here, since a server ' +
       "that mints no cursors has none to name. A client's repair is the same for all three " +
       'reset reasons and is the same work as startup: reconcile by query.',
     path: '/changes',
@@ -4504,7 +4504,7 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
         ],
         responseStatus: 200,
         openingFrames: [
-          { event: 'ready', data: { seq: 'AA3f1S' } },
+          { event: 'ready', data: { cursor: 'AA3f1S' } },
           {
             id: 'AA3f1S',
             event: 'record',
@@ -4545,10 +4545,10 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
           'The client reconnects long enough afterwards that its cursor has fallen out of the ' +
           "server's buffer.",
         path: '/changes',
-        requestHeaders: { 'Last-Event-ID': FEED_HEAD_SEQ },
+        requestHeaders: { 'Last-Event-ID': FEED_HEAD_CURSOR },
         responseStatus: 200,
         openingFrames: [
-          { event: 'ready', data: { seq: 'AB90zT' } },
+          { event: 'ready', data: { cursor: 'AB90zT' } },
           { event: 'reset', data: { reason: 'cursor_expired' } },
         ],
       },

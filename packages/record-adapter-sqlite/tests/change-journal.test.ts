@@ -269,7 +269,7 @@ describe('the log outlives the process that wrote it', () => {
 // -------------------------------------------------------
 
 describe('getJournal', () => {
-  test('reads oldest first, and windows on sinceSeq and limit', async () => {
+  test('reads oldest first, and windows on afterSeq and limit', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
@@ -282,12 +282,12 @@ describe('getJournal', () => {
     }
 
     expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
-    expect((await adapter.getJournal(record.id, { sinceSeq: 2 })).map((e) => e.seq)).toEqual([
+    expect((await adapter.getJournal(record.id, { afterSeq: 2 })).map((e) => e.seq)).toEqual([
       3, 4,
     ]);
     expect((await adapter.getJournal(record.id, { limit: 2 })).map((e) => e.seq)).toEqual([1, 2]);
     expect(
-      (await adapter.getJournal(record.id, { sinceSeq: 1, limit: 2 })).map((e) => e.seq),
+      (await adapter.getJournal(record.id, { afterSeq: 1, limit: 2 })).map((e) => e.seq),
     ).toEqual([2, 3]);
   });
 

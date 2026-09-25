@@ -75,7 +75,7 @@ It is one rule rather than two lists because the two halves are built from one o
 
 It is allocated by the adapter inside the appending write, from the log's own maximum — never computed by `Stack` from a value it read earlier. That is why the journal needs none of the collision healing [a snapshot needs](./versioning.md#snapshot-atomicity): no writer ever holds a `seq` it expects to still be free.
 
-It is **not** the [change feed's `seq`](./change-feed.md#frames), which is an opaque server-minted cursor over the whole stack. The two share a name because both order a stream, and no value may be carried from one to the other.
+It is **not** the [change feed's `cursor`](./change-feed.md#frames), which is an opaque server-minted position over the whole stack, and no value may be carried from one to the other. `afterSeq` takes a `seq` and is exclusive: it reads the entries after the one named.
 
 ## Atomicity
 
@@ -91,11 +91,11 @@ A purged record's id is therefore a pointer to nothing, wherever it survives —
 
 ## Reading it
 
-- `stack.getJournal(recordId, { sinceSeq?, limit? })` — the log, oldest first.
+- `stack.getJournal(recordId, { afterSeq?, limit? })` — the log, oldest first.
 
 **A record that does not exist is `StackNotFoundError`, never an empty log.** A purged record is gone, so it is the same refusal.
 
-`sinceSeq` and `limit` are each a non-negative integer or absent; anything else is refused with `StackBadRequestError` before an adapter sees it. The window is checked rather than coerced because the two coercions available disagree: a negative `limit` read as a JavaScript slice drops the newest entry, and read as a SQL `LIMIT` removes the ceiling altogether. **Omitting `limit` reads the whole log, and no ceiling is imposed when it is omitted** — unlike a query, where a default page size is a kindness, a truncated journal is a wrong answer to the one caller who needs it, the one reconstructing an association's full history.
+`afterSeq` and `limit` are each a non-negative integer or absent; anything else is refused with `StackBadRequestError` before an adapter sees it. The window is checked rather than coerced because the two coercions available disagree: a negative `limit` read as a JavaScript slice drops the newest entry, and read as a SQL `LIMIT` removes the ceiling altogether. **Omitting `limit` reads the whole log, and no ceiling is imposed when it is omitted** — unlike a query, where a default page size is a kindness, a truncated journal is a wrong answer to the one caller who needs it, the one reconstructing an association's full history.
 
 **Gated on the mutate surface, exactly as [history is](./versioning.md#history-access), and for the same reason.** A log of who changed what, gated on current read access, would make a record's past exactly as reachable as its present — the retroactivity that rule exists to prevent. An association label is content enough to matter: gaining read access today is not an entitlement to the trail of every tag the record has ever carried. A write-holder, the owner, or a creator passes; a plain reader gets `StackPermissionError`, the same answer `getVersions()` gives.
 
