@@ -51,7 +51,7 @@ import type {
 import {
   assertQueryCapabilities,
   assertSortCapability,
-  assertValidRelatedTo,
+  assertValidAssociationFilters,
   filtersContent,
 } from '@haverstack/core/adapter';
 import type {
@@ -546,8 +546,9 @@ const buildQueryParams = (query: StackQuery): URLSearchParams => {
   if (f.updatedAt?.before) p.set('updatedBefore', f.updatedAt.before.toISOString());
   if (f.updatedAt?.after) p.set('updatedAfter', f.updatedAt.after.toISOString());
   if (f.tags) for (const tag of f.tags) p.append('tag', tag);
-  if (f.hasAttachment) p.set('hasAttachment', f.hasAttachment);
-  if (f.attachmentFileId) p.set('attachmentFileId', f.attachmentFileId);
+  if (f.attachment?.label !== undefined) p.set('attachmentLabel', f.attachment.label);
+  if (f.attachment?.fileId !== undefined) p.set('attachmentFileId', f.attachment.fileId);
+  if (f.referencesFileId) p.set('referencesFileId', f.referencesFileId);
   if (f.relatedTo) {
     // The target kind is implied by which qualifier appears, and the type
     // guarantees at least one of these branches sets something — so the
@@ -1149,11 +1150,11 @@ export class APIAdapter implements StackAdapter {
       }
       throw err;
     }
-    // A malformed relationship filter is a caller error, not a missing
+    // A malformed association filter is a caller error, not a missing
     // capability, so this one travels as the StackBadRequestError it is —
     // refused here rather than encoded into query params a server would
     // have to reject.
-    assertValidRelatedTo(query.filter?.relatedTo);
+    assertValidAssociationFilters(query.filter);
     // Likewise for the two fields with no wire encoding, and before the
     // branch below rather than inside it: the query body carries them to a
     // server that answers 400, while the search params have nowhere to put

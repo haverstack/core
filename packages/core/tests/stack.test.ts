@@ -35,6 +35,7 @@ import type {
   AuthorityAssociation,
   GrantContent,
   GrantGrantee,
+  QueryResult,
   RecordChange,
   RecordFilter,
   RelationshipTarget,
@@ -7468,7 +7469,7 @@ describe('query — relatedTo filter', () => {
   });
 
   // "Carries any relationship at all" is refused by the type, not defined —
-  // the wire encoding has no way to say it, and `tags`/`hasAttachment` have
+  // the wire encoding has no way to say it, and `tags`/`attachment` have
   // no match-any form either. @ts-expect-error fails typecheck if this ever
   // starts compiling.
   test('a filter naming neither a label nor a target does not typecheck', () => {
@@ -7569,6 +7570,59 @@ describe('query — relatedTo filter', () => {
       },
     });
     expect(scoped.records.map((r) => r.content.text)).toEqual(['remote reply']);
+  });
+});
+
+// -------------------------------------------------------
+// query — attachment and referencesFileId filters
+// -------------------------------------------------------
+
+describe('query — attachment filter', () => {
+  const F1 = '1'.repeat(64);
+  const F2 = '2'.repeat(64);
+  const PHOTO = 'com.example.test/photo@1';
+
+  beforeEach(async () => {
+    const both = await stack.create(NOTE_V1, { text: 'cover F1, thumb F2' });
+    await stack.associate(both.id, { kind: 'attachment', label: 'cover', fileId: F1 });
+    await stack.associate(both.id, { kind: 'attachment', label: 'thumb', fileId: F2 });
+    const cover = await stack.create(NOTE_V1, { text: 'cover F2' });
+    await stack.associate(cover.id, { kind: 'attachment', label: 'cover', fileId: F2 });
+    await stack.defineType({
+      id: PHOTO,
+      name: 'Photo',
+      schema: { coverFileId: { kind: 'file-ref', required: true } },
+    });
+    await stack.create(PHOTO, { coverFileId: F2 });
+  });
+
+  const texts = (result: QueryResult) =>
+    result.records.map((r) => r.content.text ?? r.typeId).sort();
+
+  test('a label and a fileId together match one association', async () => {
+    const result = await stack.query({ filter: { attachment: { label: 'cover', fileId: F2 } } });
+    expect(texts(result)).toEqual(['cover F2']);
+  });
+
+  test('a label alone matches every file under it', async () => {
+    const result = await stack.query({ filter: { attachment: { label: 'cover' } } });
+    expect(texts(result)).toEqual(['cover F1, thumb F2', 'cover F2']);
+  });
+
+  test('a fileId alone matches associations only, not file-ref fields', async () => {
+    const result = await stack.query({ filter: { attachment: { fileId: F2 } } });
+    expect(texts(result)).toEqual(['cover F1, thumb F2', 'cover F2']);
+  });
+
+  test('referencesFileId also counts a top-level file-ref field', async () => {
+    const result = await stack.query({ filter: { referencesFileId: F2 } });
+    expect(texts(result)).toEqual([PHOTO, 'cover F1, thumb F2', 'cover F2']);
+  });
+
+  test('a filter naming neither a label nor a fileId is refused', async () => {
+    await expect(
+      stack.query({ filter: { attachment: {} as NonNullable<RecordFilter['attachment']> } }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 });
 

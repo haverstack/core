@@ -422,13 +422,20 @@ export function validateAssociations(
 }
 
 /**
- * Reject a relationship filter that names neither a label nor a target,
- * or whose target is malformed. `RelatedToFilter` promises one half is
- * always present; without the runtime check a filter decoded from a
- * request could arrive empty and match every record carrying any
- * relationship. See docs/spec/data-model.md § Filter.
+ * Reject an association filter that names neither of its halves, or whose
+ * relationship target is malformed. `RelatedToFilter` and `AttachmentFilter`
+ * promise one half is always present; without the runtime check a filter
+ * decoded from a request could arrive empty and match every record carrying
+ * any association of that kind. See docs/spec/data-model.md § Filter.
  */
-export function assertValidRelatedTo(relatedTo: RecordFilter['relatedTo']): void {
+export function assertValidAssociationFilters(filter: RecordFilter | undefined): void {
+  const attachment = filter?.attachment;
+  if (attachment && attachment.label === undefined && attachment.fileId === undefined) {
+    throw new StackBadRequestError(
+      'filter.attachment must name a label, a fileId, or both — "any attachment at all" is not a filter.',
+    );
+  }
+  const relatedTo = filter?.relatedTo;
   if (!relatedTo) return;
   if (relatedTo.label === undefined && relatedTo.target === undefined) {
     throw new StackBadRequestError(

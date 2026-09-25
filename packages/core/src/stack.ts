@@ -93,7 +93,7 @@ import {
 import {
   assertQueryCapabilities,
   assertSortCapability,
-  assertValidRelatedTo,
+  assertValidAssociationFilters,
   assertValidJournalQuery,
   assertValidSort,
   assertAuthorityAssociations,
@@ -1578,7 +1578,7 @@ export class Stack implements StackClient {
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.adapter.capabilities);
-    assertValidRelatedTo(filter?.relatedTo);
+    assertValidAssociationFilters(filter);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
@@ -2242,7 +2242,7 @@ export class Stack implements StackClient {
     // must find its attachments intact on undelete or relisting. See
     // docs/spec/attachments.md § Deleting attachments.
     const refResult = await this.query({
-      filter: { attachmentFileId: fileId, includeDeleted: true, includeUnlisted: true },
+      filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
       limit: 1,
     });
     if (refResult.records.length > 0) {
@@ -2307,7 +2307,7 @@ export class Stack implements StackClient {
 
     for (const fileId of candidateFileIds) {
       const refResult = await this.query({
-        filter: { attachmentFileId: fileId, includeDeleted: true, includeUnlisted: true },
+        filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
         limit: 1,
       });
       if (refResult.records.length > 0) continue;
@@ -2671,7 +2671,7 @@ export class Stack implements StackClient {
       id: `${SYSTEM_TYPES.ATTACHMENT}@1`,
       name: 'Attachment',
       schema: {
-        // Deliberately `string`, not `file-ref`: attachmentFileId matching
+        // Deliberately `string`, not `file-ref`: referencesFileId matching
         // (deleteAttachment()/collectAttachmentGarbage()'s reference scan) is
         // schema-driven, so a `file-ref` fileId here would make every
         // metadata record its own file's reference — nothing would ever be

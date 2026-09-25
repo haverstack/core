@@ -237,19 +237,27 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     }
   }
 
-  if (f.hasAttachment) {
-    conditions.push(hasAssociation('attachment', ['a.label = ?']));
-    params.push(f.hasAttachment);
+  // Both halves in one subquery, so they match the same association.
+  if (f.attachment) {
+    const clauses: string[] = [];
+    if (f.attachment.label !== undefined) {
+      clauses.push('a.label = ?');
+      params.push(f.attachment.label);
+    }
+    if (f.attachment.fileId !== undefined) {
+      clauses.push('a.file_id = ?');
+      params.push(f.attachment.fileId);
+    }
+    conditions.push(hasAssociation('attachment', clauses));
   }
 
-  // Attachment file ID filter — find records that reference a specific file,
-  // either via an attachment association or a top-level file-ref content field
-  if (f.attachmentFileId) {
+  // A reference is an attachment association or a top-level file-ref field.
+  if (f.referencesFileId) {
     conditions.push(
       `(${hasAssociation('attachment', ['a.file_id = ?'])}
         OR r.id IN (SELECT ci.record_id FROM content_index ci WHERE ci.file_id = ?))`,
     );
-    params.push(f.attachmentFileId, f.attachmentFileId);
+    params.push(f.referencesFileId, f.referencesFileId);
   }
 
   // Relationship filter — each clause is an optional pattern, so a bare
