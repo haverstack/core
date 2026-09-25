@@ -64,7 +64,7 @@ function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
-  await stack.defineType(NOTE, 'Note', { text: { kind: 'text' } });
+  await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
 });
 
 const COMMENT = 'com.example.test/comment@1';
@@ -903,7 +903,11 @@ describe('ScopedStack — versions', () => {
   describe('restoreVersion — reference-reconveyance gating', () => {
     test('rejects restoring a file-ref content field the requester can no longer access', async () => {
       const PHOTO_NOTE = 'com.example.test/photo-note-restore@1';
-      await stack.defineType(PHOTO_NOTE, 'Photo note', { coverFileId: { kind: 'file-ref' } });
+      await stack.defineType({
+        id: PHOTO_NOTE,
+        name: 'Photo note',
+        schema: { coverFileId: { kind: 'file-ref' } },
+      });
       await stack.grantType(PHOTO_NOTE, {
         actions: ['read-any', 'update-any'],
         grantee: { kind: 'entity', entityId: MEMBER },
@@ -936,7 +940,11 @@ describe('ScopedStack — versions', () => {
     const UNREACHABLE_FILE = 'a'.repeat(64);
 
     const photoRecordWithUnreachableSnapshot = async () => {
-      await stack.defineType(PHOTO_NOTE, 'Photo note', { coverFileId: { kind: 'file-ref' } });
+      await stack.defineType({
+        id: PHOTO_NOTE,
+        name: 'Photo note',
+        schema: { coverFileId: { kind: 'file-ref' } },
+      });
       await stack.grantType(PHOTO_NOTE, {
         actions: ['read-any', 'update-any'],
         grantee: { kind: 'entity', entityId: MEMBER },
@@ -1138,7 +1146,11 @@ describe('ScopedStack.query', () => {
 
 describe('ScopedStack.create', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
   });
 
   test('owner can always create records via ScopedStack', async () => {
@@ -1271,7 +1283,11 @@ describe('ScopedStack.create', () => {
 
 describe('ScopedStack.create — client-supplied id', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -1308,8 +1324,12 @@ describe('ScopedStack.create — client-supplied id', () => {
   test('idTimestampSkewMs: null on the Stack disables the skew check for grantees', async () => {
     const permissiveAdapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
-    await permissiveStack.defineType(COMMENT, 'Comment', {
-      text: { kind: 'text', required: true },
+    await permissiveStack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: {
+        text: { kind: 'text', required: true },
+      },
     });
     await permissiveStack.grantType(COMMENT, {
       actions: ['create'],
@@ -1338,7 +1358,11 @@ describe('ScopedStack.create — client-supplied id', () => {
 
 describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the owner acting alone', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -1462,7 +1486,11 @@ describe('ScopedStack.create — createdAt/updatedAt refused to anyone but the o
 
 describe('ScopedStack — grant-based read', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
   });
 
   test('read-any: entity can read private records of the granted type', async () => {
@@ -1550,12 +1578,12 @@ describe('ScopedStack — grant-based read', () => {
 
   test('a grant on comment@1 covers comment@2 records — version bump does not orphan it', async () => {
     const COMMENT_V2 = 'com.example.test/comment@2';
-    await stack.defineType(
-      COMMENT_V2,
-      'Comment',
-      { text: { kind: 'text', required: true }, edited: { kind: 'boolean' } },
-      { migratesFrom: COMMENT },
-    );
+    await stack.defineType({
+      id: COMMENT_V2,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true }, edited: { kind: 'boolean' } },
+      migratesFrom: COMMENT,
+    });
     await stack.grantType(COMMENT, {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -1592,7 +1620,11 @@ describe('ScopedStack — grant-based read', () => {
 
 describe('ScopedStack — group-targeted grants', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
   });
 
   test('group member can create via a group-targeted create grant', async () => {
@@ -1961,7 +1993,11 @@ describe('ScopedStack — group-targeted grants', () => {
 
 describe('ScopedStack — grant-based update/delete', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
   });
 
   test('update-own: entity can update a record they authored', async () => {
@@ -2394,13 +2430,17 @@ describe('ScopedStack.commitMigration', () => {
   const COMMENT_V2 = 'com.example.test/comment@2';
 
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
-    await stack.defineType(
-      COMMENT_V2,
-      'Comment',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: COMMENT },
-    );
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
+    await stack.defineType({
+      id: COMMENT_V2,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: COMMENT,
+    });
   });
 
   test('anonymous requester cannot migrate a record', async () => {
@@ -3083,8 +3123,12 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
 
   test('requester who can read a record with a file-ref field referencing the file can download', async () => {
     adapter.blobs.set(FILE_ID, { data: new Uint8Array([1]), modifiedAt: new Date() });
-    await stack.defineType(PHOTO_NOTE, 'Photo note', {
-      coverFileId: { kind: 'file-ref', required: true },
+    await stack.defineType({
+      id: PHOTO_NOTE,
+      name: 'Photo note',
+      schema: {
+        coverFileId: { kind: 'file-ref', required: true },
+      },
     });
     await stack.grantType(PHOTO_NOTE, {
       actions: ['read-any'],
@@ -3097,8 +3141,12 @@ describe('ScopedStack.getAttachment — file-ref content fields', () => {
   });
 
   test('a plain string field holding the same-looking fileId conveys no access', async () => {
-    await stack.defineType(PHOTO_NOTE_PLAIN, 'Photo note (plain)', {
-      coverFileId: { kind: 'string', required: true },
+    await stack.defineType({
+      id: PHOTO_NOTE_PLAIN,
+      name: 'Photo note (plain)',
+      schema: {
+        coverFileId: { kind: 'string', required: true },
+      },
     });
     await stack.grantType(PHOTO_NOTE_PLAIN, {
       actions: ['read-any'],
@@ -3943,7 +3991,11 @@ describe('Permission — an anyone element labelled otherwise reaches nobody', (
 
 describe('ScopedStack.create — attachment association gating', () => {
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -4145,7 +4197,11 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
     expect(bytes).toEqual(data);
 
     // ...and they can reference it from a new record.
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -4239,7 +4295,11 @@ describe('ScopedStack.create — relationship association and parentId gating', 
   let unreadableNote: StackRecord;
 
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: COMMENT,
+      name: 'Comment',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -4720,9 +4780,13 @@ describe('ScopedStack — file-ref content field gating', () => {
   const FILE_ID = 'c'.repeat(64);
 
   beforeEach(async () => {
-    await stack.defineType(PHOTO_NOTE, 'Photo note', {
-      coverFileId: { kind: 'file-ref' },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: PHOTO_NOTE,
+      name: 'Photo note',
+      schema: {
+        coverFileId: { kind: 'file-ref' },
+        title: { kind: 'string' },
+      },
     });
     await stack.grantType(PHOTO_NOTE, {
       actions: ['create', 'read-own', 'update-own'],
@@ -4808,7 +4872,7 @@ describe('ScopedStack — delegation', () => {
     });
 
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
+    await stack.defineType({ id: COMMENT, name: 'Comment', schema: { text: { kind: 'text' } } });
   });
 
   // Taking the session whole is what a server should reach for: both
@@ -5619,7 +5683,7 @@ describe('ScopedStack — a delegated appId must match the registered _app card'
   const APP = 'did:key:z6MkApp';
 
   beforeEach(async () => {
-    await stack.defineType(COMMENT, 'Comment', { text: { kind: 'text' } });
+    await stack.defineType({ id: COMMENT, name: 'Comment', schema: { text: { kind: 'text' } } });
     await stack.grantType(COMMENT, {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: APP },

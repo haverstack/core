@@ -18,14 +18,18 @@ JSON Feed is the closest ancestor — its item shape is nearly this type field-f
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/article@1', 'Article', {
-  title: { kind: 'string', required: true },
-  text: { kind: 'text', required: true },
-  format: { kind: 'string' },
-  summary: { kind: 'text' },
-  url: { kind: 'string' },
-  author: { kind: 'string' },
-  publishedAt: { kind: 'date' },
+await stack.defineType({
+  id: 'org.haverstack/article@1',
+  name: 'Article',
+  schema: {
+    title: { kind: 'string', required: true },
+    text: { kind: 'text', required: true },
+    format: { kind: 'string' },
+    summary: { kind: 'text' },
+    url: { kind: 'string' },
+    author: { kind: 'string' },
+    publishedAt: { kind: 'date' },
+  },
 });
 ```
 

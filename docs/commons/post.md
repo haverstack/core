@@ -22,10 +22,14 @@ boundary with `note` (kept), `message` (sent to a bounded audience), and `articl
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/post@1', 'Post', {
-  text: { kind: 'text', required: true },
-  format: { kind: 'string' },
-  url: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/post@1',
+  name: 'Post',
+  schema: {
+    text: { kind: 'text', required: true },
+    format: { kind: 'string' },
+    url: { kind: 'string' },
+  },
 });
 ```
 

@@ -23,8 +23,16 @@ const collector = () => {
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
-  await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
-  await stack.defineType(OTHER, 'Memo', { text: { kind: 'text', required: true } });
+  await stack.defineType({
+    id: NOTE,
+    name: 'Note',
+    schema: { text: { kind: 'text', required: true } },
+  });
+  await stack.defineType({
+    id: OTHER,
+    name: 'Memo',
+    schema: { text: { kind: 'text', required: true } },
+  });
 });
 
 // -------------------------------------------------------
@@ -73,9 +81,13 @@ describe('every mutation that bumps a version emits exactly one event', () => {
   });
 
   test('a migration commit reports `migrate`', async () => {
-    await stack.defineType(NOTE_V2, 'Note', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     const note = await stack.create(NOTE, { text: 'hello' });
     const { seen, handler } = collector();
@@ -224,7 +236,11 @@ describe('every record emits, including the ones a query hides', () => {
   });
 
   test('migrateAll fans out — one event per migrated record, no batch frame', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     stack.registerMigration({ from: NOTE, to: NOTE_V2, migrate: (c) => c });
     const ids = [];
     for (let i = 0; i < 3; i++) ids.push((await stack.create(NOTE, { text: `n${i}` })).id);
@@ -624,7 +640,11 @@ describe('a purged frame carries nothing about the record', () => {
 
 describe('filtering is exact', () => {
   test('typeId matches exactly, as it does in query()', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
@@ -635,7 +655,11 @@ describe('filtering is exact', () => {
   });
 
   test('baseId matches the whole family, so a version bump orphans nothing', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { baseId: 'com.example.test/note' } });
 
@@ -647,7 +671,11 @@ describe('filtering is exact', () => {
   });
 
   test('one filter selects the same records in query() and subscribe()', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const filter = { typeId: NOTE };
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter });
@@ -660,7 +688,11 @@ describe('filtering is exact', () => {
   });
 
   test('a migration reaches subscribers of the type it left and the type it entered', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const note = await stack.create(NOTE, { text: 'a' });
     const left = collector();
     const entered = collector();
@@ -687,7 +719,11 @@ describe('filtering is exact', () => {
   });
 
   test('a restore that changes the type reaches both types', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const note = await stack.create(NOTE, { text: 'a' });
     await stack.commitMigration(note.id, NOTE_V2, { text: 'a' });
     const left = collector();
@@ -699,7 +735,11 @@ describe('filtering is exact', () => {
   });
 
   test('a write that keeps the type reaches only that type', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const note = await stack.create(NOTE, { text: 'a' });
     await stack.patchContent(note.id, { text: 'b' });
     const other = collector();

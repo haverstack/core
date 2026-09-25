@@ -20,36 +20,44 @@ Condorcet/approval balloting literature for the method vocabulary.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/poll@1', 'Poll', {
-  question: { kind: 'string', required: true },
-  options: {
-    kind: 'array',
-    required: true,
-    items: {
-      kind: 'object',
-      properties: {
-        id: { kind: 'string', required: true },
-        label: { kind: 'string', required: true },
-        startsAt: { kind: 'date' },
-        endsAt: { kind: 'date' },
+await stack.defineType({
+  id: 'org.haverstack/poll@1',
+  name: 'Poll',
+  schema: {
+    question: { kind: 'string', required: true },
+    options: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          id: { kind: 'string', required: true },
+          label: { kind: 'string', required: true },
+          startsAt: { kind: 'date' },
+          endsAt: { kind: 'date' },
+        },
       },
     },
+    method: { kind: 'string' },
+    closesAt: { kind: 'date' },
+    details: { kind: 'text' },
   },
-  method: { kind: 'string' },
-  closesAt: { kind: 'date' },
-  details: { kind: 'text' },
 });
 
-await stack.defineType('org.haverstack/vote@1', 'Vote', {
-  pollId: { kind: 'record-ref', required: true },
-  choices: {
-    kind: 'array',
-    required: true,
-    items: {
-      kind: 'object',
-      properties: {
-        optionId: { kind: 'string', required: true },
-        response: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/vote@1',
+  name: 'Vote',
+  schema: {
+    pollId: { kind: 'record-ref', required: true },
+    choices: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          optionId: { kind: 'string', required: true },
+          response: { kind: 'string' },
+        },
       },
     },
   },

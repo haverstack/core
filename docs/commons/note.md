@@ -15,10 +15,14 @@ notes). For the boundary with `article` (published) and `message` (sent), see
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/note@1', 'Note', {
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
-  format: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/note@1',
+  name: 'Note',
+  schema: {
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+    format: { kind: 'string' },
+  },
 });
 ```
 

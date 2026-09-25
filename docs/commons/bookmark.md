@@ -10,10 +10,14 @@ them is the same: a URL plus optional human annotation.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/bookmark@1', 'Bookmark', {
-  url: { kind: 'string', required: true },
-  title: { kind: 'string' },
-  description: { kind: 'text' },
+await stack.defineType({
+  id: 'org.haverstack/bookmark@1',
+  name: 'Bookmark',
+  schema: {
+    url: { kind: 'string', required: true },
+    title: { kind: 'string' },
+    description: { kind: 'text' },
+  },
 });
 ```
 

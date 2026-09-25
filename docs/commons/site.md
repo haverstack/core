@@ -20,11 +20,15 @@ is the owner's, not any one site's.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/site@1', 'Site', {
-  title: { kind: 'string', required: true },
-  baseUrl: { kind: 'string', required: true },
-  description: { kind: 'text' },
-  handle: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/site@1',
+  name: 'Site',
+  schema: {
+    title: { kind: 'string', required: true },
+    baseUrl: { kind: 'string', required: true },
+    description: { kind: 'text' },
+    handle: { kind: 'string' },
+  },
 });
 ```
 

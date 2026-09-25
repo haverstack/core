@@ -25,10 +25,14 @@ Basecamp's message board.
 ## Schema
 
 ```ts
-await stack.defineType('org.haverstack/message@1', 'Message', {
-  text: { kind: 'text', required: true },
-  subject: { kind: 'string' },
-  format: { kind: 'string' },
+await stack.defineType({
+  id: 'org.haverstack/message@1',
+  name: 'Message',
+  schema: {
+    text: { kind: 'text', required: true },
+    subject: { kind: 'string' },
+    format: { kind: 'string' },
+  },
 });
 ```
 

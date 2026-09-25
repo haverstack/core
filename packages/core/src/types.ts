@@ -20,6 +20,9 @@ export type RecordId = string;
 /** Namespaced, versioned type identifier e.g. "com.example.myapp/note@2" */
 export type TypeId = string;
 
+/** A type family: a TypeId without its version, e.g. "com.example.myapp/note" */
+export type BaseId = string;
+
 /** Opaque file identifier returned by putAttachment */
 export type FileId = string;
 
@@ -339,7 +342,7 @@ export type TypeSchema = {
 
 export type StackType = {
   id: TypeId; // e.g. "com.example.myapp/note@2"
-  baseId: string; // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
+  baseId: BaseId; // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
   version: number;
   name: string; // Human-readable label
   schema: TypeSchema;
@@ -557,7 +560,7 @@ export type RecordFilter = {
    * it works regardless of which versions happen to exist. Combined with
    * typeId (if both given) as an intersection.
    */
-  baseId?: string | string[];
+  baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only
   appId?: AppId | AppId[];
   /** Matches the record's author — never the latest actor, which isn't filterable. */

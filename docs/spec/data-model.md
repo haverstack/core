@@ -220,7 +220,12 @@ Which arms a `ScopedStack` gates on creation, and why the rest are ungated rathe
 
 A **Type** defines the schema for the `content` field of a Record. Types are identified by a **namespaced, versioned string ID** controlled by the app author — the app is the real coordination mechanism between stacks, so Type identity is scoped to the app that defined it.
 
+A **type family** is every version of one Type, named by its **`BaseId`**: the `TypeId` with its `@version` suffix stripped. An API that takes only a family — `RecordFilter.baseId`, `migrateAll(baseId)` — names it `baseId` and types it `BaseId`; the type-level grant verbs, which accept either, take `typeOrBaseId: TypeId | BaseId` (see [Access control](./access-control.md#type-level-grants)).
+
 ```ts
+type TypeId = string; // e.g. "com.example.myapp/note@2"
+type BaseId = string; // e.g. "com.example.myapp/note"
+
 type ScalarFieldKind =
   | 'string'
   | 'number'
@@ -242,15 +247,33 @@ type TypeSchema = {
 };
 
 type StackType = {
-  id: string; // Versioned identifier, e.g. "com.example.myapp/note@2"
-  baseId: string; // Derived from id by stripping version suffix, e.g. "com.example.myapp/note"
+  id: TypeId;
+  baseId: BaseId; // Derived from id by stripping the version suffix
   version: number; // Incrementing integer
   name: string; // Human-readable label, e.g. "Note"
   schema: TypeSchema;
   schemaHash: string; // SHA-256 of canonical (minified, alpha-sorted) schema
-  migratesFrom?: string; // e.g. "com.example.myapp/note@1" — documents lineage
+  migratesFrom?: TypeId; // e.g. "com.example.myapp/note@1" — documents lineage
   createdAt: Date;
 };
+
+type DefineTypeOptions = {
+  id: TypeId;
+  name: string;
+  schema: TypeSchema;
+  migratesFrom?: TypeId;
+};
+```
+
+**`defineType()` takes one `DefineTypeOptions` object**, the same argument style as `registerMigration({ from, to, migrate })`. `id` and `name` are both strings, so naming them keeps a call from swapping them silently. `baseId`, `version`, `schemaHash` and `createdAt` are derived, never supplied.
+
+```ts
+await stack.defineType({
+  id: 'com.example.myapp/note@2',
+  name: 'Note',
+  schema: { text: { kind: 'text', required: true } },
+  migratesFrom: 'com.example.myapp/note@1',
+});
 ```
 
 **Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)). **`open: true` declares the container open** — a list or object whose interior the schema does not describe, and the one way to store content the schema cannot name. A container declares either its interior or `open`, never neither: opacity is a claim the schema makes, not something inferred from a missing `items`/`properties`, so a schema that forgets to describe its elements is a mistake rather than a silently unchecked field. Query reach is unaffected: a path still walks into an open container, since the query engine reads the content rather than the schema. See [Undeclared content fields](#undeclared-content-fields).
@@ -271,7 +294,7 @@ This matters because `defineType()` takes a `TypeSchema` but a schema arriving a
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, and no container [opened or closed](#undeclared-content-fields). An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType('...@n+1', ...)` + `registerMigration()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, and no container [opened or closed](#undeclared-content-fields). An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -416,8 +439,8 @@ Queries are expressed as a `Query` object passed to `stack.query()`. All adapter
 ```ts
 type Filter = {
   // Native fields
-  typeId?: string | string[];
-  baseId?: string | string[]; // matches every version of a type family
+  typeId?: TypeId | TypeId[];
+  baseId?: BaseId | BaseId[]; // matches every version of a type family
   parentId?: string | null; // null = root records only
   appId?: string | string[];
   createdBy?: { subjectId?: string | string[]; principalId?: string | string[] }; // the author, never the latest actor

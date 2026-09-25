@@ -56,6 +56,7 @@ export type { StackErrorCode } from './errors.js';
 export type {
   RecordId,
   TypeId,
+  BaseId,
   FileId,
   EntityId,
   AppId,

@@ -62,8 +62,12 @@ beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
   stack = await Stack.open(adapter);
 
-  await stack.defineType(NOTE_V1, 'Note', {
-    text: { kind: 'text', required: true },
+  await stack.defineType({
+    id: NOTE_V1,
+    name: 'Note',
+    schema: {
+      text: { kind: 'text', required: true },
+    },
   });
 });
 
@@ -173,11 +177,15 @@ describe('Stack.open', () => {
     test('treats an owner record migrated to a later type version as existing', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
       const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
-      await s.defineType('_entity@2', 'Entity', {
-        did: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        handle: { kind: 'string' },
-        pronouns: { kind: 'string' },
+      await s.defineType({
+        id: '_entity@2',
+        name: 'Entity',
+        schema: {
+          did: { kind: 'string', required: true },
+          name: { kind: 'string', required: true },
+          handle: { kind: 'string' },
+          pronouns: { kind: 'string' },
+        },
       });
       s.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
       await s.migrateAll('_entity');
@@ -239,11 +247,15 @@ describe('Stack.open', () => {
     // family, so the lookup must too: filtering by typeId '_entity@1' alone
     // would miss a card migrated to '_entity@2'.
     test('matches a card migrated to a later type version', async () => {
-      await stack.defineType('_entity@2', 'Entity', {
-        did: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        handle: { kind: 'string' },
-        pronouns: { kind: 'string' },
+      await stack.defineType({
+        id: '_entity@2',
+        name: 'Entity',
+        schema: {
+          did: { kind: 'string', required: true },
+          name: { kind: 'string', required: true },
+          handle: { kind: 'string' },
+          pronouns: { kind: 'string' },
+        },
       });
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
       stack.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
@@ -311,19 +323,19 @@ describe('defineType', () => {
   });
 
   test('throws for invalid TypeId format', async () => {
-    await expect(stack.defineType('no-version', 'Bad', {})).rejects.toThrow();
+    await expect(stack.defineType({ id: 'no-version', name: 'Bad', schema: {} })).rejects.toThrow();
   });
 
   test('stores migratesFrom when provided', async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
     const type = await stack.getType(NOTE_V2);
     expect(type?.migratesFrom).toBe(NOTE_V1);
   });
@@ -335,15 +347,23 @@ describe('defineType', () => {
   test('redefining with an identical schema is a no-op — createdAt does not churn', async () => {
     const before = await stack.getType(NOTE_V1);
     await new Promise((resolve) => setTimeout(resolve, 5));
-    await stack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const after = await stack.getType(NOTE_V1);
     expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
   });
 
   test('a name-only change persists, preserving createdAt', async () => {
     const before = await stack.getType(NOTE_V1);
-    await stack.defineType(NOTE_V1, 'Renamed Note', {
-      text: { kind: 'text', required: true },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Renamed Note',
+      schema: {
+        text: { kind: 'text', required: true },
+      },
     });
     const after = await stack.getType(NOTE_V1);
     expect(after?.name).toBe('Renamed Note');
@@ -352,9 +372,13 @@ describe('defineType', () => {
 
   test('adding a new optional field in place is accepted, preserving createdAt', async () => {
     const before = await stack.getType(NOTE_V1);
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     const after = await stack.getType(NOTE_V1);
     expect(after?.schema.title).toEqual({ kind: 'string' });
@@ -364,14 +388,22 @@ describe('defineType', () => {
 
   test('adding a new optional field nested inside an existing object is accepted', async () => {
     const nested = 'com.example.test/nested@1';
-    await stack.defineType(nested, 'Nested', {
-      author: { kind: 'object', required: true, properties: { name: { kind: 'string' } } },
+    await stack.defineType({
+      id: nested,
+      name: 'Nested',
+      schema: {
+        author: { kind: 'object', required: true, properties: { name: { kind: 'string' } } },
+      },
     });
-    await stack.defineType(nested, 'Nested', {
-      author: {
-        kind: 'object',
-        required: true,
-        properties: { name: { kind: 'string' }, email: { kind: 'string' } },
+    await stack.defineType({
+      id: nested,
+      name: 'Nested',
+      schema: {
+        author: {
+          kind: 'object',
+          required: true,
+          properties: { name: { kind: 'string' }, email: { kind: 'string' } },
+        },
       },
     });
     const type = await stack.getType(nested);
@@ -380,40 +412,60 @@ describe('defineType', () => {
 
   test('adding a new required field is rejected with StackSchemaDriftError', async () => {
     await expect(
-      stack.defineType(NOTE_V1, 'Note', {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string', required: true },
+      stack.defineType({
+        id: NOTE_V1,
+        name: 'Note',
+        schema: {
+          text: { kind: 'text', required: true },
+          title: { kind: 'string', required: true },
+        },
       }),
     ).rejects.toThrow(StackSchemaDriftError);
   });
 
   test('removing a field is rejected with StackSchemaDriftError', async () => {
-    await stack.defineType(NOTE_V2, 'Note', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     await expect(
-      stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } }),
+      stack.defineType({
+        id: NOTE_V2,
+        name: 'Note',
+        schema: { text: { kind: 'text', required: true } },
+      }),
     ).rejects.toThrow(StackSchemaDriftError);
   });
 
   test('changing a field kind is rejected with StackSchemaDriftError, even text/string', async () => {
     await expect(
-      stack.defineType(NOTE_V1, 'Note', { text: { kind: 'string', required: true } }),
+      stack.defineType({
+        id: NOTE_V1,
+        name: 'Note',
+        schema: { text: { kind: 'string', required: true } },
+      }),
     ).rejects.toThrow(StackSchemaDriftError);
   });
 
   test('flipping an existing field required is rejected with StackSchemaDriftError', async () => {
-    await expect(stack.defineType(NOTE_V1, 'Note', { text: { kind: 'text' } })).rejects.toThrow(
-      StackSchemaDriftError,
-    );
+    await expect(
+      stack.defineType({ id: NOTE_V1, name: 'Note', schema: { text: { kind: 'text' } } }),
+    ).rejects.toThrow(StackSchemaDriftError);
   });
 
   test('StackSchemaDriftError names the specific violation', async () => {
     try {
-      await stack.defineType(NOTE_V1, 'Note', {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string', required: true },
+      await stack.defineType({
+        id: NOTE_V1,
+        name: 'Note',
+        schema: {
+          text: { kind: 'text', required: true },
+          title: { kind: 'string', required: true },
+        },
       });
       expect.unreachable();
     } catch (e) {
@@ -431,9 +483,13 @@ describe('defineType', () => {
   test('an illegal redefinition does not overwrite the stored type', async () => {
     const before = await stack.getType(NOTE_V1);
     await expect(
-      stack.defineType(NOTE_V1, 'Note', {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string', required: true },
+      stack.defineType({
+        id: NOTE_V1,
+        name: 'Note',
+        schema: {
+          text: { kind: 'text', required: true },
+          title: { kind: 'string', required: true },
+        },
       }),
     ).rejects.toThrow(StackSchemaDriftError);
     const after = await stack.getType(NOTE_V1);
@@ -446,7 +502,11 @@ describe('defineType', () => {
     // the same types on the same underlying storage.
     const before = await stack.getType(NOTE_V1);
     const stackB = await Stack.open(adapter);
-    await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await stackB.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const after = await stackB.getType(NOTE_V1);
     expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
   });
@@ -667,7 +727,11 @@ describe('create — backdating (createdAt/updatedAt)', () => {
   test('idTimestampSkewMs: null disables the id/createdAt consistency check too', async () => {
     const permissiveAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
-    await permissiveStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await permissiveStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     const createdAt = new Date('2020-06-15T12:00:00.000Z');
     const id = idWithTimestamp(new Date('2000-01-01').valueOf());
@@ -842,7 +906,11 @@ describe('type cache', () => {
   });
 
   test('defineType() populates the cache — a later create() never calls adapter.getType()', async () => {
-    await stack.defineType(NOTE_V2, 'Note', { text: { kind: 'text', required: true } });
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const getTypeSpy = vi.spyOn(adapter, 'getType');
 
     await stack.create(NOTE_V2, { text: 'hello' });
@@ -870,11 +938,15 @@ describe('query — content filter null semantics', () => {
   // Additive on top of the shared Note: these tests store shapes the query
   // engine has to walk, and content outside the schema is not storable.
   beforeEach(async () => {
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      priority: { kind: 'number' },
-      a: { kind: 'object', open: true },
-      n: { kind: 'object', open: true },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        priority: { kind: 'number' },
+        a: { kind: 'object', open: true },
+        n: { kind: 'object', open: true },
+      },
     });
   });
 
@@ -934,15 +1006,19 @@ describe('query — content filter null semantics', () => {
 
 describe('query — contentPresent', () => {
   beforeEach(async () => {
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      publishedAt: { kind: 'date' },
-      a: { kind: 'number' },
-      b: { kind: 'number' },
-      // Open: these hold nulls and bare objects, which is the content
-      // whose presence semantics these tests are about.
-      emails: { kind: 'array', open: true },
-      tags: { kind: 'array', open: true },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        publishedAt: { kind: 'date' },
+        a: { kind: 'number' },
+        b: { kind: 'number' },
+        // Open: these hold nulls and bare objects, which is the content
+        // whose presence semantics these tests are about.
+        emails: { kind: 'array', open: true },
+        tags: { kind: 'array', open: true },
+      },
     });
   });
 
@@ -1026,9 +1102,13 @@ describe('query — capability fail-loud', () => {
     const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await incapableStack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      priority: { kind: 'number' },
+    await incapableStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        priority: { kind: 'number' },
+      },
     });
     await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
 
@@ -1041,9 +1121,13 @@ describe('query — capability fail-loud', () => {
     const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await incapableStack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      priority: { kind: 'number' },
+    await incapableStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        priority: { kind: 'number' },
+      },
     });
     await incapableStack.create(NOTE_V1, { text: 'has priority', priority: 1 });
 
@@ -1056,7 +1140,11 @@ describe('query — capability fail-loud', () => {
     const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await incapableStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     await incapableStack.create(NOTE_V1, { text: 'plain' });
 
     const result = await incapableStack.query({ filter: { typeId: NOTE_V1 } });
@@ -1140,12 +1228,20 @@ describe('query — sorting by a content field', () => {
     (await stack.query(query)).records.map((r) => r.content.title);
 
   beforeEach(async () => {
-    await stack.defineType(ARTICLE, 'Article', {
-      title: { kind: 'string', required: true },
-      publishedAt: { kind: 'date' },
+    await stack.defineType({
+      id: ARTICLE,
+      name: 'Article',
+      schema: {
+        title: { kind: 'string', required: true },
+        publishedAt: { kind: 'date' },
+      },
     });
-    await stack.defineType(NUMBERED, 'Numbered', {
-      title: { kind: 'string', required: true },
+    await stack.defineType({
+      id: NUMBERED,
+      name: 'Numbered',
+      schema: {
+        title: { kind: 'string', required: true },
+      },
     });
   });
 
@@ -1191,13 +1287,21 @@ describe('query — sorting by a content field', () => {
   });
 
   test('across types declaring one field name differently, numbers precede text', async () => {
-    await stack.defineType('com.example.test/ranked@1', 'Ranked', {
-      title: { kind: 'string', required: true },
-      key: { kind: 'number' },
+    await stack.defineType({
+      id: 'com.example.test/ranked@1',
+      name: 'Ranked',
+      schema: {
+        title: { kind: 'string', required: true },
+        key: { kind: 'number' },
+      },
     });
-    await stack.defineType('com.example.test/named@1', 'Named', {
-      title: { kind: 'string', required: true },
-      key: { kind: 'string' },
+    await stack.defineType({
+      id: 'com.example.test/named@1',
+      name: 'Named',
+      schema: {
+        title: { kind: 'string', required: true },
+        key: { kind: 'string' },
+      },
     });
     await stack.create('com.example.test/named@1', { title: 'text', key: 'aaa' });
     await stack.create('com.example.test/ranked@1', { title: 'number', key: 2 });
@@ -1248,9 +1352,13 @@ describe('query — sorting by a content field', () => {
 
 describe('update', () => {
   test('merges partial content with existing', async () => {
-    await stack.defineType(NOTE_V2, 'Note', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
     const updated = await stack.patchContent(record.id, { title: 'Updated' });
@@ -1258,9 +1366,13 @@ describe('update', () => {
   });
 
   test('null value removes an optional field', async () => {
-    await stack.defineType(NOTE_V2, 'Note', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     const record = await stack.create(NOTE_V2, { text: 'hello', title: 'My Note' });
     const updated = await stack.patchContent(record.id, { title: null });
@@ -1638,15 +1750,15 @@ describe('Stack.restoreVersion — containment', () => {
 
 describe('records at rest', () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
 
     stack.registerMigration({
       from: NOTE_V1,
@@ -1693,15 +1805,15 @@ describe('records at rest', () => {
 
 describe('query — baseId filter', () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
   });
 
   test('matches records across every version of the family, including not-yet-migrated ones', async () => {
@@ -1731,8 +1843,12 @@ describe('query — baseId filter', () => {
   });
 
   test('accepts an array of baseIds', async () => {
-    await stack.defineType('com.example.test/other@1', 'Other', {
-      text: { kind: 'text', required: true },
+    await stack.defineType({
+      id: 'com.example.test/other@1',
+      name: 'Other',
+      schema: {
+        text: { kind: 'text', required: true },
+      },
     });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const other = await stack.create('com.example.test/other@1', { text: 'other' });
@@ -1748,15 +1864,15 @@ describe('query — baseId filter', () => {
 
 describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
 
     stack.registerMigration({
       from: NOTE_V1,
@@ -1791,8 +1907,12 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
   test('a single-version type with no migration history is trivially "latest" — no throw', async () => {
     const unmigratableType = 'com.example.test/other@1';
-    await stack.defineType(unmigratableType, 'Other', {
-      text: { kind: 'text', required: true },
+    await stack.defineType({
+      id: unmigratableType,
+      name: 'Other',
+      schema: {
+        text: { kind: 'text', required: true },
+      },
     });
     const record = await stack.create(unmigratableType, { text: 'hello' });
     const fetched = await stack.get(record.id, { presentAt: 'latest' });
@@ -1802,19 +1922,27 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   test('stale-writer signal: a record newer than what this app instance has defined throws', async () => {
     // stackA is fully up to date: knows v1 and v2, and writes a v2 record.
     const stackA = await Stack.open(adapter);
-    await stackA.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
-    await stackA.defineType(
-      NOTE_V2,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V1 },
-    );
+    await stackA.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
+    await stackA.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V1,
+    });
     const record = await stackA.create(NOTE_V2, { text: 'hello', title: 'hi' });
 
     // stackB simulates a stale binary sharing the same storage — its own
     // startup code only ever defineType()'d v1, so it has no idea v2 exists.
     const stackB = await Stack.open(adapter);
-    await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await stackB.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     await expect(stackB.get(record.id, { presentAt: 'latest' })).rejects.toThrow(
       StackMigrationError,
@@ -1827,13 +1955,17 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   test('registration gap: an older record with no migration path to a type this app has defined throws', async () => {
     const gapAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
     const gapStack = await Stack.open(gapAdapter);
-    await gapStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
-    await gapStack.defineType(
-      NOTE_V2,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V1 },
-    );
+    await gapStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
+    await gapStack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V1,
+    });
     // Note: no registerMigration() call — this app knows v2 exists but has
     // no path to reach it from a v1 record.
     const record = await gapStack.create(NOTE_V1, { text: 'hello' });
@@ -1844,16 +1976,16 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   });
 
   test('chained migration: v1 → v2 → v3', async () => {
-    await stack.defineType(
-      NOTE_V3,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V3,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
         pinned: { kind: 'boolean' },
       },
-      { migratesFrom: NOTE_V2 },
-    );
+      migratesFrom: NOTE_V2,
+    });
 
     stack.registerMigration({
       from: NOTE_V2,
@@ -1888,15 +2020,15 @@ describe('registerMigration', () => {
 
 describe('migrateAll', () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
 
     stack.registerMigration({
       from: NOTE_V1,
@@ -1905,11 +2037,11 @@ describe('migrateAll', () => {
     });
   });
 
-  test('throws StackMigrationError for an unknown baseTypeId', async () => {
+  test('throws StackMigrationError for an unknown baseId', async () => {
     await expect(stack.migrateAll('com.example.test/noot')).rejects.toThrow(StackMigrationError);
   });
 
-  test('throws with a message that includes the bad baseTypeId', async () => {
+  test('throws with a message that includes the bad baseId', async () => {
     await expect(stack.migrateAll('com.example.test/noot')).rejects.toThrow(
       'com.example.test/noot',
     );
@@ -1960,13 +2092,17 @@ describe('migrateAll', () => {
     // migration instead of the valid one from the outer beforeEach.
     const buggyAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
     const buggyStack = await Stack.open(buggyAdapter);
-    await buggyStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
-    await buggyStack.defineType(
-      NOTE_V2,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V1 },
-    );
+    await buggyStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
+    await buggyStack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V1,
+    });
     buggyStack.registerMigration({
       from: NOTE_V1,
       to: NOTE_V2,
@@ -2005,15 +2141,15 @@ describe('migrateAll', () => {
   // commitMigration(), and neither is entitled to move a DID binding or
   // slip a reserved key past validation.
   test('aborts when a migration function would move a DID binding', async () => {
-    await stack.defineType(
-      '_entity@2',
-      'Entity',
-      {
+    await stack.defineType({
+      id: '_entity@2',
+      name: 'Entity',
+      schema: {
         did: { kind: 'string', required: true },
         name: { kind: 'string', required: true },
       },
-      { migratesFrom: '_entity@1' },
-    );
+      migratesFrom: '_entity@1',
+    });
     stack.registerMigration({
       from: '_entity@1',
       to: '_entity@2',
@@ -2029,12 +2165,12 @@ describe('migrateAll', () => {
   });
 
   test('aborts when a migration function emits a reserved content key', async () => {
-    await stack.defineType(
-      NOTE_V3,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V2 },
-    );
+    await stack.defineType({
+      id: NOTE_V3,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V2,
+    });
     stack.registerMigration({
       from: NOTE_V2,
       to: NOTE_V3,
@@ -2046,16 +2182,16 @@ describe('migrateAll', () => {
   });
 
   test('still carries an unchanged DID binding through a migration', async () => {
-    await stack.defineType(
-      '_entity@2',
-      'Entity',
-      {
+    await stack.defineType({
+      id: '_entity@2',
+      name: 'Entity',
+      schema: {
         did: { kind: 'string', required: true },
         name: { kind: 'string', required: true },
         pronouns: { kind: 'string' },
       },
-      { migratesFrom: '_entity@1' },
-    );
+      migratesFrom: '_entity@1',
+    });
     stack.registerMigration({
       from: '_entity@1',
       to: '_entity@2',
@@ -2075,15 +2211,15 @@ describe('migrateAll', () => {
 
 describe('Stack.commitMigration', () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
   });
 
   test('changes typeId and content together, bumping version', async () => {
@@ -2174,10 +2310,14 @@ describe('Stack.commitMigration — binding fields', () => {
   });
 
   test('allows a migration that carries the same did through', async () => {
-    await stack.defineType('_entity@2', 'Entity', {
-      did: { kind: 'string', required: true },
-      name: { kind: 'string', required: true },
-      pronouns: { kind: 'string' },
+    await stack.defineType({
+      id: '_entity@2',
+      name: 'Entity',
+      schema: {
+        did: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        pronouns: { kind: 'string' },
+      },
     });
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
@@ -2223,12 +2363,16 @@ describe('Stack.commitMigration — _attachment protections', () => {
   });
 
   test('allows a migration that carries the immutable fields through', async () => {
-    await stack.defineType('_attachment@2', 'Attachment', {
-      fileId: { kind: 'string', required: true },
-      mimeType: { kind: 'string', required: true },
-      size: { kind: 'number', required: true },
-      filename: { kind: 'string' },
-      caption: { kind: 'string' },
+    await stack.defineType({
+      id: '_attachment@2',
+      name: 'Attachment',
+      schema: {
+        fileId: { kind: 'string', required: true },
+        mimeType: { kind: 'string', required: true },
+        size: { kind: 'number', required: true },
+        filename: { kind: 'string' },
+        caption: { kind: 'string' },
+      },
     });
     const a = await stack.putAttachment(new Uint8Array([9]), {
       mimeType: 'text/plain',
@@ -2528,11 +2672,15 @@ describe('Stack.commitMigration — _group', () => {
   });
 
   test('allows a _group record to migrate between versions, keeping its roster', async () => {
-    await stack.defineType('_group@2', 'Group', {
-      name: { kind: 'string', required: true },
-      handle: { kind: 'string' },
-      stackUrl: { kind: 'string' },
-      topic: { kind: 'string' },
+    await stack.defineType({
+      id: '_group@2',
+      name: 'Group',
+      schema: {
+        name: { kind: 'string', required: true },
+        handle: { kind: 'string' },
+        stackUrl: { kind: 'string' },
+        topic: { kind: 'string' },
+      },
     });
     const group = await stack.create('_group@1', { name: 'Real Group' });
 
@@ -2551,15 +2699,15 @@ describe('Stack.commitMigration — _group', () => {
 
 describe('restoreVersion — typeId and validation', () => {
   beforeEach(async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      {
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: {
         text: { kind: 'text', required: true },
         title: { kind: 'string' },
       },
-      { migratesFrom: NOTE_V1 },
-    );
+      migratesFrom: NOTE_V1,
+    });
 
     stack.registerMigration({
       from: NOTE_V1,
@@ -2857,12 +3005,12 @@ describe('ifVersion', () => {
   });
 
   test('commitMigration() enforces ifVersion', async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V1 },
-    );
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V1,
+    });
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
 
@@ -3014,7 +3162,11 @@ describe('delete', () => {
     });
 
     test('names a file-ref content field, and names each file once', async () => {
-      await stack.defineType(PHOTO, 'Photo', { coverFileId: { kind: 'file-ref', required: true } });
+      await stack.defineType({
+        id: PHOTO,
+        name: 'Photo',
+        schema: { coverFileId: { kind: 'file-ref', required: true } },
+      });
       const {
         content: { fileId },
       } = await stack.putAttachment(new Uint8Array([4, 5, 6]), { mimeType: 'image/png' });
@@ -3254,9 +3406,13 @@ describe('_config protections', () => {
 
   test('commitMigration() rejects a change to entityId', async () => {
     await seedConfig('owner-123');
-    await stack.defineType('_config@2', 'Config', {
-      entityId: { kind: 'string', required: true },
-      timezone: { kind: 'string' },
+    await stack.defineType({
+      id: '_config@2',
+      name: 'Config',
+      schema: {
+        entityId: { kind: 'string', required: true },
+        timezone: { kind: 'string' },
+      },
     });
 
     await expect(
@@ -3267,9 +3423,13 @@ describe('_config protections', () => {
 
   test('commitMigration() allows the same entityId', async () => {
     await seedConfig('owner-123');
-    await stack.defineType('_config@2', 'Config', {
-      entityId: { kind: 'string', required: true },
-      timezone: { kind: 'string' },
+    await stack.defineType({
+      id: '_config@2',
+      name: 'Config',
+      schema: {
+        entityId: { kind: 'string', required: true },
+        timezone: { kind: 'string' },
+      },
     });
 
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
@@ -4136,9 +4296,13 @@ describe('revokeType', () => {
   });
 
   test('matches by baseId, covering every version of the type family', async () => {
-    await stack.defineType(NOTE_V2, 'Note v2', {
-      text: { kind: 'text', required: true },
-      title: { kind: 'string' },
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note v2',
+      schema: {
+        text: { kind: 'text', required: true },
+        title: { kind: 'string' },
+      },
     });
     await stack.grantType(NOTE_V1, {
       actions: ['create'],
@@ -4951,9 +5115,13 @@ describe('undeclared content fields', () => {
   // `parentId` as content patches it like any other field.
   test('a type that declares the name patches it as the content field it is', async () => {
     const BOOKMARK = 'com.example.test/bookmark@1';
-    await stack.defineType(BOOKMARK, 'Bookmark', {
-      url: { kind: 'string', required: true },
-      parentId: { kind: 'record-ref' },
+    await stack.defineType({
+      id: BOOKMARK,
+      name: 'Bookmark',
+      schema: {
+        url: { kind: 'string', required: true },
+        parentId: { kind: 'record-ref' },
+      },
     });
     const bookmark = await stack.create(BOOKMARK, { url: 'https://example.com' });
 
@@ -4964,12 +5132,12 @@ describe('undeclared content fields', () => {
   });
 
   test('commitMigration() holds its content to the destination schema', async () => {
-    await stack.defineType(
-      NOTE_V2,
-      'Note',
-      { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      { migratesFrom: NOTE_V1 },
-    );
+    await stack.defineType({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+      migratesFrom: NOTE_V1,
+    });
     const record = await stack.create(NOTE_V1, { text: 'hi' });
 
     await expect(
@@ -4979,9 +5147,13 @@ describe('undeclared content fields', () => {
 
   test('an open object is the way to store a shape the schema cannot describe', async () => {
     const BLOB = 'com.example.test/blob@1';
-    await stack.defineType(BLOB, 'Blob', {
-      name: { kind: 'string', required: true },
-      meta: { kind: 'object', open: true },
+    await stack.defineType({
+      id: BLOB,
+      name: 'Blob',
+      schema: {
+        name: { kind: 'string', required: true },
+        meta: { kind: 'object', open: true },
+      },
     });
 
     const record = await stack.create(BLOB, {
@@ -4996,9 +5168,13 @@ describe('undeclared content fields', () => {
   // schema, not from what a content field may be named.
   test('the field-name rule still reaches inside an open object', async () => {
     const BLOB = 'com.example.test/blob@1';
-    await stack.defineType(BLOB, 'Blob', {
-      name: { kind: 'string', required: true },
-      meta: { kind: 'object', open: true },
+    await stack.defineType({
+      id: BLOB,
+      name: 'Blob',
+      schema: {
+        name: { kind: 'string', required: true },
+        meta: { kind: 'object', open: true },
+      },
     });
 
     const content = JSON.parse('{"name": "x", "meta": {"a.b": 1}}') as Record<string, unknown>;
@@ -5051,11 +5227,11 @@ describe('reserved content keys', () => {
     'defineType() refuses a schema declaring %s as a top-level field',
     async (key) => {
       await expect(
-        stack.defineType(
-          'com.example.test/reserved@1',
-          'Reserved',
-          schemaWith(key, { kind: 'string' }),
-        ),
+        stack.defineType({
+          id: 'com.example.test/reserved@1',
+          name: 'Reserved',
+          schema: schemaWith(key, { kind: 'string' }),
+        }),
       ).rejects.toThrow(/cannot be declared as a field name/);
     },
   );
@@ -5066,11 +5242,11 @@ describe('reserved content keys', () => {
   // required field.
   test('a required declaration would be a type no record could satisfy', async () => {
     await expect(
-      stack.defineType(
-        'com.example.test/reserved@1',
-        'Reserved',
-        schemaWith('constructor', { kind: 'string', required: true }),
-      ),
+      stack.defineType({
+        id: 'com.example.test/reserved@1',
+        name: 'Reserved',
+        schema: schemaWith('constructor', { kind: 'string', required: true }),
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -5078,8 +5254,12 @@ describe('reserved content keys', () => {
   // record can actually carry.
   test('a nested declaration is left alone, and the field it names is writable', async () => {
     const NESTED = 'com.example.test/nested-reserved@1';
-    await stack.defineType(NESTED, 'Nested', {
-      meta: { kind: 'object', properties: schemaWith('constructor', { kind: 'string' }) },
+    await stack.defineType({
+      id: NESTED,
+      name: 'Nested',
+      schema: {
+        meta: { kind: 'object', properties: schemaWith('constructor', { kind: 'string' }) },
+      },
     });
 
     const record = await stack.create(NESTED, JSON.parse('{"meta": {"constructor": "ok"}}'));
@@ -5088,9 +5268,13 @@ describe('reserved content keys', () => {
   });
 
   test('a nested __proto__ is left alone — it round-trips as an inert own property', async () => {
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      meta: { kind: 'object', open: true },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        meta: { kind: 'object', open: true },
+      },
     });
     const content = JSON.parse('{"text": "hi", "meta": {"__proto__": {"x": 1}}}') as Record<
       string,
@@ -5110,10 +5294,14 @@ describe('reserved content keys', () => {
 
 describe('undefined patch values', () => {
   beforeEach(async () => {
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      extra: { kind: 'string' },
-      meta: { kind: 'object', open: true },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        extra: { kind: 'string' },
+        meta: { kind: 'object', open: true },
+      },
     });
   });
 
@@ -5210,7 +5398,11 @@ describe('content field names', () => {
     ['a definition that is not an object', '{"meta": "string"}'],
   ])('defineType() refuses %s', async (_label, json) => {
     await expect(
-      stack.defineType('com.example.test/malformed@1', 'Malformed', JSON.parse(json)),
+      stack.defineType({
+        id: 'com.example.test/malformed@1',
+        name: 'Malformed',
+        schema: JSON.parse(json),
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -5250,25 +5442,37 @@ describe('content field names', () => {
     ),
   )('defineType() refuses a declared name containing %s at the %s', async (char, _shape, build) => {
     await expect(
-      stack.defineType('com.example.test/named@1', 'Named', build(`a${char}b`)),
+      stack.defineType({
+        id: 'com.example.test/named@1',
+        name: 'Named',
+        schema: build(`a${char}b`),
+      }),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('a declared name at each of those shapes is otherwise fine', async () => {
     for (const [shape, build] of Object.entries(nameShapes)) {
       await expect(
-        stack.defineType(`com.example.test/ok-${shape.replace(/ /g, '-')}@1`, 'Ok', build('plain')),
+        stack.defineType({
+          id: `com.example.test/ok-${shape.replace(/ /g, '-')}@1`,
+          name: 'Ok',
+          schema: build('plain'),
+        }),
       ).resolves.toBeDefined();
     }
   });
 
   test('ordinary names, including unicode and reverse-DNS-ish ones, still pass', async () => {
-    await stack.defineType(NOTE_V1, 'Note', {
-      text: { kind: 'text', required: true },
-      com_example_field: { kind: 'number' },
-      çé: { kind: 'number' },
-      'with space': { kind: 'number' },
-      '@context': { kind: 'number' },
+    await stack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: {
+        text: { kind: 'text', required: true },
+        com_example_field: { kind: 'number' },
+        çé: { kind: 'number' },
+        'with space': { kind: 'number' },
+        '@context': { kind: 'number' },
+      },
     });
     const record = await stack.create(NOTE_V1, {
       text: 'hi',
@@ -5291,17 +5495,21 @@ describe('nested content paths', () => {
   const CONTACT = 'com.example.test/contact@1';
 
   const seed = async () => {
-    await stack.defineType(CONTACT, 'Contact', {
-      name: { kind: 'string', required: true },
-      emails: {
-        kind: 'array',
-        items: {
-          kind: 'object',
-          properties: { value: { kind: 'string' }, label: { kind: 'string' } },
+    await stack.defineType({
+      id: CONTACT,
+      name: 'Contact',
+      schema: {
+        name: { kind: 'string', required: true },
+        emails: {
+          kind: 'array',
+          items: {
+            kind: 'object',
+            properties: { value: { kind: 'string' }, label: { kind: 'string' } },
+          },
         },
+        address: { kind: 'object', properties: { city: { kind: 'string' } } },
+        tags: { kind: 'array', items: { kind: 'string' } },
       },
-      address: { kind: 'object', properties: { city: { kind: 'string' } } },
-      tags: { kind: 'array', items: { kind: 'string' } },
     });
     await stack.create(CONTACT, {
       name: 'ada',
@@ -5420,7 +5628,11 @@ describe('limits.contentBytes pre-check', () => {
 
   const openLimited = async (contentBytes: number): Promise<Stack> => {
     const limited = await Stack.open(withContentCeiling(contentBytes));
-    await limited.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await limited.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     return limited;
   };
 
@@ -5613,12 +5825,16 @@ describe('putAttachment — returned record', () => {
 
 /** The `_attachment@1` schema plus one added field, for migrating a record into `_attachment@2`. */
 const defineAttachmentV2 = (s: Stack): Promise<unknown> =>
-  s.defineType('_attachment@2', 'Attachment', {
-    fileId: { kind: 'string', required: true },
-    mimeType: { kind: 'string', required: true },
-    size: { kind: 'number', required: true },
-    filename: { kind: 'string' },
-    caption: { kind: 'string' },
+  s.defineType({
+    id: '_attachment@2',
+    name: 'Attachment',
+    schema: {
+      fileId: { kind: 'string', required: true },
+      mimeType: { kind: 'string', required: true },
+      size: { kind: 'number', required: true },
+      filename: { kind: 'string' },
+      caption: { kind: 'string' },
+    },
   });
 
 describe('Stack.getAttachmentRecords', () => {
@@ -6397,8 +6613,12 @@ describe('deleteAttachment', () => {
   // deleteAttachment()'s 409 check must see it, not just attachment associations.
   test('throws StackConflictError when only a file-ref content field references the file (fallback path)', async () => {
     const attachmentTypeId = 'com.example.test/photo-note@1';
-    await stack.defineType(attachmentTypeId, 'Photo note', {
-      coverFileId: { kind: 'file-ref', required: true },
+    await stack.defineType({
+      id: attachmentTypeId,
+      name: 'Photo note',
+      schema: {
+        coverFileId: { kind: 'file-ref', required: true },
+      },
     });
 
     const data = new Uint8Array([1, 2, 3]);
@@ -6412,8 +6632,12 @@ describe('deleteAttachment', () => {
 
   test('a plain string field holding a fileId conveys no delete protection', async () => {
     const attachmentTypeId = 'com.example.test/photo-note-plain@1';
-    await stack.defineType(attachmentTypeId, 'Photo note (plain)', {
-      coverFileId: { kind: 'string', required: true },
+    await stack.defineType({
+      id: attachmentTypeId,
+      name: 'Photo note (plain)',
+      schema: {
+        coverFileId: { kind: 'string', required: true },
+      },
     });
 
     const data = new Uint8Array([1, 2, 3]);
@@ -6466,7 +6690,11 @@ describe('deleteAttachment', () => {
     const atomicStack = await Stack.open(
       new AtomicAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
-    await atomicStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await atomicStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
 
     const {
       content: { fileId },
@@ -6542,8 +6770,12 @@ describe('collectAttachmentGarbage', () => {
   // attachment Association.
   test('does not collect a file referenced only via a file-ref content field', async () => {
     const photoType = 'com.example.test/photo-note@1';
-    await stack.defineType(photoType, 'Photo note', {
-      coverFileId: { kind: 'file-ref', required: true },
+    await stack.defineType({
+      id: photoType,
+      name: 'Photo note',
+      schema: {
+        coverFileId: { kind: 'file-ref', required: true },
+      },
     });
     const {
       content: { fileId },
@@ -7359,13 +7591,19 @@ describe('undefined types stay inside the error taxonomy', () => {
   });
 
   test('defineType() with a malformed typeId raises a bad_request', async () => {
-    const err = await typeStack.defineType('not-a-type-id', 'Nope', {}).catch((e) => e);
+    const err = await typeStack
+      .defineType({ id: 'not-a-type-id', name: 'Nope', schema: {} })
+      .catch((e) => e);
     expect(err).toBeInstanceOf(StackBadRequestError);
     expect(err.code).toBe('bad_request');
   });
 
   test('commitMigration() to an unknown typeId raises a bad_request', async () => {
-    await typeStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
+    await typeStack.defineType({
+      id: NOTE_V1,
+      name: 'Note',
+      schema: { text: { kind: 'text', required: true } },
+    });
     const record = await typeStack.create(NOTE_V1, { text: 'hello' });
     const err = await typeStack
       .commitMigration(record.id, 'com.example.test/note@99', { text: 'hello' })
