@@ -11,7 +11,7 @@ import type {
  * Use this when you want different backends for records and blobs, e.g.:
  *
  *   const adapter = combineAdapters({ record: sqliteAdapter, blob: s3Adapter });
- *   const stack = await Stack.create(adapter);
+ *   const stack = await Stack.open(adapter);
  */
 export function combineAdapters(parts: {
   record: StackRecordAdapter;

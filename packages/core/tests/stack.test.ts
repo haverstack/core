@@ -12,6 +12,7 @@ import {
   StackQueryError,
   StackPayloadTooLargeError,
   StackClosedError,
+  StackMisconfigurationError,
 } from '../src/errors.js';
 import {
   generateId,
@@ -59,7 +60,7 @@ let stack: Stack;
 
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
 
   await stack.defineType(NOTE_V1, 'Note', {
     text: { kind: 'text', required: true },
@@ -67,10 +68,10 @@ beforeEach(async () => {
 });
 
 // -------------------------------------------------------
-// Stack.create
+// Stack.open
 // -------------------------------------------------------
 
-describe('Stack.create', () => {
+describe('Stack.open', () => {
   test('reads ownerEntityId from adapter', async () => {
     expect(stack.ownerEntityId).toBe('owner-123');
   });
@@ -79,11 +80,13 @@ describe('Stack.create', () => {
     expect(stack.timezone).toBe('UTC');
   });
 
-  test('throws if adapter has no ownerEntityId', async () => {
+  test('an adapter with no ownerEntityId is a StackMisconfigurationError, outside StackError', async () => {
     const emptyAdapter = new MemoryAdapter();
-    await expect(Stack.create(emptyAdapter)).rejects.toThrow(
-      'Stack misconfiguration: adapter has no ownerEntityId',
-    );
+    const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackMisconfigurationError);
+    expect(err).not.toBeInstanceOf(StackError);
+    expect((err as Error).name).toBe('StackMisconfigurationError');
+    expect((err as Error).message).toContain('adapter has no ownerEntityId');
   });
 
   // timezone is optional passthrough metadata, nothing more — no
@@ -91,21 +94,21 @@ describe('Stack.create', () => {
   // stack doesn't have.
   test('timezone is undefined when not specified — no default', async () => {
     const adapter = new MemoryAdapter({ ownerEntityId: 'entity-without-timezone' });
-    const s = await Stack.create(adapter);
+    const s = await Stack.open(adapter);
     expect(s.timezone).toBeUndefined();
   });
 
   describe('ownerProfile', () => {
     test('does nothing when omitted', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter);
+      const s = await Stack.open(emptyAdapter);
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       expect(records).toHaveLength(0);
     });
 
     test('creates the owner _entity record on first init', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, {
+      const s = await Stack.open(emptyAdapter, {
         ownerProfile: { name: 'Jane Smith', handle: 'janesmith' },
       });
 
@@ -120,16 +123,16 @@ describe('Stack.create', () => {
 
     test('omits handle when not provided', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       expect(records[0].content).toEqual({ did: 'did:key:owner', name: 'Jane Smith' });
     });
 
     test('is idempotent across reopen — does not duplicate the owner record', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       // Simulate a later run against the same (still-open) adapter/data.
-      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
 
       const { records } = await reopened.query({ filter: { typeId: '_entity@1' } });
       expect(records).toHaveLength(1);
@@ -137,8 +140,8 @@ describe('Stack.create', () => {
 
     test('does not overwrite an existing owner record with different content', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      await Stack.create(emptyAdapter, { ownerProfile: { name: 'Original Name' } });
-      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'New Name' } });
+      await Stack.open(emptyAdapter, { ownerProfile: { name: 'Original Name' } });
+      const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'New Name' } });
 
       const { records } = await reopened.query({ filter: { typeId: '_entity@1' } });
       expect(records).toHaveLength(1);
@@ -150,11 +153,11 @@ describe('Stack.create', () => {
     // rules would refuse — reopening stays possible either way.
     test('treats a soft-deleted owner record as existing', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       await s.delete(records[0].id);
 
-      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
 
       const all = await reopened.query({
         filter: { typeId: '_entity@1', includeDeleted: true },
@@ -169,7 +172,7 @@ describe('Stack.create', () => {
     // at `_entity@1` would mint a card the rules then refuse.
     test('treats an owner record migrated to a later type version as existing', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       await s.defineType('_entity@2', 'Entity', {
         did: { kind: 'string', required: true },
         name: { kind: 'string', required: true },
@@ -179,7 +182,7 @@ describe('Stack.create', () => {
       s.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
       await s.migrateAll('_entity');
 
-      const reopened = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
 
       const { records } = await reopened.query({ filter: { baseId: '_entity' } });
       expect(records).toHaveLength(1);
@@ -188,18 +191,18 @@ describe('Stack.create', () => {
 
     test('leaves the created record unauthored (no createdBy), matching owner-attributed convention', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const { records } = await s.query({ filter: { typeId: '_entity@1' } });
       expect(records[0].createdBy?.subjectId).toBeUndefined();
     });
 
     // The idempotency check cursor-walks every `_entity@1` record, so an
     // owner card past page one (>50 `_entity` records, e.g. an address
-    // book) is still found and Stack.create({ ownerProfile }) stays a
+    // book) is still found and Stack.open({ ownerProfile }) stays a
     // no-op rather than minting a duplicate.
     test('does not duplicate the owner record when it exists past the first query page (regression)', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s0 = await Stack.create(emptyAdapter);
+      const s0 = await Stack.open(emptyAdapter);
       for (let i = 0; i < 55; i++) {
         await s0.create('_entity@1', { did: `did:key:filler-${i}`, name: `Filler ${i}` });
       }
@@ -207,7 +210,7 @@ describe('Stack.create', () => {
       // lands after the filler records in insertion order — past page one.
       await s0.create('_entity@1', { did: 'did:key:owner', name: 'Original Name' });
 
-      await Stack.create(emptyAdapter, { ownerProfile: { name: 'New Name' } });
+      await Stack.open(emptyAdapter, { ownerProfile: { name: 'New Name' } });
 
       const { records } = await s0.query({
         filter: { typeId: '_entity@1' },
@@ -272,7 +275,7 @@ describe('Stack.create', () => {
     // still find the match when it's unavailable.
     test('resolves the card on an adapter reaching no content', async () => {
       const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: 'owner-x' });
-      const s = await Stack.create(incapableAdapter);
+      const s = await Stack.open(incapableAdapter);
       const created = await s.create('_entity@1', { did: 'did:key:y', name: 'Y' });
       const found = await s.getEntityByDid('did:key:y');
       expect(found?.id).toBe(created.id);
@@ -280,7 +283,7 @@ describe('Stack.create', () => {
 
     test('getOwnerEntity resolves the card ownerProfile created', async () => {
       const emptyAdapter = new MemoryAdapter({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.create(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
+      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
       const found = await s.getOwnerEntity();
       expect(found?.content).toMatchObject({ did: 'did:key:owner', name: 'Jane Smith' });
     });
@@ -437,12 +440,12 @@ describe('defineType', () => {
     expect(after).toEqual(before);
   });
 
-  test('repeated seedSystemTypes()-style redefinition across Stack.create() calls stays idempotent', async () => {
+  test('repeated seedSystemTypes()-style redefinition across Stack.open() calls stays idempotent', async () => {
     // Simulates the every-open churn this issue closes: a second Stack
     // instance (e.g. a fresh process reopening the same adapter) redefines
     // the same types on the same underlying storage.
     const before = await stack.getType(NOTE_V1);
-    const stackB = await Stack.create(adapter);
+    const stackB = await Stack.open(adapter);
     await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     const after = await stackB.getType(NOTE_V1);
     expect(after?.createdAt.getTime()).toBe(before?.createdAt.getTime());
@@ -663,7 +666,7 @@ describe('create — backdating (createdAt/updatedAt)', () => {
 
   test('idTimestampSkewMs: null disables the id/createdAt consistency check too', async () => {
     const permissiveAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    const permissiveStack = await Stack.create(permissiveAdapter, { idTimestampSkewMs: null });
+    const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
 
     const createdAt = new Date('2020-06-15T12:00:00.000Z');
@@ -1018,7 +1021,7 @@ describe('query — capability fail-loud', () => {
   });
 
   test('filter.content against an adapter reaching no content throws, not returns everything', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     await incapableStack.defineType(NOTE_V1, 'Note', {
@@ -1033,7 +1036,7 @@ describe('query — capability fail-loud', () => {
   });
 
   test('contentPresent against an adapter without the capability throws', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     await incapableStack.defineType(NOTE_V1, 'Note', {
@@ -1048,7 +1051,7 @@ describe('query — capability fail-loud', () => {
   });
 
   test('a query with neither filter still works against an incapable adapter', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     await incapableStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
@@ -1220,9 +1223,7 @@ describe('query — sorting by a content field', () => {
   });
 
   test('an adapter without sort.contentField refuses rather than reordering', async () => {
-    const incapable = await Stack.create(
-      new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }),
-    );
+    const incapable = await Stack.open(new IncapableMemoryAdapter({ ownerEntityId: 'owner-123' }));
     await expect(incapable.query({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
       StackQueryError,
     );
@@ -1231,7 +1232,7 @@ describe('query — sorting by a content field', () => {
   test('a native sort an adapter does not declare is refused too', async () => {
     const adapter = new MemoryAdapter({ ownerEntityId: 'owner-123' });
     adapter.capabilities.sort.fields = ['createdAt'];
-    const limited = await Stack.create(adapter);
+    const limited = await Stack.open(adapter);
     await expect(limited.query({ sort: { field: 'version' } })).rejects.toThrow(StackQueryError);
     await expect(limited.query({ sort: { field: 'createdAt' } })).resolves.toBeDefined();
   });
@@ -1794,7 +1795,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
   test('stale-writer signal: a record newer than what this app instance has defined throws', async () => {
     // stackA is fully up to date: knows v1 and v2, and writes a v2 record.
-    const stackA = await Stack.create(adapter);
+    const stackA = await Stack.open(adapter);
     await stackA.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     await stackA.defineType(
       NOTE_V2,
@@ -1806,7 +1807,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
     // stackB simulates a stale binary sharing the same storage — its own
     // startup code only ever defineType()'d v1, so it has no idea v2 exists.
-    const stackB = await Stack.create(adapter);
+    const stackB = await Stack.open(adapter);
     await stackB.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
 
     await expect(stackB.get(record.id, { presentAt: 'latest' })).rejects.toThrow(
@@ -1819,7 +1820,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
   test('registration gap: an older record with no migration path to a type this app has defined throws', async () => {
     const gapAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    const gapStack = await Stack.create(gapAdapter);
+    const gapStack = await Stack.open(gapAdapter);
     await gapStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     await gapStack.defineType(
       NOTE_V2,
@@ -1952,7 +1953,7 @@ describe('migrateAll', () => {
     // Fresh stack so this test can register its own (deliberately buggy)
     // migration instead of the valid one from the outer beforeEach.
     const buggyAdapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    const buggyStack = await Stack.create(buggyAdapter);
+    const buggyStack = await Stack.open(buggyAdapter);
     await buggyStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     await buggyStack.defineType(
       NOTE_V2,
@@ -3492,11 +3493,11 @@ describe('grant', () => {
     });
   });
 
-  test('_grant@1 type is available immediately after Stack.create()', async () => {
+  test('_grant@1 type is available immediately after Stack.open()', async () => {
     expect(await stack.getType('_grant@1')).not.toBeNull();
   });
 
-  test('_attachment@1 type is available immediately after Stack.create()', async () => {
+  test('_attachment@1 type is available immediately after Stack.open()', async () => {
     expect(await stack.getType('_attachment@1')).not.toBeNull();
   });
 
@@ -5369,7 +5370,7 @@ describe('nested content paths', () => {
         },
       },
     );
-    const narrowStack = await Stack.create(narrow as StackAdapter);
+    const narrowStack = await Stack.open(narrow as StackAdapter);
 
     // A single-segment filter is still served by the 'field' rung.
     await expect(
@@ -5398,7 +5399,7 @@ describe('limits.contentBytes pre-check', () => {
     });
 
   const openLimited = async (contentBytes: number): Promise<Stack> => {
-    const limited = await Stack.create(withContentCeiling(contentBytes));
+    const limited = await Stack.open(withContentCeiling(contentBytes));
     await limited.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
     return limited;
   };
@@ -5450,7 +5451,7 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
   test('throws StackPayloadTooLargeError without touching the adapter', async () => {
     const limitedAdapter = withCeiling(2);
     const putAttachmentSpy = vi.spyOn(limitedAdapter, 'putAttachment');
-    const limitedStack = await Stack.create(limitedAdapter);
+    const limitedStack = await Stack.open(limitedAdapter);
 
     await expect(
       limitedStack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
@@ -5460,7 +5461,7 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
 
   test('allows an upload at exactly the ceiling', async () => {
     const limitedAdapter = withCeiling(3);
-    const limitedStack = await Stack.create(limitedAdapter);
+    const limitedStack = await Stack.open(limitedAdapter);
 
     await expect(
       limitedStack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' }),
@@ -5497,7 +5498,7 @@ describe('putAttachment — atomic adapter path', () => {
       new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
-    const atomicStack = await Stack.create(atomicAdapter);
+    const atomicStack = await Stack.open(atomicAdapter);
     const createSpy = vi.spyOn(atomicStack, 'create');
 
     const {
@@ -5534,7 +5535,7 @@ describe('putAttachment — atomic adapter path', () => {
       new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
-    const atomicStack = await Stack.create(atomicAdapter);
+    const atomicStack = await Stack.open(atomicAdapter);
 
     const record = await atomicStack.putAttachment(new Uint8Array([1, 2, 3]), {
       mimeType: 'image/png',
@@ -5701,7 +5702,7 @@ describe('Stack.getAttachmentRecords', () => {
   // exercises the in-memory filter and the cursor walk rather than the
   // content-filtered query a compliant local adapter takes.
   test('finds a record past the first page on an adapter reaching no content', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     for (let i = 0; i < 55; i++) {
@@ -6092,7 +6093,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
   // content-filtered query a compliant local adapter (MemoryAdapter's
   // real-world default) would take.
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     for (let i = 0; i < 55; i++) {
@@ -6330,7 +6331,7 @@ describe('deleteAttachment', () => {
         throw new Error('not found');
       }
     }
-    const noBytesStack = await Stack.create(
+    const noBytesStack = await Stack.open(
       new NoBytesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
 
@@ -6343,7 +6344,7 @@ describe('deleteAttachment', () => {
   // is deleted too rather than orphaned. IncapableMemoryAdapter forces the
   // in-memory fallback the test name describes.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
-    const incapableStack = await Stack.create(
+    const incapableStack = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     const targetFileId = 'target-file-abc';
@@ -6442,7 +6443,7 @@ describe('deleteAttachment', () => {
         return toDelete;
       }
     }
-    const atomicStack = await Stack.create(
+    const atomicStack = await Stack.open(
       new AtomicAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     await atomicStack.defineType(NOTE_V1, 'Note', { text: { kind: 'text', required: true } });
@@ -6598,7 +6599,7 @@ describe('collectAttachmentGarbage', () => {
     class NoListFilesAdapter extends MemoryAdapter {
       override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.create(
+    const noListFilesStack = await Stack.open(
       new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     const {
@@ -6617,7 +6618,7 @@ describe('collectAttachmentGarbage', () => {
     class NoListFilesAdapter extends MemoryAdapter {
       override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.create(
+    const noListFilesStack = await Stack.open(
       new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     const {
@@ -6640,7 +6641,7 @@ describe('collectAttachmentGarbage', () => {
       ownerEntityId: 'owner-123',
       timezone: 'UTC',
     });
-    const noListFilesStack = await Stack.create(noListFilesAdapter);
+    const noListFilesStack = await Stack.open(noListFilesAdapter);
     await noListFilesAdapter.putAttachment(new Uint8Array([9, 9, 9]));
 
     const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
@@ -6960,7 +6961,7 @@ describe('_entity.did bindings', () => {
   // the first clash, so a colliding card past page one must still be found —
   // short-circuiting is what keeps the walk bounded, not a narrower scan.
   test('finds a clash past page one on an adapter reaching no content', async () => {
-    const incapable = await Stack.create(
+    const incapable = await Stack.open(
       new IncapableMemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     for (let i = 0; i < 60; i++) {
@@ -7327,7 +7328,7 @@ describe('undefined types stay inside the error taxonomy', () => {
   let typeStack: Stack;
 
   beforeEach(async () => {
-    typeStack = await Stack.create(new MemoryAdapter({ ownerEntityId: 'owner-123' }));
+    typeStack = await Stack.open(new MemoryAdapter({ ownerEntityId: 'owner-123' }));
   });
 
   test('create() with an unknown typeId raises a bad_request', async () => {

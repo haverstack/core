@@ -63,7 +63,7 @@ function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
 
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text' } });
 });
 
@@ -1304,7 +1304,7 @@ describe('ScopedStack.create — client-supplied id', () => {
 
   test('idTimestampSkewMs: null on the Stack disables the skew check for grantees', async () => {
     const permissiveAdapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-    const permissiveStack = await Stack.create(permissiveAdapter, { idTimestampSkewMs: null });
+    const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType(COMMENT, 'Comment', {
       text: { kind: 'text', required: true },
     });
@@ -2873,7 +2873,7 @@ describe('ScopedStack.getAttachment', () => {
   // takes — the two must agree about which of the uploader's records count.
   test('an unlisted _attachment record carries it on a content-blind adapter too', async () => {
     const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-    const incapableStack = await Stack.create(incapableAdapter);
+    const incapableStack = await Stack.open(incapableAdapter);
     const fileId = fakeFileId('file-unlisted-blind');
     incapableAdapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
     const meta = await incapableStack.create(
@@ -2906,7 +2906,7 @@ describe('ScopedStack.getAttachment', () => {
   // compliant local adapter takes the content-filtered query).
   test('uploader can access an upload that is not their first (regression)', async () => {
     const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-    const incapableStack = await Stack.create(incapableAdapter);
+    const incapableStack = await Stack.open(incapableAdapter);
     const fileFirst = fakeFileId('file-first');
     const fileSecond = fakeFileId('file-second');
     incapableAdapter.blobs.set(fileFirst, { data: new Uint8Array([1]), modifiedAt: new Date() });

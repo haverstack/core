@@ -59,7 +59,7 @@ let stack: Stack;
 
 beforeEach(async () => {
   adapter = new RelayingMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 });
 
@@ -204,7 +204,7 @@ describe('a stack whose adapter relays', () => {
 
 describe('a stack whose adapter does not relay', () => {
   test('refuses `since`, which names a cursor it never minted', async () => {
-    const local = await Stack.create(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
     await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 
     await expect(local.subscribe(() => {}, { since: 'AA3f1R' })).rejects.toBeInstanceOf(
@@ -222,7 +222,7 @@ describe('a scoped view of a stack that relays', () => {
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {
-    const local = await Stack.create(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
     await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 
     const scoped = local.asEntity(OWNER);
@@ -233,7 +233,7 @@ describe('a scoped view of a stack that relays', () => {
   });
 
   test('refuses `since` even when the adapter relays nothing', async () => {
-    const local = await Stack.create(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
     await local.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 
     const scoped = local.asEntity(OWNER);

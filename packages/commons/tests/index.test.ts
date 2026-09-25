@@ -23,7 +23,7 @@ let stack: Stack;
 
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
 });
 
 describe('commons type ids', () => {

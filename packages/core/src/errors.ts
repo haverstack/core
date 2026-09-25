@@ -6,11 +6,11 @@
  * `instanceof StackError` — before serializing a wire body, and each
  * subclass carries its wire discriminator as an instance `code`.
  *
- * Three errors sit deliberately outside that root (StackClosedError,
- * StackRelayScopeError, and — in their own modules — IdGenerationError and
- * InvalidDidError): they report a local programming error or an assembled
- * topology, not a state a request can be in, so no server ever responds
- * with one.
+ * Several errors sit deliberately outside that root (StackClosedError,
+ * StackMisconfigurationError, StackRelayScopeError, and — in their own
+ * modules — IdGenerationError and InvalidDidError): they report a local
+ * programming error or an assembled topology, not a state a request can be
+ * in, so no server ever responds with one.
  */
 
 import { baseIdOf, parseTypeId } from './schema.js';
@@ -229,6 +229,19 @@ export class StackClosedError extends Error {
   constructor(message = 'This Stack has been closed.') {
     super(message);
     this.name = 'StackClosedError';
+  }
+}
+
+/**
+ * Thrown when Stack.open() is handed an adapter that cannot back a stack.
+ * Outside the StackError taxonomy for the same reason StackClosedError is:
+ * it reports a local setup mistake, not a state a request can be in.
+ * See docs/spec.md § Stack initialization.
+ */
+export class StackMisconfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackMisconfigurationError';
   }
 }
 

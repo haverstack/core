@@ -22,7 +22,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(async () => {
   adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
-  stack = await Stack.create(adapter);
+  stack = await Stack.open(adapter);
   await stack.defineType(NOTE, 'Note', { text: { kind: 'text', required: true } });
 });
 

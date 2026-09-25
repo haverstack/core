@@ -25,7 +25,7 @@ The spec is split into focused documents:
 
 ## Stack initialization
 
-A Stack is created via an async factory that reads identity (and, optionally, timezone) from the adapter.
+A Stack is opened with the async factory `Stack.open(adapter, opts)`, which reads identity (and, optionally, timezone) from the adapter.
 
 ```ts
 // First run — generate an identity keypair and create a new database.
@@ -45,10 +45,12 @@ const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 // Always the same — reads identity and timezone from the adapter.
 // ownerProfile creates the owner's own _entity profile record on first
 // run; a no-op on every later call once that record exists.
-const stack = await Stack.create(adapter, { ownerProfile: { name: 'Jane Smith' } });
+const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 stack.ownerEntityId; // from adapter.ownerEntityId
 stack.timezone; // from adapter.timezone — string | undefined
 ```
+
+`Stack.open()` throws `StackMisconfigurationError` when the adapter has no `ownerEntityId`. Like `StackClosedError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 

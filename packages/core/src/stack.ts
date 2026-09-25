@@ -79,6 +79,7 @@ import type {
 
 import {
   StackClosedError,
+  StackMisconfigurationError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
@@ -520,13 +521,13 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Create a Stack instance. Reads ownerEntityId and timezone from the adapter.
+   * Open a Stack over an adapter. Reads ownerEntityId and timezone from the adapter.
    */
-  static async create(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
+  static async open(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
-      throw new Error(
+      throw new StackMisconfigurationError(
         'Stack misconfiguration: adapter has no ownerEntityId. ' +
-          'Initialise the adapter with an entityId before calling Stack.create().',
+          'Initialise the adapter with an entityId before calling Stack.open().',
       );
     }
     const stack = new Stack(
