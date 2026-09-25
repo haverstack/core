@@ -106,7 +106,7 @@ await stack.mutate(noteId, {
 ```
 
 ```ts
-type RecordChanges = {
+type RecordChangeSet = {
   contentPatch?: Record<string, unknown | null>;
   parentId?: string | null;
   permissions?: AuthorityAssociation[];

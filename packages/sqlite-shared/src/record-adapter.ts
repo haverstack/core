@@ -27,7 +27,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
-  RecordChanges,
+  RecordChangeSet,
 } from '@haverstack/core';
 import type {
   StackRecordAdapter,
@@ -88,7 +88,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   mutateRecord(
     id: string,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts?: {
       expectedVersion?: number;
       snapshot?: RecordVersion;

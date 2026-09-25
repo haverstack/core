@@ -61,7 +61,7 @@ export type {
   AppId,
   AttachmentContent,
   StackRecord,
-  RecordChanges,
+  RecordChangeSet,
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,

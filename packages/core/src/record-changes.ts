@@ -15,7 +15,7 @@
 
 import { baseIdOf } from './schema.js';
 import { StackBadRequestError } from './errors.js';
-import { SYSTEM_TYPES, RECORD_CHANGE_KEYS } from './types.js';
+import { SYSTEM_TYPES, RECORD_CHANGE_SET_KEYS } from './types.js';
 import type {
   Association,
   AssociationChange,
@@ -24,7 +24,7 @@ import type {
   DataAssociation,
   EntityId,
   Grantee,
-  RecordChanges,
+  RecordChangeSet,
   RecordJournalEntry,
   RelationshipTarget,
   StackRecord,
@@ -184,12 +184,12 @@ export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boole
  * typically a conditional that built an empty object.
  * See docs/spec/data-model.md § Mutations.
  */
-export function assertNonEmptyChangeSet(changes: RecordChanges): void {
+export function assertNonEmptyChangeSet(changes: RecordChangeSet): void {
   // Presence, not truthiness: `unlisted: false` and `parentId: null` are
   // aspects this call names.
-  if (RECORD_CHANGE_KEYS.some((key) => changes[key] !== undefined)) return;
+  if (RECORD_CHANGE_SET_KEYS.some((key) => changes[key] !== undefined)) return;
   throw new StackBadRequestError(
-    'A change set names at least one of: ' + RECORD_CHANGE_KEYS.join(', ') + '.',
+    'A change set names at least one of: ' + RECORD_CHANGE_SET_KEYS.join(', ') + '.',
   );
 }
 
@@ -201,7 +201,7 @@ export function assertNonEmptyChangeSet(changes: RecordChanges): void {
  */
 export function changeSetOps(
   existing: StackRecord,
-  changes: RecordChanges,
+  changes: RecordChangeSet,
   merged: Record<string, unknown> | undefined,
 ): ChangeOp[] {
   const ops: ChangeOp[] = [];
@@ -260,7 +260,7 @@ export function bumpsVersion(ops: ChangeOp[]): boolean {
  * precondition on it would fence a write that the number it names cannot
  * describe. See docs/spec/versioning.md § Optimistic concurrency.
  */
-const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = new Set([
+const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_SET_KEYS)[number]> = new Set([
   'associations',
   'permissions',
   'parentId',
@@ -274,8 +274,8 @@ const NO_PRECONDITION_KEYS: ReadonlySet<(typeof RECORD_CHANGE_KEYS)[number]> = n
  * wrote rather than the ops the set turns out to move, so a stale caller is
  * told its version is stale whatever its patch says.
  */
-export function takesIfVersion(changes: RecordChanges): boolean {
-  return RECORD_CHANGE_KEYS.some(
+export function takesIfVersion(changes: RecordChangeSet): boolean {
+  return RECORD_CHANGE_SET_KEYS.some(
     (key) => !NO_PRECONDITION_KEYS.has(key) && changes[key] !== undefined,
   );
 }
@@ -287,8 +287,8 @@ export function takesIfVersion(changes: RecordChanges): boolean {
  * otherwise drag `unlistedAt` forward with no op reporting it. Every key an
  * adapter receives is one it must write.
  */
-export function effectiveChanges(changes: RecordChanges, ops: ChangeOp[]): RecordChanges {
-  const effective: RecordChanges = {};
+export function effectiveChanges(changes: RecordChangeSet, ops: ChangeOp[]): RecordChangeSet {
+  const effective: RecordChangeSet = {};
   if (ops.includes('patch')) effective.contentPatch = changes.contentPatch;
   if (ops.includes('reparent')) effective.parentId = changes.parentId;
   if (ops.includes('permissions')) effective.permissions = changes.permissions;

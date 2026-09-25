@@ -58,7 +58,7 @@ import type {
   SubscribeOptions,
   TypeId,
   Unsubscribe,
-  RecordChanges,
+  RecordChangeSet,
 } from './types.js';
 import {
   StackConflictError,
@@ -994,7 +994,7 @@ export class ScopedStack implements StackClient {
    */
   async mutate(
     id: RecordId,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     // Ahead of every gate: a malformed change set is a validation error
@@ -1117,7 +1117,7 @@ export class ScopedStack implements StackClient {
    * add, remove or repoint in either direction is a reshare.
    * See docs/spec/access-control.md § Record-level permissions.
    */
-  private permissionsMove(record: StackRecord, changes: RecordChanges): boolean {
+  private permissionsMove(record: StackRecord, changes: RecordChangeSet): boolean {
     if (changes.permissions === undefined) return false;
     return associationDelta(record.permissions ?? [], changes.permissions).length > 0;
   }

@@ -14,12 +14,12 @@
 import { isOwnerActingAlone } from './access.js';
 import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
-import { RECORD_CHANGE_KEYS } from './types.js';
+import { RECORD_CHANGE_SET_KEYS } from './types.js';
 import type {
   EntityId,
   AuthorityAssociation,
   DataAssociation,
-  RecordChanges,
+  RecordChangeSet,
   TokenSession,
   TypeId,
 } from './types.js';
@@ -144,20 +144,20 @@ export function createOptionsFromWireRecord(
  * nothing more.
  * See docs/spec/wire-format.md § Records.
  */
-export function changesFromWireBody(body: unknown): RecordChanges {
+export function changesFromWireBody(body: unknown): RecordChangeSet {
   const envelope = requireBody(body);
 
   const unknown = Object.keys(envelope).filter(
-    (key) => !(RECORD_CHANGE_KEYS as readonly string[]).includes(key),
+    (key) => !(RECORD_CHANGE_SET_KEYS as readonly string[]).includes(key),
   );
   if (unknown.length > 0) {
     throw new StackBadRequestError(
       `Unknown change-set key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
-        `A change set names one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
+        `A change set names one or more of: ${RECORD_CHANGE_SET_KEYS.join(', ')}.`,
     );
   }
 
-  const changes: RecordChanges = {};
+  const changes: RecordChangeSet = {};
 
   if (envelope.contentPatch !== undefined) {
     const patch = envelope.contentPatch;
@@ -191,7 +191,7 @@ export function changesFromWireBody(body: unknown): RecordChanges {
   // again for callers that never went through the wire.
   if (Object.keys(changes).length === 0) {
     throw new StackBadRequestError(
-      `An empty change set addresses nothing. Name one or more of: ${RECORD_CHANGE_KEYS.join(', ')}.`,
+      `An empty change set addresses nothing. Name one or more of: ${RECORD_CHANGE_SET_KEYS.join(', ')}.`,
     );
   }
 

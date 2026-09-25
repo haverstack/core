@@ -46,7 +46,7 @@ import type {
   ChangeFilter,
   RecordFilter,
   RecordChange,
-  RecordChanges,
+  RecordChangeSet,
 } from '@haverstack/core';
 import {
   assertQueryCapabilities,
@@ -1068,7 +1068,7 @@ export class APIAdapter implements StackAdapter {
 
   async mutateRecord(
     id: RecordId,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts: { expectedVersion?: number } = {},
   ): Promise<StackRecord> {
     // The change set travels as-is — no record fields (typeId, version,

@@ -70,7 +70,7 @@ import type {
   ActorOptions,
   ChangeActor,
   RecordChange,
-  RecordChanges,
+  RecordChangeSet,
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
@@ -383,7 +383,7 @@ export interface StackClient {
    * one refused key refuses the call.
    * See docs/spec/data-model.md § Mutations.
    */
-  mutate(id: RecordId, changes: RecordChanges, opts?: IfVersionOptions): Promise<StackRecord>;
+  mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
   /** mutate() with `contentPatch` alone — the common case, named for it. */
   patchContent(
     id: RecordId,
@@ -1047,7 +1047,7 @@ export class Stack implements StackClient {
    */
   async mutate(
     id: RecordId,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
@@ -1137,7 +1137,7 @@ export class Stack implements StackClient {
   private async validateChangeSet(
     id: string,
     existing: StackRecord,
-    changes: RecordChanges,
+    changes: RecordChangeSet,
   ): Promise<Record<string, unknown> | undefined> {
     const { contentPatch, permissions, associations, parentId } = changes;
 
