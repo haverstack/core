@@ -286,10 +286,11 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
  * opposite grounds — a soft delete is how revokeType() withdraws one.
  * See docs/spec/unlisted.md.
  */
-export function loadGrantRecords(
+export async function loadGrantRecords(
   query: (q: StackQuery) => Promise<QueryResult>,
-): Promise<StackRecord[]> {
-  return queryAllPages(query, {
+): Promise<(StackRecord & { content: GrantContent })[]> {
+  const records = await queryAllPages(query, {
     filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
   });
+  return records as (StackRecord & { content: GrantContent })[];
 }

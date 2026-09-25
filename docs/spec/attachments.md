@@ -153,7 +153,7 @@ Attachment bytes are only ever removed by an explicit `deleteAttachment(fileId)`
 stack.collectAttachmentGarbage(opts?: {
   graceMs?: number; // default: 24 hours
   dryRun?: boolean; // default: false
-}): Promise<{ deleted: string[]; reclaimedBytes: number }>
+}): Promise<{ deletedFileIds: FileId[]; reclaimedBytes: number }>
 ```
 
 **What counts as garbage:** a file is collectable only when _no_ record — live or soft-deleted — references it via an `attachment` Association or a `file-ref` content field. This is the same reference definition `deleteAttachment()` uses, and the same recoverability principle: nothing reachable from a soft-deleted (undelete-able) state gets destroyed.

@@ -35,9 +35,9 @@ import { DurableObjectSqliteExecutor } from './executor.js';
 // Types
 // -------------------------------------------------------
 
-export type DoRecordCreateOptions = {
+export type DoSQLiteRecordAdapterOpenOrInitializeOptions = {
   /** Entity ID of the stack owner. Ignored if the DO's storage already has a config record. */
-  entityId: string;
+  ownerEntityId: string;
   /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
   timezone?: string;
 };
@@ -52,11 +52,12 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   }
 
   /**
-   * Create (or reattach to) the adapter for a DO instance. There is no
-   * initialize()/open() split the way file-based adapters need one: a DO
-   * id either already has a config record (a previous call created it —
-   * reattach, opts.entityId/timezone ignored in favor of what's stored)
-   * or it doesn't (first call — opts.entityId/timezone become the config).
+   * Open the adapter for a DO instance, initializing its storage on first
+   * use — LocalAdapter.openOrInitialize()'s counterpart. There is no
+   * separate initialize()/open() the way file-based adapters need one: a
+   * DO id either already has a config record (reattach,
+   * opts.ownerEntityId/timezone ignored in favor of what's stored) or it
+   * doesn't (first call — opts.ownerEntityId/timezone become the config).
    * Schema DDL is `CREATE TABLE IF NOT EXISTS`, so running it every call
    * is idempotent and cheap.
    *
@@ -64,14 +65,14 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
    * outright ("not authorized") — verified against the real runtime, not
    * assumed — hence `wal: false`, unlike record-adapter-sqlite.
    */
-  static async create(
+  static async openOrInitialize(
     storage: DurableObjectStorage,
-    opts: DoRecordCreateOptions,
+    opts: DoSQLiteRecordAdapterOpenOrInitializeOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
     applyRecordSchema(exec, { wal: false });
     const config =
-      tryReadStackConfig(exec) ?? insertConfigRecord(exec, opts.entityId, opts.timezone);
+      tryReadStackConfig(exec) ?? insertConfigRecord(exec, opts.ownerEntityId, opts.timezone);
     return new DoSQLiteRecordAdapter(exec, config);
   }
 

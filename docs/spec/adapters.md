@@ -65,7 +65,7 @@ import { combineAdapters } from '@haverstack/core/adapter';
 import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3';
 
-const record = await NativeSQLiteRecordAdapter.initialize({ path, entityId, timezone });
+const record = await NativeSQLiteRecordAdapter.initialize({ path, ownerEntityId, timezone });
 const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.open(adapter);

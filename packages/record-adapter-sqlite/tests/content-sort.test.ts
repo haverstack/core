@@ -62,7 +62,7 @@ beforeEach(async () => {
   dbPath = join(testDir, 'test.db');
   adapter = await NativeSQLiteRecordAdapter.initialize({
     path: dbPath,
-    entityId: 'entity-123',
+    ownerEntityId: 'entity-123',
   });
   await adapter.saveType(
     type(ARTICLE, {

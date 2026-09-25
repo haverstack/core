@@ -3172,7 +3172,7 @@ describe('ScopedStack.collectAttachmentGarbage', () => {
 
     const result = await stack.asEntity(OWNER).collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   test('non-owner is denied', async () => {

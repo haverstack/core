@@ -27,7 +27,7 @@ import type {
   Unsubscribe,
 } from './types.js';
 import { StackBadRequestError } from './errors.js';
-import { bumpsVersion, feedAssociationDelta, movesAuthority } from './record-changes.js';
+import { bumpsVersion, feedAssociationDelta } from './record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.
@@ -373,19 +373,9 @@ export class PendingChange {
     };
   }
 
-  /**
-   * The frame's two flat lists, flattened out of the one the journal
-   * takes. Present only where non-empty.
-   *
-   * The data half alone: the `reshare` op is what announces an ACL
-   * move, so a subscriber watching tags is never handed the sharing graph
-   * as a side effect of the partition sharing one delta.
-   * See docs/spec/events.md § The event shape.
-   */
+  /** The frame's two flat lists, present only where non-empty. */
   private associationDeltas(): Pick<RecordChange, 'associationsAdded' | 'associationsRemoved'> {
-    const { added, removed } = feedAssociationDelta(
-      (this.moved.associations ?? []).filter((c) => !movesAuthority(c)),
-    );
+    const { added, removed } = feedAssociationDelta(this.moved.associations ?? []);
     return {
       ...(added.length && { associationsAdded: added }),
       ...(removed.length && { associationsRemoved: removed }),

@@ -122,7 +122,7 @@ export type APIAdapterOpenOptions = {
    * refuses a server whose discovery reports anything else. Omit when the URL
    * is the only expectation you have.
    */
-  expectedOwner?: EntityId;
+  expectedOwnerEntityId?: EntityId;
   /**
    * A DID and a signing callback — never a private key. open() performs the
    * challenge–response handshake with it and re-runs that handshake when a
@@ -207,7 +207,7 @@ export class APIAdapterVersionError extends APIAdapterError {
 }
 
 /**
- * Thrown by open() when `expectedOwner` was supplied and discovery reports a
+ * Thrown by open() when `expectedOwnerEntityId` was supplied and discovery reports a
  * different owner — or none at all. Discovery identity is unsigned and the
  * server cannot prove it, so stating the DID you expect is the only check
  * available to a client. See docs/spec/wire-format.md § Identity is trusted
@@ -215,7 +215,7 @@ export class APIAdapterVersionError extends APIAdapterError {
  */
 export class APIAdapterOwnerMismatchError extends APIAdapterError {
   constructor(
-    public readonly expectedOwner: EntityId,
+    public readonly expectedOwnerEntityId: EntityId,
     public readonly actualOwner: EntityId | undefined,
     message: string,
   ) {
@@ -838,7 +838,7 @@ export class APIAdapter implements StackAdapter {
    *
    * Throws APIAdapterAuthError on 401.
    * Throws APIAdapterConnectionError if the server is unreachable.
-   * Throws APIAdapterOwnerMismatchError when `expectedOwner` disagrees with
+   * Throws APIAdapterOwnerMismatchError when `expectedOwnerEntityId` disagrees with
    * the owner discovery reports.
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
@@ -881,15 +881,18 @@ export class APIAdapter implements StackAdapter {
 
     // After version negotiation: a differing major means fields may not mean
     // what this client reads them as, so `entityId` isn't worth comparing yet.
-    if (opts.expectedOwner !== undefined && discovery.entityId !== opts.expectedOwner) {
+    if (
+      opts.expectedOwnerEntityId !== undefined &&
+      discovery.entityId !== opts.expectedOwnerEntityId
+    ) {
       throw new APIAdapterOwnerMismatchError(
-        opts.expectedOwner,
+        opts.expectedOwnerEntityId,
         discovery.entityId,
         discovery.entityId
           ? `Server at "${baseUrl}" reports owner "${discovery.entityId}"; expected ` +
-              `"${opts.expectedOwner}".`
+              `"${opts.expectedOwnerEntityId}".`
           : `Server at "${baseUrl}" reported no owner in discovery; expected ` +
-              `"${opts.expectedOwner}".`,
+              `"${opts.expectedOwnerEntityId}".`,
       );
     }
 

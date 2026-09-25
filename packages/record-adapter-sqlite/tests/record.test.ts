@@ -29,10 +29,10 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-const initAdapter = (opts?: { timezone?: string; entityId?: string }) =>
+const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
   NativeSQLiteRecordAdapter.initialize({
     path: dbPath,
-    entityId: opts?.entityId ?? 'entity-123',
+    ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
     timezone: opts?.timezone ?? 'America/New_York',
   });
 
@@ -67,7 +67,7 @@ describe('initialize', () => {
   });
 
   test('sets ownerEntityId', async () => {
-    const adapter = await initAdapter({ entityId: 'owner-abc' });
+    const adapter = await initAdapter({ ownerEntityId: 'owner-abc' });
     expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
@@ -116,7 +116,7 @@ describe('open', () => {
 });
 
 test('preserves ownerEntityId and timezone across reopen', async () => {
-  await initAdapter({ entityId: 'owner-abc', timezone: 'Europe/London' });
+  await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
   const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
   expect(adapter.timezone).toBe('Europe/London');

@@ -152,18 +152,24 @@ export function associationDelta(before: Association[], after: Association[]): A
  * The two flat lists a change frame carries, derived from the tagged list.
  * The feed reports what is true now, so a `repoint` appears only under its
  * new value and a `remove` by identity alone — the prior state the journal
- * keeps has no place on a notification.
+ * keeps has no place on a notification. The data half alone: `reshare` is
+ * what announces an ACL move. See docs/spec/events.md § The event shape.
  */
 export function feedAssociationDelta(changes: AssociationChange[]): {
-  added: Association[];
-  removed: Association[];
+  added: DataAssociation[];
+  removed: DataAssociation[];
 } {
-  return {
-    added: changes.filter((c) => c.op !== 'remove').map((c) => c.association),
-    removed: changes
-      .filter((c) => c.op === 'remove')
-      .map((c) => stripAssociationAnnotation(c.previous)),
-  };
+  const added: DataAssociation[] = [];
+  const removed: DataAssociation[] = [];
+  for (const c of changes) {
+    if (c.op === 'remove') {
+      const identity = stripAssociationAnnotation(c.previous);
+      if (!isAuthorityAssociation(identity)) removed.push(identity);
+    } else if (!isAuthorityAssociation(c.association)) {
+      added.push(c.association);
+    }
+  }
+  return { added, removed };
 }
 
 /** Structural equality per target arm — what dissociate() matches on. */

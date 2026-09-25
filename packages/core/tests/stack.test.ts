@@ -6727,7 +6727,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     const meta = await stack.query({ filter: { typeId: '_attachment@1', includeDeleted: true } });
     expect(meta.records).toHaveLength(0);
   });
@@ -6745,7 +6745,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // Soft-deleted records are recoverable via undelete()
@@ -6764,7 +6764,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // a file-ref content field is a real reference too, same as an
@@ -6785,7 +6785,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   test('default grace period protects a fresh unreferenced upload', async () => {
@@ -6793,7 +6793,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage();
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
     const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(meta.records).toHaveLength(1);
   });
@@ -6805,7 +6805,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   test('reports reclaimedBytes summed across deleted files', async () => {
@@ -6818,7 +6818,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted.sort()).toEqual([fileId1, fileId2].sort());
+    expect(result.deletedFileIds.sort()).toEqual([fileId1, fileId2].sort());
     expect(result.reclaimedBytes).toBe(8);
   });
 
@@ -6829,7 +6829,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0, dryRun: true });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     expect(result.reclaimedBytes).toBe(3);
     const meta = await stack.query({ filter: { typeId: '_attachment@1' } });
     expect(meta.records).toHaveLength(1);
@@ -6844,7 +6844,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
     expect(result.reclaimedBytes).toBe(3);
   });
 
@@ -6861,7 +6861,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   // Without listBlobs() the sweep's only way to discover a file is its
@@ -6883,7 +6883,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([fileId]);
+    expect(result.deletedFileIds).toEqual([fileId]);
   });
 
   test('adapter without listBlobs() cannot find bare-bytes orphans', async () => {
@@ -6899,7 +6899,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([]);
+    expect(result.deletedFileIds).toEqual([]);
   });
 
   // A concurrent associate() landing between the sweep's own scan and its
@@ -6922,7 +6922,7 @@ describe('collectAttachmentGarbage', () => {
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
-    expect(result.deleted).toEqual([okFileId]);
+    expect(result.deletedFileIds).toEqual([okFileId]);
     expect(result.reclaimedBytes).toBe(2);
   });
 });

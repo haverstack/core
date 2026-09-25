@@ -11,8 +11,9 @@
  *                by both sides of a client/server connection
  *   ./adapter  — the interfaces a storage adapter implements
  *   ./testing  — the in-memory MemoryAdapter for tests
- * Storage adapters are published as separate packages:
- *   @haverstack/adapter-sqlite
+ * Storage adapters are published as separate packages — adapter-local,
+ * adapter-api, record-adapter-sqlite, record-adapter-do-sqlite,
+ * blob-adapter-disk and blob-adapter-s3, all under @haverstack/.
  */
 
 // Core class and client interface

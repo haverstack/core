@@ -35,7 +35,7 @@ A Stack is opened with the async factory `Stack.open(adapter, opts)`, which read
 const { did, privateKey } = await generateDidKeypair();
 const adapter = await LocalAdapter.initialize({
   path: './my-stack.db',
-  entityId: did, // required — owner entity ID (a DID)
+  ownerEntityId: did, // required — owner entity ID (a DID)
   timezone: 'America/New_York', // optional — IANA timezone string, passthrough metadata
 });
 
@@ -54,13 +54,13 @@ stack.timezone; // from adapter.timezone — string | undefined
 
 `LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
 
-`LocalAdapter.openOrInitialize()` covers the common case where an app doesn't know which run it is on. It takes the same options, except that `entityId` also accepts a function — called **only** when the database has to be created, so a returning run neither mints a throwaway keypair nor needs one to hand:
+`LocalAdapter.openOrInitialize()` covers the common case where an app doesn't know which run it is on. It takes the same options, except that `ownerEntityId` also accepts a function — called **only** when the database has to be created, so a returning run neither mints a throwaway keypair nor needs one to hand:
 
 ```ts
 const adapter = await LocalAdapter.openOrInitialize({
   path: './my-stack.db',
   timezone: 'America/New_York',
-  entityId: async () => {
+  ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
     await persistSomewhereSafe(privateKey); // see Identity § Key custody
     return did;

@@ -4,7 +4,6 @@ import type {
   StackRecord,
   StackType,
   RecordVersion,
-  Association,
   AssociationChange,
   AuthorityAssociation,
   DataAssociation,
@@ -655,9 +654,9 @@ export type WireRecordChange = {
   parentId?: string;
   actor?: WireChangeActor;
   /** Present when `ops` includes `associate`. See RecordChange.associationsAdded. */
-  associationsAdded?: Association[];
+  associationsAdded?: DataAssociation[];
   /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
-  associationsRemoved?: Association[];
+  associationsRemoved?: DataAssociation[];
   record?: WireRecord;
   cursor?: string;
 };

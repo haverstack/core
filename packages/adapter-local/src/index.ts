@@ -53,9 +53,9 @@ export {
   defaultTokenStorePath,
 } from '@haverstack/record-adapter-sqlite';
 export type {
-  NativeRecordInitializeOptions,
-  NativeRecordOpenOptions,
-  NativeTokenStoreOptions,
+  NativeSQLiteRecordAdapterInitializeOptions,
+  NativeSQLiteRecordAdapterOpenOptions,
+  NativeTokenStoreOpenOptions,
 } from '@haverstack/record-adapter-sqlite';
 export type { TokenSession } from '@haverstack/core';
 export type { TokenInfo } from '@haverstack/core/wire';
@@ -65,18 +65,18 @@ export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 // Option types
 // -------------------------------------------------------
 
-export type LocalInitializeOptions = {
+export type LocalAdapterInitializeOptions = {
   /** Absolute path to the .db file. Must not already exist. */
   path: string;
   /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
   timezone?: string;
   /** Entity ID of the stack owner. */
-  entityId: string;
-  /** Bypass the storage-ownership lock check. See LocalOpenOptions.force. */
+  ownerEntityId: string;
+  /** Bypass the storage-ownership lock check. See LocalAdapterOpenOptions.force. */
   force?: boolean;
 };
 
-export type LocalOpenOptions = {
+export type LocalAdapterOpenOptions = {
   /** Absolute path to an existing .db file. */
   path: string;
   /**
@@ -88,7 +88,7 @@ export type LocalOpenOptions = {
   force?: boolean;
 };
 
-export type LocalOpenOrInitializeOptions = {
+export type LocalAdapterOpenOrInitializeOptions = {
   /** Absolute path to the .db file — opened if it exists, initialized if not. */
   path: string;
   /**
@@ -103,10 +103,10 @@ export type LocalOpenOrInitializeOptions = {
    * *not* checked there — invoking it just to compare would defeat the
    * point of making it lazy.
    */
-  entityId: string | (() => string | Promise<string>);
+  ownerEntityId: string | (() => string | Promise<string>);
   /** IANA timezone string. Consulted only on the initialize path. */
   timezone?: string;
-  /** Bypass the storage-ownership lock check. See LocalOpenOptions.force. */
+  /** Bypass the storage-ownership lock check. See LocalAdapterOpenOptions.force. */
   force?: boolean;
 };
 
@@ -135,10 +135,10 @@ export class LocalAdapter implements StackAdapter {
    * Initialize a new local stack. Fails if the database already exists —
    * use open() for existing stacks.
    */
-  static async initialize(opts: LocalInitializeOptions): Promise<LocalAdapter> {
+  static async initialize(opts: LocalAdapterInitializeOptions): Promise<LocalAdapter> {
     const record = await NativeSQLiteRecordAdapter.initialize({
       path: opts.path,
-      entityId: opts.entityId,
+      ownerEntityId: opts.ownerEntityId,
       timezone: opts.timezone,
       force: opts.force,
     });
@@ -150,7 +150,7 @@ export class LocalAdapter implements StackAdapter {
    * Open an existing local stack. Fails if the database does not exist —
    * use initialize() for new stacks.
    */
-  static async open(opts: LocalOpenOptions): Promise<LocalAdapter> {
+  static async open(opts: LocalAdapterOpenOptions): Promise<LocalAdapter> {
     const record = await NativeSQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
     const blob = new DiskBlobAdapter(join(dirname(opts.path), 'attachments'));
     return new LocalAdapter(record, blob, opts.path, opts.force);
@@ -160,25 +160,26 @@ export class LocalAdapter implements StackAdapter {
    * Open the stack at `path` if it already exists, or initialize a new one
    * there if it doesn't — the first-run choreography (does the db exist?
    * open : generate identity, initialize) that every adopter otherwise
-   * has to write by hand. See LocalOpenOrInitializeOptions for how
-   * `entityId` is used differently on each path.
+   * has to write by hand. See LocalAdapterOpenOrInitializeOptions for how
+   * `ownerEntityId` is used differently on each path.
    */
-  static async openOrInitialize(opts: LocalOpenOrInitializeOptions): Promise<LocalAdapter> {
+  static async openOrInitialize(opts: LocalAdapterOpenOrInitializeOptions): Promise<LocalAdapter> {
     if (existsSync(opts.path)) {
       const adapter = await LocalAdapter.open({ path: opts.path, force: opts.force });
-      if (typeof opts.entityId === 'string' && opts.entityId !== adapter.ownerEntityId) {
+      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== adapter.ownerEntityId) {
         throw new Error(
           `Cannot open: stack at "${opts.path}" is owned by "${adapter.ownerEntityId}", ` +
-            `but openOrInitialize() was called with entityId "${opts.entityId}".`,
+            `but openOrInitialize() was called with ownerEntityId "${opts.ownerEntityId}".`,
         );
       }
       return adapter;
     }
 
-    const entityId = typeof opts.entityId === 'function' ? await opts.entityId() : opts.entityId;
+    const ownerEntityId =
+      typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
     return LocalAdapter.initialize({
       path: opts.path,
-      entityId,
+      ownerEntityId,
       timezone: opts.timezone,
       force: opts.force,
     });

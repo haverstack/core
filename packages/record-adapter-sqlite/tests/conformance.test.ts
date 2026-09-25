@@ -24,7 +24,7 @@ runRecordAdapterConformance({
     mkdirSync(currentDir, { recursive: true });
     return NativeSQLiteRecordAdapter.initialize({
       path: join(currentDir, 'test.db'),
-      entityId: 'did:key:conformance-test',
+      ownerEntityId: 'did:key:conformance-test',
     });
   },
   close: async (adapter) => {

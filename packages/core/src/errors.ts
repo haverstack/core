@@ -39,8 +39,8 @@ export type StackErrorCode =
 /**
  * Root of the Stack error taxonomy. A single `instanceof StackError` answers
  * "is this a Stack-domain error or a bug?" — the question a server's error
- * middleware asks before serializing a wire body, and one a nine-arm
- * instanceof ladder answers only by exhaustion. Every subclass carries its
+ * middleware asks before serializing a wire body, and one an instanceof
+ * ladder answers only by exhaustion. Every subclass carries its
  * discriminator as an instance `code`, so serialization is a lookup rather
  * than a chain of class tests.
  *
