@@ -2137,6 +2137,66 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-bad-request-unknown-query-param',
+    description:
+      'A query param the endpoint does not define returns 400 with code "bad_request" rather ' +
+      'than being ignored: an ignored filter param answers a wider query than the one sent, ' +
+      'with a 200 that never says so. The same holds on every endpoint. See ' +
+      'docs/spec/wire-format.md § Unrecognized input.',
+    method: 'GET',
+    path: '/records?authorId=did%3Akey%3Az6MkMember',
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Unknown query param: authorId' },
+    },
+  },
+  {
+    name: 'error-bad-request-non-boolean-param',
+    description:
+      'A boolean query param takes only "true" or "false"; any other value returns 400 with ' +
+      'code "bad_request" rather than reading as false. See docs/spec/wire-format.md ' +
+      '§ Unrecognized input.',
+    method: 'GET',
+    path: '/records?includeDeleted=1',
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid includeDeleted: expected true or false, got "1"',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-unknown-query-body-key',
+    description:
+      'POST /records/query refuses a key it does not define at any depth of the body — here ' +
+      'inside filter.createdBy — with 400 / code "bad_request". See docs/spec/wire-format.md ' +
+      '§ Unrecognized input.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { createdBy: { authorId: 'did:key:z6MkMember' } } },
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Unknown key in filter.createdBy: authorId' },
+    },
+  },
+  {
+    name: 'error-bad-request-unknown-record-key',
+    description:
+      'POST /records accepts every key a wire record carries — dropping the server-assigned ' +
+      'ones — and refuses any other with 400 / code "bad_request". See ' +
+      'docs/spec/wire-format.md § Unrecognized input.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      typeId: 'com.example/note@1',
+      content: { title: 'Hello' },
+      title: 'Hello',
+    },
+    responseStatus: 400,
+    responseBody: { error: { code: 'bad_request', message: 'Unknown record key: title' } },
+  },
+  {
     name: 'error-validation-failed',
     description:
       'PATCH content that fails the target type schema returns 422 with code "validation" and ' +

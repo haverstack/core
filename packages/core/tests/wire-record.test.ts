@@ -65,6 +65,13 @@ describe('createOptionsFromWireRecord — stamped fields', () => {
   });
 });
 
+describe('createOptionsFromWireRecord — unrecognized keys', () => {
+  test('a key no wire record carries is refused rather than ignored', () => {
+    expect(() => parse(wireBody({ entityId: OWNER }))).toThrow(StackBadRequestError);
+    expect(() => parse(wireBody({ entityId: OWNER }))).toThrow(/entityId/);
+  });
+});
+
 // -------------------------------------------------------
 // The clock fields
 // -------------------------------------------------------

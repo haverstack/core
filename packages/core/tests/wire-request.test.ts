@@ -35,11 +35,16 @@ describe('parseQueryParams', () => {
     expect(parseQueryParams(url('')).filter).toBeUndefined();
   });
 
-  test('includeDeleted and includeUnlisted are set only by the literal "true"', () => {
+  test('includeDeleted and includeUnlisted take only "true" or "false"', () => {
     expect(parseQueryParams(url('?includeDeleted=true')).filter?.includeDeleted).toBe(true);
-    expect(parseQueryParams(url('?includeDeleted=1')).filter?.includeDeleted).toBeUndefined();
+    expect(parseQueryParams(url('?includeDeleted=false')).filter?.includeDeleted).toBeUndefined();
     expect(parseQueryParams(url('?includeUnlisted=true')).filter?.includeUnlisted).toBe(true);
-    expect(parseQueryParams(url('?includeUnlisted=yes')).filter?.includeUnlisted).toBeUndefined();
+    expect(() => parseQueryParams(url('?includeDeleted=1'))).toThrow(StackBadRequestError);
+    expect(() => parseQueryParams(url('?includeUnlisted=yes'))).toThrow(StackBadRequestError);
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseQueryParams(url('?entityId=did:key:x'))).toThrow(/Unknown query param/);
   });
 
   test('a malformed date bound is refused rather than dropped', () => {
@@ -145,10 +150,32 @@ describe('parseQueryParams', () => {
 // -------------------------------------------------------
 
 describe('parseQueryBody', () => {
-  test('a non-object body parses to an empty query', () => {
+  test('an absent body is an empty query, and a non-object body is refused', () => {
     expect(parseQueryBody(undefined)).toEqual({});
-    expect(parseQueryBody(null)).toEqual({});
-    expect(parseQueryBody('nonsense')).toEqual({});
+    expect(() => parseQueryBody(null)).toThrow(StackBadRequestError);
+    expect(() => parseQueryBody('nonsense')).toThrow(StackBadRequestError);
+  });
+
+  test('an unrecognized key is refused at every level', () => {
+    for (const body of [
+      { filters: {} },
+      { filter: { entityId: 'x' } },
+      { filter: { createdBy: { entityId: 'x' } } },
+      { filter: { attachment: { label: 'a', mime: 'x' } } },
+      { filter: { createdAt: { before: '2024-01-01', on: '2024-01-01' } } },
+      { filter: { relatedTo: { label: 'x', scope: 'entity' } } },
+      { filter: { relatedTo: { target: { kind: 'entity', entityId: 'e', ns: 'x' } } } },
+      { sort: { field: 'createdAt', order: 'asc' } },
+    ]) {
+      expect(() => parseQueryBody(body), JSON.stringify(body)).toThrow(/Unknown key/);
+    }
+  });
+
+  test('a non-boolean includeDeleted or a non-string cursor is refused', () => {
+    expect(() => parseQueryBody({ filter: { includeDeleted: 'true' } })).toThrow(
+      StackBadRequestError,
+    );
+    expect(() => parseQueryBody({ cursor: 5 })).toThrow(StackBadRequestError);
   });
 
   test('ISO date strings decode back to Date objects', () => {
@@ -319,9 +346,15 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?include=everything'))).toThrow(StackBadRequestError);
   });
 
-  test('includeUnlisted is set only by the literal "true"', () => {
+  test('includeUnlisted takes only "true" or "false"', () => {
     expect(parseChangeParams(changes('?includeUnlisted=true')).includeUnlisted).toBe(true);
-    expect(parseChangeParams(changes('?includeUnlisted=1')).includeUnlisted).toBe(false);
+    expect(parseChangeParams(changes('?includeUnlisted=false')).includeUnlisted).toBe(false);
+    expect(() => parseChangeParams(changes('?includeUnlisted=1'))).toThrow(StackBadRequestError);
+  });
+
+  test('an unrecognized param is refused, and the resume cursor is not one', () => {
+    expect(() => parseChangeParams(changes('?token=abc'))).toThrow(/Unknown query param/);
+    expect(() => parseChangeParams(changes('?since=abc'))).not.toThrow();
   });
 });
 
@@ -402,6 +435,12 @@ describe('parseJournalParams', () => {
 
   test('reads an empty query as the whole log, imposing no default page size', () => {
     expect(parseJournalParams(journal('/records/r1/journal'))).toEqual({});
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseJournalParams(journal('/records/r1/journal?sinceSeq=1'))).toThrow(
+      /Unknown query param/,
+    );
   });
 
   test('round-trips a window', () => {

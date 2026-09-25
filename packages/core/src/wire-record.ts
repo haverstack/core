@@ -35,6 +35,28 @@ export type WireCreateRequest = {
   options: Omit<BackdatableCreateRecordOptions, 'createdBy'>;
 };
 
+/**
+ * Every top-level key a wire record carries. A create body is a whole
+ * record, so each of these is accepted — stamped ones are then dropped —
+ * and anything else is refused. See docs/spec/wire-format.md § Unrecognized input.
+ */
+const WIRE_RECORD_KEYS: readonly string[] = [
+  'id',
+  'typeId',
+  'createdAt',
+  'updatedAt',
+  'content',
+  'version',
+  'parentId',
+  'appId',
+  'createdBy',
+  'updatedBy',
+  'deletedAt',
+  'unlistedAt',
+  'permissions',
+  'associations',
+];
+
 function requireBody(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))
     throw new StackBadRequestError('Invalid record body: expected an object');
@@ -94,6 +116,11 @@ export function createOptionsFromWireRecord(
   ownerEntityId: EntityId,
 ): WireCreateRequest {
   const record = requireBody(body);
+  const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown record key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`,
+    );
 
   const typeId = record.typeId;
   if (typeof typeId !== 'string' || typeId === '')

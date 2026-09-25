@@ -741,10 +741,17 @@ const ERROR_CLASS_FOR_CODE = {
 /**
  * Fixtures no conformant client can originate: `QuerySort` is a union, so
  * a request naming both sort parameters is unrepresentable before it ever
- * reaches the wire. The rule is a server's to enforce, and the fixture
- * exists for server implementations to test against.
+ * reaches the wire, and APIAdapter never sends a name the wire does not
+ * define. The rules are a server's to enforce, and the fixtures exist for
+ * server implementations to test against.
  */
-const SERVER_ONLY_ERROR_FIXTURES = new Set(['error-bad-request-both-sort-parameters']);
+const SERVER_ONLY_ERROR_FIXTURES = new Set([
+  'error-bad-request-both-sort-parameters',
+  'error-bad-request-unknown-query-param',
+  'error-bad-request-non-boolean-param',
+  'error-bad-request-unknown-query-body-key',
+  'error-bad-request-unknown-record-key',
+]);
 
 describe('error response fixtures', () => {
   for (const fixture of errorResponseFixtures.filter(
