@@ -2,7 +2,7 @@
  * Stack — API Adapter
  * -------------------------------------------------------
  * Implements StackAdapter over HTTP. On open(), calls the
- * discovery endpoint to populate AdapterCapabilities before
+ * discovery endpoint to populate StackCapabilities before
  * returning, so capabilities are available synchronously
  * once the adapter is in hand.
  *
@@ -13,7 +13,7 @@
  *
  * v1 requires connectivity — offline queue is deferred. Opt-in
  * optimistic concurrency (ifVersion → If-Match) is supported: see the
- * expectedVersion option on mutateRecord(), deleteRecord() and every
+ * ifVersion option on mutateRecord(), deleteRecord() and every
  * other mutation that bumps a version.
  *
  * The write options that describe storage rather than the request are
@@ -55,7 +55,7 @@ import {
   filtersContent,
 } from '@haverstack/core/adapter';
 import type {
-  AdapterCapabilities,
+  StackCapabilities,
   MissingCapability,
   SubscribeChangesOptions,
 } from '@haverstack/core/adapter';
@@ -808,7 +808,7 @@ const performHandshake = async (
 // -------------------------------------------------------
 
 export class APIAdapter implements StackAdapter {
-  readonly capabilities: AdapterCapabilities;
+  readonly capabilities: StackCapabilities;
   readonly ownerEntityId: string;
   readonly timezone: string | undefined;
 
@@ -821,7 +821,7 @@ export class APIAdapter implements StackAdapter {
     private readonly credential: DidCredential | undefined,
     ownerEntityId: string,
     timezone: string | undefined,
-    capabilities: AdapterCapabilities,
+    capabilities: StackCapabilities,
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
   ) {
@@ -832,7 +832,7 @@ export class APIAdapter implements StackAdapter {
 
   /**
    * Connect to a remote stack server. Calls GET /.well-known/stack to verify
-   * the server and populate AdapterCapabilities before returning.
+   * the server and populate StackCapabilities before returning.
    *
    * Throws APIAdapterAuthError on 401.
    * Throws APIAdapterConnectionError if the server is unreachable.
@@ -1069,14 +1069,14 @@ export class APIAdapter implements StackAdapter {
   async mutateRecord(
     id: RecordId,
     changes: RecordChangeSet,
-    opts: { expectedVersion?: number } = {},
+    opts: { ifVersion?: number } = {},
   ): Promise<StackRecord> {
     // The change set travels as-is — no record fields (typeId, version,
     // updatedAt) ride along. The server applies it against its own current
     // state and assigns the new version/updatedAt; the response is
     // authoritative. One If-Match fences the whole set.
     const raw = await this.request<WireRecord | undefined>('PATCH', `/records/${id}`, changes, {
-      ifMatch: opts.expectedVersion,
+      ifMatch: opts.ifVersion,
     });
     return requireRecordBody(raw, `PATCH /records/${id}`);
   }
@@ -1085,13 +1085,13 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number } = {},
+    opts: { ifVersion?: number } = {},
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/migrate`,
       { toTypeId, content },
-      { ifMatch: opts.expectedVersion },
+      { ifMatch: opts.ifVersion },
     );
     return requireRecordBody(raw, `POST /records/${id}/migrate`);
   }
@@ -1104,16 +1104,16 @@ export class APIAdapter implements StackAdapter {
    */
   async deleteRecord(
     id: RecordId,
-    opts: { hard?: boolean; expectedVersion?: number } = {},
+    opts: { hard?: boolean; ifVersion?: number } = {},
   ): Promise<StackRecord | null> {
     const path = opts.hard ? `/records/${id}?hard=true` : `/records/${id}`;
     const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
-      ifMatch: opts.expectedVersion,
+      ifMatch: opts.ifVersion,
       // An unconditional hard delete of a record that isn't there purged
       // nothing, which is not an error — the same answer the local
       // adapters give by returning null. A CAS is a real precondition, so
       // its 404 is left to throw.
-      ...(opts.hard && opts.expectedVersion === undefined && { nullOn404: true }),
+      ...(opts.hard && opts.ifVersion === undefined && { nullOn404: true }),
     });
     // The purge answers with the record it destroyed: it is the only
     // report of what it referenced, and every other row naming those files
@@ -1122,15 +1122,12 @@ export class APIAdapter implements StackAdapter {
     return requireRecordBody(raw ?? undefined, `DELETE /records/${id}`);
   }
 
-  async undeleteRecord(
-    id: RecordId,
-    opts: { expectedVersion?: number } = {},
-  ): Promise<StackRecord> {
+  async undeleteRecord(id: RecordId, opts: { ifVersion?: number } = {}): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/undelete`,
       undefined,
-      { ifMatch: opts.expectedVersion },
+      { ifMatch: opts.ifVersion },
     );
     return requireRecordBody(raw, `POST /records/${id}/undelete`);
   }
@@ -1305,13 +1302,13 @@ export class APIAdapter implements StackAdapter {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts: { expectedVersion?: number } = {},
+    opts: { ifVersion?: number } = {},
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
       `/records/${id}/restore/${version}`,
       undefined,
-      { ifMatch: opts.expectedVersion },
+      { ifMatch: opts.ifVersion },
     );
     return requireRecordBody(raw, `POST /records/${id}/restore/${version}`);
   }
@@ -1351,7 +1348,7 @@ export class APIAdapter implements StackAdapter {
    * reaches this on this adapter; the throw guards direct adapter-level
    * callers. See docs/spec/wire-format.md § Upload.
    */
-  async putAttachment(_data: Uint8Array): Promise<FileId> {
+  async putBlob(_data: Uint8Array): Promise<FileId> {
     throw new APIAdapterError(
       'Bytes-only upload is not supported over the wire: POST /attachments always creates ' +
         'an _attachment@1 record. Use Stack.putAttachment(data, { mimeType, filename? }).',
@@ -1374,11 +1371,11 @@ export class APIAdapter implements StackAdapter {
     return requireRecordBody(raw, 'POST /attachments');
   }
 
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
+  async getBlob(fileId: FileId): Promise<Uint8Array> {
     return this.requestBinary(`/attachments/${fileId}`);
   }
 
-  async deleteAttachment(fileId: FileId): Promise<void> {
+  async deleteBlob(fileId: FileId): Promise<void> {
     await this.request<void>('DELETE', `/attachments/${fileId}`);
   }
 

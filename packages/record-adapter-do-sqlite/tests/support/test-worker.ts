@@ -20,7 +20,7 @@ import type {
   ActorOptions,
 } from '@haverstack/core';
 
-type MutationOpts = { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions;
+type MutationOpts = { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions;
 
 export class TestRecordAdapterDO extends DurableObject {
   private adapter!: DoSQLiteRecordAdapter;

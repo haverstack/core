@@ -30,7 +30,7 @@ import { firstRecordedAttachment } from '../src/attachment-download.js';
 import type {
   DataAssociation,
   AttachmentContent,
-  BlobFileInfo,
+  BlobInfo,
   Association,
   AuthorityAssociation,
   GrantContent,
@@ -3600,7 +3600,7 @@ describe('use after close', () => {
 
   test('identity getters still read — they touch no storage', () => {
     expect(stack.ownerEntityId).toBe('owner-123');
-    expect(stack.features).toBeDefined();
+    expect(stack.capabilities).toBeDefined();
   });
 
   test('StackClosedError stays outside the wire taxonomy', () => {
@@ -3616,7 +3616,7 @@ describe('use after close — scoped views', () => {
     await expect(
       scoped.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' }),
     ).rejects.toBeInstanceOf(StackClosedError);
-    expect(await adapter.listFiles!()).toHaveLength(0);
+    expect(await adapter.listBlobs!()).toHaveLength(0);
   });
 
   test('asEntity() itself refuses once closed', async () => {
@@ -5682,7 +5682,7 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
 
   test('throws StackPayloadTooLargeError without touching the adapter', async () => {
     const limitedAdapter = withCeiling(2);
-    const putAttachmentSpy = vi.spyOn(limitedAdapter, 'putAttachment');
+    const putAttachmentSpy = vi.spyOn(limitedAdapter, 'putBlob');
     const limitedStack = await Stack.open(limitedAdapter);
 
     await expect(
@@ -5862,7 +5862,7 @@ describe('Stack.getAttachmentRecords', () => {
   // a caller composing with firstRecordedAttachment() never re-sorts.
   test('orders by earliest createdAt, ties broken by the lower id', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await adapter.putAttachment(data);
+    const fileId = await adapter.putBlob(data);
     const sameInstant = new Date('2024-01-01T00:00:00.000Z');
     const meta = (id: string, createdAt: Date): StackRecord => ({
       id,
@@ -5905,7 +5905,7 @@ describe('Stack.getAttachmentRecords', () => {
 
   test('includes soft-deleted and unlisted records', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await adapter.putAttachment(data);
+    const fileId = await adapter.putBlob(data);
     const live = await stack.create('_attachment@1', {
       fileId,
       mimeType: 'image/png',
@@ -6381,7 +6381,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
   // type off the same record.
   test('when two conflicting records coexist, first-recorded still names one winner', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await adapter.putAttachment(data);
+    const fileId = await adapter.putBlob(data);
     const sameInstant = new Date('2024-01-01T00:00:00.000Z');
     const racer = (id: string, mimeType: string): StackRecord => ({
       id,
@@ -6412,7 +6412,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
 
   test('two different uploaders of identical bytes each get their own filename under a matching mimeType', async () => {
     const data = new Uint8Array([1, 2, 3]);
-    const fileId = await adapter.putAttachment(data);
+    const fileId = await adapter.putBlob(data);
     await stack.create(
       '_attachment@1',
       { fileId, mimeType: 'image/png', size: 3, filename: 'alice.png' },
@@ -6563,7 +6563,7 @@ describe('deleteAttachment', () => {
 
   test('throws StackNotFoundError when neither metadata nor bytes exist', async () => {
     class NoBytesAdapter extends MemoryAdapter {
-      async getAttachment(_fileId: string): Promise<Uint8Array> {
+      async getBlob(_fileId: string): Promise<Uint8Array> {
         throw new Error('not found');
       }
     }
@@ -6837,9 +6837,9 @@ describe('collectAttachmentGarbage', () => {
   // Bytes with no metadata record (a putAttachment() that stored bytes but
   // crashed before creating _attachment@1 — simulated here by writing
   // through the adapter directly, since no Stack method produces this
-  // state on purpose) are only discoverable via StackBlobAdapter.listFiles().
-  test('collects a bare-bytes orphan discovered via listFiles()', async () => {
-    const fileId = await adapter.putAttachment(new Uint8Array([9, 9, 9]));
+  // state on purpose) are only discoverable via StackBlobAdapter.listBlobs().
+  test('collects a bare-bytes orphan discovered via listBlobs()', async () => {
+    const fileId = await adapter.putBlob(new Uint8Array([9, 9, 9]));
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -6847,56 +6847,56 @@ describe('collectAttachmentGarbage', () => {
     expect(result.reclaimedBytes).toBe(3);
   });
 
-  test('adapter without listFiles() still collects metadata-tracked orphans', async () => {
-    class NoListFilesAdapter extends MemoryAdapter {
-      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+  test('adapter without listBlobs() still collects metadata-tracked orphans', async () => {
+    class NoListBlobsAdapter extends MemoryAdapter {
+      override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.open(
-      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    const noListBlobsStack = await Stack.open(
+      new NoListBlobsAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     const {
       content: { fileId },
-    } = await noListFilesStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
+    } = await noListBlobsStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
 
-    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+    const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
     expect(result.deleted).toEqual([fileId]);
   });
 
-  // Without listFiles() the sweep's only way to discover a file is its
+  // Without listBlobs() the sweep's only way to discover a file is its
   // metadata, so a record migrated past @1 must still be found — otherwise
   // its bytes are unreachable by any sweep.
   test('finds a file whose only metadata record is in a later family version', async () => {
-    class NoListFilesAdapter extends MemoryAdapter {
-      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+    class NoListBlobsAdapter extends MemoryAdapter {
+      override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
-    const noListFilesStack = await Stack.open(
-      new NoListFilesAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+    const noListBlobsStack = await Stack.open(
+      new NoListBlobsAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
     );
     const {
       id,
       content: { fileId, mimeType, size },
-    } = await noListFilesStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
-    await defineAttachmentV2(noListFilesStack);
-    await noListFilesStack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
+    } = await noListBlobsStack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
+    await defineAttachmentV2(noListBlobsStack);
+    await noListBlobsStack.commitMigration(id, '_attachment@2', { fileId, mimeType, size });
 
-    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+    const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
     expect(result.deleted).toEqual([fileId]);
   });
 
-  test('adapter without listFiles() cannot find bare-bytes orphans', async () => {
-    class NoListFilesAdapter extends MemoryAdapter {
-      override listFiles: (() => Promise<BlobFileInfo[]>) | undefined = undefined;
+  test('adapter without listBlobs() cannot find bare-bytes orphans', async () => {
+    class NoListBlobsAdapter extends MemoryAdapter {
+      override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
-    const noListFilesAdapter = new NoListFilesAdapter({
+    const noListBlobsAdapter = new NoListBlobsAdapter({
       ownerEntityId: 'owner-123',
       timezone: 'UTC',
     });
-    const noListFilesStack = await Stack.open(noListFilesAdapter);
-    await noListFilesAdapter.putAttachment(new Uint8Array([9, 9, 9]));
+    const noListBlobsStack = await Stack.open(noListBlobsAdapter);
+    await noListBlobsAdapter.putBlob(new Uint8Array([9, 9, 9]));
 
-    const result = await noListFilesStack.collectAttachmentGarbage({ graceMs: 0 });
+    const result = await noListBlobsStack.collectAttachmentGarbage({ graceMs: 0 });
 
     expect(result.deleted).toEqual([]);
   });

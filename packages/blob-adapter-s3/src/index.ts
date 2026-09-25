@@ -27,7 +27,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import type { StackBlobAdapter, BlobFileInfo } from '@haverstack/core/adapter';
+import type { StackBlobAdapter, BlobInfo } from '@haverstack/core/adapter';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -86,7 +86,7 @@ export class S3BlobAdapter implements StackBlobAdapter {
     }
   }
 
-  async putAttachment(data: Uint8Array): Promise<FileId> {
+  async putBlob(data: Uint8Array): Promise<FileId> {
     const fileId = createHash('sha256').update(data).digest('hex');
     if (!(await this.objectExists(fileId))) {
       await this.client.send(
@@ -96,7 +96,7 @@ export class S3BlobAdapter implements StackBlobAdapter {
     return fileId;
   }
 
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
+  async getBlob(fileId: FileId): Promise<Uint8Array> {
     assertFileId(fileId);
     try {
       const response = await this.client.send(
@@ -111,7 +111,7 @@ export class S3BlobAdapter implements StackBlobAdapter {
     }
   }
 
-  async deleteAttachment(fileId: FileId): Promise<void> {
+  async deleteBlob(fileId: FileId): Promise<void> {
     assertFileId(fileId);
     // S3's DeleteObject is idempotent — a missing key is treated as
     // already-deleted rather than an error, so no non-fatal catch is
@@ -119,8 +119,8 @@ export class S3BlobAdapter implements StackBlobAdapter {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: fileId }));
   }
 
-  async listFiles(): Promise<BlobFileInfo[]> {
-    const files: BlobFileInfo[] = [];
+  async listBlobs(): Promise<BlobInfo[]> {
+    const files: BlobInfo[] = [];
     let continuationToken: string | undefined;
     do {
       const response = await this.client.send(

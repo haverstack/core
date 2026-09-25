@@ -786,11 +786,11 @@ describe('error response fixtures', () => {
           // If-Match (see error-version-conflict-if-match-mismatch) travels as a quoted
           // version number, matching the header APIAdapter itself sends for ifVersion.
           const ifMatch = fixture.requestHeaders?.['If-Match'];
-          const expectedVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
+          const ifVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
           return adapter.mutateRecord(
             idFromPath(fixture.path),
             fixture.requestBody as RecordChangeSet,
-            { expectedVersion },
+            { ifVersion },
           );
         }
         throw new Error(`no dispatch wired for error fixture "${fixture.name}"`);

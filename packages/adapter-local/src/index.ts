@@ -34,8 +34,8 @@ import type {
   RecordChangeSet,
 } from '@haverstack/core';
 import type {
-  AdapterCapabilities,
-  BlobFileInfo,
+  StackCapabilities,
+  BlobInfo,
   StackBlobAdapter,
   JournalOptions,
 } from '@haverstack/core/adapter';
@@ -198,7 +198,7 @@ export class LocalAdapter implements StackAdapter {
   // StackRecordAdapter
   // -------------------------------------------------------
 
-  get capabilities(): AdapterCapabilities {
+  get capabilities(): StackCapabilities {
     return this.record.capabilities;
   }
 
@@ -222,7 +222,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     changes: RecordChangeSet,
     opts?: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
     } & ActorOptions,
@@ -232,14 +232,14 @@ export class LocalAdapter implements StackAdapter {
 
   async deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean; expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { hard?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
   async undeleteRecord(
     id: RecordId,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
@@ -290,7 +290,7 @@ export class LocalAdapter implements StackAdapter {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
@@ -299,7 +299,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
@@ -320,21 +320,21 @@ export class LocalAdapter implements StackAdapter {
   // StackBlobAdapter
   // -------------------------------------------------------
 
-  async putAttachment(data: Uint8Array): Promise<FileId> {
-    return this.blob.putAttachment(data);
+  async putBlob(data: Uint8Array): Promise<FileId> {
+    return this.blob.putBlob(data);
   }
 
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    return this.blob.getAttachment(fileId);
+  async getBlob(fileId: FileId): Promise<Uint8Array> {
+    return this.blob.getBlob(fileId);
   }
 
-  async deleteAttachment(fileId: FileId): Promise<void> {
-    return this.blob.deleteAttachment(fileId);
+  async deleteBlob(fileId: FileId): Promise<void> {
+    return this.blob.deleteBlob(fileId);
   }
 
   /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
-  async listFiles(): Promise<BlobFileInfo[]> {
-    return this.blob.listFiles!();
+  async listBlobs(): Promise<BlobInfo[]> {
+    return this.blob.listBlobs!();
   }
 
   // -------------------------------------------------------

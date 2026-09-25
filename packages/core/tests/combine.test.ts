@@ -3,8 +3,8 @@ import { combineAdapters } from '../src/combine.js';
 import type {
   StackRecordAdapter,
   StackBlobAdapter,
-  AdapterCapabilities,
-  BlobFileInfo,
+  StackCapabilities,
+  BlobInfo,
   StackRecord,
   RecordChangeSet,
   FileId,
@@ -25,7 +25,7 @@ const purgedRecord: StackRecord = {
 // Minimal fakes
 // -------------------------------------------------------
 
-const capabilities: AdapterCapabilities = {
+const capabilities: StackCapabilities = {
   filter: {
     content: 'none',
     contentPresent: false,
@@ -83,9 +83,9 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
 /** Bare-minimum StackBlobAdapter — only what combineAdapters() touches. */
 function makeBlobAdapter(overrides: Partial<StackBlobAdapter> = {}): StackBlobAdapter {
   return {
-    putAttachment: async () => 'file-id',
-    getAttachment: async () => new Uint8Array(),
-    deleteAttachment: async () => {},
+    putBlob: async () => 'file-id',
+    getBlob: async () => new Uint8Array(),
+    deleteBlob: async () => {},
     ...overrides,
   };
 }
@@ -112,7 +112,7 @@ describe('combineAdapters', () => {
         },
       }),
       blob: makeBlobAdapter({
-        putAttachment: async (data) => {
+        putBlob: async (data) => {
           putBytes = data;
           return 'computed-id';
         },
@@ -131,7 +131,7 @@ describe('combineAdapters', () => {
     expect(created).toBe(record);
 
     const bytes = new Uint8Array([1, 2, 3]);
-    const fileId = await adapter.putAttachment(bytes);
+    const fileId = await adapter.putBlob(bytes);
     expect(putBytes).toBe(bytes);
     expect(fileId).toBe('computed-id');
   });
@@ -263,23 +263,23 @@ describe('combineAdapters', () => {
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeUndefined();
     });
 
-    test('listFiles is present when the blob adapter implements it', async () => {
-      const files: BlobFileInfo[] = [{ fileId: 'f1', size: 3, modifiedAt: new Date() }];
+    test('listBlobs is present when the blob adapter implements it', async () => {
+      const files: BlobInfo[] = [{ fileId: 'f1', size: 3, modifiedAt: new Date() }];
       const adapter = combineAdapters({
         record: makeRecordAdapter(),
-        blob: makeBlobAdapter({ listFiles: async () => files }),
+        blob: makeBlobAdapter({ listBlobs: async () => files }),
       });
 
-      expect(adapter.listFiles).toBeDefined();
-      expect(await adapter.listFiles!()).toBe(files);
+      expect(adapter.listBlobs).toBeDefined();
+      expect(await adapter.listBlobs!()).toBe(files);
     });
 
-    test('listFiles is absent when the blob adapter does not implement it', () => {
+    test('listBlobs is absent when the blob adapter does not implement it', () => {
       const adapter = combineAdapters({
         record: makeRecordAdapter(),
         blob: makeBlobAdapter(),
       });
-      expect(adapter.listFiles).toBeUndefined();
+      expect(adapter.listBlobs).toBeUndefined();
     });
 
     test('subscribeChanges is present when the record adapter implements it', async () => {

@@ -17,7 +17,7 @@ import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises'
 import { join } from 'path';
 import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import type { StackBlobAdapter, BlobFileInfo } from '@haverstack/core/adapter';
+import type { StackBlobAdapter, BlobInfo } from '@haverstack/core/adapter';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -32,7 +32,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     mkdirSync(dir, { recursive: true });
   }
 
-  async putAttachment(data: Uint8Array): Promise<FileId> {
+  async putBlob(data: Uint8Array): Promise<FileId> {
     const fileId = createHash('sha256').update(data).digest('hex');
     const finalPath = join(this.dir, fileId);
     if (!existsSync(finalPath)) {
@@ -48,14 +48,14 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     return fileId;
   }
 
-  async getAttachment(fileId: FileId): Promise<Uint8Array> {
+  async getBlob(fileId: FileId): Promise<Uint8Array> {
     assertFileId(fileId);
     if (!existsSync(join(this.dir, fileId)))
       throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return readFile(join(this.dir, fileId));
   }
 
-  async deleteAttachment(fileId: FileId): Promise<void> {
+  async deleteBlob(fileId: FileId): Promise<void> {
     assertFileId(fileId);
     try {
       await unlink(join(this.dir, fileId));
@@ -64,7 +64,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     }
   }
 
-  async listFiles(): Promise<BlobFileInfo[]> {
+  async listBlobs(): Promise<BlobInfo[]> {
     const entries = await readdir(this.dir);
     const fileIds = entries.filter((name) => SHA256_HEX_RE.test(name));
     return Promise.all(

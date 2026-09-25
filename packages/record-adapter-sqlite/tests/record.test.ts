@@ -363,17 +363,17 @@ describe('records — CRUD', () => {
 });
 
 // -------------------------------------------------------
-// expectedVersion (opt-in optimistic concurrency)
+// ifVersion (opt-in optimistic concurrency)
 // -------------------------------------------------------
 
-describe('expectedVersion', () => {
-  test('patchContent applies when expectedVersion matches', async () => {
+describe('ifVersion', () => {
+  test('patchContent applies when ifVersion matches', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
     const updated = await adapter.mutateRecord(
       record.id,
       { contentPatch: { text: 'Updated' } },
-      { expectedVersion: 1 },
+      { ifVersion: 1 },
     );
     expect(updated.version).toBe(2);
     expect(updated.content).toEqual({ text: 'Updated' });
@@ -385,7 +385,7 @@ describe('expectedVersion', () => {
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'first' } }); // -> v2
 
     const err = await adapter
-      .mutateRecord(record.id, { contentPatch: { text: 'second' } }, { expectedVersion: 1 })
+      .mutateRecord(record.id, { contentPatch: { text: 'second' } }, { ifVersion: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).recordId).toBe(record.id);
@@ -403,11 +403,7 @@ describe('expectedVersion', () => {
       makeRecord({ content: { text: 'searchable original' } }),
     );
     await adapter
-      .mutateRecord(
-        record.id,
-        { contentPatch: { text: 'rejected update' } },
-        { expectedVersion: 999 },
-      )
+      .mutateRecord(record.id, { contentPatch: { text: 'rejected update' } }, { ifVersion: 999 })
       .catch(() => {});
 
     const stillFindsOriginal = await adapter.queryRecords({ filter: { search: 'original' } });
@@ -416,24 +412,24 @@ describe('expectedVersion', () => {
     expect(doesNotFindRejected.records).toEqual([]);
   });
 
-  test('soft deleteRecord and undeleteRecord enforce expectedVersion', async () => {
+  test('soft deleteRecord and undeleteRecord enforce ifVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
-    await expect(adapter.deleteRecord(record.id, { expectedVersion: 1 })).rejects.toBeInstanceOf(
+    await expect(adapter.deleteRecord(record.id, { ifVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
     );
-    await adapter.deleteRecord(record.id, { expectedVersion: 2 }); // -> v3
+    await adapter.deleteRecord(record.id, { ifVersion: 2 }); // -> v3
 
-    await expect(adapter.undeleteRecord(record.id, { expectedVersion: 1 })).rejects.toBeInstanceOf(
+    await expect(adapter.undeleteRecord(record.id, { ifVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
     );
-    const undeleted = await adapter.undeleteRecord(record.id, { expectedVersion: 3 }); // -> v4
+    const undeleted = await adapter.undeleteRecord(record.id, { ifVersion: 3 }); // -> v4
     expect(undeleted.version).toBe(4);
   });
 
-  test('commitMigration enforces expectedVersion and leaves typeId untouched on mismatch', async () => {
+  test('commitMigration enforces ifVersion and leaves typeId untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
@@ -444,7 +440,7 @@ describe('expectedVersion', () => {
         'com.example/note@2',
         { text: 'migrated' },
         {
-          expectedVersion: 1,
+          ifVersion: 1,
         },
       ),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
@@ -459,27 +455,27 @@ describe('expectedVersion', () => {
       record.id,
       'com.example/note@2',
       { text: 'migrated' },
-      { expectedVersion: 2 },
+      { ifVersion: 2 },
     ); // -> v3
     expect(migrated.typeId).toBe('com.example/note@2');
     expect(migrated.version).toBe(3);
   });
 
-  test('hard deleteRecord enforces expectedVersion and leaves the record untouched on mismatch', async () => {
+  test('hard deleteRecord enforces ifVersion and leaves the record untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(
-      adapter.deleteRecord(record.id, { hard: true, expectedVersion: 1 }),
+      adapter.deleteRecord(record.id, { hard: true, ifVersion: 1 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
     expect(await adapter.getRecord(record.id)).not.toBeNull();
 
-    await adapter.deleteRecord(record.id, { hard: true, expectedVersion: 2 });
+    await adapter.deleteRecord(record.id, { hard: true, ifVersion: 2 });
     expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
-  test('associate and dissociate take no expectedVersion and never bump', async () => {
+  test('associate and dissociate take no ifVersion and never bump', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
@@ -491,7 +487,7 @@ describe('expectedVersion', () => {
 
   // mutateRecord's non-bumping path (opts.bumpsVersion: false — what a
   // caller passes for an associations-only change set) re-checks
-  // expectedVersion against a fresh read inside its own transaction,
+  // ifVersion against a fresh read inside its own transaction,
   // since there is no version-bumping UPDATE for the guard to ride in.
   // That read can come back null if a concurrent hard delete lands
   // between mutateRecord's own read and this re-check; the adapter must
@@ -517,12 +513,12 @@ describe('expectedVersion', () => {
       adapter.mutateRecord(
         record.id,
         { associations: [{ kind: 'tag', label: 'x' }] },
-        { bumpsVersion: false, expectedVersion: 1 },
+        { bumpsVersion: false, ifVersion: 1 },
       ),
     ).rejects.toBeInstanceOf(StackNotFoundError);
   });
 
-  test('a permissions change set enforces expectedVersion', async () => {
+  test('a permissions change set enforces ifVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
@@ -530,19 +526,19 @@ describe('expectedVersion', () => {
       adapter.mutateRecord(
         record.id,
         { permissions: [{ kind: 'anyone', label: 'read' }] },
-        { expectedVersion: 99 },
+        { ifVersion: 99 },
       ),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
 
     await adapter.mutateRecord(
       record.id,
       { permissions: [{ kind: 'anyone', label: 'read' }] },
-      { expectedVersion: 1 },
+      { ifVersion: 1 },
     );
     expect((await adapter.getRecord(record.id))?.version).toBe(2);
   });
 
-  test('restoreVersion enforces expectedVersion', async () => {
+  test('restoreVersion enforces ifVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
     await adapter.saveVersion(record.id, {
@@ -553,11 +549,11 @@ describe('expectedVersion', () => {
     });
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
-    await expect(
-      adapter.restoreVersion(record.id, 1, { expectedVersion: 1 }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    await expect(adapter.restoreVersion(record.id, 1, { ifVersion: 1 })).rejects.toBeInstanceOf(
+      StackVersionConflictError,
+    );
 
-    const restored = await adapter.restoreVersion(record.id, 1, { expectedVersion: 2 }); // -> v3
+    const restored = await adapter.restoreVersion(record.id, 1, { ifVersion: 2 }); // -> v3
     expect(restored.version).toBe(3);
     expect(restored.content).toEqual({ text: 'original' });
   });
@@ -571,7 +567,7 @@ describe('expectedVersion', () => {
 });
 
 // -------------------------------------------------------
-// expectedVersion — enforced against the row actually written
+// ifVersion — enforced against the row actually written
 // -------------------------------------------------------
 
 /**
@@ -586,7 +582,7 @@ describe('expectedVersion', () => {
  * here with the precondition already satisfied, so the next synchronous
  * statement below lands squarely between the check and the write.
  */
-describe('expectedVersion is re-checked by the statement that writes', () => {
+describe('ifVersion is re-checked by the statement that writes', () => {
   /**
    * A second writer, on its own connection — the adapter holds a lock
    * *file*, which only initialize()/open() consult, so this is the real
@@ -612,7 +608,7 @@ describe('expectedVersion is re-checked by the statement that writes', () => {
     });
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
-    const restoring = adapter.restoreVersion(record.id, 1, { expectedVersion: 2 });
+    const restoring = adapter.restoreVersion(record.id, 1, { ifVersion: 2 });
     bumpVersionBehindTheAdapter(record.id); // -> v3, after the check, before the write
 
     const err = await restoring.catch((e: unknown) => e);
@@ -634,7 +630,7 @@ describe('expectedVersion is re-checked by the statement that writes', () => {
       record.id,
       'com.example/note@2',
       { text: 'migrated' },
-      { expectedVersion: 1 },
+      { ifVersion: 1 },
     );
     bumpVersionBehindTheAdapter(record.id); // -> v2, after the check, before the write
 
@@ -1743,14 +1739,14 @@ describe('mutateRecord — the `unlisted` key', () => {
     expect(retrieved?.version).toBe(3);
   });
 
-  test('enforces expectedVersion', async () => {
+  test('enforces ifVersion', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
     await expect(
-      adapter.mutateRecord(record.id, { unlisted: true }, { expectedVersion: 99 }),
+      adapter.mutateRecord(record.id, { unlisted: true }, { ifVersion: 99 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.mutateRecord(record.id, { unlisted: true }, { expectedVersion: 1 });
+    await adapter.mutateRecord(record.id, { unlisted: true }, { ifVersion: 1 });
   });
 });
 
@@ -1862,16 +1858,16 @@ describe('mutateRecord — the `parentId` key', () => {
     expect(result.records.map((r) => r.id)).toEqual([record.id]);
   });
 
-  test('enforces expectedVersion', async () => {
+  test('enforces ifVersion', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
     await expect(
-      adapter.mutateRecord(record.id, { parentId: box.id }, { expectedVersion: 99 }),
+      adapter.mutateRecord(record.id, { parentId: box.id }, { ifVersion: 99 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.mutateRecord(record.id, { parentId: box.id }, { expectedVersion: 1 });
+    await adapter.mutateRecord(record.id, { parentId: box.id }, { ifVersion: 1 });
   });
 });
 

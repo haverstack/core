@@ -180,7 +180,7 @@ describe('a journal entry lands in the same write as its mutation', () => {
         record.id,
         { contentPatch: { text: 'edited' } },
         {
-          expectedVersion: 99,
+          ifVersion: 99,
           journal: entry({ ops: ['patch'], kind: 'changed' }),
         },
       ),

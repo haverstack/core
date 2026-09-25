@@ -12,18 +12,18 @@
 import { describe, test, expect } from 'vitest';
 import { assertQueryCapabilities, assertSortCapability } from '../src/query-validation.js';
 import { StackBadRequestError } from '../src/errors.js';
-import type { MissingCapability, RecordFilter, StackFeatures } from '../src/types.js';
+import type { MissingCapability, RecordFilter, StackCapabilities } from '../src/types.js';
 
-const ALL: StackFeatures = {
+const ALL: StackCapabilities = {
   filter: { content: 'path', contentPresent: true, search: true },
   sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
   limits: { attachmentBytes: null, contentBytes: null },
 };
 
 const without = (overrides: {
-  filter?: Partial<StackFeatures['filter']>;
-  sort?: Partial<StackFeatures['sort']>;
-}): StackFeatures => ({
+  filter?: Partial<StackCapabilities['filter']>;
+  sort?: Partial<StackCapabilities['sort']>;
+}): StackCapabilities => ({
   ...ALL,
   filter: { ...ALL.filter, ...overrides.filter },
   sort: { ...ALL.sort, ...overrides.sort },

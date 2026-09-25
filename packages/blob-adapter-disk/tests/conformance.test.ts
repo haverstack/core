@@ -13,7 +13,7 @@ let currentDir: string | undefined;
 
 runBlobAdapterConformance({
   name: 'DiskBlobAdapter',
-  listFiles: true,
+  listBlobs: true,
   open: () => {
     currentDir = join(
       tmpdir(),

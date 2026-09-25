@@ -18,7 +18,7 @@ import type {
   RecordChange,
   RecordJournalEntry,
 } from '@haverstack/core';
-import type { AdapterCapabilities, ContentFilterReach } from '@haverstack/core/adapter';
+import type { StackCapabilities, ContentFilterReach } from '@haverstack/core/adapter';
 import {
   StackError,
   StackValidationError,
@@ -467,7 +467,7 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,
-): AdapterCapabilities {
+): StackCapabilities {
   const filter = capabilities?.filter;
   const sort = capabilities?.sort;
   const limits = capabilities?.limits;

@@ -32,16 +32,16 @@ export interface BlobAdapterConformanceOptions {
   /** Release what `open()` acquired. Called after every test. */
   close?: (adapter: StackBlobAdapter) => Promise<void> | void;
   /**
-   * Whether this adapter implements the optional `listFiles()`. Passed
-   * explicitly, like `capabilities` in the record suite, so the listFiles
+   * Whether this adapter implements the optional `listBlobs()`. Passed
+   * explicitly, like `capabilities` in the record suite, so the listBlobs
    * describe block can be registered or skipped at vitest's synchronous
    * collection time rather than probed off an opened instance.
    */
-  listFiles?: boolean;
+  listBlobs?: boolean;
 }
 
 export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions): void {
-  const { name, open, close, listFiles = false } = options;
+  const { name, open, close, listBlobs = false } = options;
 
   describe(`blob adapter conformance: ${name}`, () => {
     let adapter: StackBlobAdapter;
@@ -63,66 +63,66 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
       await close?.(adapter);
     });
 
-    test('putAttachment returns the SHA-256 hex of the stored bytes', async () => {
+    test('putBlob returns the SHA-256 hex of the stored bytes', async () => {
       const data = new TextEncoder().encode('hello attachment');
-      const fileId = await adapter.putAttachment(data);
+      const fileId = await adapter.putBlob(data);
       expect(fileId).toMatch(SHA256_HEX_RE);
       expect(fileId).toBe(await sha256Hex(data));
     });
 
-    test('getAttachment returns exactly the bytes that were stored', async () => {
+    test('getBlob returns exactly the bytes that were stored', async () => {
       const data = new TextEncoder().encode('roundtrip me');
-      const fileId = await adapter.putAttachment(data);
-      const retrieved = await adapter.getAttachment(fileId);
+      const fileId = await adapter.putBlob(data);
+      const retrieved = await adapter.getBlob(fileId);
       expect(new Uint8Array(retrieved)).toEqual(data);
     });
 
-    test('putAttachment is content-addressed — identical bytes yield the same fileId', async () => {
+    test('putBlob is content-addressed — identical bytes yield the same fileId', async () => {
       const data = new TextEncoder().encode('same content twice');
-      const first = await adapter.putAttachment(data);
-      const second = await adapter.putAttachment(data);
+      const first = await adapter.putBlob(data);
+      const second = await adapter.putBlob(data);
       expect(first).toBe(second);
     });
 
-    test('getAttachment reports not_found for a well-formed but unknown fileId', async () => {
+    test('getBlob reports not_found for a well-formed but unknown fileId', async () => {
       const neverStored = 'a'.repeat(64);
-      await expectStackErrorCode(adapter.getAttachment(neverStored), 'not_found');
+      await expectStackErrorCode(adapter.getBlob(neverStored), 'not_found');
     });
 
-    test('getAttachment reports bad_request for a malformed fileId', async () => {
-      await expectStackErrorCode(adapter.getAttachment('not-a-sha256-hash'), 'bad_request');
+    test('getBlob reports bad_request for a malformed fileId', async () => {
+      await expectStackErrorCode(adapter.getBlob('not-a-sha256-hash'), 'bad_request');
     });
 
-    test('deleteAttachment removes the blob — a later getAttachment reports not_found', async () => {
-      const fileId = await adapter.putAttachment(new TextEncoder().encode('temporary'));
-      await adapter.deleteAttachment(fileId);
-      await expectStackErrorCode(adapter.getAttachment(fileId), 'not_found');
+    test('deleteBlob removes the blob — a later getBlob reports not_found', async () => {
+      const fileId = await adapter.putBlob(new TextEncoder().encode('temporary'));
+      await adapter.deleteBlob(fileId);
+      await expectStackErrorCode(adapter.getBlob(fileId), 'not_found');
     });
 
-    test('deleteAttachment is non-fatal for a fileId that was never stored', async () => {
-      await expect(adapter.deleteAttachment('b'.repeat(64))).resolves.toBeUndefined();
+    test('deleteBlob is non-fatal for a fileId that was never stored', async () => {
+      await expect(adapter.deleteBlob('b'.repeat(64))).resolves.toBeUndefined();
     });
 
-    if (listFiles) {
-      describe('listFiles', () => {
+    if (listBlobs) {
+      describe('listBlobs', () => {
         test('returns an empty array for an empty store', async () => {
-          expect(await adapter.listFiles!()).toEqual([]);
+          expect(await adapter.listBlobs!()).toEqual([]);
         });
 
         test('lists every stored blob with its fileId, size and modifiedAt', async () => {
           const data = new TextEncoder().encode('a stored blob');
-          const fileId = await adapter.putAttachment(data);
+          const fileId = await adapter.putBlob(data);
 
-          const files = await adapter.listFiles!();
+          const files = await adapter.listBlobs!();
           const entry = files.find((f) => f.fileId === fileId);
           expect(entry?.size).toBe(data.byteLength);
           expect(entry?.modifiedAt).toBeInstanceOf(Date);
         });
 
         test('a deleted blob no longer appears', async () => {
-          const fileId = await adapter.putAttachment(new TextEncoder().encode('gone soon'));
-          await adapter.deleteAttachment(fileId);
-          const files = await adapter.listFiles!();
+          const fileId = await adapter.putBlob(new TextEncoder().encode('gone soon'));
+          await adapter.deleteBlob(fileId);
+          const files = await adapter.listBlobs!();
           expect(files.some((f) => f.fileId === fileId)).toBe(false);
         });
       });

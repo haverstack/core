@@ -23,7 +23,7 @@ export type TypeId = string;
 /** A type family: a TypeId without its version, e.g. "com.example.myapp/note" */
 export type BaseId = string;
 
-/** Opaque file identifier returned by putAttachment */
+/** Opaque file identifier returned by putBlob() */
 export type FileId = string;
 
 /**
@@ -678,7 +678,7 @@ export type Migration = {
 };
 
 // -------------------------------------------------------
-// Adapter capabilities / Stack features
+// Stack capabilities
 // -------------------------------------------------------
 
 /**
@@ -699,14 +699,14 @@ export type ContentFilterReach =
   | 'path';
 
 /**
- * What an adapter honors, grouped by the query surface each entry gates:
+ * What a Stack — and the adapter under it — honors, grouped by the query surface each entry gates:
  * every flag under `filter`/`sort` is named for the query key it answers
  * for, so the capability a query needs is derivable from the query rather
  * than memorized. `limits` sits apart because a byte ceiling is not a
  * feature to gate on but a number to pre-check against.
  * See docs/spec/adapters.md § Adapter capabilities.
  */
-export type AdapterCapabilities = {
+export type StackCapabilities = {
   filter: {
     /**
      * Required `'path'` for local/in-process adapters; a wire adapter may
@@ -766,12 +766,9 @@ export type AdapterCapabilities = {
   };
 };
 
-/** What a Stack can do, as seen by app and plugin code. */
-export type StackFeatures = AdapterCapabilities;
-
 /**
  * A capability a query can be refused for, as its path into
- * AdapterCapabilities — the same name the spec and a discovery response
+ * StackCapabilities — the same name the spec and a discovery response
  * use, so an error says which key to look at. `limits` never appears: a
  * ceiling is not something a query can lack.
  */
@@ -788,13 +785,14 @@ export type MissingCapability =
 
 /**
  * Opt-in optimistic-concurrency precondition, accepted by every mutation
- * that bumps a record's version. On mismatch the adapter throws
- * StackVersionConflictError without applying anything. The check is atomic
- * inside the adapter's write, never a read-then-write. See
- * docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
+ * that bumps a record's version. On mismatch the mutation throws
+ * StackVersionConflictError and changes nothing; omit to keep
+ * last-writer-wins. An adapter checks it atomically inside its write, never
+ * as a read-then-write. See docs/spec/versioning.md § Optimistic
+ * concurrency (`ifVersion`).
  */
-export type ExpectedVersionOptions = {
-  expectedVersion?: number;
+export type IfVersionOptions = {
+  ifVersion?: number;
 };
 
 /**
@@ -1106,7 +1104,7 @@ export type SubscribeChangesOptions = {
  * associations, versioning, type definitions, and stack identity.
  */
 export interface StackRecordAdapter {
-  readonly capabilities: AdapterCapabilities;
+  readonly capabilities: StackCapabilities;
 
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
@@ -1152,11 +1150,7 @@ export interface StackRecordAdapter {
   mutateRecord(
     id: RecordId,
     changes: RecordChangeSet,
-    opts?: ExpectedVersionOptions &
-      SnapshotOptions &
-      BumpVersionOptions &
-      ActorOptions &
-      JournalOptions,
+    opts?: IfVersionOptions & SnapshotOptions & BumpVersionOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
@@ -1167,15 +1161,12 @@ export interface StackRecordAdapter {
    */
   deleteRecord(
     id: RecordId,
-    opts?: { hard?: boolean } & ExpectedVersionOptions &
-      SnapshotOptions &
-      ActorOptions &
-      JournalOptions,
+    opts?: { hard?: boolean } & IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(
     id: RecordId,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
@@ -1217,7 +1208,7 @@ export interface StackRecordAdapter {
   restoreVersion(
     id: RecordId,
     version: number,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
 
   /**
@@ -1230,7 +1221,7 @@ export interface StackRecordAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: ExpectedVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
 
   // Types
@@ -1271,8 +1262,8 @@ export interface StackRecordAdapter {
   close?(): Promise<void>;
 }
 
-/** One stored blob, as reported by StackBlobAdapter.listFiles(). */
-export type BlobFileInfo = {
+/** One stored blob, as reported by StackBlobAdapter.listBlobs(). */
+export type BlobInfo = {
   fileId: FileId;
   size: number;
   /** When the blob was written. Used to apply a GC grace period to fresh, not-yet-associated uploads. */
@@ -1284,10 +1275,10 @@ export type BlobFileInfo = {
  * attachment metadata lives on _attachment@1 records in the record adapter.
  */
 export interface StackBlobAdapter {
-  // Attachments — bytes storage only; metadata lives on _attachment@1 records
-  putAttachment(data: Uint8Array): Promise<FileId>;
-  getAttachment(fileId: FileId): Promise<Uint8Array>;
-  deleteAttachment(fileId: FileId): Promise<void>;
+  // Bytes only — "attachment" is the record-backed concept at the Stack layer
+  putBlob(data: Uint8Array): Promise<FileId>;
+  getBlob(fileId: FileId): Promise<Uint8Array>;
+  deleteBlob(fileId: FileId): Promise<void>;
 
   /**
    * Enumerate every blob currently in storage. Optional — without it,
@@ -1295,7 +1286,7 @@ export interface StackBlobAdapter {
    * metadata record at all). See docs/spec/attachments.md § Garbage
    * collection.
    */
-  listFiles?(): Promise<BlobFileInfo[]>;
+  listBlobs?(): Promise<BlobInfo[]>;
 
   // Lifecycle
   flush?(): Promise<void>;

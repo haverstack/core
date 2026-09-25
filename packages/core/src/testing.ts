@@ -16,8 +16,8 @@ import type {
   Association,
   AuthorityAssociation,
   DataAssociation,
-  AdapterCapabilities,
-  BlobFileInfo,
+  StackCapabilities,
+  BlobInfo,
   QuerySort,
 } from './types.js';
 import { SYSTEM_TYPES } from './types.js';
@@ -72,7 +72,7 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
  * the capability-gated paths use IncapableMemoryAdapter below.
  */
 export class MemoryAdapter implements StackAdapter {
-  readonly capabilities: AdapterCapabilities = {
+  readonly capabilities: StackCapabilities = {
     filter: {
       content: 'path',
       contentPresent: true,
@@ -136,7 +136,7 @@ export class MemoryAdapter implements StackAdapter {
     };
   }
 
-  /** Opt-in CAS check mirroring the real adapters' expectedVersion contract. */
+  /** Opt-in CAS check mirroring the real adapters' ifVersion contract. */
   private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
     if (expectedVersion === undefined || record.version === expectedVersion) return;
     throw new StackVersionConflictError(
@@ -166,7 +166,7 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     changes: RecordChangeSet,
     opts: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
       bumpsVersion?: boolean;
     } & ActorOptions &
@@ -174,7 +174,7 @@ export class MemoryAdapter implements StackAdapter {
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.expectedVersion);
+    this.checkExpectedVersion(existing, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
 
     // Destructured out so each optional native field is re-added only when
@@ -213,7 +213,7 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     opts: {
       hard?: boolean;
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
       JournalOptions = {},
@@ -224,10 +224,10 @@ export class MemoryAdapter implements StackAdapter {
       // adapters answer silently; every other shape of this call reports a
       // record that isn't there, and a fixture that shrugged instead would
       // pass tests the real adapters fail.
-      if (opts.hard && opts.expectedVersion === undefined) return null;
+      if (opts.hard && opts.ifVersion === undefined) return null;
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    this.checkExpectedVersion(record, opts.expectedVersion);
+    this.checkExpectedVersion(record, opts.ifVersion);
     if (opts.hard) {
       this.records.delete(id);
       this.order.splice(this.order.indexOf(id), 1);
@@ -247,12 +247,11 @@ export class MemoryAdapter implements StackAdapter {
 
   async undeleteRecord(
     id: string,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions = {},
+    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
+    this.checkExpectedVersion(record, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const { deletedAt: _deletedAt, ...rest } = record;
     const updated = this.bump(rest as StackRecord, opts);
@@ -557,14 +556,14 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     version: number,
     opts: {
-      expectedVersion?: number;
+      ifVersion?: number;
       snapshot?: RecordVersion;
     } & ActorOptions &
       JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
+    this.checkExpectedVersion(record, opts.ifVersion);
     const target = (this.versions.get(id) ?? []).find((v) => v.version === version);
     if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
@@ -581,12 +580,11 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { expectedVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions = {},
+    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(record, opts.expectedVersion);
+    this.checkExpectedVersion(record, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
     this.records.set(id, updated);
@@ -639,7 +637,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
-  async putAttachment(data: Uint8Array): Promise<string> {
+  async putBlob(data: Uint8Array): Promise<string> {
     const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
     const fileId = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
@@ -649,7 +647,7 @@ export class MemoryAdapter implements StackAdapter {
     }
     return fileId;
   }
-  async getAttachment(fileId: string): Promise<Uint8Array> {
+  async getBlob(fileId: string): Promise<Uint8Array> {
     if (!SHA256_HEX_RE.test(fileId)) {
       throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
     }
@@ -657,13 +655,13 @@ export class MemoryAdapter implements StackAdapter {
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return blob.data;
   }
-  async deleteAttachment(fileId: string) {
+  async deleteBlob(fileId: string) {
     this.blobs.delete(fileId);
   }
   // Declared as an optional field (not a fixed method) so a test subclass
   // can override it to `undefined`, simulating an adapter that doesn't
-  // implement this capability (see stack.test.ts's NoListFilesAdapter).
-  listFiles?: () => Promise<BlobFileInfo[]> = async () => {
+  // implement this capability (see stack.test.ts's NoListBlobsAdapter).
+  listBlobs?: () => Promise<BlobInfo[]> = async () => {
     return [...this.blobs.entries()].map(([fileId, blob]) => ({
       fileId,
       size: blob.data.byteLength,
@@ -683,7 +681,7 @@ export class MemoryAdapter implements StackAdapter {
  * check in tests; not a stand-in for a real local adapter.
  */
 export class IncapableMemoryAdapter extends MemoryAdapter {
-  override readonly capabilities: AdapterCapabilities = {
+  override readonly capabilities: StackCapabilities = {
     filter: {
       content: 'none',
       contentPresent: false,

@@ -16,9 +16,9 @@ The adapter contract is split into two focused interfaces that are composed into
 
 Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
 
-**`StackBlobAdapter`** — binary storage: `putAttachment`, `getAttachment`, `deleteAttachment`, an optional `listFiles()` capability, and optional lifecycle hooks.
+**`StackBlobAdapter`** — binary storage: `putBlob`, `getBlob`, `deleteBlob`, an optional `listBlobs()` capability, and optional lifecycle hooks. The names are deliberately not `*Attachment`: an attachment is the managed, record-backed concept at the `Stack` layer — permission-checked, reference-checked, carrying metadata — while a blob is the raw bytes beneath it. `putAttachmentWithMetadata()` (below) keeps its name because it really is the attachment operation.
 
-**`StackBlobAdapter` error contract:** `getAttachment(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
+**`StackBlobAdapter` error contract:** `getBlob(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
 
 ```ts
 type StackAdapter = StackRecordAdapter &
@@ -32,7 +32,7 @@ type StackAdapter = StackRecordAdapter &
   };
 ```
 
-**Optional capabilities** follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check — see [Attachments](./attachments.md#deleting-attachments)), `StackBlobAdapter.listFiles()` (blob enumeration, used by [garbage collection](./attachments.md#garbage-collection) to find bare-bytes orphans), `StackRecordAdapter.subscribeChanges()` (relaying a feed that originates elsewhere — see [Change events § Where events come from](./events.md#where-events-come-from)), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
+**Optional capabilities** follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check — see [Attachments](./attachments.md#deleting-attachments)), `StackBlobAdapter.listBlobs()` (blob enumeration, used by [garbage collection](./attachments.md#garbage-collection) to find bare-bytes orphans), `StackRecordAdapter.subscribeChanges()` (relaying a feed that originates elsewhere — see [Change events § Where events come from](./events.md#where-events-come-from)), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
 
 `StackAdapter.putAttachmentWithMetadata(data, { mimeType, filename?, appId? })` stores bytes and creates the accompanying `_attachment@1` record as **one atomic operation**, returning the created record. It is declared on the composed `StackAdapter` type rather than on either half, because neither half can ever have it: "bytes + record in one operation" is a property only a whole adapter can offer. Today exactly one does: the API adapter, backed by a single `POST /attachments` request the server fulfills atomically. Local storage adapters don't implement it, and `combineAdapters()` never synthesizes it from parts (a record backend and a blob backend glued together have no shared transaction). `Stack.putAttachment()` checks for it — present means delegate the whole operation and trust the returned record as backend-authoritative; absent means the bytes-then-`create()` fallback sequence. See [Wire format § Attachments](./wire-format.md#attachments) for why the atomic form is a correctness requirement, not an efficiency optimization.
 
@@ -71,7 +71,7 @@ const adapter = combineAdapters({ record, blob });
 const stack = await Stack.open(adapter);
 ```
 
-`limits.attachmentBytes` lives on `AdapterCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
+`limits.attachmentBytes` lives on `StackCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per the local-adapter rule above: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
 
@@ -110,7 +110,7 @@ A missing row is not only a stale read. `deleteUnreferencedAttachmentRecords()` 
 Adapters expose a capabilities object so apps can check what's supported before relying on a feature:
 
 ```ts
-type AdapterCapabilities = {
+type StackCapabilities = {
   filter: {
     content: 'none' | 'field' | 'path'; // how far a content filter key may reach
     contentPresent: boolean; // filter.contentPresent is honored
@@ -127,7 +127,7 @@ type AdapterCapabilities = {
 };
 ```
 
-`AdapterCapabilities` is the adapter-implementer-facing name. On the `StackClient` interface it is exposed as `features: StackFeatures` (a type alias for `AdapterCapabilities`). App and plugin code should read `stack.features` rather than going through the adapter directly.
+One type, `StackCapabilities`, names both sides: an adapter declares it as `capabilities`, and `StackClient` exposes the same object as `capabilities`. App and plugin code should read `stack.capabilities` rather than going through the adapter directly.
 
 **Each entry is named for the query key it answers for.** `filter.content` gates `filter.content`, `sort.fields` gates `sort.field`, and so on down — so the capability a query needs is derivable from the query rather than memorized, and an error can name the key to look at. `limits` is grouped apart because a ceiling is not a feature to gate on: nothing is refused for lacking one.
 
@@ -180,4 +180,4 @@ A failed flush still releases resources before the error propagates. The alterna
 
 **Every other method throws `StackClosedError` once closed**, on both `Stack` and `ScopedStack`. Without the guard the failure surfaces as whatever the underlying engine says about a dangling handle — `node:sqlite`'s `ERR_INVALID_STATE`, or nothing at all on an adapter that silently accepts writes it will never persist. The asymmetry with `close()` is deliberate: teardown is idempotent because a caller cannot always know whether it already ran, while doing _work_ through a closed client is unambiguously a bug, and `flush()` is work.
 
-`StackClosedError` sits outside the `StackError` taxonomy, alongside `IdGenerationError` and `InvalidDidError` (see [Wire format § The taxonomy root](./wire-format.md#the-taxonomy-root)). Every `StackError` maps to a wire status, and no server ever answers "your client is closed" — it is a local programming error, not a transportable failure. The stack-identity getters (`ownerEntityId`, `timezone`, `features`) keep working after close: they read values cached at open and touch no storage.
+`StackClosedError` sits outside the `StackError` taxonomy, alongside `IdGenerationError` and `InvalidDidError` (see [Wire format § The taxonomy root](./wire-format.md#the-taxonomy-root)). Every `StackError` maps to a wire status, and no server ever answers "your client is closed" — it is a local programming error, not a transportable failure. The stack-identity getters (`ownerEntityId`, `timezone`, `capabilities`) keep working after close: they read values cached at open and touch no storage.

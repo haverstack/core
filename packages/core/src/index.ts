@@ -28,7 +28,6 @@ export type {
   DeleteRecordOptions,
   DeleteResult,
   DeleteAndReturnResult,
-  IfVersionOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
 } from './stack.js';
@@ -108,7 +107,8 @@ export type {
   Migration,
   MigrationFn,
   StackAdapter,
-  StackFeatures,
+  StackCapabilities,
+  IfVersionOptions,
   TokenSession,
   EntityContent,
   AppContent,

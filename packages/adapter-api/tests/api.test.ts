@@ -524,7 +524,7 @@ describe('re-authentication', () => {
     mockFetch.mockResolvedValueOnce(tokenResponse('renewed-token'));
     mockFetch.mockResolvedValueOnce(new Response(new Uint8Array([7, 8, 9])));
 
-    expect(await adapter.getAttachment('file-1')).toEqual(new Uint8Array([7, 8, 9]));
+    expect(await adapter.getBlob('file-1')).toEqual(new Uint8Array([7, 8, 9]));
     expect(authHeader(6)).toBe('Bearer renewed-token');
   });
 
@@ -758,7 +758,7 @@ describe('mutateRecord', () => {
         permissions: [{ kind: 'anyone', label: 'read' }],
         unlisted: false,
       },
-      { expectedVersion: 1 },
+      { ifVersion: 1 },
     );
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/records/rec-abc123`);
@@ -790,19 +790,15 @@ describe('mutateRecord', () => {
     expect(result.updatedAt).toBeInstanceOf(Date);
   });
 
-  test('sends If-Match when expectedVersion is given', async () => {
+  test('sends If-Match when ifVersion is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    await adapter.mutateRecord(
-      'rec-abc123',
-      { contentPatch: { text: 'x' } },
-      { expectedVersion: 5 },
-    );
+    await adapter.mutateRecord('rec-abc123', { contentPatch: { text: 'x' } }, { ifVersion: 5 });
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['If-Match']).toBe('"5"');
   });
 
-  test('omits If-Match when expectedVersion is not given', async () => {
+  test('omits If-Match when ifVersion is not given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     await adapter.mutateRecord('rec-abc123', { contentPatch: { text: 'x' } });
@@ -840,15 +836,15 @@ describe('commitMigration', () => {
     expect(result.typeId).toBe('com.example/note@2');
   });
 
-  test('sends If-Match when expectedVersion is given', async () => {
+  test('sends If-Match when ifVersion is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    await adapter.commitMigration('rec-abc123', 'com.example/note@2', {}, { expectedVersion: 5 });
+    await adapter.commitMigration('rec-abc123', 'com.example/note@2', {}, { ifVersion: 5 });
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect((init.headers as Record<string, string>)['If-Match']).toBe('"5"');
   });
 
-  test('omits If-Match when expectedVersion is not given', async () => {
+  test('omits If-Match when ifVersion is not given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     await adapter.commitMigration('rec-abc123', 'com.example/note@2', {});
@@ -1537,7 +1533,7 @@ describe('a read answering 200 with an empty body', () => {
   test('an endpoint with no body to return is unaffected', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(emptyOk());
-    await expect(adapter.deleteAttachment('file-xyz')).resolves.toBeUndefined();
+    await expect(adapter.deleteBlob('file-xyz')).resolves.toBeUndefined();
   });
 });
 
@@ -1805,7 +1801,7 @@ const attachmentRecordResponse = (overrides: Partial<Record<string, unknown>> = 
   ...overrides,
 });
 
-describe('putAttachment', () => {
+describe('putBlob', () => {
   // Bytes-only upload has no wire mode: POST /attachments always creates
   // the _attachment@1 record, so implementing this method would
   // silently mint a default-mimeType record while claiming "no record
@@ -1815,8 +1811,8 @@ describe('putAttachment', () => {
     const adapter = await openAdapter();
     mockFetch.mockClear();
     const data = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    await expect(adapter.putAttachment(data)).rejects.toThrow(APIAdapterError);
-    await expect(adapter.putAttachment(data)).rejects.toThrow(/not supported over the wire/);
+    await expect(adapter.putBlob(data)).rejects.toThrow(APIAdapterError);
+    await expect(adapter.putBlob(data)).rejects.toThrow(/not supported over the wire/);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });
@@ -1880,12 +1876,12 @@ describe('putAttachmentWithMetadata', () => {
   });
 });
 
-describe('getAttachment', () => {
+describe('getBlob', () => {
   test('sends GET /attachments/:fileId and returns Uint8Array', async () => {
     const adapter = await openAdapter();
     const data = new Uint8Array([1, 2, 3, 4]);
     mockFetch.mockResolvedValueOnce(new Response(data, { status: 200 }));
-    const result = await adapter.getAttachment('file-xyz');
+    const result = await adapter.getBlob('file-xyz');
     expect(result).toBeInstanceOf(Uint8Array);
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/attachments/file-xyz`,
@@ -1894,11 +1890,11 @@ describe('getAttachment', () => {
   });
 });
 
-describe('deleteAttachment', () => {
+describe('deleteBlob', () => {
   test('sends DELETE /attachments/:fileId', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    await adapter.deleteAttachment('file-xyz');
+    await adapter.deleteBlob('file-xyz');
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/attachments/file-xyz`,
       expect.objectContaining({ method: 'DELETE' }),
@@ -2017,7 +2013,7 @@ describe('error taxonomy reconstruction', () => {
     );
     let caught: unknown;
     try {
-      await adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { expectedVersion: 2 });
+      await adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { ifVersion: 2 });
     } catch (err) {
       caught = err;
     }
@@ -2035,7 +2031,7 @@ describe('error taxonomy reconstruction', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(new Response('not json', { status: 412 }));
     await expect(
-      adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { expectedVersion: 2 }),
+      adapter.mutateRecord('rec-1', { contentPatch: { title: 'x' } }, { ifVersion: 2 }),
     ).rejects.toThrow(StackVersionConflictError);
   });
 
