@@ -185,7 +185,7 @@ The distinction between **400** and **422** matters for write endpoints (`POST /
 
 ### Unrecognized input
 
-**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body — a filter's `createdBy`, a sort, a relationship target — and a boolean param takes only `true` or `false`, since any other value is a mistake of the same kind.
+**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target. The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
 
 Three things sit outside it:
 
@@ -193,7 +193,7 @@ Three things sit outside it:
 - **Headers.** A request carries headers the application never sees — proxies and browsers add them — so an unrecognized one is ignored, as is `If-Match` on the association endpoints (see [Records](#records)).
 - **Responses.** A client reading a server's response ignores what it doesn't recognize, the way it ignores an [unrecognized frame](./change-feed.md). Strictness is the server's side of the contract, where the input is the client's intent.
 
-A server built on core reaches this through the wire parsers in `@haverstack/core/wire` — `parseQueryParams()`, `parseQueryBody()`, `parseChangeParams()`, `parseJournalParams()`, `createOptionsFromWireRecord()` and `changesFromWireBody()` — each of which refuses what its endpoint does not define. Endpoints a server parses itself owe the same refusal.
+A server built on core reaches this through the wire parsers in `@haverstack/core/wire` — `parseQueryParams()`, `parseQueryBody()`, `parseChangeParams()`, `parseJournalParams()`, `createOptionsFromWireRecord()` and `changesFromWireBody()` — each of which refuses what its endpoint does not define. Endpoints a server parses itself — `/auth/token` among them — owe the same refusal.
 
 ### The taxonomy root
 

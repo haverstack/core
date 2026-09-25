@@ -47,6 +47,17 @@ describe('parseQueryParams', () => {
     expect(() => parseQueryParams(url('?entityId=did:key:x'))).toThrow(/Unknown query param/);
   });
 
+  test('a single-value param appears at most once; a filter list may repeat', () => {
+    expect(() => parseQueryParams(url('?includeDeleted=true&includeDeleted=junk'))).toThrow(
+      /Repeated query param: includeDeleted/,
+    );
+    expect(() => parseQueryParams(url('?limit=5&limit=500'))).toThrow(/Repeated query param/);
+    expect(parseQueryParams(url('?typeId=a/b@1&typeId=a/c@1&tag=x&tag=y')).filter).toMatchObject({
+      typeId: ['a/b@1', 'a/c@1'],
+      tags: ['x', 'y'],
+    });
+  });
+
   test('a malformed date bound is refused rather than dropped', () => {
     expect(() => parseQueryParams(url('?createdBefore=not-a-date'))).toThrow(StackBadRequestError);
   });
@@ -356,6 +367,13 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?token=abc'))).toThrow(/Unknown query param/);
     expect(() => parseChangeParams(changes('?since=abc'))).not.toThrow();
   });
+
+  test('a single-value param appears at most once; a filter list may repeat', () => {
+    expect(() => parseChangeParams(changes('?include=record&include=record'))).toThrow(
+      /Repeated query param/,
+    );
+    expect(() => parseChangeParams(changes('?kind=created&kind=deleted'))).not.toThrow();
+  });
 });
 
 // -------------------------------------------------------
@@ -440,6 +458,12 @@ describe('parseJournalParams', () => {
   test('an unrecognized param is refused rather than ignored', () => {
     expect(() => parseJournalParams(journal('/records/r1/journal?sinceSeq=1'))).toThrow(
       /Unknown query param/,
+    );
+  });
+
+  test('a repeated param is refused', () => {
+    expect(() => parseJournalParams(journal('/records/r1/journal?afterSeq=1&afterSeq=9'))).toThrow(
+      /Repeated query param/,
     );
   });
 

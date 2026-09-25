@@ -20,6 +20,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   RecordChangeSet,
+  StackRecord,
   TokenSession,
   TypeId,
 } from './types.js';
@@ -36,26 +37,27 @@ export type WireCreateRequest = {
 };
 
 /**
- * Every top-level key a wire record carries. A create body is a whole
+ * Every top-level key a wire record carries — a `StackRecord`'s, so a new
+ * field fails to compile here until it is listed. A create body is a whole
  * record, so each of these is accepted — stamped ones are then dropped —
  * and anything else is refused. See docs/spec/wire-format.md § Unrecognized input.
  */
-const WIRE_RECORD_KEYS: readonly string[] = [
-  'id',
-  'typeId',
-  'createdAt',
-  'updatedAt',
-  'content',
-  'version',
-  'parentId',
-  'appId',
-  'createdBy',
-  'updatedBy',
-  'deletedAt',
-  'unlistedAt',
-  'permissions',
-  'associations',
-];
+const WIRE_RECORD_KEYS: readonly string[] = Object.keys({
+  id: true,
+  typeId: true,
+  createdAt: true,
+  updatedAt: true,
+  content: true,
+  version: true,
+  parentId: true,
+  appId: true,
+  createdBy: true,
+  updatedBy: true,
+  deletedAt: true,
+  unlistedAt: true,
+  permissions: true,
+  associations: true,
+} satisfies Record<keyof StackRecord, true>);
 
 function requireBody(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))

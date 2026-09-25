@@ -227,12 +227,34 @@ function requireKnownKeys(
   return obj;
 }
 
-/** The URL-param form of requireKnownKeys(). */
+/**
+ * Params a filter repeats to name several values. Any other param names
+ * one value, so a repeat of it is refused rather than read as its first.
+ */
+const REPEATABLE_PARAMS: ReadonlySet<string> = new Set([
+  'typeId',
+  'baseId',
+  'appId',
+  'createdBySubject',
+  'createdByPrincipal',
+  'tag',
+  'kind',
+]);
+
+/** The URL-param form of requireKnownKeys(), which also refuses a repeat. */
 function requireKnownParams(url: URL, names: readonly string[]): void {
-  const unknown = [...new Set(url.searchParams.keys())].filter((name) => !names.includes(name));
+  const present = [...new Set(url.searchParams.keys())];
+  const unknown = present.filter((name) => !names.includes(name));
   if (unknown.length > 0)
     throw new StackBadRequestError(
       `Unknown query param${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`,
+    );
+  const repeated = present.filter(
+    (name) => !REPEATABLE_PARAMS.has(name) && url.searchParams.getAll(name).length > 1,
+  );
+  if (repeated.length > 0)
+    throw new StackBadRequestError(
+      `Repeated query param${repeated.length > 1 ? 's' : ''}: ${repeated.join(', ')}`,
     );
 }
 
@@ -527,7 +549,9 @@ function parseLimitValue(raw: unknown): number {
  * Build a `StackQuery` from a `POST /records/query` JSON body — the
  * superset form, which additionally carries `filter.content`. Dates arrive
  * as the ISO strings `JSON.stringify` made of them and are decoded back to
- * `Date`. See docs/spec/wire-format.md § Records.
+ * `Date`. `undefined` is the absent body; `null` or any other non-object
+ * is refused, so a server hands over no body as `undefined`.
+ * See docs/spec/wire-format.md § Records.
  */
 export function parseQueryBody(raw: unknown): StackQuery {
   if (raw === undefined) return {};
