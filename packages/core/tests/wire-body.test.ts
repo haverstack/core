@@ -85,20 +85,23 @@ describe('parseAuthTokenBody', () => {
 });
 
 describe('parseEntityPatchBody', () => {
-  test('reads content, keeping null as a removal', () => {
-    expect(parseEntityPatchBody({ content: { name: 'Jane', handle: null } })).toEqual({
-      content: { name: 'Jane', handle: null },
+  test('reads contentPatch, keeping null as a removal', () => {
+    expect(parseEntityPatchBody({ contentPatch: { name: 'Jane', handle: null } })).toEqual({
+      contentPatch: { name: 'Jane', handle: null },
     });
   });
 
-  test('an unknown key is 400', () => {
-    expect(() => parseEntityPatchBody({ content: {}, did: DID })).toThrow(StackBadRequestError);
+  test('an unknown key is 400, content included', () => {
+    expect(() => parseEntityPatchBody({ contentPatch: {}, did: DID })).toThrow(
+      StackBadRequestError,
+    );
+    expect(() => parseEntityPatchBody({ content: {} })).toThrow(StackBadRequestError);
   });
 
-  test('an absent content is 400; a non-object one is 422 naming the field', () => {
+  test('an absent contentPatch is 400; a non-object one is 422 naming the field', () => {
     expect(() => parseEntityPatchBody({})).toThrow(StackBadRequestError);
-    expect(pathOf(() => parseEntityPatchBody({ content: [] }))).toBe('content');
-    expect(pathOf(() => parseEntityPatchBody({ content: null }))).toBe('content');
+    expect(pathOf(() => parseEntityPatchBody({ contentPatch: [] }))).toBe('contentPatch');
+    expect(pathOf(() => parseEntityPatchBody({ contentPatch: null }))).toBe('contentPatch');
   });
 });
 

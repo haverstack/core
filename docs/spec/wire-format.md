@@ -695,7 +695,7 @@ PATCH /entity    — update it
 
 A convenience alias for the owner entity rather than requiring clients to look it up by ID.
 
-**The `PATCH` body is `{ "content": { … } }`** and nothing else: `content` is a content patch, merged at the top level exactly as a `PATCH /records/:id` `contentPatch` is — omitted keeps, `null` removes. It is not the records change set, so `contentPatch` and the envelope's native keys are refused with **400** like any other unrecognized key (see [Unrecognized input](#unrecognized-input)); a missing or non-object `content` is **400** and **422** respectively.
+**The `PATCH` body is `{ "contentPatch": { … } }`** and nothing else, merged at the top level exactly as the same key on `PATCH /records/:id` is — omitted keeps, `null` removes. It carries that key's name because `content` on the wire means whole content, as on `POST /records` and `POST /records/:id/migrate`; see [Data model § Mutations](./data-model.md#mutations). The records envelope's other keys, and `content`, are refused with **400** like any other unrecognized key (see [Unrecognized input](#unrecognized-input)); a missing or non-object `contentPatch` is **400** and **422** respectively.
 
 ## Change feed
 

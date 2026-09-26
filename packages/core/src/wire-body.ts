@@ -108,13 +108,13 @@ export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
 // -------------------------------------------------------
 
 /** A content patch for the owner entity, in the shape `patchContent()` takes. */
-export type WireEntityPatch = { content: Record<string, unknown | null> };
+export type WireEntityPatch = { contentPatch: Record<string, unknown | null> };
 
 /** Parse a `PATCH /entity` body. See docs/spec/wire-format.md § Entity. */
 export function parseEntityPatchBody(body: unknown): WireEntityPatch {
   const label = 'entity body';
-  const b = requireKnownBody(body, ['content'], label);
-  return { content: requiredObject(b, 'content', label) };
+  const b = requireKnownBody(body, ['contentPatch'], label);
+  return { contentPatch: requiredObject(b, 'contentPatch', label) };
 }
 
 // -------------------------------------------------------
