@@ -695,6 +695,8 @@ PATCH /entity    — update it
 
 A convenience alias for the owner entity rather than requiring clients to look it up by ID.
 
+**The `PATCH` body is `{ "content": { … } }`** and nothing else: `content` is a content patch, merged at the top level exactly as a `PATCH /records/:id` `contentPatch` is — omitted keeps, `null` removes. It is not the records change set, so `contentPatch` and the envelope's native keys are refused with **400** like any other unrecognized key (see [Unrecognized input](#unrecognized-input)); a missing or non-object `content` is **400** and **422** respectively.
+
 ## Change feed
 
 `GET /changes` streams record changes over SSE. Its frames, resumption rules and the obligations that fall on a server are [Change feed](./change-feed.md); the model it encodes is [Change events](./events.md).
