@@ -309,6 +309,8 @@ pnpm build
 pnpm typecheck
 ```
 
+[`examples/reading-list`](./examples/reading-list) is a small app built on the public API — a runnable tour of it, tested against both the memory and local adapters.
+
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, comment and commit conventions, the architecture conventions this codebase follows, and [where things live](./CONTRIBUTING.md#where-things-live).
 
 Versions and npm publishes are automated with [Changesets](https://github.com/changesets/changesets): a change that ships to npm carries a `pnpm changeset` file, and CI turns pending changesets into a release PR whose merge publishes. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).

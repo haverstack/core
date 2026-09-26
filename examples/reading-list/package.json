@@ -1,0 +1,23 @@
+{
+  "name": "@haverstack/example-reading-list",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example app exercising the @haverstack/core Stack API end to end",
+  "type": "module",
+  "scripts": {
+    "start": "node --no-warnings src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "@haverstack/adapter-local": "workspace:^",
+    "@haverstack/commons": "workspace:^",
+    "@haverstack/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.11"
+  }
+}
