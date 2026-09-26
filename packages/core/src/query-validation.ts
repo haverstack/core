@@ -23,11 +23,20 @@ import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './vali
 import type { ValidationError } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
+  AnyoneAssociation,
   Association,
+  AttachmentAssociation,
   AuthorityAssociation,
   DataAssociation,
+  EntityTarget,
+  ExternalTarget,
+  GrantGrantee,
   JournalQuery,
   Grantee,
+  PermissionAssociation,
+  RecordTarget,
+  RelationshipAssociation,
+  TagAssociation,
   QuerySort,
   RecordFilter,
   RelationshipTarget,
@@ -215,6 +224,60 @@ export function assertSortCapability(
 const TARGET_KINDS = new Set(['record', 'entity', 'external']);
 
 /**
+ * The keys of one arm of a union, listed as an object so the compiler
+ * holds the list to the type: a field added to the arm fails to compile
+ * here until it is listed.
+ */
+const keysOf = <T>(keys: Record<keyof T, true>): readonly string[] => Object.keys(keys);
+
+/** Every key each relationship target arm defines. */
+export const TARGET_KEYS: Record<RelationshipTarget['kind'], readonly string[]> = {
+  record: keysOf<RecordTarget>({ kind: true, recordId: true, stackUrl: true }),
+  entity: keysOf<EntityTarget>({ kind: true, entityId: true }),
+  external: keysOf<ExternalTarget>({ kind: true, ns: true, id: true }),
+};
+
+/** Every key each association kind defines. */
+const ASSOCIATION_KEYS: Record<Association['kind'], readonly string[]> = {
+  tag: keysOf<TagAssociation>({ kind: true, label: true }),
+  attachment: keysOf<AttachmentAssociation>({
+    kind: true,
+    label: true,
+    fileId: true,
+    attachmentRecordId: true,
+  }),
+  relationship: keysOf<RelationshipAssociation>({ kind: true, label: true, target: true }),
+  permission: keysOf<PermissionAssociation>({ kind: true, label: true, grantee: true }),
+  anyone: keysOf<AnyoneAssociation>({ kind: true, label: true }),
+};
+
+/** Every key each grantee arm defines, the default tier included. */
+export const GRANTEE_KEYS: Record<GrantGrantee['kind'], readonly string[]> = {
+  entity: keysOf<Extract<Grantee, { kind: 'entity' }>>({ kind: true, entityId: true }),
+  group: keysOf<Extract<Grantee, { kind: 'group' }>>({ kind: true, groupId: true, role: true }),
+  authenticated: keysOf<Extract<GrantGrantee, { kind: 'authenticated' }>>({ kind: true }),
+};
+
+/**
+ * The keys of `value` its arm does not define. An element carrying one is
+ * refused rather than stored: an adapter keeps only the keys it has
+ * columns for, so the rest would answer 200 and then vanish.
+ * See docs/spec/data-model.md § Associations.
+ */
+export function unknownKeys(value: object, keys: readonly string[]): string[] {
+  return Object.keys(value).filter((key) => !keys.includes(key));
+}
+
+/** unknownKeys() as a refusal. 400, not 422: the key addresses nothing. */
+export function assertKnownKeys(value: object, keys: readonly string[], path: string): void {
+  const unknown = unknownKeys(value, keys);
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown key${unknown.length > 1 ? 's' : ''} in ${path}: ${unknown.join(', ')}`,
+    );
+}
+
+/**
  * Collect what makes a relationship target malformed. Absence is
  * meaningful on `stackUrl` and an external `id` — this stack, and the
  * whole namespace — so every part that names something must be non-empty:
@@ -234,6 +297,7 @@ function targetErrors(
       `Unknown relationship target kind "${target.kind}": expected "record", "entity" or "external".`,
     );
   }
+  assertKnownKeys(target, TARGET_KEYS[target.kind], path);
   if (target.kind === 'record') {
     if (!target.recordId) return fail('A record target requires a non-empty recordId.');
     if (target.stackUrl !== undefined && !target.stackUrl) {
@@ -258,6 +322,10 @@ function targetErrors(
  * unrecognized kind would otherwise be stored under the one arm that
  * names a Record in this stack. See docs/spec/data-model.md
  * § Relationship targets.
+ *
+ * A key the element's kind does not define is thrown as a 400 rather than
+ * collected, at every depth: it addresses nothing, the way an unknown key
+ * on a request body does. See docs/spec/data-model.md § Associations.
  */
 export function validateAssociation(
   association: Association,
@@ -271,6 +339,7 @@ export function validateAssociation(
       },
     ];
   }
+  assertKnownKeys(association, ASSOCIATION_KEYS[association.kind], path);
   if (association.kind === 'permission') {
     return granteeErrors(association, `${path}.grantee`);
   }
@@ -335,6 +404,8 @@ function granteeErrors(
   }
   const grantee = association.grantee;
   if (!grantee || typeof grantee !== 'object') return fail('A permission requires a grantee.');
+  if (grantee.kind === 'entity' || grantee.kind === 'group')
+    assertKnownKeys(grantee, GRANTEE_KEYS[grantee.kind], path);
   if (grantee.kind === 'entity') {
     return grantee.entityId ? [] : fail('An entity grantee requires a non-empty entityId.');
   }

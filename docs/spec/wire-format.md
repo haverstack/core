@@ -185,7 +185,7 @@ The distinction between **400** and **422** matters for write endpoints (`POST /
 
 ### Unrecognized input
 
-**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target. The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
+**A query param or JSON body key an endpoint does not define is refused with 400 (`bad_request`), never ignored.** Ignoring it answers a different request than the one sent, and the difference is always in the direction the caller didn't ask for: a misspelled filter widens a query, a misspelled `purge` soft-deletes, a misspelled field on a token request mints a token for someone else. A 400 tells the caller at once; a 200 for the wrong request never does. The rule holds at every depth of a body: a filter's `createdBy`, a sort, a relationship target, an association or permission element (see [Data model § Associations](./data-model.md#associations)). The same goes for values: a boolean param takes only `true` or `false`, and a param that names one value appears at most once, since reading a repeat as its first value ignores the rest.
 
 Three things sit outside it:
 
@@ -193,7 +193,26 @@ Three things sit outside it:
 - **Headers.** A request carries headers the application never sees — proxies and browsers add them — so an unrecognized one is ignored, as is `If-Match` on the association endpoints (see [Records](#records)).
 - **Responses.** A client reading a server's response ignores what it doesn't recognize, the way it ignores an [unrecognized frame](./change-feed.md). Strictness is the server's side of the contract, where the input is the client's intent.
 
-A server built on core reaches this through the wire parsers in `@haverstack/core/wire` — `parseQueryParams()`, `parseQueryBody()`, `parseChangeParams()`, `parseJournalParams()`, `createOptionsFromWireRecord()` and `changesFromWireBody()` — each of which refuses what its endpoint does not define. Endpoints a server parses itself — `/auth/token` among them — owe the same refusal.
+A server built on core reaches this through the wire parsers in `@haverstack/core/wire`, one per endpoint that takes input, each of which refuses what its endpoint does not define:
+
+| Endpoint                        | Parser                          |
+| ------------------------------- | ------------------------------- |
+| `GET /records`                  | `parseQueryParams()`            |
+| `POST /records/query`           | `parseQueryBody()`              |
+| `POST /records`                 | `createOptionsFromWireRecord()` |
+| `PATCH /records/:id`            | `changesFromWireBody()`         |
+| `DELETE /records/:id`           | `parseDeleteParams()`           |
+| `POST /records/:id/migrate`     | `parseMigrationBody()`          |
+| `GET /records/:id/journal`      | `parseJournalParams()`          |
+| `GET /records/:id/associations` | `parseAssociationParams()`      |
+| `GET /changes`                  | `parseChangeParams()`           |
+| `GET /attachments/:fileId`      | `parseDownloadParams()`         |
+| `POST /types`                   | `parseTypeBody()`               |
+| `PATCH /entity`                 | `parseEntityPatchBody()`        |
+| `POST /auth/challenge`          | `parseAuthChallengeBody()`      |
+| `POST /auth/token`              | `parseAuthTokenBody()`          |
+
+The body parsers split errors the way [Records](#records) does for a create: a body that is not an object, carries a key its endpoint does not define, or lacks a field the endpoint requires is not that request at all, so it is **400**; a known field whose value is the wrong type is **422**, carrying the field's path. Endpoints a server defines beyond this spec owe the same refusal, parsed by the server itself.
 
 ### The taxonomy root
 
@@ -577,6 +596,8 @@ GET  /types/:id    — get one type definition (id is URL-encoded)
 POST /types        — register a type, or evolve an existing one in place
 ```
 
+**The body is a whole Type**, as `GET /types/:id` returns one. `id`, `name` and `schema` are read, as is `migratesFrom` when present; `baseId`, `version`, `schemaHash` and `createdAt` are accepted and ignored, since `defineType()` derives or stamps each of them. Any other key is refused (see [Unrecognized input](#unrecognized-input)).
+
 `POST /types` on an `id` that already has a stored Type runs the same [schema drift check](./data-model.md#schema-drift-detection) as `Stack.defineType()` — the server-side storage layer never blindly overwrites a Type definition; legality is decided once, in the same invariant layer both the local and wire paths share.
 
 **A malformed schema answers 422** (code `validation`) rather than failing inside the server: a body here is parsed JSON, so a definition that is not an object, one naming no `kind` or an unrecognized one, a non-boolean `required`/`open`, and a container declaring neither its interior nor `open` — or both — are each reported against the field they sit on. See [Data model § Types](./data-model.md#types).
@@ -673,6 +694,8 @@ PATCH /entity    — update it
 ```
 
 A convenience alias for the owner entity rather than requiring clients to look it up by ID.
+
+**The `PATCH` body is `{ "contentPatch": { … } }`** and nothing else, merged at the top level exactly as the same key on `PATCH /records/:id` is — omitted keeps, `null` removes. It carries that key's name because `content` on the wire means whole content, as on `POST /records` and `POST /records/:id/migrate`; see [Data model § Mutations](./data-model.md#mutations). The records envelope's other keys, and `content`, are refused with **400** like any other unrecognized key (see [Unrecognized input](#unrecognized-input)); a missing or non-object `contentPatch` is **400** and **422** respectively.
 
 ## Change feed
 

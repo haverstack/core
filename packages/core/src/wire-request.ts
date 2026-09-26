@@ -26,8 +26,10 @@
  */
 
 import { StackBadRequestError } from './errors.js';
+import { TARGET_KEYS } from './query-validation.js';
 import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
+  DataAssociation,
   ChangeFilter,
   ChangeKind,
   JournalQuery,
@@ -55,12 +57,8 @@ const POSITIVE_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
+const ASSOCIATION_KINDS: ReadonlySet<string> = new Set(['tag', 'attachment', 'relationship']);
 const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
-const TARGET_KEYS: Record<RelationshipTargetPattern['kind'], readonly string[]> = {
-  record: ['kind', 'recordId', 'stackUrl'],
-  entity: ['kind', 'entityId'],
-  external: ['kind', 'ns', 'id'],
-};
 
 /** Every param `GET /records` defines. See docs/spec/wire-format.md § Records. */
 const RECORD_QUERY_PARAMS = [
@@ -698,6 +696,69 @@ export function parseJournalParams(url: URL): JournalQuery {
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
   return query;
+}
+
+// -------------------------------------------------------
+// DELETE /records/:id
+// -------------------------------------------------------
+
+/**
+ * Parse `DELETE /records/:id`'s query params into the `purge` flag. A
+ * misspelled or non-boolean `purge` is refused rather than read as a soft
+ * delete. See docs/spec/wire-format.md § Records.
+ */
+export function parseDeleteParams(url: URL): { purge: boolean } {
+  requireKnownParams(url, ['purge']);
+  return { purge: booleanParam(url, 'purge') };
+}
+
+// -------------------------------------------------------
+// GET /attachments/:fileId
+// -------------------------------------------------------
+
+/**
+ * The download params, in the names `resolveAttachmentDownloadContentType()`
+ * takes them by. An empty value stays empty rather than absent, so the
+ * resolution treats it exactly as it would an omitted one.
+ */
+export type ParsedDownloadParams = { contentTypeParam?: string; filenameParam?: string };
+
+/** Parse `GET /attachments/:fileId`'s query params. See docs/spec/wire-format.md § Download. */
+export function parseDownloadParams(url: URL): ParsedDownloadParams {
+  requireKnownParams(url, ['contentType', 'filename']);
+  const contentType = url.searchParams.get('contentType');
+  const filename = url.searchParams.get('filename');
+  return {
+    ...(contentType !== null && { contentTypeParam: contentType }),
+    ...(filename !== null && { filenameParam: filename }),
+  };
+}
+
+// -------------------------------------------------------
+// GET /records/:id/associations
+// -------------------------------------------------------
+
+export type ParsedAssociationParams = { kind?: DataAssociation['kind']; label?: string };
+
+/**
+ * Parse `GET /records/:id/associations`' query params. An unrecognized
+ * `kind` is refused, since reading it as absent would answer with every
+ * kind. `kind` repeats on `GET /changes` but names one value here, so a
+ * repeat is refused rather than read as its first.
+ * See docs/spec/wire-format.md § Associations.
+ */
+export function parseAssociationParams(url: URL): ParsedAssociationParams {
+  requireKnownParams(url, ['kind', 'label']);
+  if (url.searchParams.getAll('kind').length > 1)
+    throw new StackBadRequestError('Repeated query param: kind');
+  const kind = url.searchParams.get('kind');
+  if (kind !== null && !ASSOCIATION_KINDS.has(kind))
+    throw new StackBadRequestError(`Invalid kind: "${kind}"`);
+  const label = url.searchParams.get('label');
+  return {
+    ...(kind !== null && { kind: kind as DataAssociation['kind'] }),
+    ...(label !== null && { label }),
+  };
 }
 
 // -------------------------------------------------------
