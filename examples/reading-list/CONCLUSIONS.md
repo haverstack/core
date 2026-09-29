@@ -24,7 +24,13 @@ What to do about each item in [FINDINGS.md](./FINDINGS.md), decided after experi
 - [ ] Remove the sort workaround in `ReadingList.history()` and update any caller or test that assumes oldest first.
 - [ ] Changeset: `minor` for `@haverstack/core` (a consumer can observe `MemoryAdapter`'s order changing).
 
-**Open, not blocking:** whether `getVersions()` should be paged (a `limit` and a `beforeVersion` cursor), as `getJournal()` is. This decision doesn't depend on it.
+**Paging:** `getVersions()` is paged, with a `limit` and a `beforeVersion` cursor, in the same shape as `getJournal()`. It's a separate change from the ordering fix, which doesn't depend on it.
+
+- [ ] Add `limit` and `beforeVersion` to `getVersions()` on `StackRecordAdapter`, `Stack`, `ScopedStack` and `StackClient`, matching `getJournal()`'s default limit and next-page signal. Implement in `MemoryAdapter`, `sqlite-shared` and `APIAdapter`.
+- [ ] Wire: `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=`. Update `wire-format.md`, `versioning.md` and `@haverstack/conformance-fixtures`.
+- [ ] `@haverstack/adapter-conformance`: paging walks every version exactly once, newest first.
+- [ ] `ReadingList.history()` reads the first page.
+- [ ] Changesets: `minor` for `@haverstack/core`, `@haverstack/adapter-api`, `@haverstack/adapter-conformance`, `@haverstack/conformance-fixtures` and `@haverstack/record-adapter-sqlite`.
 
 ### 2. Unscoped `Stack` lets you edit a tombstone. `ScopedStack` refuses.
 
@@ -136,9 +142,9 @@ Content inside `open` objects and arrays is opaque to core and keeps any `null`s
 
 **Why:** without it, a field like `status` derives as plain `string`, and apps keep hand-writing unions (`BookStatus` in `schema.ts`), which is the drift `ContentOf<>` exists to remove. It's also the most obvious validation gap in the schema format.
 
-**Schema drift:** removing values or adding an `enum` to an existing string field narrows what's valid, so it needs a version bump. Removing an `enum` widens, so it's additive.
+**Schema drift:** removing values or adding an `enum` to an existing string field narrows what's valid, so it needs a version bump. Removing an `enum` or adding values widens, so it's additive. The schema hash sorts `enum` values, so reordering them isn't a change.
 
-**Open:** whether adding values is additive. The schema accepts more, but an older app's derived type excludes the new value and would receive it anyway, because readers don't validate. I lean towards requiring a version bump, so a type handle never sees a value its type rules out. The schema hash should sort `enum` values, so reordering them isn't a change.
+**Consequence for type handles:** because adding values is additive, an older app's typed read can receive a value its derived union excludes. The type handle work has to decide what a typed read does then: validate `enum` fields against the handle's schema and throw, or derive a wider type (e.g. `'want' | … | (string & {})`) so callers must handle unknown values.
 
 **Actions:**
 
