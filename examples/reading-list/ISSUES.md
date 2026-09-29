@@ -17,11 +17,11 @@ And the one existing follow-up: app manifests (#359).
 
 ## Merges and splits
 
-| Finding | Becomes | Why |
-| --- | --- | --- |
-| #3 | folded into I-7 | Its code half _is_ #6. Its spec half is one sentence in the same `versioning.md` section. |
-| #5 | I-9, I-11, I-12 | Three separable changes. Nullability and `enum` each change validation and the spec on their own, and the type handles build on both. |
-| #8, #9 | I-13, I-14, I-15 | They share one adapter contract (`amendAssociations`), one wire body (`{ changes }`) and one type (`AssociationEdit`). Split by layer, not by finding, so each PR is coherent. |
+| Finding | Becomes          | Why                                                                                                                                                                            |
+| ------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| #3      | folded into I-7  | Its code half _is_ #6. Its spec half is one sentence in the same `versioning.md` section.                                                                                      |
+| #5      | I-9, I-11, I-12  | Three separable changes. Nullability and `enum` each change validation and the spec on their own, and the type handles build on both.                                          |
+| #8, #9  | I-13, I-14, I-15 | They share one adapter contract (`amendAssociations`), one wire body (`{ changes }`) and one type (`AssociationEdit`). Split by layer, not by finding, so each PR is coherent. |
 
 Everything else is one issue per finding.
 
