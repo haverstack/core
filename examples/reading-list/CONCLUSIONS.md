@@ -430,3 +430,50 @@ Wherever validation names the type it got, a `Date` is named as `a Date` rather 
 - [ ] `data-model.md § Filter`: state that a query hides exactly three things by default, soft-deleted records (`includeDeleted`), unlisted records (`includeUnlisted`) and `_config` (always), and nothing else. So an unfiltered query returns every readable record from every app, system types included, and an app filters by `typeId`, `baseId` or `appId` to get its own.
 - [ ] Root `README.md` and `packages/core/README.md` quick starts: one sentence beside the `query()` example saying the same, pointing at the type filter it already uses.
 - [ ] Changeset: `patch` for `@haverstack/core`, since `packages/core/README.md` is published with the package. No code change.
+
+## Minor
+
+### 13. Adapters are constructed inconsistently
+
+**Decision:** An adapter that holds a stack's identity has exactly one entry point, an async static `open(opts)`, and a private constructor. Whether `open()` may create a new stack is an option, not a separate method. Blob adapters hold no identity and keep their public constructors. `Stack.open(adapter)` stays a separate step.
+
+| Adapter                                     | Entry point                                   | `create`                                          |
+| ------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| `LocalAdapter`, `NativeSQLiteRecordAdapter` | `open({ path, create?, ownerEntityId?, … })`  | `'never'` (default), `'ifMissing'`, `'exclusive'` |
+| `DoSQLiteRecordAdapter`                     | `open(storage, { ownerEntityId, timezone? })` | none: always creates if missing                   |
+| `APIAdapter`                                | `open({ url, ownerEntityId?, … })`            | none: a client never creates                      |
+| `MemoryAdapter`, `IncapableMemoryAdapter`   | `open({ ownerEntityId, timezone? })`          | none: always new                                  |
+
+`create` names what `open()` does when the store is missing or present, like `O_CREAT`/`O_EXCL`:
+
+- `'never'`: open an existing store, fail if missing.
+- `'ifMissing'`: open it if present, create it if not.
+- `'exclusive'`: create it, fail if present.
+
+`ownerEntityId` follows one rule everywhere it's accepted:
+
+- **Required whenever `open()` may create.** The type makes it required for `'ifMissing'` and `'exclusive'`, on the DO adapter and on `MemoryAdapter`. No adapter defaults it to `''`.
+- **A plain string or a lazy `() => string | Promise<string>`** on every creating path, called only when a store is actually created.
+- **A plain string is checked against an existing store's owner**, in every mode and on every adapter, and a mismatch throws `OwnerMismatchError`. A lazy provider is never called just to compare.
+
+**Why:**
+
+- **One thing to learn.** Four adapters today use four shapes: a sync constructor, three factories, one factory with positional storage, and one factory for the API adapter. Under this rule, knowing one adapter tells you how to open the others.
+- **A mode instead of methods fits every backend.** Separate `initialize()`/`open()` only make sense for files. The DO and API adapters would each support one of the three methods, and `MemoryAdapter` would have an `open()` that can't open anything. With a mode, each adapter supports exactly the modes it can honor, and the ones that can't choose drop the option.
+- **The owner check stops being `LocalAdapter`'s alone.** Today only `LocalAdapter.openOrInitialize()` and `APIAdapter` (as `expectedOwnerEntityId`) check the owner. `NativeSQLiteRecordAdapter` can't, and `DoSQLiteRecordAdapter` ignores a mismatched owner without an error. That's the silent config divergence `spec.md` says `initialize()`/`open()` exist to prevent.
+- **`MemoryAdapter`'s `''` default hides a mistake.** `new MemoryAdapter()` succeeds and `Stack.open()` rejects it later with `InvalidAdapterError`. A required option fails at compile time instead.
+- **`Stack.open()` stays separate** because `combineAdapters()` sits between the two steps. A convenience that returns a `Stack` directly (option C in the discussion) can come later if the quick start still reads as too much ceremony.
+
+**Actions:**
+
+- [ ] `@haverstack/core/adapter`: export `OwnerMismatchError` (`expected`, `actual`, and a `where` string naming the path, URL or DO), outside the `StackError` taxonomy alongside `InvalidAdapterError`.
+- [ ] `NativeSQLiteRecordAdapter`: replace `initialize()`/`open()` with `open({ path, create, ownerEntityId, timezone, force })`. The owner check moves here, so `LocalAdapter` inherits it. Error messages for a missing or existing file name the `create` mode to pass instead of the other method.
+- [ ] `LocalAdapter`: replace `initialize()`/`open()`/`openOrInitialize()` with `open()`, passing options through. Delete `LocalAdapterOwnerMismatchError`.
+- [ ] `DoSQLiteRecordAdapter`: rename `openOrInitialize()` to `open()`, and check a plain-string `ownerEntityId` against a stored config instead of ignoring it.
+- [ ] `APIAdapter`: rename `expectedOwnerEntityId` to `ownerEntityId` (same meaning: asserted, never used to create) and throw `OwnerMismatchError` in place of `APIAdapterOwnerMismatchError`, which is deleted.
+- [ ] `MemoryAdapter`, `IncapableMemoryAdapter` (`packages/core/src/testing.ts`): private constructor, `static async open({ ownerEntityId, timezone })` with `ownerEntityId` required. Update call sites in every package's tests and the conformance harness. The `InvalidAdapterError` test in `stack.test.ts` builds its owner-less adapter some other way.
+- [ ] Tests, per adapter that accepts `create`: each mode against a missing and an existing store. Per adapter: a plain-string owner mismatch throws `OwnerMismatchError` and releases what it acquired, and a lazy provider isn't called when the store exists.
+- [ ] Spec: `spec.md`'s quick start and the paragraphs after it describe `open()` and `create`. `adapters.md` gets a `## Construction` section stating the rule and the table above, and its `combineAdapters()` example and `§ Concurrency & storage ownership` stop naming `initialize()`.
+- [ ] READMEs: root, `packages/core`, `packages/adapter-conformance`, and any adapter README that shows construction.
+- [ ] This example: `main.ts` uses `open({ create: 'exclusive', … })` for the v1 run and `open({ path })` after.
+- [ ] Changeset: `minor` for `@haverstack/core`, `@haverstack/record-adapter-sqlite`, `@haverstack/adapter-local`, `@haverstack/record-adapter-do-sqlite` and `@haverstack/adapter-api`.
