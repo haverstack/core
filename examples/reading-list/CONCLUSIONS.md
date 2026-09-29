@@ -477,3 +477,39 @@ Wherever validation names the type it got, a `Date` is named as `a Date` rather 
 - [ ] READMEs: root, `packages/core`, `packages/adapter-conformance`, and any adapter README that shows construction.
 - [ ] This example: `main.ts` uses `open({ create: 'exclusive', … })` for the v1 run and `open({ path })` after.
 - [ ] Changeset: `minor` for `@haverstack/core`, `@haverstack/record-adapter-sqlite`, `@haverstack/adapter-local`, `@haverstack/record-adapter-do-sqlite` and `@haverstack/adapter-api`.
+
+### 14. `StackPermissionError: Permission denied` is the one vague message
+
+**Decision:** Every `StackPermissionError` says what was refused, and the constructor no longer has a default message, so a new throw site can't be vague either. The error gets no structured fields. How specific a message can be depends on what the requester can already read.
+
+**What each refusal says:**
+
+- **Refusing a Record the requester can read** (the three sites that go through `denialFor()`: the update/delete gate, the `_group` management gate, and reshare). `disclosure.md § Which refusal a Record answers with` already allows these to be specific. They name the verb, the Record, its type, and what was missing, and they say which side lacked it when the requester is delegated:
+  - `Cannot update "<id>" (<typeId>): requires update-own or update-any`
+  - `Cannot delete "<id>" (<typeId>): the app acting for this entity holds no delete grant`
+  - `Cannot change permissions on "<id>": only its author or the stack owner can reshare it`
+  - `Cannot change group "<id>": only its admins can manage it`
+- **Refusing a reference** (file-reference fields, `attachment` and `relationship` associations, `parentId` on `create()` and `mutate()`, the `fileId` of a non-owner `_attachment` create) **and `getAttachment()`**. The requester may not be able to read the target, so the message names only what the caller passed and reads the same whether the target is missing or unreadable:
+  - `Cannot reference record "<id>" as parent: it does not exist or you cannot read it`
+  - `Cannot reference file "<fileId>" in field "<field>": it does not exist or you cannot read it`
+  - `Cannot read file "<fileId>": it does not exist or you cannot read it`
+
+**Why:**
+
+- **Only the default was vague.** Every other throw site already passes a specific message. The 9 bare sites are where an app is most likely to need to know why: an app that edits shared records hits the update gate first.
+- **The disclosure rule already allows it for Records.** The spec's reasoning holds: a requester who can read a Record learns nothing new from being told what it lacks on it, and it only ever learns its own grants.
+- **References can still say what failed.** Naming the ID the caller supplied tells them nothing they didn't already know, and "does not exist or you cannot read it" keeps the two cases indistinguishable, as `access-control.md § Reference-creation gating` requires.
+- **No structured fields yet.** Fields like `action`, `recordId` or `reference` would need a new wire body field, fixtures, and the disclosure rule applied field by field. Nothing needs to branch on the reason yet: the reading list only checks `instanceof`. `code` stays the discriminator.
+- **A required message is the guard.** With the default gone, a vague `new StackPermissionError()` fails to compile.
+
+**Actions:**
+
+- [ ] `StackPermissionError` (`packages/core/src/errors.ts`): `message` is required.
+- [ ] `denialFor()` takes a message at every call site: `requireVerb()` (update or delete, whichever verb is being gated), the `_group` branch, and `requireReshareOf()`. `requireVerb()` works out whether the subject or the principal lacked the verb and says so.
+- [ ] Reference gates (`requireFileRefAccess()`, `requireAssociationAccess()`, the `parentId` checks in `create()` and `mutate()`, the `_attachment` `fileId` check) and `getAttachment()`: messages in the form above.
+- [ ] Tests: each denial names its verb and Record. For each reference gate, a missing target and an unreadable one produce the same message.
+- [ ] Spec:
+  - `disclosure.md § Which refusal a Record answers with`: a `StackPermissionError` names the verb, the Record and what was missing.
+  - `access-control.md § Reference-creation gating`: a refused reference names what the caller passed, with one message for missing and unreadable.
+  - `wire-format.md § Wire error body`: `message` is for humans and not part of the contract, and clients branch on `code`. So the fixtures' `'Permission denied'` bodies stay as they are.
+- [ ] Changeset: `minor` for `@haverstack/core` (the constructor's signature changes and messages change). `wire-types` already passes a message on both of its paths and needs no change.
