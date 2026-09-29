@@ -44,7 +44,7 @@ Mechanical rename across core, sqlite-shared's `CHECK`, conformance and fixtures
 MemoryAdapter change, conformance test, fixture check, spec.
 
 **I-4. `feat(core)!: page getVersions()`** (#1, open question)
-`getVersions(id, { limit, beforeVersion })`, newest first, with the same paging shape as `getJournal()` (default limit, cursor, how the next page is signalled). Adapter contract and every adapter, `GET /records/:id/versions` query params, fixtures, conformance, `versioning.md` and `wire-format.md`. `ReadingList.history()` reads the first page.
+`getVersions(id, { limit, beforeVersion })`, newest first, in the same shape as `getJournal()`: omitting both reads everything, and the wire `cursor` signals the next page. Adapter contract and every adapter, `GET /records/:id/versions` query params, fixtures, conformance, `versioning.md` and `wire-format.md`. `ReadingList.history()` reads the first page.
 _After I-3_: a `beforeVersion` cursor only makes sense once the order is fixed.
 
 **I-5. `feat(core)!: a named sort defaults to asc`** (#10)

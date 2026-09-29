@@ -26,8 +26,8 @@ What to do about each item in [FINDINGS.md](./FINDINGS.md), decided after experi
 
 **Paging:** `getVersions()` is paged, with a `limit` and a `beforeVersion` cursor, in the same shape as `getJournal()`. It's a separate change from the ordering fix, which doesn't depend on it.
 
-- [ ] Add `limit` and `beforeVersion` to `getVersions()` on `StackRecordAdapter`, `Stack`, `ScopedStack` and `StackClient`, matching `getJournal()`'s default limit and next-page signal. Implement in `MemoryAdapter`, `sqlite-shared` and `APIAdapter`.
-- [ ] Wire: `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=`. Update `wire-format.md`, `versioning.md` and `@haverstack/conformance-fixtures`.
+- [ ] Add `limit` and `beforeVersion` to `getVersions()` on `StackRecordAdapter`, `Stack`, `ScopedStack` and `StackClient`, as `JournalQuery` has `afterSeq` and `limit`. Omitting both reads every version, as it reads the whole journal. Implement in `MemoryAdapter`, `sqlite-shared` and `APIAdapter`.
+- [ ] Wire: `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=`, and `cursor` carries the next `beforeVersion` (or `null` at the end), as on the journal endpoint. `APIAdapter` follows it when no `limit` is given. Update `wire-format.md`, `versioning.md` and `@haverstack/conformance-fixtures`.
 - [ ] `@haverstack/adapter-conformance`: paging walks every version exactly once, newest first.
 - [ ] `ReadingList.history()` reads the first page.
 - [ ] Changesets: `minor` for `@haverstack/core`, `@haverstack/adapter-api`, `@haverstack/adapter-conformance`, `@haverstack/conformance-fixtures` and `@haverstack/record-adapter-sqlite`.
