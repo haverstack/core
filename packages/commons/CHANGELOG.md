@@ -1,5 +1,11 @@
 # @haverstack/commons
 
+## 0.34.0
+
+### Minor Changes
+
+- [#357](https://github.com/haverstack/core/pull/357) [`44c2f68`](https://github.com/haverstack/core/commit/44c2f684f006263fe92e1795901067904f5b787a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the `org.haverstack/photo@1` type to `org.haverstack/image@1` (export `PHOTO` → `IMAGE`), since paintings, drawings, scans, and screenshots belong in it as much as photos. Its required `file-ref` field is `file` (was `image`) and the capture-time field is `capturedAt` (was `takenAt`). See docs/commons/image.md.
+
 ## 0.33.0
 
 ### Minor Changes
