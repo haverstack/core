@@ -10,13 +10,13 @@ import {
   ARTICLE,
   PLACE,
   PAGE,
-  PHOTO,
+  IMAGE,
   POST,
   SITE,
   defineCommonsTypes,
 } from '../src/index.js';
 
-const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO, POST, SITE];
+const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, IMAGE, POST, SITE];
 
 let adapter: MemoryAdapter;
 let stack: Stack;
@@ -76,7 +76,7 @@ describe('read-compat cores', () => {
       slug: { kind: 'string', required: true },
       text: { kind: 'text', required: true },
     },
-    [PHOTO.id]: { image: { kind: 'file-ref', required: true } },
+    [IMAGE.id]: { file: { kind: 'file-ref', required: true } },
     [POST.id]: { text: { kind: 'text', required: true } },
     [SITE.id]: {
       title: { kind: 'string', required: true },
@@ -91,9 +91,9 @@ describe('read-compat cores', () => {
   });
 });
 
-describe('PHOTO', () => {
-  test('image is a required file-ref field, schema-enforced', async () => {
-    const defined = await defineCommonsTypes(stack, [PHOTO]);
-    expect(defined[0].schema.image).toEqual({ kind: 'file-ref', required: true });
+describe('IMAGE', () => {
+  test('file is a required file-ref field, schema-enforced', async () => {
+    const defined = await defineCommonsTypes(stack, [IMAGE]);
+    expect(defined[0].schema.file).toEqual({ kind: 'file-ref', required: true });
   });
 });

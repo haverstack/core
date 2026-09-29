@@ -44,12 +44,12 @@ await stack.defineType({
 ## Conventions
 
 - **Containment is `parentId`**, for both subfolders and contents. Any record type can
-  live in a folder — a drive holding notes, photos, polls, and plain files is the
+  live in a folder — a drive holding notes, images, polls, and plain files is the
   intended picture, not an edge case.
 - **A "file" in the drive** is, today, any record carrying an attachment association —
   typically a `note` with the file attached and the body as commentary. A first-class
   `file` type (a required `file-ref` plus name) is expected to follow
-  [`photo`](./photo.md)'s pattern; this file's conventions will be amended when a real
+  [`image`](./image.md)'s pattern; this file's conventions will be amended when a real
   writer needs it.
 - **Folder-level permissions do not exist** — permissions are per-record and grants are
   per-type; a folder's `permissions` field governs the folder record itself, **not**

@@ -117,14 +117,14 @@ export const PAGE: CommonsType = {
   },
 };
 
-export const PHOTO: CommonsType = {
-  id: 'org.haverstack/photo@1',
-  name: 'Photo',
+export const IMAGE: CommonsType = {
+  id: 'org.haverstack/image@1',
+  name: 'Image',
   schema: {
-    image: { kind: 'file-ref', required: true },
+    file: { kind: 'file-ref', required: true },
     caption: { kind: 'text' },
     alt: { kind: 'string' },
-    takenAt: { kind: 'date' },
+    capturedAt: { kind: 'date' },
   },
 };
 

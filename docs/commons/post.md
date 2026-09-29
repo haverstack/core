@@ -48,7 +48,7 @@ else's byline.
 ### No date field, deliberately
 
 The commons applies a consistent rule: a content date earns its place by naming an
-event `createdAt` doesn't (`photo.takenAt` is capture vs. import, `article.publishedAt`
+event `createdAt` doesn't (`image.capturedAt` is capture vs. import, `article.publishedAt`
 is publication vs. drafting). For a broadcast utterance, **uttering is creating** — an
 unsaid post is working material, not a post, which is the same reasoning that leaves
 `message@1` with no date field. A `publishedAt` here would equal `createdAt` on
