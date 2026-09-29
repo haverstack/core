@@ -32,7 +32,7 @@ org.haverstack/contact@1
 org.haverstack/article@1
 org.haverstack/place@1
 org.haverstack/page@1
-org.haverstack/photo@1
+org.haverstack/image@1
 org.haverstack/post@1
 org.haverstack/site@1
 org.haverstack/message@1 (proposed — see below)
@@ -115,7 +115,7 @@ these.
    labeled content entries rather than associations. One carve-out, for references
    rather than data: a **constitutive reference** — the record is _about_ exactly one
    target and is invalid without it — is a schema-required `record-ref`/`file-ref`
-   content field (`vote.pollId`, `photo.image`), so validation can enforce it and
+   content field (`vote.pollId`, `image.file`), so validation can enforce it and
    read-compat can see it. Organizational references — optional, heterogeneous,
    legitimately re-parentable — stay native (`parentId`, relationship associations);
    "no bare ID strings" still holds, since `record-ref` is a typed kind, not a string.
@@ -176,7 +176,7 @@ sense for it.
   remote content address, which account it went out from — that is a record of the
   bridge's own type, related back to this one; the label alone carries only the link.
 - **`site`** — `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
-  on an `article`, `photo`, `bookmark`, or `post` means that record is published on the
+  on an `article`, `image`, `bookmark`, or `post` means that record is published on the
   named [`site`](./site.md). Multi-valued: two associations means the record is
   cross-posted to both sites. Structurally the same shape as `location` — a label
   pointing from any record at one commons type — and orthogonal to `page`'s own
@@ -251,7 +251,7 @@ examples (comments on a blog post are messages; private marginalia are notes).
 | `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft    | `{ title, text }`         |
 | `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft    | `{ latitude, longitude }` |
 | `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
-| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Draft    | `{ image }`               |
+| `org.haverstack/image@1`    | [`image.md`](./image.md)       | Draft    | `{ file }`                |
 | `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
 | `org.haverstack/site@1`     | [`site.md`](./site.md)         | Draft    | `{ title, baseUrl }`      |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
@@ -271,7 +271,7 @@ documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are
 materialized in @1), `file`/`document` (a first-class `file` type is expected to follow
-`photo`'s pattern; until a real writer needs it, a record plus attachment covers it), and
+`image`'s pattern; until a real writer needs it, a record plus attachment covers it), and
 `checkin` (subsumed by the `location` cross-type convention plus any record).
 
 ---

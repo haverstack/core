@@ -87,7 +87,7 @@ await stack.defineType({
   for types without one, all records. Member permalinks default to paths under the
   root (`/blog/my-post/`), overridable in the sidecar. Examples: the blog is
   `{ slug: 'blog', collection: { typeId: 'org.haverstack/article@1' } }`; a tag
-  archive adds `tag: 'travel'`; a gallery is `typeId: 'org.haverstack/photo@1'`; a
+  archive adds `tag: 'travel'`; a gallery is `typeId: 'org.haverstack/image@1'`; a
   linkroll is `typeId: 'org.haverstack/bookmark@1'`. The shape is deliberately a
   restricted, schema-validated vocabulary rather than a stored full `Query` object —
   it covers what site structure actually needs, grows additively (`limit`,

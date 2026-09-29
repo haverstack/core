@@ -6,7 +6,7 @@
 A published website: a personal site, a professional site, a project microsite — one of
 possibly several built from the same stack. The gap this closes: the page tree already
 supports multiple sites (`parentId` walks terminate on whatever record is the root
-ancestor), but nothing says which `article`, `photo`, `bookmark`, or `post` records a
+ancestor), but nothing says which `article`, `image`, `bookmark`, or `post` records a
 given site publishes, because `collection.typeId` on [`page`](./page.md) is
 stack-global — `/articles/` on one site and `/writing/` on another both select every
 `article@1` in the stack, with no way to tell them apart.
@@ -51,7 +51,7 @@ await stack.defineType({
   `page.md` already applies to hierarchy.
 - **Membership: the `site` cross-type convention.**
   `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
-  on an `article`, `photo`, `bookmark`, or `post` means that record is published on that
+  on an `article`, `image`, `bookmark`, or `post` means that record is published on that
   site. Multi-valued — two associations means the record appears on both sites, the
   cross-posting case `parentId` can't express. This is a publication relationship: the
   record exists independently of any site and may be published on several, so it stays
@@ -72,7 +72,7 @@ await stack.defineType({
 - **Single-site stacks are unaffected.** A page with no `site` ancestor is at the site
   root, and a collection root with no `site` ancestor selects members without regard to
   membership — both rules degrade to current behavior when no `site` record exists.
-- **Canonical URLs.** `article.url` (and `photo`/`bookmark`/`post`'s equivalent) is
+- **Canonical URLs.** `article.url` (and `image`/`bookmark`/`post`'s equivalent) is
   stamped with the canonical location at first publish, per each type's own convention.
   A record published on two sites has two locations and one field — resolved by
   whichever site's `baseUrl` prefixes the stored URL being canonical; a site building a
