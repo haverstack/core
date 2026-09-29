@@ -513,3 +513,26 @@ Wherever validation names the type it got, a `Date` is named as `a Date` rather 
   - `access-control.md § Reference-creation gating`: a refused reference names what the caller passed, with one message for missing and unreadable.
   - `wire-format.md § Wire error body`: `message` is for humans and not part of the contract, and clients branch on `code`. So the fixtures' `'Permission denied'` bodies stay as they are.
 - [ ] Changeset: `minor` for `@haverstack/core` (the constructor's signature changes and messages change). `wire-types` already passes a message on both of its paths and needs no change.
+
+### 15. Unlisting reaches subscribers as `kind: 'deleted'`
+
+**Decision:** Rename the `deleted` kind to `removed`. The set stays closed at four: `created`, `changed`, `removed`, `purged`. `removed` covers `delete` and `unlist`, as `deleted` does now, and `ops` still says which one happened. No behavior changes.
+
+**Why:**
+
+- **`kind` says what the subscriber should do with its copy, not what happened to the record.** `changed` already works this way: it means "upsert", not "you've seen this before". Under that reading `deleted` is the one misnamed value. An unlisted record hasn't been deleted, but the subscriber still has to drop it. `removed` says exactly that.
+- **This is a naming fix, not a disclosure fix.** Mapping `unlist` to a removal isn't what protects the unlisted record. The `unlist` frame already carries `ops: ['unlist']` and the full, readable record with no `deletedAt`, so a subscriber can already tell it from a delete. The protection is that nothing more is announced while the record stays unlisted (`events.md § The unlisted transition`). Renaming leaks nothing new.
+- **A fifth kind would reopen the trap it's meant to close.** An `unlisted` kind would let a handler written for four kinds miss it and keep a stale copy, which is exactly what the "most conservative entry" rule (`events.md § The event shape`) exists to prevent.
+- **A flag would be redundant.** `record.deletedAt`, or `ops`, already tells a tombstone from an unlisted record.
+- **`purged` still reads correctly beside it.** `removed` means drop your copy, and a tombstone may still exist. `purged` means nothing is left, not even a tombstone.
+
+**Actions:**
+
+- [ ] `ChangeKind` (`packages/core/src/types.ts`): `'deleted'` becomes `'removed'`. Update `changes.ts` (the `unlist` override and the op→kind table) and `CHANGE_KINDS` in `wire-request.ts`.
+- [ ] `sqlite-shared` journal schema: the `kind` `CHECK` constraint lists `removed`.
+- [ ] `adapter-conformance` and `conformance-fixtures`: expected `kind` values.
+- [ ] Spec:
+  - `events.md`: the kind/ops table, the "most conservative entry" paragraph, and a sentence under `§ The event shape` saying `kind` names what to do with a held copy and `ops` names why.
+  - `change-feed.md`: the `?kind=` filter values.
+  - `journal.md`: anywhere it names the kind. The unlisted and tombstone sections in `events.md` and `unlisted.md` should say "removed" wherever they mean the kind.
+- [ ] Changesets: `minor` for `@haverstack/core`, `@haverstack/conformance-fixtures`, `@haverstack/adapter-conformance` and `@haverstack/record-adapter-sqlite` (for `sqlite-shared`). `wire-types` imports `ChangeKind` from core, so it's covered when dependents are expanded.
