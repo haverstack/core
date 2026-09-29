@@ -536,3 +536,26 @@ Wherever validation names the type it got, a `Date` is named as `a Date` rather 
   - `change-feed.md`: the `?kind=` filter values.
   - `journal.md`: anywhere it names the kind. The unlisted and tombstone sections in `events.md` and `unlisted.md` should say "removed" wherever they mean the kind.
 - [ ] Changesets: `minor` for `@haverstack/core`, `@haverstack/conformance-fixtures`, `@haverstack/adapter-conformance` and `@haverstack/record-adapter-sqlite` (for `sqlite-shared`). `wire-types` imports `ChangeKind` from core, so it's covered when dependents are expanded.
+
+### 16. Setup and data access are split by type
+
+**Decision:** The split is right and stays. This is a documentation fix, plus one spec gap it exposed: nothing says who may call `POST /types`. The rule becomes owner-acting-alone, matching `commitMigration()`. How an app that isn't the owner gets its types into a stack is a separate design item (app manifests, #359), not part of this entry.
+
+**Why the split is right:** `defineType()`, `migrateAll()` and `grantType()` change the whole stack, not one record. `StackClient` is what `ScopedStack` implements for a possibly untrusted requester. Adding these to it would mean methods that throw for everyone but the owner, and letting `ScopedStack` define types would break the boundary it exists to hold.
+
+**What the finding exposes:**
+
+- **The pattern is undocumented.** Every app written against `StackClient` ends up with the reading list's shape: a data layer anyone can use and an install path only the owner can run. Nothing tells an app author this before `client.defineType` fails to exist.
+- **`registerMigration()` is startup, not install.** Its registry lives in memory on each `Stack` instance (`data-model.md § Type migrations`), so it runs on every start. The reading list's `installReadingList()` mixes both, and that only works because it runs on every open.
+- **`POST /types` has no access rule.** `ScopedStack` has no `defineType()`, so a server can only serve the endpoint through an unscoped `Stack`, and the spec doesn't say whom it serves. `POST /records/:id/migrate` is explicitly owner-only, and defining a type is at least as stack-wide as committing a migration.
+- **A contained app can't install itself.** The README's contained-app example has the owner grant `note@1` to an app, but the app is what knows the schema, and under the rule above only the owner can define it. That gap is what #359 addresses.
+
+**Actions:**
+
+- [ ] Spec, `wire-format.md § Types`: `POST /types` is served to the owner acting alone and answers `403` otherwise, like `POST /records/:id/migrate`. `GET /types` stays open to any authenticated requester, since a client needs schemas to validate and render.
+- [ ] Spec, `access-control.md § Type-level grants`: list defining a type beside `commitMigration()` as owner-acting-alone, with no grant that confers it.
+- [ ] Spec, `data-model.md § Type migrations`: say plainly that registration runs at every startup, for every `Stack` instance, including one opened over `APIAdapter`.
+- [ ] Root `README.md` and `packages/core/README.md`: a short "Writing an app" section describing the two layers: a data class that takes `StackClient`, and an owner-run install function that takes `Stack` (defining types, `migrateAll()`, grants), with migration registration at startup. Point to this example.
+- [ ] This example: split `installReadingList()` into `registerReadingListMigrations(stack)` (every start) and `installReadingList(stack)` (types and `migrateAll()`).
+- [ ] Follow-up: app manifests, #359.
+- [ ] Changeset: `patch` for `@haverstack/core` (its README is published). No code change: an owner-only `POST /types` is a rule for servers, which `@haverstack/core/wire` already supports with `isOwnerActingAlone()`.
