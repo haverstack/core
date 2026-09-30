@@ -56,7 +56,7 @@ export function parseDate(val: unknown): Date | undefined {
 const POSITIVE_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
-const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
+const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'removed', 'purged']);
 const ASSOCIATION_KINDS: ReadonlySet<string> = new Set(['tag', 'attachment', 'relationship']);
 const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
 

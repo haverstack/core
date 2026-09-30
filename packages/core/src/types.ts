@@ -929,7 +929,7 @@ export type JournalQuery = {
  * `changed` is an upsert signal carrying nine distinct verbs.
  * See docs/spec/events.md § The event shape.
  */
-export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
+export type ChangeKind = 'created' | 'changed' | 'removed' | 'purged';
 
 /**
  * The precise verb behind a ChangeKind, for consumers that distinguish a

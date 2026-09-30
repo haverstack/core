@@ -632,7 +632,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         await adapter.deleteRecord(record.id, {
-          journal: { ops: ['delete'], kind: 'deleted' },
+          journal: { ops: ['delete'], kind: 'removed' },
         });
         // A tombstone is recoverable, and its journal is part of what
         // recovers it.

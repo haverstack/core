@@ -373,7 +373,7 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     expect(owner.seen).toEqual([]);
   });
 
-  test('the unlist transition itself reaches a default subscriber, as kind "deleted"', async () => {
+  test('the unlist transition itself reaches a default subscriber, as kind "removed"', async () => {
     const note = await stack.create(NOTE, { text: 'was public' });
     const owner = collector();
     await stack.asEntity(OWNER).subscribe(owner.handler, { filter: { typeId: NOTE } });
@@ -381,7 +381,7 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     await stack.mutate(note.id, { unlisted: true });
     await settle();
 
-    expect(owner.seen.map((c) => [c.kind, c.ops])).toEqual([['deleted', ['unlist']]]);
+    expect(owner.seen.map((c) => [c.kind, c.ops])).toEqual([['removed', ['unlist']]]);
   });
 
   test('the list transition reaches a default subscriber, as an ordinary upsert', async () => {
@@ -504,7 +504,7 @@ describe('the feed carries no more of a soft-deleted record than get() does', ()
     await settle();
 
     const frame = reader.seen.find((c) => c.recordId === note.id);
-    expect(frame?.kind).toBe('deleted');
+    expect(frame?.kind).toBe('removed');
     expect(frame?.record).toBeDefined();
     expect(frame!.record!.content).toEqual({});
     expect(frame!.record!.deletedAt).toBeInstanceOf(Date);
