@@ -163,6 +163,16 @@ describe('open create modes', () => {
     await expect(initAdapter()).resolves.toBeDefined();
   });
 
+  test.each(['ifMissing', 'exclusive'] as const)(
+    "creating under '%s' without an owner fails and leaves no file behind",
+    async (create) => {
+      await expect(
+        NativeSQLiteRecordAdapter.open({ path: dbPath, create } as never),
+      ).rejects.toThrow(/no ownerEntityId/);
+      expect(existsSync(dbPath)).toBe(false);
+    },
+  );
+
   test('a lazy ownerEntityId is called when a store is created, sync or async', async () => {
     const sync = vi.fn(() => 'owner-sync');
     const a = await NativeSQLiteRecordAdapter.open({

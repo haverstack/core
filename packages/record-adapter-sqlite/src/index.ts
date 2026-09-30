@@ -10,7 +10,7 @@
  *
  * A stack file is owned by exactly one process at a time (see
  * docs/spec/adapters.md § Concurrency & storage ownership). open()
- * acquires a PID-stamped lock file beside the database and reject if
+ * acquires a PID-stamped lock file beside the database and rejects if
  * another live process already holds it; close() releases it.
  *
  * Token storage is a separate concern — see NativeTokenStore in this
@@ -103,31 +103,41 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: NativeSQLiteRecordAdapterOpenOptions,
   ): Promise<NativeSQLiteRecordAdapter> {
     const mode: StoreCreateMode = opts.create ?? 'never';
-    const exists = existsSync(opts.path);
-    if (!exists && mode === 'never') {
-      throw new Error(
-        `Cannot open: no database found at "${opts.path}". ` +
-          `Pass create: 'ifMissing' or 'exclusive' to create one.`,
-      );
-    }
-    if (exists && mode === 'exclusive') {
-      throw new Error(
-        `Cannot create: database already exists at "${opts.path}". ` +
-          `Pass create: 'never' or 'ifMissing' to open it.`,
-      );
-    }
+    const checkMode = (exists: boolean): void => {
+      if (!exists && mode === 'never') {
+        throw new Error(
+          `Cannot open: no database found at "${opts.path}". ` +
+            `Pass create: 'ifMissing' or 'exclusive' to create one.`,
+        );
+      }
+      if (exists && mode === 'exclusive') {
+        throw new Error(
+          `Cannot create: database already exists at "${opts.path}". ` +
+            `Pass create: 'never' or 'ifMissing' to open it.`,
+        );
+      }
+    };
+    const existedBeforeLock = existsSync(opts.path);
+    checkMode(existedBeforeLock);
 
     // Resolved before the lock is taken so a failing provider leaves nothing held.
-    const newOwner =
-      exists || typeof opts.ownerEntityId === 'undefined'
-        ? undefined
-        : typeof opts.ownerEntityId === 'function'
-          ? await opts.ownerEntityId()
-          : opts.ownerEntityId;
+    let newOwner: string | undefined;
+    if (!existedBeforeLock) {
+      newOwner =
+        typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
+      if (!newOwner) {
+        throw new Error(
+          `Cannot create: no ownerEntityId given for the new database at "${opts.path}".`,
+        );
+      }
+    }
 
     acquireLock(opts.path, opts.force);
     let db: DatabaseSync | undefined;
     try {
+      // Re-checked under the lock: another process may have created the file meanwhile.
+      const exists = existsSync(opts.path);
+      checkMode(exists);
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
       applyRecordSchema(exec, { wal: true });
@@ -138,7 +148,8 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
           throw new OwnerMismatchError(opts.ownerEntityId, config.entityId, `"${opts.path}"`);
         }
       } else {
-        config = insertConfigRecord(exec, newOwner!, opts.timezone);
+        if (!newOwner) throw new Error(`Cannot create: "${opts.path}" vanished while opening.`);
+        config = insertConfigRecord(exec, newOwner, opts.timezone);
       }
       return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
     } catch (err) {
