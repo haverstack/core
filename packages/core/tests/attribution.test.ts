@@ -16,7 +16,7 @@ let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -245,7 +245,7 @@ describe('attribution — separate from authorship checks', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
-    const ownOnly = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const ownOnly = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     const s2 = await Stack.open(ownOnly);
     await s2.defineType({
       id: NOTE,

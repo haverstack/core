@@ -7,6 +7,7 @@
  * each StackRecordAdapter method needs its own exposed method here.
  */
 import { DurableObject } from 'cloudflare:workers';
+import type { OwnerMismatchError } from '@haverstack/core/adapter';
 import { DoSQLiteRecordAdapter } from '../../src/index.js';
 import type {
   StackRecord,
@@ -29,7 +30,7 @@ export class TestRecordAdapterDO extends DurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ready = ctx.blockConcurrencyWhile(async () => {
-      this.adapter = await DoSQLiteRecordAdapter.openOrInitialize(ctx.storage, {
+      this.adapter = await DoSQLiteRecordAdapter.open(ctx.storage, {
         ownerEntityId: 'entity-test',
         timezone: 'America/New_York',
       });
@@ -44,6 +45,29 @@ export class TestRecordAdapterDO extends DurableObject {
   async getOwnerEntityId() {
     await this.ready;
     return this.adapter.ownerEntityId;
+  }
+
+  /** Re-opens this DO's storage with `owner`; reports what happened, since an error can't cross RPC typed. */
+  async reopen(
+    owner: string,
+  ): Promise<{ owner: string } | { error: string; expected?: string; actual?: string }> {
+    await this.ready;
+    let called = false;
+    const ownerEntityId =
+      owner === 'lazy:unused'
+        ? () => {
+            called = true;
+            return 'lazy-owner';
+          }
+        : owner;
+    try {
+      const reopened = await DoSQLiteRecordAdapter.open(this.ctx.storage, { ownerEntityId });
+      if (called) return { error: 'LazyProviderCalled' };
+      return { owner: reopened.ownerEntityId };
+    } catch (err) {
+      const e = err as OwnerMismatchError;
+      return { error: e.name, expected: e.expected, actual: e.actual };
+    }
   }
 
   async createRecord(record: StackRecord) {

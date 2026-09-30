@@ -6,7 +6,6 @@ import {
   APIAdapterError,
   APIAdapterCapabilityError,
   APIAdapterVersionError,
-  APIAdapterOwnerMismatchError,
   APIAdapterAuthUnsupportedError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,
@@ -24,6 +23,7 @@ import {
   openAdapter,
   useFetchMock,
 } from './helpers.js';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
@@ -269,13 +269,13 @@ describe('open — version negotiation', () => {
 });
 
 // -------------------------------------------------------
-// open() — expectedOwnerEntityId
+// open() — ownerEntityId
 // -------------------------------------------------------
 
 // Discovery identity is unsigned and the server can't prove it, so stating
 // the DID you expect is the only check a client has. See
 // docs/spec/wire-format.md § Identity is trusted on transport.
-describe('open — expectedOwnerEntityId', () => {
+describe('open — ownerEntityId', () => {
   const OWNER_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
   const OTHER_DID = 'did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG';
   const ownedDiscovery = { ...DISCOVERY, entityId: OWNER_DID };
@@ -285,7 +285,7 @@ describe('open — expectedOwnerEntityId', () => {
     const adapter = await APIAdapter.open({
       url: BASE_URL,
       token: TOKEN,
-      expectedOwnerEntityId: OWNER_DID,
+      ownerEntityId: OWNER_DID,
     });
     expect(adapter.ownerEntityId).toBe(OWNER_DID);
   });
@@ -293,8 +293,8 @@ describe('open — expectedOwnerEntityId', () => {
   test('refuses a server reporting a different owner', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
   test('carries both DIDs for a caller that wants to report them', async () => {
@@ -302,18 +302,18 @@ describe('open — expectedOwnerEntityId', () => {
     const err = await APIAdapter.open({
       url: BASE_URL,
       token: TOKEN,
-      expectedOwnerEntityId: OWNER_DID,
+      ownerEntityId: OWNER_DID,
     }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(APIAdapterOwnerMismatchError);
-    expect((err as APIAdapterOwnerMismatchError).expectedOwnerEntityId).toBe(OWNER_DID);
-    expect((err as APIAdapterOwnerMismatchError).actualOwnerEntityId).toBe(OTHER_DID);
+    expect(err).toBeInstanceOf(OwnerMismatchError);
+    expect((err as OwnerMismatchError).expected).toBe(OWNER_DID);
+    expect((err as OwnerMismatchError).actual).toBe(OTHER_DID);
   });
 
   test('refuses discovery carrying no owner at all — absence is not a match', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: undefined }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
   test('compares exactly — a DID differing only in case is a mismatch', async () => {
@@ -322,12 +322,12 @@ describe('open — expectedOwnerEntityId', () => {
       APIAdapter.open({
         url: BASE_URL,
         token: TOKEN,
-        expectedOwnerEntityId: OWNER_DID.toLowerCase(),
+        ownerEntityId: OWNER_DID.toLowerCase(),
       }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
-  test('an omitted expectedOwnerEntityId opens against whatever owner is reported', async () => {
+  test('an omitted ownerEntityId opens against whatever owner is reported', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     const adapter = await APIAdapter.open({ url: BASE_URL, token: TOKEN });
     expect(adapter.ownerEntityId).toBe(OTHER_DID);
@@ -336,8 +336,8 @@ describe('open — expectedOwnerEntityId', () => {
   test('refuses before sending any other request', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -348,7 +348,7 @@ describe('open — expectedOwnerEntityId', () => {
       jsonResponse({ ...DISCOVERY, version: '2.0', entityId: OTHER_DID }),
     );
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
     ).rejects.toThrow(APIAdapterVersionError);
   });
 });
@@ -423,13 +423,13 @@ describe('open — DID credential handshake', () => {
 
   // A signature keeps its value after the connection is abandoned, so it is
   // never spent on a server this client has already decided to refuse.
-  test('does not handshake against a server failing the expectedOwnerEntityId check', async () => {
+  test('does not handshake against a server failing the ownerEntityId check', async () => {
     const credential = stubCredential();
     mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
     await APIAdapter.open({
       url: BASE_URL,
       credential,
-      expectedOwnerEntityId: 'did:key:zSomeoneElse',
+      ownerEntityId: 'did:key:zSomeoneElse',
     }).catch(() => undefined);
     expect(credential.sign).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledTimes(1);

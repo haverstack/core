@@ -7,7 +7,7 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, RelayScopeError, and — in their own
+ * InvalidAdapterError, OwnerMismatchError, RelayScopeError, and — in their own
  * modules — IdGenerationError and InvalidDidError): they report a local
  * programming error or an assembled topology, not a state a request can be
  * in, so no server ever responds with one.
@@ -19,7 +19,7 @@
 import { baseIdOf, parseTypeId } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import type { ValidationError } from './validate.js';
-import type { MissingCapability, TypeId } from './types.js';
+import type { EntityId, MissingCapability, TypeId } from './types.js';
 
 /**
  * The wire-protocol discriminator vocabulary, one code per Stack-domain
@@ -245,6 +245,28 @@ export class InvalidAdapterError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'InvalidAdapterError';
+  }
+}
+
+/**
+ * Thrown by an adapter's open() when a plain-string `ownerEntityId` disagrees
+ * with the owner the store already has. `where` names the path, URL or
+ * Durable Object that was opened; `actual` is undefined when a server reports
+ * no owner at all. Outside the StackError taxonomy for the same reason as
+ * InvalidAdapterError. See docs/spec/adapters.md § Construction.
+ */
+export class OwnerMismatchError extends Error {
+  constructor(
+    public readonly expected: EntityId,
+    public readonly actual: EntityId | undefined,
+    public readonly where: string,
+  ) {
+    super(
+      actual
+        ? `Cannot open ${where}: it is owned by "${actual}", but ownerEntityId "${expected}" was given.`
+        : `Cannot open ${where}: it reports no owner, but ownerEntityId "${expected}" was given.`,
+    );
+    this.name = 'OwnerMismatchError';
   }
 }
 

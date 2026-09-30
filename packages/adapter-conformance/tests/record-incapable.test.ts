@@ -11,6 +11,6 @@ import { runRecordAdapterConformance } from '../src/record.js';
 
 runRecordAdapterConformance({
   name: 'IncapableMemoryAdapter',
-  open: () => new IncapableMemoryAdapter({ ownerEntityId: 'did:key:conformance-test' }),
-  capabilities: new IncapableMemoryAdapter().capabilities,
+  open: () => IncapableMemoryAdapter.open({ ownerEntityId: 'did:key:conformance-test' }),
+  capabilities: (await IncapableMemoryAdapter.open({ ownerEntityId: 'did:key:test' })).capabilities,
 });

@@ -62,7 +62,7 @@ function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
 }
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
 });
@@ -1322,7 +1322,7 @@ describe('ScopedStack.create — client-supplied id', () => {
   });
 
   test('idTimestampSkewMs: null on the Stack disables the skew check for grantees', async () => {
-    const permissiveAdapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const permissiveAdapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType({
       id: COMMENT,
@@ -2933,7 +2933,10 @@ describe('ScopedStack.getAttachment', () => {
   // The same clause on the in-memory branch an adapter reaching no content
   // takes — the two must agree about which of the uploader's records count.
   test('an unlisted _attachment record carries it on a content-blind adapter too', async () => {
-    const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const incapableAdapter = await IncapableMemoryAdapter.open({
+      ownerEntityId: OWNER,
+      timezone: 'UTC',
+    });
     const incapableStack = await Stack.open(incapableAdapter);
     const fileId = fakeFileId('file-unlisted-blind');
     incapableAdapter.blobs.set(fileId, { data: new Uint8Array([1]), modifiedAt: new Date() });
@@ -2966,7 +2969,10 @@ describe('ScopedStack.getAttachment', () => {
   // considered. IncapableMemoryAdapter forces that fallback path (a
   // compliant local adapter takes the content-filtered query).
   test('uploader can access an upload that is not their first (regression)', async () => {
-    const incapableAdapter = new IncapableMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const incapableAdapter = await IncapableMemoryAdapter.open({
+      ownerEntityId: OWNER,
+      timezone: 'UTC',
+    });
     const incapableStack = await Stack.open(incapableAdapter);
     const fileFirst = fakeFileId('file-first');
     const fileSecond = fakeFileId('file-second');

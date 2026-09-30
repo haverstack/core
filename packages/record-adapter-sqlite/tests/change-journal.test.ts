@@ -22,7 +22,8 @@ afterEach(() => {
 });
 
 const initAdapter = () =>
-  NativeSQLiteRecordAdapter.initialize({
+  NativeSQLiteRecordAdapter.open({
+    create: 'exclusive',
     path: dbPath,
     ownerEntityId: 'entity-123',
     timezone: 'UTC',

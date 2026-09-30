@@ -51,6 +51,7 @@ import type {
 } from '@haverstack/core';
 import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import {
+  OwnerMismatchError,
   assertQueryCapabilities,
   assertSortCapability,
   assertValidAssociationFilters,
@@ -115,11 +116,11 @@ export type APIAdapterOpenOptions = {
   /** Bearer token issued by the stack server. Omit for unauthenticated access. */
   token?: string;
   /**
-   * The DID this client expects to own the stack at `url`. When set, open()
-   * refuses a server whose discovery reports anything else. Omit when the URL
-   * is the only expectation you have.
+   * The DID this client expects to own the stack at `url`. Asserted, never
+   * used to create: open() throws OwnerMismatchError when discovery reports
+   * anything else. Omit when the URL is the only expectation you have.
    */
-  expectedOwnerEntityId?: EntityId;
+  ownerEntityId?: EntityId;
   /**
    * A DID and a signing callback — never a private key. open() performs the
    * challenge–response handshake with it and re-runs that handshake when a
@@ -200,24 +201,6 @@ export class APIAdapterVersionError extends APIAdapterError {
   ) {
     super(message);
     this.name = 'APIAdapterVersionError';
-  }
-}
-
-/**
- * Thrown by open() when `expectedOwnerEntityId` was supplied and discovery reports a
- * different owner — or none at all. Discovery identity is unsigned and the
- * server cannot prove it, so stating the DID you expect is the only check
- * available to a client. See docs/spec/wire-format.md § Identity is trusted
- * on transport.
- */
-export class APIAdapterOwnerMismatchError extends APIAdapterError {
-  constructor(
-    public readonly expectedOwnerEntityId: EntityId,
-    public readonly actualOwnerEntityId: EntityId | undefined,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'APIAdapterOwnerMismatchError';
   }
 }
 
@@ -835,7 +818,7 @@ export class APIAdapter implements StackAdapter {
    *
    * Throws APIAdapterAuthError on 401.
    * Throws APIAdapterConnectionError if the server is unreachable.
-   * Throws APIAdapterOwnerMismatchError when `expectedOwnerEntityId` disagrees with
+   * Throws OwnerMismatchError when `ownerEntityId` disagrees with
    * the owner discovery reports.
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
@@ -878,18 +861,11 @@ export class APIAdapter implements StackAdapter {
 
     // After version negotiation: a differing major means fields may not mean
     // what this client reads them as, so `entityId` isn't worth comparing yet.
-    if (
-      opts.expectedOwnerEntityId !== undefined &&
-      discovery.entityId !== opts.expectedOwnerEntityId
-    ) {
-      throw new APIAdapterOwnerMismatchError(
-        opts.expectedOwnerEntityId,
+    if (opts.ownerEntityId !== undefined && discovery.entityId !== opts.ownerEntityId) {
+      throw new OwnerMismatchError(
+        opts.ownerEntityId,
         discovery.entityId,
-        discovery.entityId
-          ? `Server at "${baseUrl}" reports owner "${discovery.entityId}"; expected ` +
-              `"${opts.expectedOwnerEntityId}".`
-          : `Server at "${baseUrl}" reported no owner in discovery; expected ` +
-              `"${opts.expectedOwnerEntityId}".`,
+        `the server at "${baseUrl}"`,
       );
     }
 

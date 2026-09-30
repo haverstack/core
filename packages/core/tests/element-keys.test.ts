@@ -11,7 +11,7 @@ let stack: Stack;
 let recordId: string;
 
 beforeEach(async () => {
-  stack = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }));
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
   recordId = (await stack.create(NOTE, { text: 'x' })).id;
 });

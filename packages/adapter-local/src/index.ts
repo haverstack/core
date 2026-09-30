@@ -14,7 +14,6 @@
  */
 
 import { dirname, join } from 'path';
-import { existsSync } from 'fs';
 import type {
   JournalQuery,
   RecordJournalEntry,
@@ -30,7 +29,6 @@ import type {
   RecordId,
   FileId,
   RecordChangeSet,
-  EntityId,
   StackCapabilities,
 } from '@haverstack/core';
 import type {
@@ -44,6 +42,7 @@ import {
   NativeSQLiteRecordAdapter,
   NativeTokenStore,
   defaultTokenStorePath,
+  type NativeSQLiteRecordAdapterOpenOptions,
 } from '@haverstack/record-adapter-sqlite';
 import { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 
@@ -53,8 +52,9 @@ export {
   defaultTokenStorePath,
 } from '@haverstack/record-adapter-sqlite';
 export type {
-  NativeSQLiteRecordAdapterInitializeOptions,
   NativeSQLiteRecordAdapterOpenOptions,
+  OwnerEntityIdInput,
+  StoreCreateMode,
   NativeTokenStoreOpenOptions,
 } from '@haverstack/record-adapter-sqlite';
 export type { TokenSession, TokenInfo } from '@haverstack/core/wire';
@@ -62,76 +62,11 @@ export { DiskBlobAdapter } from '@haverstack/blob-adapter-disk';
 export type { DiskBlobAdapterOptions } from '@haverstack/blob-adapter-disk';
 
 // -------------------------------------------------------
-// Errors
-// -------------------------------------------------------
-
-/**
- * Thrown by openOrInitialize() when a plain-string `ownerEntityId`
- * disagrees with the owner of the stack already at `path` — the local
- * counterpart of adapter-api's APIAdapterOwnerMismatchError.
- */
-export class LocalAdapterOwnerMismatchError extends Error {
-  constructor(
-    public readonly expectedOwnerEntityId: EntityId,
-    public readonly actualOwnerEntityId: EntityId,
-    public readonly path: string,
-  ) {
-    super(
-      `Cannot open: stack at "${path}" is owned by "${actualOwnerEntityId}", ` +
-        `but openOrInitialize() was called with ownerEntityId "${expectedOwnerEntityId}".`,
-    );
-    this.name = 'LocalAdapterOwnerMismatchError';
-  }
-}
-
-// -------------------------------------------------------
 // Option types
 // -------------------------------------------------------
 
-export type LocalAdapterInitializeOptions = {
-  /** Absolute path to the .db file. Must not already exist. */
-  path: string;
-  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-  timezone?: string;
-  /** Entity ID of the stack owner. */
-  ownerEntityId: string;
-  /** Bypass the storage-ownership lock check. See LocalAdapterOpenOptions.force. */
-  force?: boolean;
-};
-
-export type LocalAdapterOpenOptions = {
-  /** Absolute path to an existing .db file. */
-  path: string;
-  /**
-   * Open even if a lock file from another live process is present.
-   * Only needed if that process is gone but its PID was reused by
-   * something else (the automatic stale-lock check already reclaims
-   * locks whose owning process is no longer running).
-   */
-  force?: boolean;
-};
-
-export type LocalAdapterOpenOrInitializeOptions = {
-  /** Absolute path to the .db file — opened if it exists, initialized if not. */
-  path: string;
-  /**
-   * Entity ID of the stack owner, consulted only on the initialize path
-   * (the file doesn't exist yet). Pass a plain DID string, or a lazy
-   * `() => string | Promise<string>` (e.g. wrapping `generateDidKeypair()`)
-   * so keypair generation only happens when a stack is actually being
-   * created — the provider is never invoked when the file already exists.
-   *
-   * A plain string is also asserted against the existing stack's owner on
-   * the open path, to catch silent config divergence. A lazy provider is
-   * *not* checked there — invoking it just to compare would defeat the
-   * point of making it lazy.
-   */
-  ownerEntityId: string | (() => string | Promise<string>);
-  /** IANA timezone string. Consulted only on the initialize path. */
-  timezone?: string;
-  /** Bypass the storage-ownership lock check. See LocalAdapterOpenOptions.force. */
-  force?: boolean;
-};
+/** Same shape as NativeSQLiteRecordAdapter's: LocalAdapter adds only blob storage. */
+export type LocalAdapterOpenOptions = NativeSQLiteRecordAdapterOpenOptions;
 
 // -------------------------------------------------------
 // LocalAdapter
@@ -155,61 +90,13 @@ export class LocalAdapter implements StackAdapter {
   ) {}
 
   /**
-   * Initialize a new local stack. Fails if the database already exists —
-   * use open() for existing stacks.
-   */
-  static async initialize(opts: LocalAdapterInitializeOptions): Promise<LocalAdapter> {
-    const record = await NativeSQLiteRecordAdapter.initialize({
-      path: opts.path,
-      ownerEntityId: opts.ownerEntityId,
-      timezone: opts.timezone,
-      force: opts.force,
-    });
-    const blob = new DiskBlobAdapter({ dir: join(dirname(opts.path), 'attachments') });
-    return new LocalAdapter(record, blob, opts.path, opts.force);
-  }
-
-  /**
-   * Open an existing local stack. Fails if the database does not exist —
-   * use initialize() for new stacks.
+   * Opens or creates the local stack at `opts.path` according to `opts.create`;
+   * see NativeSQLiteRecordAdapter.open() for the modes and owner checks.
    */
   static async open(opts: LocalAdapterOpenOptions): Promise<LocalAdapter> {
-    const record = await NativeSQLiteRecordAdapter.open({ path: opts.path, force: opts.force });
+    const record = await NativeSQLiteRecordAdapter.open(opts);
     const blob = new DiskBlobAdapter({ dir: join(dirname(opts.path), 'attachments') });
     return new LocalAdapter(record, blob, opts.path, opts.force);
-  }
-
-  /**
-   * Open the stack at `path` if it already exists, or initialize a new one
-   * there if it doesn't — the first-run choreography (does the db exist?
-   * open : generate identity, initialize) that every adopter otherwise
-   * has to write by hand. See LocalAdapterOpenOrInitializeOptions for how
-   * `ownerEntityId` is used differently on each path.
-   */
-  static async openOrInitialize(opts: LocalAdapterOpenOrInitializeOptions): Promise<LocalAdapter> {
-    if (existsSync(opts.path)) {
-      const adapter = await LocalAdapter.open({ path: opts.path, force: opts.force });
-      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== adapter.ownerEntityId) {
-        // Released first: the caller never receives this adapter, so
-        // nothing else could free its lock.
-        await adapter.close();
-        throw new LocalAdapterOwnerMismatchError(
-          opts.ownerEntityId,
-          adapter.ownerEntityId,
-          opts.path,
-        );
-      }
-      return adapter;
-    }
-
-    const ownerEntityId =
-      typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-    return LocalAdapter.initialize({
-      path: opts.path,
-      ownerEntityId,
-      timezone: opts.timezone,
-      force: opts.force,
-    });
   }
 
   private async getTokenStore(): Promise<NativeTokenStore> {

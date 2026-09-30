@@ -110,7 +110,7 @@ describe('parseTypeBody', () => {
 
   test('a whole Type as a client serializes one parses to defineType() options', async () => {
     const stack = await Stack.open(
-      new MemoryAdapter({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     );
     const type = await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema });
     const wire = JSON.parse(JSON.stringify(type)) as unknown;
@@ -142,7 +142,7 @@ describe('parseTypeBody', () => {
   test('a malformed schema passes through for defineType() to answer with 422', async () => {
     const options = parseTypeBody({ id: 'a@1', name: 'A', schema: 'not a schema' });
     const stack = await Stack.open(
-      new MemoryAdapter({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     );
     await expect(stack.defineType(options)).rejects.toThrow(StackValidationError);
   });

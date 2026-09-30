@@ -64,6 +64,8 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
   return current.flatMap(spreadValue);
 };
 
+export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
+
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
  * the full RecordFilter shape (mirroring sqlite-shared's recordConditions)
@@ -98,12 +100,15 @@ export class MemoryAdapter implements StackAdapter {
   readonly types = new Map<string, StackType>();
   readonly blobs = new Map<string, { data: Uint8Array; modifiedAt: Date }>();
 
-  constructor({
-    ownerEntityId = '',
-    timezone,
-  }: { ownerEntityId?: string; timezone?: string } = {}) {
-    this.ownerEntityId = ownerEntityId;
-    this.timezone = timezone;
+  // Protected only so IncapableMemoryAdapter can extend; callers go through open().
+  protected constructor(opts: MemoryAdapterOpenOptions) {
+    this.ownerEntityId = opts.ownerEntityId;
+    this.timezone = opts.timezone;
+  }
+
+  /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
+  static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
+    return new MemoryAdapter(opts);
   }
 
   async createRecord(record: StackRecord, opts: JournalOptions = {}) {
@@ -702,6 +707,10 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
       contentBytes: null,
     },
   };
+
+  static override async open(opts: MemoryAdapterOpenOptions): Promise<IncapableMemoryAdapter> {
+    return new IncapableMemoryAdapter(opts);
+  }
 }
 
 /** Whether an association carries authority — mirrors core's own predicate. */

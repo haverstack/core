@@ -19,6 +19,7 @@ export type {
   JournalOptions,
   SubscribeChangesOptions,
 } from './types.js';
+export { OwnerMismatchError } from './errors.js';
 export { combineAdapters } from './combine.js';
 export {
   assertQueryCapabilities,
