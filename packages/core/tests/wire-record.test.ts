@@ -234,7 +234,7 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
   let stack: Stack;
 
   beforeEach(async () => {
-    adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     stack = await Stack.open(adapter);
     await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
     await stack.grantType(NOTE, {

@@ -234,8 +234,8 @@ export type RecordSchemaOptions = {
 /**
  * Brings a records database up to the schema every SQLite record adapter
  * expects: foreign keys on, then the tables and the FTS5 index. Every
- * statement is idempotent, so an engine that has no
- * initialize()/open() split can run this on each attach.
+ * statement is idempotent, so an engine that cannot tell
+ * whether a store exists can run this on each attach.
  */
 export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
   exec.exec(PRAGMA_FOREIGN_KEYS_ON);

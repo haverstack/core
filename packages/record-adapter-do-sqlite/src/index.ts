@@ -29,15 +29,20 @@ import {
   SharedSqlRecordAdapter,
   type StackConfig,
 } from '@haverstack/sqlite-shared/record';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-export type DoSQLiteRecordAdapterOpenOrInitializeOptions = {
-  /** Entity ID of the stack owner. Ignored if the DO's storage already has a config record. */
-  ownerEntityId: string;
+export type DoSQLiteRecordAdapterOpenOptions = {
+  /**
+   * Entity ID of the stack owner. A plain string is checked against an
+   * existing config record (mismatch throws OwnerMismatchError); a lazy
+   * provider is called only when the DO's storage has none yet.
+   */
+  ownerEntityId: string | (() => string | Promise<string>);
   /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
   timezone?: string;
 };
@@ -52,27 +57,36 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   }
 
   /**
-   * Open the adapter for a DO instance, initializing its storage on first
-   * use — LocalAdapter.openOrInitialize()'s counterpart. There is no
-   * separate initialize()/open() the way file-based adapters need one: a
-   * DO id either already has a config record (reattach,
-   * opts.ownerEntityId/timezone ignored in favor of what's stored) or it
-   * doesn't (first call — opts.ownerEntityId/timezone become the config).
-   * Schema DDL is `CREATE TABLE IF NOT EXISTS`, so running it every call
-   * is idempotent and cheap.
+   * Open the adapter for a DO instance, creating its storage on first use.
+   * A DO id either already has a config record (reattach) or it doesn't
+   * (first call — opts.ownerEntityId/timezone become the config), so there
+   * is no `create` option. Schema DDL is `CREATE TABLE IF NOT EXISTS`, so
+   * running it every call is idempotent and cheap.
    *
    * DO SQLite manages its own durability and rejects PRAGMA journal_mode
    * outright ("not authorized") — verified against the real runtime, not
    * assumed — hence `wal: false`, unlike record-adapter-sqlite.
    */
-  static async openOrInitialize(
+  static async open(
     storage: DurableObjectStorage,
-    opts: DoSQLiteRecordAdapterOpenOrInitializeOptions,
+    opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
     applyRecordSchema(exec, { wal: false });
-    const config =
-      tryReadStackConfig(exec) ?? insertConfigRecord(exec, opts.ownerEntityId, opts.timezone);
+    let config = tryReadStackConfig(exec);
+    if (config) {
+      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
+        throw new OwnerMismatchError(
+          opts.ownerEntityId,
+          config.entityId,
+          'the Durable Object storage',
+        );
+      }
+    } else {
+      const ownerEntityId =
+        typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
+      config = insertConfigRecord(exec, ownerEntityId, opts.timezone);
+    }
     return new DoSQLiteRecordAdapter(exec, config);
   }
 

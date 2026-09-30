@@ -61,7 +61,12 @@ import { combineAdapters } from '@haverstack/core/adapter';
 import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3';
 
-const record = await NativeSQLiteRecordAdapter.initialize({ path, ownerEntityId, timezone });
+const record = await NativeSQLiteRecordAdapter.open({
+  path,
+  create: 'exclusive',
+  ownerEntityId,
+  timezone,
+});
 const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.open(adapter);
@@ -70,6 +75,31 @@ const stack = await Stack.open(adapter);
 `limits.attachmentBytes` lives on `StackCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per [the local-adapter rule](#adapter-capabilities) below: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
+
+## Construction
+
+An adapter that holds a stack's identity has exactly one entry point, an async static `open(opts)`, and no public constructor. Whether `open()` may create a new stack is an option, not a separate method. Blob adapters hold no identity and keep their public constructors. `Stack.open(adapter)` stays a separate step, because `combineAdapters()` sits between the two.
+
+| Adapter                                             | Entry point                                   | `create`                                          |
+| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId?, … })`  | `'never'` (default), `'ifMissing'`, `'exclusive'` |
+| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId, timezone? })` | none: always creates if missing                   |
+| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`            | none: a client never creates                      |
+| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? })`          | none: always new                                  |
+
+`create` names what `open()` does when the store is missing or present, like `O_CREAT`/`O_EXCL`:
+
+- `'never'`: open an existing store, fail if missing.
+- `'ifMissing'`: open it if present, create it if not.
+- `'exclusive'`: create it, fail if present.
+
+`ownerEntityId` follows one rule everywhere it is accepted:
+
+- **Required whenever `open()` may create.** The type makes it required for `'ifMissing'` and `'exclusive'`, on the DO adapter and on `MemoryAdapter`. No adapter defaults it to `''`.
+- **A plain string or a lazy `() => string | Promise<string>`** on every creating path, called only when a store is actually created.
+- **A plain string is checked against an existing store's owner**, in every mode and on every adapter; a mismatch throws `OwnerMismatchError` (`expected`, `actual`, and a `where` naming the path, URL or Durable Object) and releases anything `open()` had acquired. A lazy provider is never called just to compare.
+
+`OwnerMismatchError` is exported from `@haverstack/core/adapter`, outside the `StackError` taxonomy alongside `InvalidAdapterError`: it reports a setup mistake, not a state a request can be in.
 
 ## Conformance
 
@@ -160,7 +190,7 @@ A stack's backing storage (a SQLite file, a JSON directory) has exactly one owni
 
 How each adapter honors the single-writer rule differs by what it actually is:
 
-- **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`/`initialize()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
+- **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
 - **`record-adapter-do-sqlite`** (Cloudflare Durable Objects, SQLite storage) needs no lock file at all — a Durable Object id maps to exactly one running instance, enforced by the platform itself, so the single-writer rule is a property of the runtime rather than something this adapter has to implement. There is likewise no `persist`/flush step: every write through `ctx.storage.sql` is durable by the time the call returns. The one real engine-specific wrinkle is transactions — DO SQLite rejects raw `BEGIN`/`COMMIT`/`ROLLBACK` outright, and (confirmed against the real runtime, not assumed) does not roll back a write on a later exception the way an open SQL transaction would; the adapter reaches `ctx.storage.transactionSync()` instead, through `SqlExecutor.transaction()` (see above).
 - **The planned whole-file `adapter-json`** reads its entire store into memory on open and rewrites it whole on every persist, so it must supply both guarantees itself: a PID lock file (to fail loudly on double-open) and an atomic temp-file-and-`rename()` persist (so a crash mid-write can't leave a torn, unreadable file). `record-adapter-sqlite` gets both from WAL and real file locking instead.
 

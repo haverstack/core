@@ -52,7 +52,7 @@ import { didCredentialFromKeypair } from '@haverstack/core/wire';
 const adapter = await APIAdapter.open({
   url: 'https://stack.example.com',
   credential: didCredentialFromKeypair(appKeypair), // or your own { did, sign }
-  expectedOwnerEntityId: ownerDid, // refuse a server claiming to be someone else's stack
+  ownerEntityId: ownerDid, // refuse a server claiming to be someone else's stack
 });
 ```
 
@@ -111,11 +111,12 @@ const dbPath = './my-stack.db';
 const keyPath = './my-stack.key.json'; // see "Key custody" below for where this really belongs
 
 // First run: neither file exists yet, so this generates an identity
-// keypair and persists the private key before initializing. Every run
+// keypair and persists the private key before creating the store. Every run
 // after that: the db exists, so this just opens it — the ownerEntityId
 // function below is never called, so no throwaway keypair is minted.
-const adapter = await LocalAdapter.openOrInitialize({
+const adapter = await LocalAdapter.open({
   path: dbPath,
+  create: 'ifMissing',
   timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
@@ -198,7 +199,7 @@ See [Identity](./docs/spec/identity.md) in the spec for the full model, includin
 
 On every path, reconstruct the key with `importDidPrivateKeyJwk()` (or read the `CryptoKey` straight back out of IndexedDB) and hand it to `signWithDid()` / `buildAuthChallengePayload()` when authenticating to a server — see the "Authentication: challenge–response" section of [Identity](./docs/spec/identity.md) in the spec.
 
-**The asymmetry that makes this matter:** losing the key doesn't break anything local — nothing in the stack ever asks for it again, `openOrInitialize()`/`open()` only need the `did`. But you can never again authenticate as that identity to any server, because there's no recovery path — `did:key` identity _is_ the key (see [Deferred: key rotation](./docs/spec/identity.md#deferred-key-rotation)). An early "didn't bother persisting it" decision is invisible until the day you want to serve or share the stack, and by then it's permanent. Persist it from the first run, even if you don't yet know why you'd need it.
+**The asymmetry that makes this matter:** losing the key doesn't break anything local — nothing in the stack ever asks for it again, `open()` only needs the `did`. But you can never again authenticate as that identity to any server, because there's no recovery path — `did:key` identity _is_ the key (see [Deferred: key rotation](./docs/spec/identity.md#deferred-key-rotation)). An early "didn't bother persisting it" decision is invisible until the day you want to serve or share the stack, and by then it's permanent. Persist it from the first run, even if you don't yet know why you'd need it.
 
 ### Types
 

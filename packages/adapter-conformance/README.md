@@ -21,7 +21,12 @@ import { MyRecordAdapter, MY_RECORD_CAPABILITIES } from './my-adapter.js';
 runRecordAdapterConformance({
   name: 'MyRecordAdapter',
   capabilities: MY_RECORD_CAPABILITIES,
-  open: () => MyRecordAdapter.initialize({ path: tempDbPath() }),
+  open: () =>
+    MyRecordAdapter.open({
+      path: tempDbPath(),
+      create: 'exclusive',
+      ownerEntityId: 'did:key:test',
+    }),
   close: (adapter) => adapter.close?.(),
 });
 ```

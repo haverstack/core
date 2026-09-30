@@ -2,7 +2,8 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { LocalAdapter, LocalAdapterOwnerMismatchError } from '../src/index.js';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
+import { LocalAdapter } from '../src/index.js';
 import type { StackRecord } from '@haverstack/core';
 
 let testDir: string;
@@ -19,7 +20,8 @@ afterEach(() => {
 });
 
 const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
-  LocalAdapter.initialize({
+  LocalAdapter.open({
+    create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
     timezone: opts?.timezone ?? 'America/New_York',
@@ -96,9 +98,10 @@ describe('open', () => {
   });
 });
 
-describe('openOrInitialize', () => {
+describe('open with create: ifMissing', () => {
   test('initializes a new database when none exists', async () => {
-    const adapter = await LocalAdapter.openOrInitialize({
+    const adapter = await LocalAdapter.open({
+      create: 'ifMissing',
       path: dbPath,
       ownerEntityId: 'owner-abc',
     });
@@ -111,7 +114,8 @@ describe('openOrInitialize', () => {
     const record = makeRecord({ id: 'existing' });
     await (await LocalAdapter.open({ path: dbPath })).createRecord(record);
 
-    const adapter = await LocalAdapter.openOrInitialize({
+    const adapter = await LocalAdapter.open({
+      create: 'ifMissing',
       path: dbPath,
       ownerEntityId: 'owner-abc',
     });
@@ -123,14 +127,19 @@ describe('openOrInitialize', () => {
     await initAdapter({ ownerEntityId: 'owner-abc' });
     const provider = vi.fn(() => 'should-not-be-called');
 
-    const adapter = await LocalAdapter.openOrInitialize({ path: dbPath, ownerEntityId: provider });
+    const adapter = await LocalAdapter.open({
+      create: 'ifMissing',
+      path: dbPath,
+      ownerEntityId: provider,
+    });
 
     expect(adapter.ownerEntityId).toBe('owner-abc');
     expect(provider).not.toHaveBeenCalled();
   });
 
   test('invokes a lazy ownerEntityId provider on the initialize path, sync or async', async () => {
-    const adapter = await LocalAdapter.openOrInitialize({
+    const adapter = await LocalAdapter.open({
+      create: 'ifMissing',
       path: dbPath,
       ownerEntityId: async () => 'generated-owner',
     });
@@ -139,25 +148,32 @@ describe('openOrInitialize', () => {
 
   test('throws if a plain-string ownerEntityId does not match the existing owner', async () => {
     await initAdapter({ ownerEntityId: 'owner-abc' });
-    const err = await LocalAdapter.openOrInitialize({
+    const err = await LocalAdapter.open({
+      create: 'ifMissing',
       path: dbPath,
       ownerEntityId: 'owner-xyz',
     }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(LocalAdapterOwnerMismatchError);
-    expect((err as LocalAdapterOwnerMismatchError).expectedOwnerEntityId).toBe('owner-xyz');
-    expect((err as LocalAdapterOwnerMismatchError).actualOwnerEntityId).toBe('owner-abc');
+    expect(err).toBeInstanceOf(OwnerMismatchError);
+    expect((err as OwnerMismatchError).expected).toBe('owner-xyz');
+    expect((err as OwnerMismatchError).actual).toBe('owner-abc');
+    expect((err as OwnerMismatchError).where).toContain(dbPath);
   });
 
   test('releases the storage lock when the owner does not match', async () => {
     await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();
     await expect(
-      LocalAdapter.openOrInitialize({ path: dbPath, ownerEntityId: 'owner-xyz' }),
-    ).rejects.toThrow(LocalAdapterOwnerMismatchError);
+      LocalAdapter.open({
+        create: 'ifMissing',
+        path: dbPath,
+        ownerEntityId: 'owner-xyz',
+      }),
+    ).rejects.toThrow(OwnerMismatchError);
     expect(existsSync(`${dbPath}.lock`)).toBe(false);
   });
 
-  test('passes timezone through on the initialize path only', async () => {
-    const adapter = await LocalAdapter.openOrInitialize({
+  test('passes timezone through when the store is created', async () => {
+    const adapter = await LocalAdapter.open({
+      create: 'ifMissing',
       path: dbPath,
       ownerEntityId: 'owner-abc',
       timezone: 'Europe/London',

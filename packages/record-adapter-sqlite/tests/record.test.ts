@@ -10,6 +10,7 @@ import {
   StackNotFoundError,
   StackBadRequestError,
 } from '@haverstack/core';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
 import type { AuthorityAssociation, StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -30,7 +31,8 @@ afterEach(() => {
 });
 
 const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
-  NativeSQLiteRecordAdapter.initialize({
+  NativeSQLiteRecordAdapter.open({
+    create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
     timezone: opts?.timezone ?? 'America/New_York',
@@ -120,6 +122,103 @@ test('preserves ownerEntityId and timezone across reopen', async () => {
   const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
   expect(adapter.timezone).toBe('Europe/London');
+});
+
+// -------------------------------------------------------
+// create modes and owner checks
+// -------------------------------------------------------
+
+describe('open create modes', () => {
+  test("'never' (the default) fails on a missing store and opens a present one", async () => {
+    await expect(NativeSQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
+      /Pass create: 'ifMissing' or 'exclusive'/,
+    );
+    await initAdapter();
+    const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath, create: 'never' });
+    expect(adapter.ownerEntityId).toBe('entity-123');
+  });
+
+  test("'ifMissing' creates a missing store and opens a present one", async () => {
+    const created = await NativeSQLiteRecordAdapter.open({
+      path: dbPath,
+      create: 'ifMissing',
+      ownerEntityId: 'owner-a',
+    });
+    expect(created.ownerEntityId).toBe('owner-a');
+    await created.saveType(NOTE_TYPE);
+
+    const reopened = await NativeSQLiteRecordAdapter.open({
+      path: dbPath,
+      create: 'ifMissing',
+      ownerEntityId: 'owner-a',
+    });
+    expect(await reopened.getType(NOTE_TYPE.id)).not.toBeNull();
+  });
+
+  test("'exclusive' creates a missing store and fails on a present one", async () => {
+    await initAdapter();
+    await expect(initAdapter()).rejects.toThrow(/Pass create: 'never' or 'ifMissing'/);
+    rmSync(dbPath);
+    rmSync(`${dbPath}.lock`, { force: true });
+    await expect(initAdapter()).resolves.toBeDefined();
+  });
+
+  test('a lazy ownerEntityId is called when a store is created, sync or async', async () => {
+    const sync = vi.fn(() => 'owner-sync');
+    const a = await NativeSQLiteRecordAdapter.open({
+      path: dbPath,
+      create: 'exclusive',
+      ownerEntityId: sync,
+    });
+    expect(a.ownerEntityId).toBe('owner-sync');
+    expect(sync).toHaveBeenCalledOnce();
+    await a.close();
+
+    const b = await NativeSQLiteRecordAdapter.open({
+      path: join(testDir, 'b.db'),
+      create: 'ifMissing',
+      ownerEntityId: async () => 'owner-async',
+    });
+    expect(b.ownerEntityId).toBe('owner-async');
+  });
+
+  test('a lazy ownerEntityId is not called when the store exists', async () => {
+    await (await initAdapter()).close();
+    const provider = vi.fn(() => 'unused');
+    const adapter = await NativeSQLiteRecordAdapter.open({
+      path: dbPath,
+      create: 'ifMissing',
+      ownerEntityId: provider,
+    });
+    expect(adapter.ownerEntityId).toBe('entity-123');
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  test.each(['never', 'ifMissing'] as const)(
+    "a mismatched plain-string owner throws OwnerMismatchError and releases the lock under '%s'",
+    async (create) => {
+      await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();
+      const err = await NativeSQLiteRecordAdapter.open({
+        path: dbPath,
+        create,
+        ownerEntityId: 'owner-xyz',
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OwnerMismatchError);
+      expect((err as OwnerMismatchError).expected).toBe('owner-xyz');
+      expect((err as OwnerMismatchError).actual).toBe('owner-abc');
+      expect((err as OwnerMismatchError).where).toContain(dbPath);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    },
+  );
+
+  test('a matching plain-string owner opens an existing store', async () => {
+    await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();
+    const adapter = await NativeSQLiteRecordAdapter.open({
+      path: dbPath,
+      ownerEntityId: 'owner-abc',
+    });
+    expect(adapter.ownerEntityId).toBe('owner-abc');
+  });
 });
 
 // -------------------------------------------------------

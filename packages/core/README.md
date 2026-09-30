@@ -28,11 +28,12 @@ const dbPath = './my-stack.db';
 const keyPath = './my-stack.key.json'; // see "Key custody" under Identity for where this really belongs
 
 // First run: neither file exists yet, so this generates an identity
-// keypair and persists the private key before initializing. Every run
+// keypair and persists the private key before creating the store. Every run
 // after that: the db exists, so this just opens it — the ownerEntityId
 // function below is never called, so no throwaway keypair is minted.
-const adapter = await LocalAdapter.openOrInitialize({
+const adapter = await LocalAdapter.open({
   path: dbPath,
+  create: 'ifMissing',
   timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();

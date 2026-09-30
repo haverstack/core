@@ -49,6 +49,9 @@ import type {
 type TestStub = {
   getCapabilities(): Promise<StackCapabilities>;
   getOwnerEntityId(): Promise<string>;
+  reopen(
+    owner: string,
+  ): Promise<{ owner: string } | { error: string; expected?: string; actual?: string }>;
   createRecord(record: StackRecord): Promise<StackRecord>;
   getRecord(id: string): Promise<StackRecord | null>;
   patchContent(
@@ -119,9 +122,25 @@ describe('construction', () => {
     });
   });
 
-  test('sets ownerEntityId from create() options', async () => {
+  test('sets ownerEntityId from open() options', async () => {
     const stub = getStub();
     expect(await stub.getOwnerEntityId()).toBe('entity-test');
+  });
+
+  test('re-opening with the same plain-string owner succeeds', async () => {
+    expect(await getStub().reopen('entity-test')).toEqual({ owner: 'entity-test' });
+  });
+
+  test('re-opening with a different plain-string owner throws OwnerMismatchError', async () => {
+    expect(await getStub().reopen('entity-other')).toEqual({
+      error: 'OwnerMismatchError',
+      expected: 'entity-other',
+      actual: 'entity-test',
+    });
+  });
+
+  test('a lazy owner provider is not called when the storage already has a config', async () => {
+    expect(await getStub().reopen('lazy:unused')).toEqual({ owner: 'entity-test' });
   });
 });
 

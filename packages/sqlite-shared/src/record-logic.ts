@@ -1,5 +1,5 @@
 /**
- * The actual StackRecordAdapter logic (minus lifecycle: initialize/open/
+ * The actual StackRecordAdapter logic (minus lifecycle: open/
  * close/flush stay per-engine, since schema setup, pragmas, locking, and
  * durability differ there). Every CRUD/query/version/type/association
  * operation lives here exactly once, parametrized over a SqlExecutor

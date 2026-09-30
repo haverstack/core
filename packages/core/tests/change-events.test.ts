@@ -21,7 +21,7 @@ const collector = () => {
 };
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,

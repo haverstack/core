@@ -23,7 +23,7 @@ const makeRecord = (id: string, priority: number): StackRecord => ({
 let adapter: MemoryAdapter;
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter();
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'did:key:test' });
   for (let i = 0; i < 6; i++) await adapter.createRecord(makeRecord(`r${i}`, i));
 });
 

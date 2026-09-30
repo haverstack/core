@@ -60,7 +60,8 @@ beforeEach(async () => {
   testDir = join(tmpdir(), `sort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   dbPath = join(testDir, 'test.db');
-  adapter = await NativeSQLiteRecordAdapter.initialize({
+  adapter = await NativeSQLiteRecordAdapter.open({
+    create: 'exclusive',
     path: dbPath,
     ownerEntityId: 'entity-123',
   });
