@@ -41,7 +41,7 @@ type RecordVersion = {
 
 **API surface:**
 
-- `stack.getVersions(recordId)` — retrieve version history
+- `stack.getVersions(recordId)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), so the restore point just before the current version comes first and a page of history starts at the useful end. [`getJournal()`](./journal.md) runs the other way: an append-only log tailed forward from a cursor reads oldest first.
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content` and `typeId`, and **restores nothing else** — see [Restore semantics](#restore-semantics). The snapshot deliberately does not capture `appId` either, so restore never reverts an app reattribution.
 
 ## Snapshot atomicity

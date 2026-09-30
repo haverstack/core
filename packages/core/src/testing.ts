@@ -503,7 +503,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async getVersions(id: string) {
-    return this.versions.get(id) ?? [];
+    return [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;

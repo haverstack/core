@@ -1201,6 +1201,7 @@ export interface StackRecordAdapter {
   dissociate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
 
   // Versions
+  /** Snapshots newest first — see docs/spec/versioning.md § Version history. */
   getVersions(id: RecordId): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   /**
