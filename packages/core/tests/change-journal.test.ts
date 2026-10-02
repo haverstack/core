@@ -591,6 +591,16 @@ describe('JournalQuery is validated at the surface', () => {
 // The app-facing contract
 // -------------------------------------------------------
 
+describe('VersionsQuery is validated at the surface', () => {
+  test.each([{ beforeVersion: 0 }, { limit: 0 }, { limit: -1 }, { beforeVersion: 1.5 }])(
+    'getVersions refuses %j, as the wire does',
+    async (query) => {
+      const note = await stack.create(NOTE, { text: 'hello' });
+      await expect(stack.getVersions(note.id, query)).rejects.toThrow(StackBadRequestError);
+    },
+  );
+});
+
 describe('getJournal is on StackClient', () => {
   // Stack and ScopedStack both implement it; the interface is what plugin
   // and extension code is typed against, so an omission there is a TS2339

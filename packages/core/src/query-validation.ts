@@ -557,9 +557,9 @@ export function assertValidVersionsQuery(query: VersionsQuery | undefined): void
   for (const key of ['beforeVersion', 'limit'] as const) {
     const value = query[key];
     if (value === undefined) continue;
-    if (!Number.isInteger(value) || value < 0) {
+    if (!Number.isInteger(value) || value < 1) {
       throw new StackBadRequestError(
-        `Invalid versions ${key} ${String(value)}: expected a non-negative integer.`,
+        `Invalid versions ${key} ${String(value)}: expected a positive integer.`,
       );
     }
   }
