@@ -32,6 +32,7 @@ import type {
   ExternalTarget,
   GrantGrantee,
   JournalQuery,
+  VersionsQuery,
   Grantee,
   PermissionAssociation,
   RecordTarget,
@@ -541,6 +542,24 @@ export function assertValidJournalQuery(query: JournalQuery | undefined): void {
     if (!Number.isInteger(value) || value < 0) {
       throw new StackBadRequestError(
         `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
+      );
+    }
+  }
+}
+
+/**
+ * Refuse a `getVersions()` window the adapters would read differently, as
+ * assertValidJournalQuery() does for the journal. No ceiling is imposed:
+ * omitting `limit` reads every version by contract.
+ */
+export function assertValidVersionsQuery(query: VersionsQuery | undefined): void {
+  if (!query) return;
+  for (const key of ['beforeVersion', 'limit'] as const) {
+    const value = query[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < 0) {
+      throw new StackBadRequestError(
+        `Invalid versions ${key} ${String(value)}: expected a non-negative integer.`,
       );
     }
   }

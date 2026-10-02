@@ -593,14 +593,26 @@ describe('getVersions fixtures', () => {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      // A fixture whose page reports a cursor documents one page of a
+      // longer history, so the adapter asks again; the second page is the end.
+      if (fixture.responseBody!.cursor !== null) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [], cursor: null }));
+      }
 
-      const result = await adapter.getVersions(idFromPath(fixture.path));
+      const query = new URL(`${BASE_URL}${fixture.path}`).searchParams;
+      const beforeVersion = query.get('beforeVersion');
+      const limit = query.get('limit');
+      const result = await adapter.getVersions(idFromPath(fixture.path), {
+        ...(beforeVersion !== null && { beforeVersion: Number(beforeVersion) }),
+        ...(limit !== null && { limit: Number(limit) }),
+      });
 
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result).toHaveLength(fixture.responseBody!.length);
-      expect(result[0].content).toEqual(fixture.responseBody![0].content);
+      const documented = fixture.responseBody!.versions;
+      expect(result.map((v) => v.version)).toEqual(documented.map((v) => v.version));
+      expect(result[0].content).toEqual(documented[0].content);
     });
   }
 });
@@ -638,7 +650,9 @@ describe('getVersions after migrate/restore fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result.map((v) => v.version)).toEqual(fixture.responseBody!.map((v) => v.version));
+      expect(result.map((v) => v.version)).toEqual(
+        fixture.responseBody!.versions.map((v) => v.version),
+      );
       // A snapshot never captures an association set, so neither the
       // fixture nor what the adapter parses out of it may name one.
       for (const version of result) expect(Object.keys(version)).not.toContain('associations');

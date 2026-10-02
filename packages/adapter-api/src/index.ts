@@ -27,6 +27,7 @@
 import { StackError, StackBadRequestError } from '@haverstack/core';
 import type {
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
   Actor,
   ChangeActor,
@@ -73,6 +74,7 @@ import type {
   WireRecordChange,
   WireJournalEntry,
   WireJournalResponse,
+  WireVersionsResponse,
   WireReadyFrame,
   DiscoveryChanges,
   DiscoveryResponse,
@@ -1205,9 +1207,37 @@ export class APIAdapter implements StackAdapter {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
-    const raw = await this.request<WireVersion[] | undefined>('GET', `/records/${id}/versions`);
-    return requireBody(raw, `GET /records/${id}/versions`).map(parseVersion);
+  /**
+   * Reads the window the caller asked for, across as many requests as the
+   * server's own page cap takes — `getJournal()`'s loop, walking `cursor`
+   * as the next `beforeVersion` rather than `afterSeq`.
+   * See docs/spec/wire-format.md § Versions.
+   */
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
+    const versions: RecordVersion[] = [];
+    let beforeVersion = query.beforeVersion;
+    for (;;) {
+      const remaining = query.limit === undefined ? undefined : query.limit - versions.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      const params = new URLSearchParams();
+      if (beforeVersion !== undefined) params.set('beforeVersion', String(beforeVersion));
+      if (remaining !== undefined) params.set('limit', String(remaining));
+      const qs = params.toString();
+      const path = `/records/${id}/versions${qs ? `?${qs}` : ''}`;
+      const raw = await this.request<WireVersionsResponse | undefined>('GET', path);
+      const body = requireBody(raw, `GET ${path}`);
+      for (const v of body.versions) versions.push(parseVersion(v));
+      if (body.versions.length === 0) break;
+      // A cursor that does not move strictly older would repeat a page.
+      if (
+        typeof body.cursor !== 'number' ||
+        (beforeVersion !== undefined && body.cursor >= beforeVersion)
+      ) {
+        break;
+      }
+      beforeVersion = body.cursor;
+    }
+    return query.limit === undefined ? versions : versions.slice(0, query.limit);
   }
 
   /**

@@ -51,6 +51,7 @@ import type {
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,
+  VersionsQuery,
   StackAdapter,
   StackCapabilities,
   IfVersionOptions,
@@ -1312,9 +1313,9 @@ export class ScopedStack implements StackClient {
    * already read got that way is not the escalation that fence exists to
    * stop. See docs/spec/versioning.md § History access.
    */
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
     await this.requireUpdatable(id, { mutating: false });
-    return this.stack.getVersions(id);
+    return this.stack.getVersions(id, query);
   }
 
   /**

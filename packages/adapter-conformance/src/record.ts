@@ -217,6 +217,49 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([3, 2, 1]);
       });
 
+      test('getVersions pages walk every version exactly once, newest first', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3, 4, 5]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        const seen: number[] = [];
+        let beforeVersion: number | undefined;
+        for (;;) {
+          const page = await adapter.getVersions(record.id, { beforeVersion, limit: 2 });
+          if (page.length === 0) break;
+          expect(page.length).toBeLessThanOrEqual(2);
+          seen.push(...page.map((v) => v.version));
+          beforeVersion = page[page.length - 1].version;
+        }
+        expect(seen).toEqual([5, 4, 3, 2, 1]);
+      });
+
+      test('getVersions beforeVersion is exclusive and limit bounds the result', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        const versionsOf = async (query: { beforeVersion?: number; limit?: number }) =>
+          (await adapter.getVersions(record.id, query)).map((v) => v.version);
+        expect(await versionsOf({ beforeVersion: 3 })).toEqual([2, 1]);
+        expect(await versionsOf({ beforeVersion: 1 })).toEqual([]);
+        expect(await versionsOf({ limit: 1 })).toEqual([3]);
+        expect(await versionsOf({ beforeVersion: 3, limit: 1 })).toEqual([2]);
+        expect(await versionsOf({})).toEqual([3, 2, 1]);
+      });
+
       test('purging deleteRecord removes the record and its version history', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);

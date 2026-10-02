@@ -18,6 +18,7 @@ import {
 import type {
   RecordJournalEntry,
   JournalQuery,
+  VersionsQuery,
   StackRecord,
   StackType,
   TypeId,
@@ -639,10 +640,18 @@ export class SharedSqlRecordLogic {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: string): Promise<RecordVersion[]> {
+  async getVersions(id: string, query: VersionsQuery = {}): Promise<RecordVersion[]> {
+    const conditions = ['record_id = ?'];
+    const values: unknown[] = [id];
+    if (query.beforeVersion !== undefined) {
+      conditions.push('version < ?');
+      values.push(query.beforeVersion);
+    }
     const rows = this.exec.all<Record<string, unknown>>(
-      'SELECT * FROM versions WHERE record_id = ? ORDER BY version DESC',
-      [id],
+      `SELECT * FROM versions WHERE ${conditions.join(' AND ')} ORDER BY version DESC${
+        query.limit !== undefined ? ' LIMIT ?' : ''
+      }`,
+      query.limit !== undefined ? [...values, query.limit] : values,
     );
     return rows.map(rowToVersion);
   }

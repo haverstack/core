@@ -1333,7 +1333,7 @@ describe('a mutation that bumps a version must answer with a Record', () => {
 describe('getVersions', () => {
   test('sends GET /records/:id/versions', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [VERSION_RAW], cursor: null }));
     await adapter.getVersions('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/versions`,
@@ -1343,7 +1343,7 @@ describe('getVersions', () => {
 
   test('parses version array with Date objects', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [VERSION_RAW], cursor: null }));
     const versions = await adapter.getVersions('rec-abc123');
     expect(versions).toHaveLength(1);
     expect(versions[0].version).toBe(1);
@@ -1352,13 +1352,50 @@ describe('getVersions', () => {
     expect(versions[0].createdBy?.subjectId).toBe('entity-owner-123');
   });
 
+  test('follows cursor as beforeVersion to the end when no limit is given', async () => {
+    const adapter = await openAdapter();
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 3 }], cursor: 3 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 1 }], cursor: null }),
+      );
+    const versions = await adapter.getVersions('rec-abc123');
+    expect(versions.map((v) => v.version)).toEqual([3, 1]);
+    expect(mockFetch.mock.calls[2][0]).toBe(
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3`,
+    );
+  });
+
+  test('sends limit and beforeVersion, and caps the result at limit', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        versions: [
+          { ...VERSION_RAW, version: 2 },
+          { ...VERSION_RAW, version: 1 },
+        ],
+        cursor: null,
+      }),
+    );
+    const versions = await adapter.getVersions('rec-abc123', { beforeVersion: 3, limit: 1 });
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3&limit=1`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(versions.map((v) => v.version)).toEqual([2]);
+  });
+
   // A snapshot describes content and the type it is read under; containment
   // bumps no version, so no snapshot is taken of it. A foreign server that
   // sends one anyway is writing a key with no field to land in.
   // See docs/spec/versioning.md § Version history.
   test('a parentId from a foreign server is dropped', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: 'rec-box' }]));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ versions: [{ ...VERSION_RAW, parentId: 'rec-box' }], cursor: null }),
+    );
     const [parsed] = await adapter.getVersions('rec-abc123');
     expect('parentId' in parsed).toBe(false);
   });

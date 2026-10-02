@@ -68,6 +68,7 @@ export type {
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,
+  VersionsQuery,
   Actor,
   ActorOptions,
   ChangeKind,

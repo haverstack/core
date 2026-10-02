@@ -76,6 +76,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
 } from './types.js';
 
@@ -95,6 +96,7 @@ import {
   assertSortCapability,
   assertValidAssociationFilters,
   assertValidJournalQuery,
+  assertValidVersionsQuery,
   assertValidSort,
   assertAuthorityAssociations,
   assertDataAssociations,
@@ -413,7 +415,7 @@ export interface StackClient {
    */
   deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
   undelete(id: RecordId, opts?: IfVersionOptions): Promise<StackRecord>;
-  getVersions(id: RecordId): Promise<RecordVersion[]>;
+  getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: RecordId, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
@@ -1628,9 +1630,10 @@ export class Stack implements StackClient {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
     this.assertOpen();
-    return this.adapter.getVersions(id);
+    assertValidVersionsQuery(query);
+    return this.adapter.getVersions(id, query);
   }
 
   /**

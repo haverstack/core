@@ -33,6 +33,7 @@ import type {
   ChangeFilter,
   ChangeKind,
   JournalQuery,
+  VersionsQuery,
   NativeSortField,
   QuerySort,
   RecordFilter,
@@ -693,6 +694,26 @@ export function parseJournalParams(url: URL): JournalQuery {
   const query: JournalQuery = {};
   const afterSeq = url.searchParams.get('afterSeq');
   if (afterSeq !== null) query.afterSeq = parsePositiveInt(afterSeq, 'afterSeq');
+  const limit = url.searchParams.get('limit');
+  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  return query;
+}
+
+/**
+ * Parse `GET /records/:id/versions`'s query params into the `VersionsQuery`
+ * `getVersions()` takes. Absent params stay absent, for the reason
+ * parseJournalParams() leaves them so.
+ *
+ * `beforeVersion` is a snapshot's `version`, exclusive.
+ * See docs/spec/wire-format.md § Versions.
+ */
+export function parseVersionsParams(url: URL): VersionsQuery {
+  requireKnownParams(url, ['beforeVersion', 'limit']);
+  const query: VersionsQuery = {};
+  const beforeVersion = url.searchParams.get('beforeVersion');
+  if (beforeVersion !== null) {
+    query.beforeVersion = parsePositiveInt(beforeVersion, 'beforeVersion');
+  }
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
   return query;

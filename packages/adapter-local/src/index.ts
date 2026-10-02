@@ -16,6 +16,7 @@
 import { dirname, join } from 'path';
 import type {
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
   StackRecord,
   StackType,
@@ -190,8 +191,8 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getJournal(id, query);
   }
 
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
-    return this.record.getVersions(id);
+  async getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]> {
+    return this.record.getVersions(id, query);
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {

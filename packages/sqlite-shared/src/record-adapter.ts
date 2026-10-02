@@ -17,6 +17,7 @@
 
 import type {
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
   StackType,
   TypeId,
@@ -143,8 +144,8 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   // Versions
   // -------------------------------------------------------
 
-  getVersions(id: string): Promise<RecordVersion[]> {
-    return this.record.getVersions(id);
+  getVersions(id: string, query?: VersionsQuery): Promise<RecordVersion[]> {
+    return this.record.getVersions(id, query);
   }
 
   getVersion(id: string, version: number): Promise<RecordVersion | null> {

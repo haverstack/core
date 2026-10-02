@@ -28,6 +28,7 @@ import type {
   WireQueryResponse,
   WireError,
   WireVersion,
+  WireVersionsResponse,
   WireJournalResponse,
   WireRecordChange,
   WireReadyFrame,
@@ -1449,7 +1450,7 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
 // § History access). These pin the success shape; the 403 case is
 // error-permission-denied-versions-read-only.
 
-export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
+export const getVersionsFixtures: ConformanceFixture<undefined, WireVersionsResponse>[] = [
   {
     name: 'get-versions-owner',
     description:
@@ -1457,14 +1458,17 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
-    responseBody: [
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
+    responseBody: {
+      versions: [
+        {
+          version: 1,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+      cursor: null,
+    },
   },
   {
     name: 'get-versions-non-owner-write-holder-sees-the-same-rows',
@@ -1477,16 +1481,62 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
-    responseBody: [
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-        createdBy: { subjectId: 'entity-contributor-789' },
-        updatedBy: { subjectId: 'entity-contributor-789' },
-      },
-    ],
+    responseBody: {
+      versions: [
+        {
+          version: 1,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          createdBy: { subjectId: 'entity-contributor-789' },
+          updatedBy: { subjectId: 'entity-contributor-789' },
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-versions-page-reports-a-cursor-to-resume-from',
+    description:
+      'Newest first, a page of history starts at the restore points. A server may answer a ' +
+      'page shorter than the limit asked for, so cursor is the only end-of-history signal: ' +
+      'its value is the version to send back as beforeVersion, which is exclusive. A client ' +
+      'reading the whole history follows it rather than taking the first page for the answer. ' +
+      'See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions?limit=1',
+    responseStatus: 200,
+    responseBody: {
+      versions: [
+        {
+          version: 3,
+          typeId: 'com.example/note@1',
+          content: { title: 'title before restore' },
+          updatedAt: '2024-01-03T00:00:00.000Z',
+        },
+      ],
+      cursor: 3,
+    },
+  },
+  {
+    name: 'get-versions-before-version-ends-with-a-null-cursor',
+    description:
+      'The follow-up page from cursor 3 holds the versions strictly older than 3, and its ' +
+      'cursor is null because nothing follows. See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions?beforeVersion=3&limit=1',
+    responseStatus: 200,
+    responseBody: {
+      versions: [
+        {
+          version: 2,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-02T00:00:00.000Z',
+        },
+      ],
+      cursor: null,
+    },
   },
 ];
 
@@ -1538,98 +1588,108 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
 // dispatches the mutating fixture first and asserts the version count
 // grew; a mocked-transport run can only assert the response shape parses.
 
-export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
-  {
-    name: 'get-versions-after-restore-includes-pre-restore-snapshot',
-    description:
-      'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
-      'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
-      "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
-      'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
-      'a container, whichever one the record sat in when it was taken.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
+export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersionsResponse>[] =
+  [
+    {
+      name: 'get-versions-after-restore-includes-pre-restore-snapshot',
+      description:
+        'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
+        'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
+        "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
+        'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
+        'a container, whichever one the record sat in when it was taken.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
+    },
+    {
+      name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
+      description:
+        'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
+        'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
+        "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
+        'typeId — on top of everything restore-version already produced.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 4,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-    ],
-  },
-  {
-    name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
-    description:
-      'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
-      'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
-      "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
-      'typeId — on top of everything restore-version already produced.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 4,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
+    },
+    {
+      name: 'get-versions-after-associate-is-unchanged',
+      description:
+        'The association endpoints are the one pair of mutations that write no version. After ' +
+        'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
+        'answers with exactly the list it answered with before — no new entry, and no entry ' +
+        'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
+        'snapshots here hands every later restore a stale association set to put back. ' +
+        'See docs/spec/wire-format.md § Versions.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 4,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
-  },
-  {
-    name: 'get-versions-after-associate-is-unchanged',
-    description:
-      'The association endpoints are the one pair of mutations that write no version. After ' +
-      'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
-      'answers with exactly the list it answered with before — no new entry, and no entry ' +
-      'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
-      'snapshots here hands every later restore a stale association set to put back. ' +
-      'See docs/spec/wire-format.md § Versions.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 4,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
-  },
-];
+    },
+  ];
 
 // -------------------------------------------------------
 // Versions: restore

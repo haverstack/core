@@ -8,6 +8,7 @@ import type {
   JournalEntryInput,
   JournalOptions,
   JournalQuery,
+  VersionsQuery,
   RecordChangeSet,
   ActorOptions,
   StackQuery,
@@ -502,8 +503,13 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
-  async getVersions(id: string) {
-    return [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
+  async getVersions(id: string, query: VersionsQuery = {}) {
+    const newestFirst = [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
+    const before =
+      query.beforeVersion === undefined
+        ? newestFirst
+        : newestFirst.filter((v) => v.version < query.beforeVersion!);
+    return query.limit === undefined ? before : before.slice(0, query.limit);
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
