@@ -375,7 +375,7 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?include=record&include=record'))).toThrow(
       /Repeated query param/,
     );
-    expect(() => parseChangeParams(changes('?kind=created&kind=deleted'))).not.toThrow();
+    expect(() => parseChangeParams(changes('?kind=created&kind=removed'))).not.toThrow();
   });
 });
 

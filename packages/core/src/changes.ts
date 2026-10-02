@@ -441,7 +441,7 @@ export class ChangeEmitter {
  * transitions that are always emitted alone.
  */
 function resolveKind(ops: ChangeOp[]): ChangeKind {
-  if (ops.includes('unlist')) return 'deleted';
+  if (ops.includes('unlist')) return 'removed';
   if (ops.length === 1) return CHANGE_KINDS[ops[0]!];
   return 'changed';
 }
@@ -456,10 +456,10 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
   migrate: 'changed',
   restore: 'changed',
   undelete: 'changed',
-  delete: 'deleted',
+  delete: 'removed',
   purge: 'purged',
   list: 'changed',
-  unlist: 'deleted',
+  unlist: 'removed',
   reparent: 'changed',
 };
 

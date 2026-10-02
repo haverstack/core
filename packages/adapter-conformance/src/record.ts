@@ -203,6 +203,20 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(undeleted.deletedAt).toBeUndefined();
       });
 
+      test('getVersions returns snapshots newest first', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([3, 2, 1]);
+      });
+
       test('purging deleteRecord removes the record and its version history', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
@@ -632,7 +646,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         await adapter.deleteRecord(record.id, {
-          journal: { ops: ['delete'], kind: 'deleted' },
+          journal: { ops: ['delete'], kind: 'removed' },
         });
         // A tombstone is recoverable, and its journal is part of what
         // recovers it.

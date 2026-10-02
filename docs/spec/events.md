@@ -26,7 +26,7 @@ So the pattern is **notify-then-reconcile**: the feed says _when_ to run a `quer
 ## The event shape
 
 ```ts
-type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
+type ChangeKind = 'created' | 'changed' | 'removed' | 'purged';
 
 type ChangeOp =
   | 'create'
@@ -65,10 +65,10 @@ type RecordChange = {
 | --------- | --------------------------------------------------------------------------------------------------- |
 | `created` | `create`                                                                                            |
 | `changed` | `patch`, `associate`, `dissociate`, `reshare`, `migrate`, `restore`, `undelete`, `list`, `reparent` |
-| `deleted` | `delete` (soft), `unlist`                                                                           |
+| `removed` | `delete` (soft), `unlist`                                                                           |
 | `purged`  | `purge`                                                                                             |
 
-**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`deleted`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this change.
+**Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`removed`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `kind` names what a subscriber should do with a copy it holds — `created` and `changed` upsert it, `removed` drops it, `purged` drops it and expects nothing left behind — and `ops` names why. `removed` covers both a soft delete and an unlist, so a handler that must tell a tombstone from an unlisted record reads `ops` (or `record.deletedAt`). `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this change.
 
 **Every op is a verb, named after the call that produced it.** Most share the method's name. Three don't, because the method covers more than one op:
 
@@ -95,7 +95,7 @@ Neither list is ever present on an op other than `associate`/`dissociate`, and a
 
 **Both lists are derived from the [journal's tagged list](./journal.md#the-entry), not computed beside it.** One write names what it moved once; the durable half takes that list as it stands and the frame is flattened out of it. So a frame can never report an edit an entry doesn't, and the two shapes are a difference in what each tier is read for rather than two comparisons that might disagree.
 
-**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
+**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `removed` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
 Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other ten verbs, and the bug is invisible until an index drifts from the records it describes.
 
@@ -255,7 +255,7 @@ interface StackClient {
 
 An unlisted record that emits a change event to a default subscriber is not unlisted, so the feed excludes them the same way `query()` does — `includeUnlisted` opts a subscription back in, gated exactly as [`RecordFilter.includeUnlisted`](./unlisted.md#includeunlisted-is-owner-only) is. Since `unlistedAt` deliberately keeps `get()` working, an ID is sufficient to fetch; if `query()` excluded unlisted records but the feed did not, the feed would be a strictly better enumeration channel than the query it is supposed to match.
 
-**Suppression is not total, or a default subscriber would keep a stale copy forever.** Soft delete is the model: `query()` hides a deleted record while the feed still emits `deleted`, because that event is what tells a subscriber to drop its copy. The same reasoning governs every transition here:
+**Suppression is not total, or a default subscriber would keep a stale copy forever.** Soft delete is the model: `query()` hides a deleted record while the feed still emits `removed`, because that event is what tells a subscriber to drop its copy. The same reasoning governs every transition here:
 
 | Transition                   | Emits to a default subscriber? | Why                                                                 |
 | ---------------------------- | :----------------------------: | ------------------------------------------------------------------- |
@@ -265,7 +265,7 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
 | Purge while unlisted         |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'deleted'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 
@@ -279,7 +279,7 @@ A `parentId` filter is answered by the record, not the envelope, so a record tha
 
 **A move bumps no version**, so a `reparent` frame carries the `version` and `updatedAt` the record already had — the same stance an `associate` frame takes. A subscriber that treats a frame's `version` as a change counter will see it stand still across a move; [`seq` on the journal](./journal.md#ordering) is the number that counts every change. The same holds for `unlist` and `list`. See [Versioning § Version history](./versioning.md#version-history).
 
-**Kind is `changed`, not `deleted`.** `unlist` maps to `deleted` because the record genuinely leaves the subscriber's view and must be dropped. A moved record is still there and still readable; only its container moved, and the same frame reaches the destination's subscribers, for whom "drop your copy" would be exactly wrong. A subscriber maintaining a list of one container's children therefore has to read `parentId` rather than treating every `changed` as an upsert — the one place where kind alone under-determines what to do, and the reason a filtered subscription is [guaranteed `parentId` in the stub](#the-event-shape).
+**Kind is `changed`, not `removed`.** `unlist` maps to `removed` because the record genuinely leaves the subscriber's view and must be dropped. A moved record is still there and still readable; only its container moved, and the same frame reaches the destination's subscribers, for whom "drop your copy" would be exactly wrong. A subscriber maintaining a list of one container's children therefore has to read `parentId` rather than treating every `changed` as an upsert — the one place where kind alone under-determines what to do, and the reason a filtered subscription is [guaranteed `parentId` in the stub](#the-event-shape).
 
 A `parentId: null` filter (root records) participates on the same terms: a record moved to the root is an arrival there, and one moved off it a departure.
 

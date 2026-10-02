@@ -7839,13 +7839,13 @@ describe('Stack.mutate — one call, one version', () => {
   });
 
   // unlist is the one op that must survive being bundled: a subscriber
-  // holding the record has to be told to drop it, so kind stays 'deleted'.
-  test('an unlist bundled with an edit is still kind deleted', async () => {
+  // holding the record has to be told to drop it, so kind stays 'removed'.
+  test('an unlist bundled with an edit is still kind removed', async () => {
     const seen: RecordChange[] = [];
     await stack.subscribe((c) => seen.push(c), { includeUnlisted: true });
     await stack.mutate(note.id, { contentPatch: { text: 'edited' }, unlisted: true });
 
-    expect(seen[0]!.kind).toBe('deleted');
+    expect(seen[0]!.kind).toBe('removed');
     expect([...seen[0]!.ops].sort()).toEqual(['patch', 'unlist']);
   });
 

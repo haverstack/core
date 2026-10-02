@@ -74,7 +74,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
       [['associate'], 'changed'],
       [['dissociate'], 'changed'],
       [['reshare'], 'changed'],
-      [['delete'], 'deleted'],
+      [['delete'], 'removed'],
       [['undelete'], 'changed'],
       [['restore'], 'changed'],
     ]);
@@ -279,14 +279,14 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     expect(seen.map((c) => c.ops)).toEqual([['create']]);
   });
 
-  test('the unlist transition emits kind "deleted" despite the post-change state', async () => {
+  test('the unlist transition emits kind "removed" despite the post-change state', async () => {
     const note = await stack.create(NOTE, { text: 'was listed' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.mutate(note.id, { unlisted: true });
 
-    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['deleted', ['unlist']]]);
+    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['removed', ['unlist']]]);
   });
 
   test('the list transition emits kind "changed", an upsert like undelete', async () => {
@@ -612,7 +612,7 @@ describe('a purged frame carries nothing about the record', () => {
     await stack.delete(soft.id);
     await stack.delete(purged.id, { purge: true });
 
-    expect(seen[0]).toMatchObject({ kind: 'deleted', parentId: parent.id });
+    expect(seen[0]).toMatchObject({ kind: 'removed', parentId: parent.id });
     expect(seen[1]!.kind).toBe('purged');
     expect(seen[1]!.parentId).toBeUndefined();
   });
@@ -762,13 +762,13 @@ describe('filtering is exact', () => {
 
   test('kinds narrows to the branches a consumer handles', async () => {
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { typeId: NOTE, kinds: ['deleted', 'purged'] } });
+    await stack.subscribe(handler, { filter: { typeId: NOTE, kinds: ['removed', 'purged'] } });
 
     const note = await stack.create(NOTE, { text: 'a' });
     await stack.patchContent(note.id, { text: 'b' });
     await stack.delete(note.id);
 
-    expect(seen.map((c) => c.kind)).toEqual(['deleted']);
+    expect(seen.map((c) => c.kind)).toEqual(['removed']);
   });
 
   test('parentId reads the record, so it still filters a purge', async () => {

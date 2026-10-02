@@ -3892,7 +3892,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-deleted-frame-is-not-terminal',
     description:
-      'A soft delete is kind "deleted" and bumps a version like any other mutation, so the ' +
+      'A soft delete is kind "removed" and bumps a version like any other mutation, so the ' +
       'record can still be undeleted, restored or read as history. That is what separates it ' +
       'from "purged" below, and why the two are distinct kinds rather than one delete signal: a ' +
       'consumer that drops its history on a soft delete has thrown away recoverable state.',
@@ -3923,7 +3923,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: 'AA3f1T',
             event: 'record',
             data: {
-              kind: 'deleted',
+              kind: 'removed',
               ops: ['delete'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
@@ -3937,9 +3937,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     ],
   },
   {
-    name: 'change-feed-unlist-frame-is-a-deleted-kind',
+    name: 'change-feed-unlist-frame-is-a-removed-kind',
     description:
-      'Marking a record unlisted arrives as kind "deleted" / op "unlist" — not "changed" — even ' +
+      'Marking a record unlisted arrives as kind "removed" / op "unlist" — not "changed" — even ' +
       'though the record still exists and get() still resolves it. A subscriber without ' +
       'includeUnlisted already knows this record from before, and the record’s new state ' +
       '(unlistedAt now set) would otherwise be excluded by the very filter this event announces, ' +
@@ -3976,7 +3976,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: 'AA3f1U',
             event: 'record',
             data: {
-              kind: 'deleted',
+              kind: 'removed',
               ops: ['unlist'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
@@ -3997,7 +3997,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'carries the record’s state at the moment of the change, so a subscriber compares it to ' +
       'its own filter to tell a departure from an arrival. The record’s post-change state ' +
       'alone would answer only for the destination, which is why this transition is matched ' +
-      'against both containers. Kind is "changed", not "deleted": the record is still there ' +
+      'against both containers. Kind is "changed", not "removed": the record is still there ' +
       'and still readable — only its container moved. A move bumps no version, so the frame ' +
       'carries the version and updatedAt the record already had. See ' +
       'docs/spec/events.md § The reparent transition.',
@@ -4050,7 +4050,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'publish moment, mechanically identical to an ordinary upsert. A subscriber applies it the ' +
       'same way it applies "undelete": it may never have seen this record before (its earlier ' +
       'create and any edits while unlisted were withheld), and this is the first event that ' +
-      'names it. Assumes prior state from change-feed-unlist-frame-is-a-deleted-kind. See ' +
+      'names it. Assumes prior state from change-feed-unlist-frame-is-a-removed-kind. See ' +
       'docs/spec/events.md § The unlisted transition.',
     path: '/changes',
     responseStatus: 200,
@@ -4099,7 +4099,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'without includeUnlisted — not an empty or redacted one. This is what makes the feed match ' +
       'an equivalent query(): a record excluded from listings is excluded from the announcement ' +
       'stream too, on every op except the unlist transition itself (see ' +
-      'change-feed-unlist-frame-is-a-deleted-kind). Assumes the note was already made unlisted. ' +
+      'change-feed-unlist-frame-is-a-removed-kind). Assumes the note was already made unlisted. ' +
       'See docs/spec/events.md § The unlisted transition.',
     path: '/changes',
     responseStatus: 200,

@@ -31,7 +31,7 @@ Last-Event-ID: <cursor>       (equivalently ?since=<cursor>)
 ?parentId=           ("null" for root records, as GET /records; see Events § The reparent transition)
 ?createdBySubject=   (repeatable; the record's author, not the actor, as GET /records)
 ?createdByPrincipal= (repeatable; the principal behind the author, as GET /records)
-?kind=            (repeatable: created|changed|deleted|purged)
+?kind=            (repeatable: created|changed|removed|purged)
 ?include=record   (ignored for kind=purged)
 ?includeUnlisted= (owner-only — see Unlisted)
 ```
