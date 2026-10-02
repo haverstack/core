@@ -919,6 +919,17 @@ export type JournalQuery = {
   limit?: number;
 };
 
+/**
+ * Window into a record's version history. Newest first, the reverse of
+ * JournalQuery; omitting both reads every version.
+ * See docs/spec/versioning.md § Version history.
+ */
+export type VersionsQuery = {
+  /** Versions strictly older than this, exclusive. */
+  beforeVersion?: number;
+  limit?: number;
+};
+
 // -------------------------------------------------------
 // Change events
 // -------------------------------------------------------
@@ -1201,8 +1212,11 @@ export interface StackRecordAdapter {
   dissociate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
 
   // Versions
-  /** Snapshots newest first — see docs/spec/versioning.md § Version history. */
-  getVersions(id: RecordId): Promise<RecordVersion[]>;
+  /**
+   * Snapshots newest first; omitting `query` reads every version.
+   * See docs/spec/versioning.md § Version history.
+   */
+  getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   /**
    * Standalone snapshot write, outside of a mutation's own atomic path.

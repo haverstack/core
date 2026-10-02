@@ -204,6 +204,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `DELETE /records/:id`           | `parseDeleteParams()`           |
 | `POST /records/:id/migrate`     | `parseMigrationBody()`          |
 | `GET /records/:id/journal`      | `parseJournalParams()`          |
+| `GET /records/:id/versions`     | `parseVersionsParams()`         |
 | `GET /records/:id/associations` | `parseAssociationParams()`      |
 | `GET /changes`                  | `parseChangeParams()`           |
 | `GET /attachments/:fileId`      | `parseDownloadParams()`         |
@@ -456,11 +457,15 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
+GET  /records/:id/versions?beforeVersion=4&limit=50
+                                      — at most 50 versions older than 4, exclusive
 GET  /records/:id/versions/:version   — get a specific version
 POST /records/:id/restore/:version    — restore a version (creates new version, no rewrite)
 ```
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Every requester who passes that gate gets the same body. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
+
+**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, paged like [the journal](#journal) but newest first.** `limit` bounds the page and `beforeVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `beforeVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
 
 **A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`** — no version has ever captured any of the four (see [Versioning § Version history](./versioning.md#version-history)). `WireVersion` has no such field, so a server that emits one is writing a key every client drops.
 

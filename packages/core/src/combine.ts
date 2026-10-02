@@ -38,7 +38,7 @@ export function combineAdapters(parts: {
     associate: (id, assoc, opts) => parts.record.associate(id, assoc, opts),
     dissociate: (id, assoc, opts) => parts.record.dissociate(id, assoc, opts),
 
-    getVersions: (id) => parts.record.getVersions(id),
+    getVersions: (id, query) => parts.record.getVersions(id, query),
     getVersion: (id, v) => parts.record.getVersion(id, v),
     saveVersion: (id, v) => parts.record.saveVersion(id, v),
     getJournal: (id, query) => parts.record.getJournal(id, query),
