@@ -3891,6 +3891,16 @@ describe('grantType', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  test('listTypeGrants loads on an adapter whose sort.fields omits createdAt', async () => {
+    const bare = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    (bare as { capabilities: StackAdapter['capabilities'] }).capabilities = {
+      ...bare.capabilities,
+      sort: { fields: [], contentField: false },
+    };
+    const bareStack = await Stack.open(bare);
+    expect(await bareStack.listTypeGrants()).toEqual([]);
+  });
+
   // A tier that names nobody reaches nobody, so storing one would leave a
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {
@@ -7889,5 +7899,48 @@ describe('Stack.mutate — one call, one version', () => {
     const patched = await stack.patchContent(note.id, { text: 'edited' });
     expect(patched.content).toEqual({ text: 'edited' });
     expect(patched.version).toBe(2);
+  });
+});
+
+describe('query — sort direction defaults', () => {
+  beforeEach(async () => {
+    for (const text of ['b', 'c', 'a']) {
+      await stack.create(
+        NOTE_V1,
+        { text },
+        { createdAt: new Date(`2024-01-0${'bca'.indexOf(text) + 1}`) },
+      );
+    }
+  });
+
+  const texts = (r: { records: { content: unknown }[] }) =>
+    r.records.map((x) => (x.content as { text: string }).text);
+
+  test('a content sort naming no direction runs ascending', async () => {
+    expect(texts(await stack.query({ sort: { contentField: 'text' } }))).toEqual(['a', 'b', 'c']);
+  });
+
+  test('a native sort naming no direction runs ascending', async () => {
+    expect(texts(await stack.query({ sort: { field: 'createdAt' } }))).toEqual(['b', 'c', 'a']);
+  });
+
+  test('a query with no sort returns createdAt, newest first', async () => {
+    expect(texts(await stack.query())).toEqual(['a', 'c', 'b']);
+  });
+
+  test('an explicit direction is kept', async () => {
+    expect(texts(await stack.query({ sort: { contentField: 'text', direction: 'desc' } }))).toEqual(
+      ['c', 'b', 'a'],
+    );
+  });
+
+  test('the adapter always receives an explicit direction', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query();
+    await stack.query({ sort: { contentField: 'text' } });
+    expect(spy.mock.calls.map(([q]) => q.sort)).toEqual([
+      { field: 'createdAt', direction: 'desc' },
+      { contentField: 'text', direction: 'asc' },
+    ]);
   });
 });

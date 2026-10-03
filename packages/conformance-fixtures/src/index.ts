@@ -688,6 +688,71 @@ export const queryRecordsFixtures: ConformanceFixture<
     },
   },
   {
+    name: 'query-content-sort-defaults-to-ascending',
+    description:
+      'A sort that names a field with no direction runs ascending, as ORDER BY does — native ' +
+      'column or content field alike. A content date reads newest first only when the caller ' +
+      'asks for `desc`. A server built on Stack.query() inherits this. ' +
+      'See docs/spec/data-model.md § Sorting and pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { sort: { contentField: 'title' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00061',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'apple' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00062',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Zebra' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'query-without-sort-returns-newest-first',
+    description:
+      'A query naming no sort answers by createdAt, newest first — the order a feed-style ' +
+      "listing reads in. That is the opposite of `sort: { field: 'createdAt' }`, which names a " +
+      'sort and so runs ascending. See docs/spec/data-model.md § Sorting and pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00071',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-02-01T00:00:00.000Z',
+          updatedAt: '2024-02-01T00:00:00.000Z',
+          content: { title: 'Second' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00072',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'First' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
     name: 'query-content-sort-folds-case-and-accents',
     description:
       'Text orders by a folded key rather than by code point: compatibility-decompose, drop ' +

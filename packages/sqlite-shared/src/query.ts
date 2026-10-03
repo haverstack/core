@@ -45,11 +45,12 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
  * invariant layer, but this builder writes the value straight into
  * `ORDER BY` and the cursor comparison, so it re-checks rather than trust
  * an upstream that a future refactor could bypass: an unvalidated direction
- * here is a SQL-injection sink. Anything but "asc" is treated as the
- * default "desc" only after passing the guard.
+ * here is a SQL-injection sink. A sort without a direction is refused: core
+ * resolves the default before any adapter sees the query.
  */
 const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
-  const dir = query.sort?.direction ?? 'desc';
+  // No sort at all is the unsorted default; a sort always carries its direction.
+  const dir = query.sort ? query.sort.direction : 'desc';
   if (dir !== 'asc' && dir !== 'desc') {
     throw new StackBadRequestError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
   }
