@@ -1,5 +1,23 @@
 # @haverstack/adapter-conformance
 
+## 0.9.0
+
+### Minor Changes
+
+- [#387](https://github.com/haverstack/core/pull/387) [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The blob suite requires `getBlob()` to return a plain `Uint8Array` (not a subclass such as `Buffer`) and checks that the returned array and the array passed to `putBlob()` are independent of the stored bytes.
+
+- [#383](https://github.com/haverstack/core/pull/383) [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `getVersions()` takes an optional `VersionsQuery` (`beforeVersion`, `limit`) and pages newest first, in the shape of `getJournal()`'s `JournalQuery`; omitting both reads every version. `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=` and answers `{ versions, cursor }`, with `parseVersionsParams()` in `@haverstack/core/wire` to decode them. `APIAdapter` follows `cursor` to the end when no `limit` is given.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the change kind `deleted` to `removed`. It names what a subscriber does with its copy, and covers both a soft delete and an unlist; `ops` still says which. The set stays `created`, `changed`, `removed`, `purged`, and the `?kind=` filter and journal `kind` column take the new value.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `MemoryAdapter.getVersions()` returns versions newest first, matching the SQLite adapters and `APIAdapter`. The order is now stated in the spec and `StackRecordAdapter`, and pinned by an `adapter-conformance` test.
+
+### Patch Changes
+
+- [#384](https://github.com/haverstack/core/pull/384) [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A sort that names a field now defaults to ascending, native or content field alike, as `ORDER BY` does; a query with no sort still returns `createdAt`, newest first. `Stack.query()` resolves both defaults before an adapter sees the query, so `queryRecords()` always receives an explicit `direction`. `listTypeGrants()` states its newest-first order rather than inheriting it.
+- Updated dependencies [[`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa), [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4), [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1), [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d), [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a), [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736), [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5), [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8), [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070)]:
+  - @haverstack/core@0.40.0
+
 ## 0.8.0
 
 ### Minor Changes
