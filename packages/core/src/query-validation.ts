@@ -192,15 +192,16 @@ export function assertValidSort(sort: QuerySort | undefined): void {
 }
 
 /**
- * The sort every adapter receives: no sort is `createdAt`, newest first,
- * and a named sort with no `direction` is ascending. The defaults live
- * here so no adapter carries its own. See docs/spec/data-model.md
- * § Sorting and pagination.
+ * The sort every adapter receives: a named sort with no `direction` is
+ * ascending, resolved here so no adapter carries its own default. No sort
+ * stays absent — the adapter's unsorted order is `createdAt` newest first,
+ * and an explicit sort would be re-checked against the server's declared
+ * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
  */
 export function normalizeSort(
   sort: QuerySort | undefined,
-): QuerySort & { direction: 'asc' | 'desc' } {
-  if (!sort) return { field: 'createdAt', direction: 'desc' };
+): (QuerySort & { direction: 'asc' | 'desc' }) | undefined {
+  if (!sort) return undefined;
   return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
     direction: 'asc' | 'desc';
   };

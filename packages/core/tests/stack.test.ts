@@ -7994,14 +7994,12 @@ describe('query — sort direction defaults', () => {
     );
   });
 
-  test('the adapter always receives an explicit direction', async () => {
+  test('the adapter receives an explicit direction, or no sort at all', async () => {
     const spy = vi.spyOn(adapter, 'queryRecords');
     await stack.query();
     await stack.query({ sort: { contentField: 'text' } });
-    expect(spy.mock.calls.map(([q]) => q.sort)).toEqual([
-      { field: 'createdAt', direction: 'desc' },
-      { contentField: 'text', direction: 'asc' },
-    ]);
+    expect(spy.mock.calls[0]![0]).not.toHaveProperty('sort');
+    expect(spy.mock.calls[1]![0].sort).toEqual({ contentField: 'text', direction: 'asc' });
   });
 });
 
