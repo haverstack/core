@@ -26,13 +26,6 @@ import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
 
-/** Core resolves the default direction; an adapter only ever sees an explicit one. */
-const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
-  if (sort.direction === undefined) {
-    throw new Error('queryRecords() received a sort without a direction.');
-  }
-  return sort.direction;
-};
 import {
   StackVersionConflictError,
   StackConflictError,
@@ -42,6 +35,13 @@ import {
 import { parseContentFilterKey } from './query-validation.js';
 import { associationEqual } from './record-changes.js';
 
+/** Core resolves the default direction; an adapter only ever sees an explicit one. */
+const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
+  if (sort.direction === undefined) {
+    throw new StackBadRequestError('queryRecords() received a sort without a direction.');
+  }
+  return sort.direction;
+};
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
 
@@ -388,7 +388,7 @@ export class MemoryAdapter implements StackAdapter {
     return JSON.stringify([
       sort?.contentField ?? null,
       sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort?.direction ?? null,
+      sort ? requireDirection(sort) : 'desc',
     ]);
   }
 

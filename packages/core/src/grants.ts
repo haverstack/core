@@ -303,8 +303,6 @@ export async function loadGrantRecords(
 ): Promise<(StackRecord & { content: GrantContent })[]> {
   const records = await queryAllPages(query, {
     filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
-    // Stated rather than inherited: listTypeGrants() answers in this order.
-    sort: { field: 'createdAt', direction: 'desc' },
   });
   return records as (StackRecord & { content: GrantContent })[];
 }
