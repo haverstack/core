@@ -191,6 +191,21 @@ export function assertValidSort(sort: QuerySort | undefined): void {
 }
 
 /**
+ * The sort every adapter receives: no sort is `createdAt`, newest first,
+ * and a named sort with no `direction` is ascending. The defaults live
+ * here so no adapter carries its own. See docs/spec/data-model.md
+ * § Sorting and pagination.
+ */
+export function normalizeSort(
+  sort: QuerySort | undefined,
+): QuerySort & { direction: 'asc' | 'desc' } {
+  if (!sort) return { field: 'createdAt', direction: 'desc' };
+  return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
+    direction: 'asc' | 'desc';
+  };
+}
+
+/**
  * Fail loud rather than silently reorder: an adapter that can't honor the
  * requested sort would otherwise answer in some other order, which a
  * caller paging a bounded window has no way to notice. The companion to

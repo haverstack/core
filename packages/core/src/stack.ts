@@ -98,6 +98,7 @@ import {
   assertValidJournalQuery,
   assertValidVersionsQuery,
   assertValidSort,
+  normalizeSort,
   assertAuthorityAssociations,
   assertDataAssociations,
   filtersContent,
@@ -1617,6 +1618,7 @@ export class Stack implements StackClient {
 
     const result = await this.adapter.queryRecords({
       ...rest,
+      sort: normalizeSort(query.sort),
       ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
       ...(limit !== undefined && { limit }),
     });

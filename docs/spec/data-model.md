@@ -536,6 +536,19 @@ type QueryResult = {
 
 Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackBadRequestError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
 
+**Direction defaults follow SQL.** A sort that names a field runs `asc` unless `direction` says otherwise, whether the field is native or a content field, so `sort: { contentField: 'name' }` reads A→Z. A query with no sort answers by `createdAt`, newest first, the order a feed-style listing reads in. The two meet in one visible quirk: `sort: { field: 'createdAt' }` returns oldest first, the opposite of the unsorted default on the same field. No single default direction fits both a `name` and a `date`, and core cannot tell them apart at query time (a query can span Types), so the rule keys on nothing but whether a sort was named. `Stack.query()` and `ScopedStack.query()` resolve both defaults before an adapter sees the query, so `queryRecords()` always receives a sort with an explicit `direction`, or none.
+
+**Every list's order is stated here.**
+
+| Call                     | Order                                                                |
+| ------------------------ | -------------------------------------------------------------------- |
+| `query()`, no sort       | `createdAt`, newest first                                            |
+| `query()` with a sort    | `direction`, default `asc`                                           |
+| `getVersions()`          | newest first ([Versioning](./versioning.md))                         |
+| `getJournal()`           | oldest first ([Journal](./journal.md))                               |
+| `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md)) |
+| `listTypeGrants()`       | newest first                                                         |
+
 **A sort names either a native column or a content field, never both**, and a request naming both is rejected with `StackBadRequestError` (**400**) rather than resolved in one direction. They are two members rather than one widened `field` because a content field may be named `version`, `createdAt` or `updatedAt`, and a `'content.publishedAt'` prefix would collide with the [path separator](#filter) a filter key is split on.
 
 **`sort.field` and `sort.direction` are validated, not merely typed.** The `'asc' | 'desc'` and three-field types are a compile-time contract only; a request arriving over the wire (a server mapping `?sort=`/`?direction=`) or from a delegated app supplies raw strings. A SQLite record adapter interpolates the direction into its `ORDER BY`, so `Stack.query()`/`ScopedStack.query()` reject a field or direction outside the enumerated set with `StackBadRequestError` (**400**, `bad_request`) before it reaches an adapter — the same posture as a malformed cursor. The value never reaches SQL as anything but one of the two keywords.
