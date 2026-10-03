@@ -3891,6 +3891,16 @@ describe('grantType', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  test('listTypeGrants loads on an adapter whose sort.fields omits createdAt', async () => {
+    const bare = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    (bare as { capabilities: StackAdapter['capabilities'] }).capabilities = {
+      ...bare.capabilities,
+      sort: { fields: [], contentField: false },
+    };
+    const bareStack = await Stack.open(bare);
+    expect(await bareStack.listTypeGrants()).toEqual([]);
+  });
+
   // A tier that names nobody reaches nobody, so storing one would leave a
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {

@@ -64,4 +64,20 @@ describe('MemoryAdapter cursors', () => {
       }),
     ).rejects.toThrow(StackBadRequestError);
   });
+
+  test('replays an unsorted cursor under the equivalent explicit createdAt desc sort', async () => {
+    const first = await adapter.queryRecords({ limit: 2 });
+    const second = await adapter.queryRecords({
+      limit: 2,
+      cursor: first.cursor!,
+      sort: { field: 'createdAt', direction: 'desc' },
+    });
+    expect(second.records.map((r) => r.id)).not.toEqual(first.records.map((r) => r.id));
+  });
+
+  test('refuses a named sort that carries no direction', async () => {
+    await expect(adapter.queryRecords({ sort: { field: 'updatedAt' } })).rejects.toThrow(
+      StackBadRequestError,
+    );
+  });
 });
