@@ -7891,3 +7891,46 @@ describe('Stack.mutate — one call, one version', () => {
     expect(patched.version).toBe(2);
   });
 });
+
+describe('query — sort direction defaults', () => {
+  beforeEach(async () => {
+    for (const text of ['b', 'c', 'a']) {
+      await stack.create(
+        NOTE_V1,
+        { text },
+        { createdAt: new Date(`2024-01-0${'bca'.indexOf(text) + 1}`) },
+      );
+    }
+  });
+
+  const texts = (r: { records: { content: unknown }[] }) =>
+    r.records.map((x) => (x.content as { text: string }).text);
+
+  test('a content sort naming no direction runs ascending', async () => {
+    expect(texts(await stack.query({ sort: { contentField: 'text' } }))).toEqual(['a', 'b', 'c']);
+  });
+
+  test('a native sort naming no direction runs ascending', async () => {
+    expect(texts(await stack.query({ sort: { field: 'createdAt' } }))).toEqual(['b', 'c', 'a']);
+  });
+
+  test('a query with no sort returns createdAt, newest first', async () => {
+    expect(texts(await stack.query())).toEqual(['a', 'c', 'b']);
+  });
+
+  test('an explicit direction is kept', async () => {
+    expect(texts(await stack.query({ sort: { contentField: 'text', direction: 'desc' } }))).toEqual(
+      ['c', 'b', 'a'],
+    );
+  });
+
+  test('the adapter always receives an explicit direction', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query();
+    await stack.query({ sort: { contentField: 'text' } });
+    expect(spy.mock.calls.map(([q]) => q.sort)).toEqual([
+      { field: 'createdAt', direction: 'desc' },
+      { contentField: 'text', direction: 'asc' },
+    ]);
+  });
+});

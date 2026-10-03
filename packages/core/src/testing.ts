@@ -25,6 +25,14 @@ import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
+
+/** Core resolves the default direction; an adapter only ever sees an explicit one. */
+const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
+  if (sort.direction === undefined) {
+    throw new Error('queryRecords() received a sort without a direction.');
+  }
+  return sort.direction;
+};
 import {
   StackVersionConflictError,
   StackConflictError,
@@ -380,7 +388,7 @@ export class MemoryAdapter implements StackAdapter {
     return JSON.stringify([
       sort?.contentField ?? null,
       sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort?.direction ?? 'desc',
+      sort?.direction ?? null,
     ]);
   }
 
@@ -442,7 +450,7 @@ export class MemoryAdapter implements StackAdapter {
    * (docs/spec/data-model.md § Sorting by a content field).
    */
   private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
-    const direction = sort?.direction ?? 'desc';
+    const direction = sort ? requireDirection(sort) : 'desc';
     const sign = direction === 'asc' ? 1 : -1;
     const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
 

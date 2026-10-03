@@ -656,7 +656,10 @@ export type NativeSortField = (typeof NATIVE_SORT_FIELDS)[number];
  * `version` would otherwise be indistinguishable from the native column.
  * A `'content.'` prefix can't carry the distinction either: `.` is the
  * path separator `parseContentFilterKey()` splits on.
- * See docs/spec/data-model.md § Sorting by a content field.
+ * `direction` defaults to `asc` for any named sort, native or content, as
+ * `ORDER BY` does; a query with no sort is `createdAt`, newest first.
+ * See docs/spec/data-model.md § Sorting by a content field and
+ * § Sorting and pagination.
  */
 export type QuerySort =
   | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
@@ -1199,6 +1202,10 @@ export interface StackRecordAdapter {
     id: RecordId,
     opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
+  /**
+   * `query.sort`, when present, always carries a `direction`: `Stack`
+   * resolves the defaults before any adapter sees the query.
+   */
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations

@@ -52,9 +52,16 @@ describe('MemoryAdapter cursors', () => {
   });
 
   test('still refuses a cursor minted under a different sort', async () => {
-    const first = await adapter.queryRecords({ limit: 2, sort: { field: 'createdAt' } });
+    const first = await adapter.queryRecords({
+      limit: 2,
+      sort: { field: 'createdAt', direction: 'desc' },
+    });
     await expect(
-      adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort: { field: 'updatedAt' } }),
+      adapter.queryRecords({
+        limit: 2,
+        cursor: first.cursor!,
+        sort: { field: 'updatedAt', direction: 'desc' },
+      }),
     ).rejects.toThrow(StackBadRequestError);
   });
 });

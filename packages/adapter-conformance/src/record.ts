@@ -763,14 +763,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(makeRecord());
         const minted = await adapter.queryRecords({
           limit: 1,
-          sort: { field: 'createdAt' },
+          sort: { field: 'createdAt', direction: 'asc' },
         });
         expect(minted.cursor).not.toBeNull();
         await expectStackErrorCode(
           adapter.queryRecords({
             limit: 1,
             cursor: minted.cursor!,
-            sort: { field: 'updatedAt' },
+            sort: { field: 'updatedAt', direction: 'asc' },
           }),
           'bad_request',
         );
@@ -882,8 +882,39 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Sort by content field — capability-gated on sort.contentField
     // -----------------------------------------------------------------
+    describe('sort direction', () => {
+      test.each(['asc', 'desc'] as const)(
+        'honors an explicit %s on a native field',
+        async (direction) => {
+          const a = await adapter.createRecord(makeRecord());
+          await new Promise((r) => setTimeout(r, 5));
+          const b = await adapter.createRecord(makeRecord());
+          const result = await adapter.queryRecords({ sort: { field: 'createdAt', direction } });
+          const ids = result.records.map((r) => r.id);
+          expect(ids).toEqual(direction === 'asc' ? [a.id, b.id] : [b.id, a.id]);
+        },
+      );
+    });
+
     if (capabilities.sort.contentField) {
       describe('sort by content field', () => {
+        test.each(['asc', 'desc'] as const)(
+          'honors an explicit %s on a content field',
+          async (direction) => {
+            await adapter.saveType(conformanceType());
+            await adapter.createRecord(makeRecord({ content: { title: 'x', priority: 1 } }));
+            await adapter.createRecord(makeRecord({ content: { title: 'y', priority: 2 } }));
+
+            const result = await adapter.queryRecords({
+              sort: { contentField: 'priority', direction },
+            });
+            const priorities = result.records.map(
+              (r) => (r.content as { priority: number }).priority,
+            );
+            expect(priorities).toEqual(direction === 'asc' ? [1, 2] : [2, 1]);
+          },
+        );
+
         test('orders records by a declared content field', async () => {
           // Registered so an adapter that resolves the field's sort kind
           // through the type schema (rather than off the raw JSON value)

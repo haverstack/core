@@ -6162,3 +6162,17 @@ describe('ScopedStack.mutate — delegated principals', () => {
     expect((await stack.get(shared.id))!.version).toBe(1);
   });
 });
+
+describe('listTypeGrants — order', () => {
+  test('lists grants newest first', async () => {
+    await stack.grantType(NOTE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    await stack.grantType(NOTE, { actions: ['read-any'], grantee: { kind: 'authenticated' } });
+    const grants = await stack.listTypeGrants();
+    const times = grants.map((g) => g.createdAt.getTime());
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+    expect(grants[0].content.grantee).toEqual({ kind: 'authenticated' });
+  });
+});
