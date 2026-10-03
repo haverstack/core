@@ -198,7 +198,7 @@ describe('attachments', () => {
     const data = Buffer.from('hello attachment');
     const fileId = await adapter.putBlob(data);
     const retrieved = await adapter.getBlob(fileId);
-    expect((retrieved as Buffer).toString()).toBe('hello attachment');
+    expect(new TextDecoder().decode(retrieved)).toBe('hello attachment');
   });
 
   test('attachment file is stored in the attachments directory', async () => {
