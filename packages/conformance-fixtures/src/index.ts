@@ -4794,21 +4794,6 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
   },
 ];
 
-// -------------------------------------------------------
-// All fixtures
-// -------------------------------------------------------
-
-/**
- * Every fixture across every endpoint, for consumers that want to iterate
- * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
- * authSequenceFixtures, deleteRecordSequenceFixtures, changeFeedFixtures and
- * changeFeedSequenceFixtures — each a different shape (binary body,
- * header-focused, or an ordered series rather than a plain JSON
- * request/response pair), imported separately.
- *
- * The auth fixtures are the one group here sent with no bearer token, since
- * they are how a token is earned.
- */
 /**
  * A soft delete changes what `GET /records/:id` answers, and a single pair
  * cannot pin the change: it is the same path before and after. Hidden by
@@ -4872,6 +4857,21 @@ export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
   },
 ];
 
+// -------------------------------------------------------
+// All fixtures
+// -------------------------------------------------------
+
+/**
+ * Every fixture across every endpoint, for consumers that want to iterate
+ * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
+ * authSequenceFixtures, deleteRecordSequenceFixtures, getRecordSequenceFixtures,
+ * changeFeedFixtures and changeFeedSequenceFixtures — each a different shape (binary body,
+ * header-focused, or an ordered series rather than a plain JSON
+ * request/response pair), imported separately.
+ *
+ * The auth fixtures are the one group here sent with no bearer token, since
+ * they are how a token is earned.
+ */
 export const allConformanceFixtures: ConformanceFixture[] = [
   ...discoveryFixtures,
   ...authChallengeFixtures,
