@@ -24,6 +24,7 @@ import {
   familyIdProblem,
 } from './schema.js';
 import {
+  dropAbsentFields,
   validateContent,
   validateContentKeys,
   validatePatchValues,
@@ -857,7 +858,7 @@ export class Stack implements StackClient {
    */
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
-    content: T,
+    input: T,
     opts: BackdatableCreateRecordOptions = {},
   ): Promise<StackRecord & { content: T }> {
     this.assertOpen();
@@ -865,6 +866,7 @@ export class Stack implements StackClient {
     if (!type) {
       throw new StackBadRequestError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
+    const content = dropAbsentFields(input, type.schema) as T;
 
     // Copied, never aliased: an import loop that reuses one Date across rows
     // (`d.setTime(...)` per record) would otherwise retro-edit every record
@@ -1809,7 +1811,7 @@ export class Stack implements StackClient {
   private async commitMigrationChecked(
     existing: StackRecord,
     toTypeId: TypeId,
-    content: Record<string, unknown>,
+    input: Record<string, unknown>,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     const id = existing.id;
@@ -1818,6 +1820,7 @@ export class Stack implements StackClient {
     if (!type) {
       throw new StackBadRequestError(`Unknown type: "${toTypeId}". Call defineType() first.`);
     }
+    const content = dropAbsentFields(input, type.schema);
 
     const errors = [
       ...validateReservedKeys(content),
