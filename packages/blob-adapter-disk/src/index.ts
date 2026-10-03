@@ -60,7 +60,8 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     assertFileId(fileId);
     if (!existsSync(join(this.dir, fileId)))
       throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
-    return readFile(join(this.dir, fileId));
+    const buf = await readFile(join(this.dir, fileId));
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
