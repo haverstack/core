@@ -183,6 +183,45 @@ export const validateContent = (
 };
 
 /**
+ * Copy of `content` with every `null`/`undefined` field removed, recursing
+ * into declared nested objects (including those inside declared arrays)
+ * but not into `open` ones, whose interior is opaque to core.
+ * See docs/spec/data-model.md § Absent content fields.
+ */
+export const dropAbsentFields = (
+  content: Record<string, unknown>,
+  schema: TypeSchema,
+): Record<string, unknown> => dropAbsentObject(content, schema, 0);
+
+// fromEntries, not `out[key] = …`: assignment to `__proto__` would invoke
+// the setter and swallow a key validateReservedKeys must still see.
+const dropAbsentObject = (
+  content: Record<string, unknown>,
+  schema: TypeSchema,
+  depth: number,
+): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(content)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => {
+        const def = Object.hasOwn(schema, key) ? schema[key] : undefined;
+        return [key, def ? dropAbsentValue(value, def, depth) : value];
+      }),
+  );
+
+const dropAbsentValue = (value: unknown, def: FieldDef, depth: number): unknown => {
+  // Past the limit validation reports the nesting error; stop recursing.
+  if (depth > MAX_VALIDATION_DEPTH) return value;
+  if (def.kind === 'object' && !def.open && isPlainObject(value)) {
+    return dropAbsentObject(value, def.properties, depth + 1);
+  }
+  if (def.kind === 'array' && !def.open && Array.isArray(value)) {
+    return value.map((item) => dropAbsentValue(item, def.items, depth + 1));
+  }
+  return value;
+};
+
+/**
  * Content keys that name JavaScript's object machinery rather than a
  * field. Undeclared content fields are allowed by design, so without this
  * they reach `merged[key] = value` in applyMergePatch — where `__proto__`

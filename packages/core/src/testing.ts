@@ -73,6 +73,11 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
   return current.flatMap(spreadValue);
 };
 
+// An `undefined` field is a field the record does not have; storing the key
+// would make `'u' in content` differ from adapters that serialize to JSON.
+const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
+
 export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
 
 /**
@@ -124,10 +129,11 @@ export class MemoryAdapter implements StackAdapter {
     if (this.records.has(record.id)) {
       throw new StackConflictError(`Record already exists: "${record.id}"`);
     }
-    this.records.set(record.id, { ...record });
+    const stored = { ...record, content: withoutUndefined(record.content) };
+    this.records.set(record.id, stored);
     this.order.push(record.id);
-    this.appendJournal(record.id, opts.journal, record);
-    return record;
+    this.appendJournal(record.id, opts.journal, stored);
+    return stored;
   }
 
   async getRecord(id: string) {
@@ -611,7 +617,10 @@ export class MemoryAdapter implements StackAdapter {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
+    const updated = this.bump(
+      { ...record, typeId: toTypeId, content: withoutUndefined(content) },
+      opts,
+    );
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;

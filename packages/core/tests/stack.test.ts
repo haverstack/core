@@ -572,6 +572,64 @@ describe('create', () => {
 // create — _group admin bootstrap
 // -------------------------------------------------------
 
+describe('create — absent content fields', () => {
+  const TYPE = 'com.example.test/absent@1';
+  beforeEach(async () => {
+    await stack.defineType({
+      id: TYPE,
+      name: 'Absent',
+      schema: {
+        title: { kind: 'string' },
+        pages: { kind: 'number' },
+        meta: { kind: 'object', properties: { a: { kind: 'string' }, b: { kind: 'string' } } },
+        rows: {
+          kind: 'array',
+          items: { kind: 'object', properties: { x: { kind: 'string' } } },
+        },
+        extra: { kind: 'object', open: true },
+      },
+    });
+  });
+
+  test('null and undefined top-level fields are dropped', async () => {
+    const record = await stack.create(TYPE, { title: 'T', pages: null, extra: undefined });
+    expect(Object.keys(record.content)).toEqual(['title']);
+    expect(Object.keys((await stack.get(record.id))!.content)).toEqual(['title']);
+  });
+
+  test('null and undefined are dropped inside declared nested objects', async () => {
+    const record = await stack.create(TYPE, {
+      meta: { a: 'x', b: null },
+      rows: [{ x: null }],
+    });
+    expect(record.content).toEqual({ meta: { a: 'x' }, rows: [{}] });
+  });
+
+  test('null is kept inside open values', async () => {
+    const record = await stack.create(TYPE, { extra: { k: null, list: [null] } });
+    expect(record.content).toEqual({ extra: { k: null, list: [null] } });
+  });
+
+  test("create()'s return value matches a subsequent get()", async () => {
+    const record = await stack.create(TYPE, { title: 'T', pages: null });
+    expect((await stack.get(record.id))!.content).toEqual(record.content);
+  });
+
+  test('a required field set to null is still missing', async () => {
+    await expect(stack.create(NOTE_V1, { text: null })).rejects.toThrow(/Required field/);
+  });
+
+  test('commitMigration drops null and undefined fields', async () => {
+    const record = await stack.create(TYPE, { title: 'T' });
+    const migrated = await stack.commitMigration(record.id, TYPE, {
+      title: 'U',
+      pages: null,
+      meta: { a: undefined },
+    });
+    expect(migrated.content).toEqual({ title: 'U', meta: {} });
+  });
+});
+
 describe('create — _group admin bootstrap', () => {
   test('owner-created group via plain Stack.create stamps the owner as first admin', async () => {
     const group = await stack.create('_group@1', { name: 'New Group' });

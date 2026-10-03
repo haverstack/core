@@ -126,6 +126,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(stored?.content).toEqual({ title: 'Hello' });
       });
 
+      test('a content field set to undefined reads back absent', async () => {
+        const record = makeRecord({ content: { title: 'Hello', priority: undefined } });
+        await adapter.createRecord(record);
+        const stored = await adapter.getRecord(record.id);
+        expect(Object.keys(stored?.content ?? {})).toEqual(['title']);
+        expect(stored?.content).not.toHaveProperty('priority');
+      });
+
       test('getRecord returns null for an unknown id', async () => {
         expect(await adapter.getRecord(uniqueId('missing'))).toBeNull();
       });

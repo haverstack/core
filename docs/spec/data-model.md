@@ -269,6 +269,8 @@ type DefineTypeOptions = {
 };
 ```
 
+`required: false` makes a field optional, not nullable: [content fields are never `null`](#absent-content-fields).
+
 **`defineType()` takes one `DefineTypeOptions` object**, the same argument style as `registerMigration({ from, to, migrate })`. `id` and `name` are both strings, so naming them keeps a call from swapping them silently. `baseId`, `version`, `schemaHash` and `createdAt` are derived, never supplied.
 
 ```ts
@@ -416,11 +418,19 @@ This is a `Stack` invariant, not an adapter or server concern — it holds for e
 
 ### Undefined values in a patch
 
-[A content patch](#mutations) keeps an omitted field at its current value and removes one set to `null`. `undefined` is neither, and there is no third meaning left for it to carry — so **a top-level patch key whose value is `undefined` is rejected with `StackValidationError` (422)**. This is a `contentPatch` rule only: `create()` and `commitMigration()` take a whole content object, where an undefined field is simply a field the record does not have, and the schema's own required-field check already speaks to it.
+[A content patch](#mutations) keeps an omitted field at its current value and removes one set to `null`. `undefined` is neither, and there is no third meaning left for it to carry — so **a top-level patch key whose value is `undefined` is rejected with `StackValidationError` (422)**. This is a `contentPatch` rule only: `create()` and `commitMigration()` take a whole content object, where `null` and `undefined` are both [absent](#absent-content-fields) and the schema's own required-field check speaks to the result.
 
 It cannot arrive over the wire — JSON has no `undefined`, and `JSON.stringify` omits the key rather than emitting one — so every occurrence is an in-process caller spreading a partial object, meaning either "leave this alone" or "remove this" and spelling neither. Accepting it would resolve the ambiguity twice over, differently each time: storage drops the key on serialization, landing on the first, while the checks that ask whether a patch _names_ a field land on the second. Those checks are load-bearing — [binding immutability](./identity.md#did-bindings), [attachment field immutability](./attachments.md#the-_attachment-record-type), and `ScopedStack`'s owner-only fence on `_app` bindings all read the key as a claim on the field. A write-holder patching an `_app` card with `{ did: undefined }` would be refused for repointing a DID it never sent, and the refusal would be a permission error naming a field the caller did not set.
 
 This is a `Stack` invariant, so every adapter inherits it. `ScopedStack.mutate()` additionally applies it ahead of its own binding fences, so a patch carrying `undefined` is a validation error for every requester rather than a validation error for the owner and a permission refusal for everyone else.
+
+### Absent content fields
+
+**A content field is never `null`.** The schema expresses that a field is optional, not that it is nullable, and a patch already uses `null` to mean "remove" — one value cannot be both removable and settable. So `null` means absent on every write path: `create()` and `commitMigration()` drop top-level fields set to `null` or `undefined` before storing, and a patch with `null` removes the field. Reads never return `null` for a content field, and `create()` returns the content as stored.
+
+The rule recurses into declared nested objects, including those inside declared arrays, and stops at `open` objects and arrays, whose interior is opaque to core and keeps any `null`s it holds. An app that needs "explicitly none" as distinct from "never set" says so in the schema, for example with an enum value like `'declined'`.
+
+Adapters give `undefined` the same meaning: a field set to `undefined` is stored as no key at all.
 
 ### Content field names
 
