@@ -1,5 +1,31 @@
 # @haverstack/core
 
+## 0.40.0
+
+### Minor Changes
+
+- [#386](https://github.com/haverstack/core/pull/386) [`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa) Thanks [@cuibonobo](https://github.com/cuibonobo)! - An argument that means a whole type family takes a `BaseId` and refuses a versioned `TypeId` with a `StackValidationError` naming the family to pass instead. This covers `migrateAll()`, `grantType()`, `revokeType()` (whose `typeOrBaseId` is now `baseId`), and `RecordFilter.baseId` / `ChangeFilter.baseId`.
+
+  `GrantContent.typeId` is renamed `baseId`, and the `_grant@1` schema with it. Every `_grant` write now refuses a versioned or protected-system-type target, not only `grantType()`, and a stored grant whose `baseId` carries an `@version` suffix confers nothing. The `_grant@1` fixtures carry `baseId`, and two new fixtures pin the `POST /records` refusals.
+
+- [#385](https://github.com/haverstack/core/pull/385) [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack.get()` and `ScopedStack.get()` hide soft-deleted records by default, as `query()` does: `get(id)` on a tombstone answers `null`. Pass `{ includeDeleted: true }` to read it back. Adds `parseGetRecordParams()` for `GET /records/:id`.
+
+- [#383](https://github.com/haverstack/core/pull/383) [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `getVersions()` takes an optional `VersionsQuery` (`beforeVersion`, `limit`) and pages newest first, in the shape of `getJournal()`'s `JournalQuery`; omitting both reads every version. `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=` and answers `{ versions, cursor }`, with `parseVersionsParams()` in `@haverstack/core/wire` to decode them. `APIAdapter` follows `cursor` to the end when no `limit` is given.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the change kind `deleted` to `removed`. It names what a subscriber does with its copy, and covers both a soft delete and an unlist; `ops` still says which. The set stays `created`, `changed`, `removed`, `purged`, and the `?kind=` filter and journal `kind` column take the new value.
+
+- [#380](https://github.com/haverstack/core/pull/380) [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Open every identity-holding adapter with a single async `open()`. `NativeSQLiteRecordAdapter` and `LocalAdapter` replace `initialize()`/`open()`/`openOrInitialize()` with `open({ path, create?, ownerEntityId?, … })`, where `create` is `'never'` (default), `'ifMissing'` or `'exclusive'`. `DoSQLiteRecordAdapter.openOrInitialize()` is now `open()`. `APIAdapter`'s `expectedOwnerEntityId` option is renamed `ownerEntityId`. A plain-string `ownerEntityId` is checked against an existing store on every adapter, and a mismatch throws the new `OwnerMismatchError` from `@haverstack/core/adapter`, replacing `LocalAdapterOwnerMismatchError` and `APIAdapterOwnerMismatchError`. `MemoryAdapter` and `IncapableMemoryAdapter` (`@haverstack/core/testing`) are opened with `await X.open({ ownerEntityId })`; `ownerEntityId` is required.
+
+- [#384](https://github.com/haverstack/core/pull/384) [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A sort that names a field now defaults to ascending, native or content field alike, as `ORDER BY` does; a query with no sort still returns `createdAt`, newest first. `Stack.query()` resolves both defaults before an adapter sees the query, so `queryRecords()` always receives an explicit `direction`. `listTypeGrants()` states its newest-first order rather than inheriting it.
+
+- [#385](https://github.com/haverstack/core/pull/385) [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack.mutate()`, `patchContent()`, `associate()`, `dissociate()` and `restoreVersion()` throw `StackConflictError` on a soft-deleted record, as `ScopedStack` already did. Call `undelete()` first.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `MemoryAdapter.getVersions()` returns versions newest first, matching the SQLite adapters and `APIAdapter`. The order is now stated in the spec and `StackRecordAdapter`, and pinned by an `adapter-conformance` test.
+
+### Patch Changes
+
+- [#387](https://github.com/haverstack/core/pull/387) [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `MemoryAdapter` copies blob bytes in `putBlob()` and `getBlob()`, so callers can no longer change stored blobs through a shared array.
+
 ## 0.39.0
 
 ### Minor Changes

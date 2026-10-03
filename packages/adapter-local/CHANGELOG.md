@@ -1,5 +1,18 @@
 # @haverstack/adapter-local
 
+## 0.39.0
+
+### Minor Changes
+
+- [#380](https://github.com/haverstack/core/pull/380) [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Open every identity-holding adapter with a single async `open()`. `NativeSQLiteRecordAdapter` and `LocalAdapter` replace `initialize()`/`open()`/`openOrInitialize()` with `open({ path, create?, ownerEntityId?, … })`, where `create` is `'never'` (default), `'ifMissing'` or `'exclusive'`. `DoSQLiteRecordAdapter.openOrInitialize()` is now `open()`. `APIAdapter`'s `expectedOwnerEntityId` option is renamed `ownerEntityId`. A plain-string `ownerEntityId` is checked against an existing store on every adapter, and a mismatch throws the new `OwnerMismatchError` from `@haverstack/core/adapter`, replacing `LocalAdapterOwnerMismatchError` and `APIAdapterOwnerMismatchError`. `MemoryAdapter` and `IncapableMemoryAdapter` (`@haverstack/core/testing`) are opened with `await X.open({ ownerEntityId })`; `ownerEntityId` is required.
+
+### Patch Changes
+
+- Updated dependencies [[`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa), [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1), [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4), [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1), [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d), [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a), [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736), [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5), [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8), [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070)]:
+  - @haverstack/core@0.40.0
+  - @haverstack/blob-adapter-disk@0.38.0
+  - @haverstack/record-adapter-sqlite@0.32.0
+
 ## 0.38.0
 
 ### Minor Changes
