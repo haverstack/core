@@ -1320,6 +1320,10 @@ export type BlobInfo = {
 export interface StackBlobAdapter {
   // Bytes only — "attachment" is the record-backed concept at the Stack layer
   putBlob(data: Uint8Array): Promise<FileId>;
+  /**
+   * Returns a plain `Uint8Array` (never a subclass such as `Buffer`) that the
+   * caller owns: changing it never changes the stored bytes.
+   */
   getBlob(fileId: FileId): Promise<Uint8Array>;
   deleteBlob(fileId: FileId): Promise<void>;
 

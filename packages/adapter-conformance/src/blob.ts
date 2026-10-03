@@ -74,7 +74,24 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
       const data = new TextEncoder().encode('roundtrip me');
       const fileId = await adapter.putBlob(data);
       const retrieved = await adapter.getBlob(fileId);
-      expect(new Uint8Array(retrieved)).toEqual(data);
+      expect(Object.getPrototypeOf(retrieved)).toBe(Uint8Array.prototype);
+      expect(retrieved).toEqual(data);
+    });
+
+    test('mutating the array getBlob returned leaves the stored bytes unchanged', async () => {
+      const data = new TextEncoder().encode('stored bytes');
+      const fileId = await adapter.putBlob(data);
+      const first = await adapter.getBlob(fileId);
+      first.fill(0);
+      expect(await adapter.getBlob(fileId)).toEqual(data);
+    });
+
+    test('mutating the array passed to putBlob leaves the stored bytes unchanged', async () => {
+      const data = new TextEncoder().encode('caller keeps this');
+      const original = data.slice();
+      const fileId = await adapter.putBlob(data);
+      data.fill(0);
+      expect(await adapter.getBlob(fileId)).toEqual(original);
     });
 
     test('putBlob is content-addressed — identical bytes yield the same fileId', async () => {
