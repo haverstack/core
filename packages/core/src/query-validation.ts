@@ -17,7 +17,8 @@
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
-import { StackBadRequestError } from './errors.js';
+import { StackBadRequestError, StackValidationError } from './errors.js';
+import { familyIdProblem } from './schema.js';
 import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
@@ -534,6 +535,20 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
     externalIdOptional: true,
   });
   if (errors.length > 0) throw new StackBadRequestError(errors[0].message);
+}
+
+/**
+ * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
+ * against registered families, so a TypeId there would match nothing and
+ * say nothing. See docs/spec/data-model.md § Filter.
+ */
+export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } | undefined): void {
+  if (filter?.baseId === undefined) return;
+  const errors = (Array.isArray(filter.baseId) ? filter.baseId : [filter.baseId])
+    .map((b) => familyIdProblem(b, 'filter.baseId'))
+    .filter((m): m is string => m !== null)
+    .map((message) => ({ path: 'filter.baseId', message }));
+  if (errors.length > 0) throw new StackValidationError(errors);
 }
 
 /**

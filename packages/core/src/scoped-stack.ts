@@ -75,6 +75,7 @@ import {
   assertDataAssociations,
   assertSortCapability,
   assertValidAssociationFilters,
+  assertValidBaseIdFilter,
   assertValidSort,
   filtersContent,
 } from './query-validation.js';
@@ -444,9 +445,8 @@ export class ScopedStack implements StackClient {
     if (prefetchedGrants !== undefined) {
       grantRecords = prefetchedGrants;
     } else {
-      // No content-field prefilter: a stored grant's typeId may be a bare
-      // baseId or versioned, so exact matching would wrongly exclude family
-      // versions. Cursor-walked to see grants past page one.
+      // Cursor-walked to see grants past page one. A stored baseId is
+      // judged by grantReach(), which refuses a versioned one.
       grantRecords = await this.loadGrants();
     }
 
@@ -952,6 +952,7 @@ export class ScopedStack implements StackClient {
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.stack.capabilities);
     assertValidAssociationFilters(query.filter);
+    assertValidBaseIdFilter(query.filter);
     if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
@@ -1488,6 +1489,7 @@ export class ScopedStack implements StackClient {
     // A relaying stack was already refused above, so relaysChanges is
     // always false here — `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
+    assertValidBaseIdFilter(opts.filter);
     if (opts.includeUnlisted && !this.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }

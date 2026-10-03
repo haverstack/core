@@ -327,7 +327,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['create', 'read-any'],
         grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
       },
@@ -340,7 +340,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['create', 'read-any'],
         grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
       },
@@ -2466,7 +2466,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       typeId: '_grant@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { typeId: 'com.example/comment@1', actions: ['read-any'] },
+      content: { baseId: 'com.example/comment', actions: ['read-any'] },
       version: 1,
     },
     responseStatus: 422,
@@ -2475,6 +2475,75 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [{ path: 'grantee', message: 'Required field is missing' }],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-versioned-base-id',
+    description:
+      'POST /records creating a _grant@1 record whose `baseId` carries an `@version` suffix ' +
+      'returns 422 with code "validation", the refusal naming the family to use. A grant ' +
+      'reaches a whole type family, so a versioned target would read as pinned to one version ' +
+      'while covering them all; wherever one is already stored it confers nothing. ' +
+      'See docs/spec/access-control.md § Refused at the write, and again at evaluation.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0601a',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        baseId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'authenticated' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'baseId',
+            message:
+              'baseId: "com.example/comment@1" names one version; pass the family "com.example/comment"',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-protected-system-type',
+    description:
+      'POST /records creating a _grant@1 record whose `baseId` names `_grant`, `_config` or ' +
+      '`_app` returns 422 with code "validation", however the record is written: the target ' +
+      'rule holds on every `_grant` write, not only through grantType(). ' +
+      'See docs/spec/access-control.md § Refused at the write, and again at evaluation.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0601b',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { baseId: '_app', actions: ['create'], grantee: { kind: 'authenticated' } },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'baseId',
+            message:
+              'Cannot grant on "_app": grants on _grant, _config, _app are refused to prevent privilege escalation',
+          },
+        ],
       },
     },
   },
@@ -2496,7 +2565,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '1hk153x05001' },
       },
@@ -2531,7 +2600,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'entity' },
       },
@@ -2568,7 +2637,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'entity', entityId: '' },
       },
@@ -2603,7 +2672,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', role: 'member' },
       },
@@ -2639,7 +2708,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '1hk153x05001', role: 'any' },
       },
@@ -2672,7 +2741,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'everyone' },
       },
@@ -2708,7 +2777,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: null,
       },

@@ -9,7 +9,7 @@
  * See docs/spec/access-control.md § Type-level grants.
  */
 
-import { baseIdOf } from './schema.js';
+import { baseIdOf, familyIdProblem } from './schema.js';
 import { StackBadRequestError } from './errors.js';
 import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
@@ -77,12 +77,13 @@ export function grantConveys(actions: readonly GrantAction[], action: GrantActio
  * See docs/spec/access-control.md § Refused at the write, and again at evaluation.
  */
 export function grantReach(content: unknown): { familyId: string; actions: GrantAction[] } | null {
-  const c = content as { typeId?: unknown; actions?: unknown } | null;
+  const c = content as { baseId?: unknown; actions?: unknown } | null;
   if (!c || typeof c !== 'object') return null;
-  if (typeof c.typeId !== 'string' || c.typeId.length === 0) return null;
+  // A versioned target names one version, which a grant cannot: it confers nothing.
+  if (typeof c.baseId !== 'string' || c.baseId.length === 0 || c.baseId.includes('@')) return null;
   if (!Array.isArray(c.actions)) return null;
   return {
-    familyId: baseIdOf(c.typeId),
+    familyId: c.baseId,
     actions: c.actions.filter((a): a is GrantAction => GRANT_ACTION_SET.has(a as GrantAction)),
   };
 }
@@ -211,6 +212,31 @@ export function validateGrantee(typeId: TypeId, content: unknown): ValidationErr
         },
       ];
   }
+}
+
+/**
+ * A `_grant`'s target, asked of its content on every write: a bare baseId
+ * naming a family, and not one of the protected system types. Read as data
+ * like the grantee beside it. See docs/spec/access-control.md
+ * § Refused at the write, and again at evaluation.
+ */
+export function validateGrantBaseId(typeId: TypeId, content: unknown): ValidationError[] {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
+  const baseId = (content as { baseId?: unknown } | null)?.baseId;
+  // A missing or non-string baseId is the schema's to refuse.
+  if (typeof baseId !== 'string') return [];
+  const problem = familyIdProblem(baseId, 'baseId');
+  if (problem) return [{ path: 'baseId', message: problem }];
+  if (UNGRANTABLE_SYSTEM_TYPES.has(baseId)) {
+    const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
+    return [
+      {
+        path: 'baseId',
+        message: `Cannot grant on "${baseId}": grants on ${refused} are refused to prevent privilege escalation`,
+      },
+    ];
+  }
+  return [];
 }
 
 /**
