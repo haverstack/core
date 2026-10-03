@@ -170,6 +170,16 @@ describe('auth handshake fixtures', () => {
     expect((shown.responseBody as { deletedAt?: string }).deletedAt).toBeDefined();
   });
 
+  test('the unreadable get-record sequence answers the same 404 with and without includeDeleted', () => {
+    const [plain, opted] = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-unreadable',
+    )!.steps;
+    expect(opted.path).toBe(`${plain.path}?includeDeleted=true`);
+    expect(plain.responseStatus).toBe(404);
+    expect(opted.responseStatus).toBe(404);
+    expect(opted.responseBody).toEqual(plain.responseBody);
+  });
+
   // Internally consistent and still refused: the signature verifies, but
   // the nonce was issued to somebody else.
   test('the wrong-DID fixture carries a signature that genuinely verifies for its DID', async () => {

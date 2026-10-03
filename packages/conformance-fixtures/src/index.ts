@@ -4855,6 +4855,38 @@ export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
       },
     ],
   },
+  {
+    name: 'get-record-after-soft-delete-unreadable',
+    description:
+      'A requester with no read access to the soft-deleted record "1hk153x00002" gets 404 ' +
+      "whether or not it passes ?includeDeleted=true: the flag discloses nothing the record's " +
+      'own permissions would withhold. Assumes that record is soft-deleted and private to its ' +
+      'owner, and that this requester holds no grant on it.',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-unreadable-default',
+        description: 'The default read of a tombstone this requester may not read: 404.',
+        method: 'GET',
+        path: '/records/1hk153x00002',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-unreadable-include-deleted',
+        description:
+          'Opting in changes nothing for an unreadable record: the same 404, so the flag is no ' +
+          'probe for guessed IDs.',
+        method: 'GET',
+        path: '/records/1hk153x00002?includeDeleted=true',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+    ],
+  },
 ];
 
 // -------------------------------------------------------
