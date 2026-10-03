@@ -63,7 +63,6 @@ import type {
   RecordChangeSet,
 } from './types.js';
 import {
-  StackConflictError,
   StackError,
   StackNotFoundError,
   StackPermissionError,
@@ -312,7 +311,8 @@ export class ScopedStack implements StackClient {
     return this.stack.capabilities;
   }
 
-  private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
+  private resolveRecord = (id: string): Promise<StackRecord | null> =>
+    this.stack.get(id, { includeDeleted: true });
 
   /** Every `_grant` Record — see loadGrantRecords(). */
   private loadGrants = (): Promise<StackRecord[]> => loadGrantRecords((q) => this.stack.query(q));
@@ -598,13 +598,11 @@ export class ScopedStack implements StackClient {
     id: string,
     opts: { mutating?: boolean } = {},
   ): Promise<StackRecord> {
-    const mutating = opts.mutating ?? true;
     // The `_grant` write fence applies to mutating callers only: reading a
     // grant Record's history is not the escalation that fence exists to stop.
-    const record = await this.requireVerb(id, ['update-own', 'update-any'], {
-      fenceGrantRecord: mutating,
+    return this.requireVerb(id, ['update-own', 'update-any'], {
+      fenceGrantRecord: opts.mutating ?? true,
     });
-    return this.refuseIfDeleted(record, mutating);
   }
 
   /**
@@ -619,7 +617,7 @@ export class ScopedStack implements StackClient {
     actions: GrantAction[],
     opts: { fenceGrantRecord: boolean },
   ): Promise<StackRecord> {
-    const record = await this.stack.get(id);
+    const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
@@ -631,22 +629,6 @@ export class ScopedStack implements StackClient {
         (await this.subjectAllows(record.typeId, actions, { record }))) &&
       (await this.principalAllows(record.typeId, actions));
     if (!allowed) throw await this.denialFor(record);
-    return record;
-  }
-
-  /**
-   * Refuse a mutation aimed at a soft-deleted Record. Asked only of a
-   * mutating caller, so the history readers borrowing this gate still work,
-   * and only after the authority decision, so "exists but deleted" is never
-   * a probe a stranger can run. See docs/spec/versioning.md § Mutations are
-   * refused, not applied to a tombstone.
-   */
-  private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
-    if (mutating && record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
-      );
-    }
     return record;
   }
 
@@ -672,7 +654,7 @@ export class ScopedStack implements StackClient {
    */
   private async canReadReferent(recordId: string): Promise<boolean> {
     if (this.ownerActingAlone) return true;
-    const record = await this.stack.get(recordId);
+    const record = await this.stack.get(recordId, { includeDeleted: true });
     if (!record) return false;
     return this.canRead(record);
   }
@@ -1100,14 +1082,11 @@ export class ScopedStack implements StackClient {
    * deliberately does not confer.
    */
   private async requireReshareable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id);
+    const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     await this.requireOwnerForGrantRecord(record);
     await this.requireReshareOf(record);
-    // Reached through its own gate rather than requireUpdatable(), so the
-    // soft-delete refusal has to be asked here too — after the authority
-    // decision above, for the reason refuseIfDeleted() gives.
-    return this.refuseIfDeleted(record, true);
+    return record;
   }
 
   /**

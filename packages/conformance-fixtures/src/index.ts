@@ -4794,6 +4794,101 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
   },
 ];
 
+/**
+ * A soft delete changes what `GET /records/:id` answers, and a single pair
+ * cannot pin the change: it is the same path before and after. Hidden by
+ * default and returned on request, for a requester who may read the record.
+ * See docs/spec/wire-format.md § Records.
+ */
+export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'get-record-after-soft-delete',
+    description:
+      'GET /records/:id hides a soft-deleted record unless ?includeDeleted=true, as ' +
+      'GET /records does. Assumes a record readable by this requester at "1hk153x00001".',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-delete',
+        description: 'The soft delete that turns the record into a tombstone.',
+        method: 'DELETE',
+        path: '/records/1hk153x00001',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-hidden',
+        description:
+          'Without includeDeleted the tombstone is "not here": 404, the same answer a missing ' +
+          'or unreadable record gives.',
+        method: 'GET',
+        path: '/records/1hk153x00001',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-include-deleted',
+        description:
+          'With ?includeDeleted=true a requester who may read the record gets the tombstone ' +
+          'projection back: 200, empty content, deletedAt set.',
+        method: 'GET',
+        path: '/records/1hk153x00001?includeDeleted=true',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+    ],
+  },
+  {
+    name: 'get-record-after-soft-delete-unreadable',
+    description:
+      'A requester with no read access to the soft-deleted record "1hk153x00002" gets 404 ' +
+      "whether or not it passes ?includeDeleted=true: the flag discloses nothing the record's " +
+      'own permissions would withhold. Assumes that record is soft-deleted and private to its ' +
+      'owner, and that this requester holds no grant on it.',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-unreadable-default',
+        description: 'The default read of a tombstone this requester may not read: 404.',
+        method: 'GET',
+        path: '/records/1hk153x00002',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-unreadable-include-deleted',
+        description:
+          'Opting in changes nothing for an unreadable record: the same 404, so the flag is no ' +
+          'probe for guessed IDs.',
+        method: 'GET',
+        path: '/records/1hk153x00002?includeDeleted=true',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+    ],
+  },
+];
+
 // -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
@@ -4801,8 +4896,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
  * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
- * authSequenceFixtures, deleteRecordSequenceFixtures, changeFeedFixtures and
- * changeFeedSequenceFixtures — each a different shape (binary body,
+ * authSequenceFixtures, deleteRecordSequenceFixtures, getRecordSequenceFixtures,
+ * changeFeedFixtures and changeFeedSequenceFixtures — each a different shape (binary body,
  * header-focused, or an ordered series rather than a plain JSON
  * request/response pair), imported separately.
  *

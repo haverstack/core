@@ -7902,6 +7902,52 @@ describe('Stack.mutate — one call, one version', () => {
   });
 });
 
+describe('Stack — a tombstone refuses mutation', () => {
+  let note: StackRecord;
+  const tag = { kind: 'tag', label: 'pinned' } as const;
+
+  beforeEach(async () => {
+    note = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.patchContent(note.id, { text: 'v2' });
+    await stack.delete(note.id);
+  });
+
+  test.each([
+    ['mutate', () => stack.mutate(note.id, { contentPatch: { text: 'x' } })],
+    ['patchContent', () => stack.patchContent(note.id, { text: 'x' })],
+    ['associate', () => stack.associate(note.id, tag)],
+    ['dissociate', () => stack.dissociate(note.id, tag)],
+    ['restoreVersion', () => stack.restoreVersion(note.id, 1)],
+  ])('%s throws StackConflictError', async (_verb, call) => {
+    await expect(call()).rejects.toThrow(StackConflictError);
+    expect((await adapter.getRecord(note.id))?.content).toEqual({
+      text: 'v2',
+    });
+  });
+
+  test('get() answers null for a tombstone; includeDeleted returns it', async () => {
+    expect(await stack.get(note.id)).toBeNull();
+    const got = await stack.get(note.id, { includeDeleted: true });
+    expect(got?.deletedAt).toBeInstanceOf(Date);
+    expect(got?.content).toEqual({ text: 'v2' });
+  });
+
+  test('getVersions() still serves a deleted record’s history', async () => {
+    const versions = await stack.getVersions(note.id);
+    expect(versions.length).toBeGreaterThan(0);
+  });
+
+  test('getJournal() still serves a deleted record’s log', async () => {
+    expect((await stack.getJournal(note.id)).length).toBeGreaterThan(0);
+  });
+
+  test('undelete() followed by a mutation succeeds', async () => {
+    await stack.undelete(note.id);
+    const patched = await stack.patchContent(note.id, { text: 'back' });
+    expect(patched.content).toEqual({ text: 'back' });
+  });
+});
+
 describe('query — sort direction defaults', () => {
   beforeEach(async () => {
     for (const text of ['b', 'c', 'a']) {

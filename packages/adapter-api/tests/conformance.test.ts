@@ -41,6 +41,7 @@ import {
   authChallengeFixtures,
   authTokenFixtures,
   authSequenceFixtures,
+  getRecordSequenceFixtures,
   AUTH_FIXTURE_ORIGIN,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
@@ -154,6 +155,29 @@ describe('auth handshake fixtures', () => {
     expect(second.requestBody).toEqual(first.requestBody);
     expect(first.responseStatus).toBe(200);
     expect(second.responseStatus).toBe(401);
+  });
+
+  // The tombstone is only pinned if the same path is read both ways after
+  // the delete: hidden by default, returned on request.
+  test('the get-record sequence reads a tombstone with and without includeDeleted', () => {
+    const [del, hidden, shown] = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete',
+    )!.steps;
+    expect(del.method).toBe('DELETE');
+    expect(hidden.path).toBe(shown.path.replace('?includeDeleted=true', ''));
+    expect(hidden.responseStatus).toBe(404);
+    expect(shown.responseStatus).toBe(200);
+    expect((shown.responseBody as { deletedAt?: string }).deletedAt).toBeDefined();
+  });
+
+  test('the unreadable get-record sequence answers the same 404 with and without includeDeleted', () => {
+    const [plain, opted] = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-unreadable',
+    )!.steps;
+    expect(opted.path).toBe(`${plain.path}?includeDeleted=true`);
+    expect(plain.responseStatus).toBe(404);
+    expect(opted.responseStatus).toBe(404);
+    expect(opted.responseBody).toEqual(plain.responseBody);
   });
 
   // Internally consistent and still refused: the signature verifies, but

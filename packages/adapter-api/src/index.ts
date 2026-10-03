@@ -1035,10 +1035,12 @@ export class APIAdapter implements StackAdapter {
     return requireRecordBody(raw, 'POST /records');
   }
 
+  // Always opts into tombstones: hiding them is Stack.get()'s policy, and
+  // the verbs that refuse or undelete one have to be able to find it.
   async getRecord(id: RecordId): Promise<StackRecord | null> {
     const raw = await this.request<WireRecord | null | undefined>(
       'GET',
-      `/records/${id}`,
+      `/records/${id}?includeDeleted=true`,
       undefined,
       { nullOn404: true },
     );

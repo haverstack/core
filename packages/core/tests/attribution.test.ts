@@ -72,7 +72,9 @@ describe('attribution — updatedBy tracks the actor', () => {
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
     await view.delete(created.id);
-    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
+    expect((await stack.get(created.id, { includeDeleted: true }))?.updatedBy?.subjectId).toBe(
+      EDITOR,
+    );
 
     await view.undelete(created.id);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);

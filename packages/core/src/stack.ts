@@ -297,6 +297,12 @@ export type GetRecordOptions = {
    * See docs/spec/data-model.md § Type migrations.
    */
   presentAt?: 'stored' | 'latest';
+  /**
+   * Soft-deleted records are hidden by default, as query() hides them: a
+   * tombstone reads as `null`. Pass true to read it back.
+   * See docs/spec/versioning.md § Deletion.
+   */
+  includeDeleted?: boolean;
 };
 
 export type DeleteRecordOptions = IfVersionOptions & {
@@ -1019,12 +1025,14 @@ export class Stack implements StackClient {
   /**
    * Get a record by ID, exactly as stored — no implicit migration. Pass
    * { presentAt: 'latest' } to migrate in memory; only migrateAll()
-   * commits migrations to disk.
+   * commits migrations to disk. A soft-deleted record answers `null` unless
+   * { includeDeleted: true } is passed.
    */
   async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
+    if (record.deletedAt && !opts.includeDeleted) return null;
     return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
   }
 
@@ -1050,6 +1058,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
 
     // Checked before validation, so a caller that lost the race learns its
     // version is stale rather than that its patch is bad, and before the
@@ -1256,6 +1265,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
       return existing;
     }
@@ -1295,6 +1305,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     const matched = (existing.associations ?? []).find((a) => associationEqual(a, association));
     if (!matched) {
       return existing;
@@ -1388,6 +1399,21 @@ export class Stack implements StackClient {
   private assertPermissionSet(next: AuthorityAssociation[]): void {
     const errors = validatePermissions(next);
     if (errors.length > 0) throw new StackValidationError(errors);
+  }
+
+  /**
+   * A soft-deleted record has no current state to edit, so the verbs that
+   * edit one refuse it; undelete() and commitMigration() do not call this.
+   * Asked after the record is found and, under ScopedStack, after the
+   * authority decision. See docs/spec/versioning.md § Mutations are refused,
+   * not applied to a tombstone.
+   */
+  private refuseIfDeleted(record: StackRecord): void {
+    if (record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
+      );
+    }
   }
 
   /** The record, or the not-found refusal every mutating verb owes. */
@@ -1674,6 +1700,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
 
     const target = await this.adapter.getVersion(id, version);
@@ -2528,7 +2555,7 @@ export class Stack implements StackClient {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
-        resolveRecord: (id) => this.get(id),
+        resolveRecord: (id) => this.get(id, { includeDeleted: true }),
       });
       if (covers) result.push(r);
     }
