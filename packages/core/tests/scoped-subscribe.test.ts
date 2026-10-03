@@ -3,6 +3,7 @@ import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { AuthorityAssociation, RecordChange, StackRecord } from '../src/types.js';
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
 const READER = 'did:key:zReader';
@@ -144,7 +145,7 @@ describe('a record the subscriber cannot read produces no event', () => {
 
 describe('type-level grants reach the feed exactly as they reach query()', () => {
   test('a read grant delivers records the subject does not own', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -158,7 +159,7 @@ describe('type-level grants reach the feed exactly as they reach query()', () =>
   });
 
   test('a delegated session sees the intersection, not either half', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -182,7 +183,7 @@ describe('type-level grants reach the feed exactly as they reach query()', () =>
 
 describe('a revocation takes effect on the next event, not the next subscription', () => {
   test('revoking a grant stops delivery', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -193,7 +194,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.revokeType(NOTE, {
+    await stack.revokeType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -213,7 +214,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toEqual([]);
 
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -235,7 +236,7 @@ describe('a revocation takes effect on the next event, not the next subscription
     );
     // A grant naming the group, not the entity: reachability now depends on
     // the roster, which is the lookup a subscription caches.
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
     });
@@ -259,7 +260,7 @@ describe('a revocation takes effect on the next event, not the next subscription
   });
 
   test('a revocation that lands mid-prefetch still expires the cached grants', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -284,7 +285,7 @@ describe('a revocation takes effect on the next event, not the next subscription
 
     await stack.create(NOTE, { text: 'starts the prefetch' });
     await settle();
-    await stack.revokeType(NOTE, {
+    await stack.revokeType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });
@@ -453,7 +454,7 @@ describe('scoped delivery keeps the guarantees the emitter makes', () => {
   });
 
   test('a scoped subscriber sees its own writes', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: READER },
     });

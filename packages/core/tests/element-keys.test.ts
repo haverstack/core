@@ -4,6 +4,7 @@ import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { Association, DataAssociation, AuthorityAssociation } from '../src/types.js';
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'did:key:owner';
 
@@ -103,10 +104,10 @@ describe('a grant target carries only the keys its tier defines', () => {
   test('grantType() and revokeType() refuse an unknown key', async () => {
     const grantee = { kind: 'entity', entityId: 'did:key:a', scope: 'all' } as never;
     const message = 'Unknown key in grant target: scope';
-    await expect(stack.grantType(NOTE, { actions: ['read-any'], grantee })).rejects.toThrow(
+    await expect(stack.grantType(fam(NOTE), { actions: ['read-any'], grantee })).rejects.toThrow(
       new StackBadRequestError(message),
     );
-    await expect(stack.revokeType(NOTE, { actions: ['read-any'], grantee })).rejects.toThrow(
+    await expect(stack.revokeType(fam(NOTE), { actions: ['read-any'], grantee })).rejects.toThrow(
       new StackBadRequestError(message),
     );
   });

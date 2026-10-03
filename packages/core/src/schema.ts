@@ -313,13 +313,19 @@ export const buildTypeId = (baseId: string, version: number): string => `${baseI
 export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;
 
 /**
- * True if typeId is well-formed as either a bare baseId (no version
- * suffix) or a versioned TypeId ("baseId@version") — the shape
- * GrantContent.typeId accepts, the same tolerance baseIdOf() applies.
- * Not used by defineType(), which requires a version and needs the parsed
- * {baseId, version} itself — it calls parseTypeId() directly instead.
+ * Why `value` cannot name a type family, or null if it can. A family is a
+ * bare `BaseId`; a versioned TypeId names one version and is refused with the
+ * family to pass instead. See docs/spec/data-model.md § Types.
  */
-export const isWellFormedTypeId = (typeId: string): boolean => {
-  if (typeof typeId !== 'string' || typeId.trim().length === 0) return false;
-  return !typeId.includes('@') || parseTypeId(typeId) !== null;
+export const familyIdProblem = (value: unknown, label: string): string | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return `${label}: expected a non-empty baseId`;
+  }
+  if (value.includes('@')) {
+    const parsed = parseTypeId(value);
+    return parsed
+      ? `${label}: "${value}" names one version; pass the family "${parsed.baseId}"`
+      : `${label}: "${value}" is not a well-formed baseId (expected "baseId", with no "@version")`;
+  }
+  return null;
 };

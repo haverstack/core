@@ -6,6 +6,7 @@ import { MemoryAdapter } from '../src/testing.js';
 // Test setup
 // -------------------------------------------------------
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
 const AUTHOR = 'did:key:zAuthor';
@@ -23,11 +24,11 @@ beforeEach(async () => {
     name: 'Note',
     schema: { text: { kind: 'text', required: true } },
   });
-  await stack.grantType(NOTE, {
+  await stack.grantType(fam(NOTE), {
     actions: ['create', 'read-any', 'update-any', 'delete-any'],
     grantee: { kind: 'authenticated' },
   });
-  await stack.grantType(NOTE, {
+  await stack.grantType(fam(NOTE), {
     actions: ['create', 'read-any', 'update-any', 'delete-any'],
     grantee: { kind: 'entity', entityId: APP },
   });
@@ -254,7 +255,7 @@ describe('attribution — separate from authorship checks', () => {
       name: 'Note',
       schema: { text: { kind: 'text', required: true } },
     });
-    await s2.grantType(NOTE, {
+    await s2.grantType(fam(NOTE), {
       actions: ['create', 'read-own'],
       grantee: { kind: 'authenticated' },
     });

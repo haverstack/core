@@ -470,8 +470,8 @@ export type TypeGrant = {
 
 /** Content for _grant records */
 export type GrantContent = {
-  /** Which record type the grant applies to. */
-  typeId: TypeId;
+  /** The type family the grant applies to: a bare baseId, never a versioned TypeId. */
+  baseId: BaseId;
   /** Which actions are permitted. */
   actions: GrantAction[];
   /** Who the grant reaches. Required — see GrantGrantee. */
@@ -572,7 +572,8 @@ export type RecordFilter = {
    * matches both "com.example/note@1" and "com.example/note@2" records.
    * Resolved against registered Types, not parsed from typeId strings, so
    * it works regardless of which versions happen to exist. Combined with
-   * typeId (if both given) as an intersection.
+   * typeId (if both given) as an intersection. A value carrying an
+   * `@version` suffix is refused with StackValidationError.
    */
   baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only

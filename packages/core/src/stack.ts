@@ -21,7 +21,7 @@ import {
   parseTypeId,
   baseIdOf,
   diffSchemas,
-  isWellFormedTypeId,
+  familyIdProblem,
 } from './schema.js';
 import {
   validateContent,
@@ -95,6 +95,7 @@ import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidAssociationFilters,
+  assertValidBaseIdFilter,
   assertValidJournalQuery,
   assertValidVersionsQuery,
   assertValidSort,
@@ -113,8 +114,8 @@ import {
   matchesGrantTarget,
   validateGrantTarget,
   validateGrantee,
+  validateGrantBaseId,
   grantCoversGrantee,
-  UNGRANTABLE_SYSTEM_TYPES,
   loadGrantRecords,
 } from './grants.js';
 import type { GrantQuery } from './grants.js';
@@ -792,6 +793,8 @@ export class Stack implements StackClient {
    */
   async migrateAll(baseId: BaseId): Promise<{ migrated: number }> {
     this.assertOpen();
+    const problem = familyIdProblem(baseId, 'migrateAll');
+    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
     const types = await this.adapter.listTypes();
     const familyTypeIds = types.filter((t) => t.baseId === baseId).map((t) => t.id);
 
@@ -887,6 +890,7 @@ export class Stack implements StackClient {
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
       ...validateGrantee(typeId, content),
+      ...validateGrantBaseId(typeId, content),
       ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -1183,6 +1187,7 @@ export class Stack implements StackClient {
       const contentErrors = [
         ...validateContent(merged, type.schema),
         ...validateGrantee(existing.typeId, merged),
+        ...validateGrantBaseId(existing.typeId, merged),
       ];
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
@@ -1609,6 +1614,7 @@ export class Stack implements StackClient {
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.adapter.capabilities);
     assertValidAssociationFilters(filter);
+    assertValidBaseIdFilter(filter);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
@@ -1618,7 +1624,7 @@ export class Stack implements StackClient {
 
     const result = await this.adapter.queryRecords({
       ...rest,
-      sort: normalizeSort(query.sort),
+      ...(query.sort && { sort: normalizeSort(query.sort) }),
       ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
       ...(limit !== undefined && { limit }),
     });
@@ -1716,6 +1722,7 @@ export class Stack implements StackClient {
     const errors = [
       ...validateContent(target.content, type.schema),
       ...validateGrantee(target.typeId, target.content),
+      ...validateGrantBaseId(target.typeId, target.content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -1817,6 +1824,7 @@ export class Stack implements StackClient {
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
       ...validateGrantee(toTypeId, content),
+      ...validateGrantBaseId(toTypeId, content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -2393,6 +2401,7 @@ export class Stack implements StackClient {
   ): Promise<Unsubscribe> {
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
+    assertValidBaseIdFilter(opts.filter);
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {
@@ -2503,19 +2512,18 @@ export class Stack implements StackClient {
    * needs, not the suffix that looks narrowest. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
-   * `typeOrBaseId` is a versioned TypeId (`"baseId@version"`) or a bare
-   * baseId; either names the whole family. See
-   * docs/spec/access-control.md § Type-level grants.
+   * `baseId` names the whole family and is refused when it carries an
+   * `@version` suffix. See docs/spec/access-control.md § Type-level grants.
    */
   async grantType(
-    typeOrBaseId: TypeId | BaseId,
+    baseId: BaseId,
     grant: TypeGrant,
   ): Promise<StackRecord & { content: GrantContent }> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    this.checkGrantValid(typeOrBaseId, grant.actions);
+    this.checkGrantValid(baseId, grant.actions);
     return this.create<GrantContent>(`${SYSTEM_TYPES.GRANT}@1`, {
-      typeId: typeOrBaseId,
+      baseId,
       actions: grant.actions,
       grantee: grant.grantee,
     });
@@ -2564,7 +2572,7 @@ export class Stack implements StackClient {
 
   /**
    * The inverse of grantType(): soft-deletes the _grant records on
-   * `typeOrBaseId`'s family matching `grant`, at the same granularity
+   * `baseId`'s family matching `grant`, at the same granularity
    * grantType() writes — the grantee is matched whole, role included, and
    * the actions exactly. A soft delete like any other — the owner can
    * undelete a revocation.
@@ -2576,12 +2584,14 @@ export class Stack implements StackClient {
    * docs/spec/access-control.md § Listing and revoking.
    */
   async revokeType(
-    typeOrBaseId: TypeId | BaseId,
+    baseId: BaseId,
     grant: TypeGrant,
   ): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    const familyId = baseIdOf(typeOrBaseId);
+    const problem = familyIdProblem(baseId, 'revokeType');
+    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
+    const familyId = baseId;
     const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
     const matches = all.filter((r) => {
@@ -2604,11 +2614,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Actions must be known GrantAction values, typeIds must be well-formed,
-   * and the _grant/_config families are refused — see
-   * docs/spec/access-control.md § Type-level grants.
+   * Actions must be known GrantAction values; the target is held to the
+   * same rule every `_grant` write meets — see validateGrantBaseId().
    */
-  private checkGrantValid(typeId: TypeId, actions: GrantAction[]): void {
+  private checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
     const errors: ValidationError[] = [];
     actions.forEach((action, j) => {
       if (!GRANT_ACTION_SET.has(action)) {
@@ -2616,17 +2625,11 @@ export class Stack implements StackClient {
       }
     });
 
-    if (!isWellFormedTypeId(typeId)) {
-      errors.push({
-        path: 'typeId',
-        message: `"${typeId}" is not a well-formed baseId or versioned TypeId (expected "baseId" or "baseId@version")`,
-      });
-    } else if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(typeId))) {
-      const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
-      errors.push({
-        path: 'typeId',
-        message: `Cannot grant on "${baseIdOf(typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
-      });
+    const problem = familyIdProblem(baseId, 'grantType');
+    if (problem) {
+      errors.push({ path: 'baseId', message: problem });
+    } else {
+      errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
     }
 
     actions.forEach((action, j) => {
@@ -2685,7 +2688,7 @@ export class Stack implements StackClient {
       id: `${SYSTEM_TYPES.GRANT}@1`,
       name: 'Grant',
       schema: {
-        typeId: { kind: 'string', required: true },
+        baseId: { kind: 'string', required: true },
         actions: { kind: 'array', items: { kind: 'string' }, required: true },
         // Required, and closed: a Grant's reach is spelled by its `grantee`,
         // so a record arriving without one is refused here rather than read
