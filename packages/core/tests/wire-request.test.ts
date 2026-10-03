@@ -4,6 +4,7 @@ import {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
   parseAssociationParams,
@@ -505,6 +506,21 @@ describe('parseDate', () => {
 // -------------------------------------------------------
 // DELETE /records/:id, GET /attachments/:fileId, GET /records/:id/associations
 // -------------------------------------------------------
+
+describe('parseGetRecordParams', () => {
+  const get = (qs: string) => new URL(`http://x/records/r${qs}`);
+
+  test('includeDeleted is absent unless true', () => {
+    expect(parseGetRecordParams(get(''))).toEqual({ includeDeleted: false });
+    expect(parseGetRecordParams(get('?includeDeleted=false'))).toEqual({ includeDeleted: false });
+    expect(parseGetRecordParams(get('?includeDeleted=true'))).toEqual({ includeDeleted: true });
+  });
+
+  test('a non-boolean or unknown param is refused', () => {
+    expect(() => parseGetRecordParams(get('?includeDeleted=1'))).toThrow(StackBadRequestError);
+    expect(() => parseGetRecordParams(get('?includeDelete=true'))).toThrow(StackBadRequestError);
+  });
+});
 
 describe('parseDeleteParams', () => {
   const del = (qs: string): URL => new URL(`https://stack.example.com/records/rec-1${qs}`);

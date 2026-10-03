@@ -311,7 +311,8 @@ export class ScopedStack implements StackClient {
     return this.stack.capabilities;
   }
 
-  private resolveRecord = (id: string): Promise<StackRecord | null> => this.stack.get(id);
+  private resolveRecord = (id: string): Promise<StackRecord | null> =>
+    this.stack.get(id, { includeDeleted: true });
 
   /** Every `_grant` Record — see loadGrantRecords(). */
   private loadGrants = (): Promise<StackRecord[]> => loadGrantRecords((q) => this.stack.query(q));
@@ -616,7 +617,7 @@ export class ScopedStack implements StackClient {
     actions: GrantAction[],
     opts: { fenceGrantRecord: boolean },
   ): Promise<StackRecord> {
-    const record = await this.stack.get(id);
+    const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
@@ -653,7 +654,7 @@ export class ScopedStack implements StackClient {
    */
   private async canReadReferent(recordId: string): Promise<boolean> {
     if (this.ownerActingAlone) return true;
-    const record = await this.stack.get(recordId);
+    const record = await this.stack.get(recordId, { includeDeleted: true });
     if (!record) return false;
     return this.canRead(record);
   }
@@ -1081,7 +1082,7 @@ export class ScopedStack implements StackClient {
    * deliberately does not confer.
    */
   private async requireReshareable(id: string): Promise<StackRecord> {
-    const record = await this.stack.get(id);
+    const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     await this.requireOwnerForGrantRecord(record);
     await this.requireReshareOf(record);

@@ -52,7 +52,7 @@ export type { StackTokenStore, TokenInfo, TokenSession } from './types.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,
-// GET /changes, GET /records/:id/journal, GET /records/:id/versions, DELETE /records/:id,
+// GET /changes, GET /records/:id/journal, GET /records/:id/versions, GET /records/:id, DELETE /records/:id,
 // GET /attachments/:fileId and GET /records/:id/associations with these
 // rather than transcribing the parameter table.
 // Contract, not internal — and the round trip against the builders is
@@ -63,6 +63,7 @@ export {
   parseChangeParams,
   parseJournalParams,
   parseVersionsParams,
+  parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
   parseAssociationParams,

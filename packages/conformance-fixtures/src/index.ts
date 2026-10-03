@@ -4744,6 +4744,69 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
  * The auth fixtures are the one group here sent with no bearer token, since
  * they are how a token is earned.
  */
+/**
+ * A soft delete changes what `GET /records/:id` answers, and a single pair
+ * cannot pin the change: it is the same path before and after. Hidden by
+ * default and returned on request, for a requester who may read the record.
+ * See docs/spec/wire-format.md § Records.
+ */
+export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'get-record-after-soft-delete',
+    description:
+      'GET /records/:id hides a soft-deleted record unless ?includeDeleted=true, as ' +
+      'GET /records does. Assumes a record readable by this requester at "1hk153x00001".',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-delete',
+        description: 'The soft delete that turns the record into a tombstone.',
+        method: 'DELETE',
+        path: '/records/1hk153x00001',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-hidden',
+        description:
+          'Without includeDeleted the tombstone is "not here": 404, the same answer a missing ' +
+          'or unreadable record gives.',
+        method: 'GET',
+        path: '/records/1hk153x00001',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-include-deleted',
+        description:
+          'With ?includeDeleted=true a requester who may read the record gets the tombstone ' +
+          'projection back: 200, empty content, deletedAt set.',
+        method: 'GET',
+        path: '/records/1hk153x00001?includeDeleted=true',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+    ],
+  },
+];
+
 export const allConformanceFixtures: ConformanceFixture[] = [
   ...discoveryFixtures,
   ...authChallengeFixtures,

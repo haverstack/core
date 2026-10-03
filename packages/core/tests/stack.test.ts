@@ -7915,6 +7915,22 @@ describe('Stack — a tombstone refuses mutation', () => {
     });
   });
 
+  test('get() answers null for a tombstone; includeDeleted returns it', async () => {
+    expect(await stack.get(note.id)).toBeNull();
+    const got = await stack.get(note.id, { includeDeleted: true });
+    expect(got?.deletedAt).toBeInstanceOf(Date);
+    expect(got?.content).toEqual({ text: 'v2' });
+  });
+
+  test('getVersions() still serves a deleted record’s history', async () => {
+    const versions = await stack.getVersions(note.id);
+    expect(versions.length).toBeGreaterThan(0);
+  });
+
+  test('getJournal() still serves a deleted record’s log', async () => {
+    expect((await stack.getJournal(note.id)).length).toBeGreaterThan(0);
+  });
+
   test('undelete() followed by a mutation succeeds', async () => {
     await stack.undelete(note.id);
     const patched = await stack.patchContent(note.id, { text: 'back' });

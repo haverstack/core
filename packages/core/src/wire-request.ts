@@ -720,6 +720,20 @@ export function parseVersionsParams(url: URL): VersionsQuery {
 }
 
 // -------------------------------------------------------
+// GET /records/:id
+// -------------------------------------------------------
+
+/**
+ * Parse `GET /records/:id`'s query params into the `includeDeleted` flag. A
+ * misspelled or non-boolean value is refused rather than read as absent.
+ * See docs/spec/wire-format.md § Records.
+ */
+export function parseGetRecordParams(url: URL): { includeDeleted: boolean } {
+  requireKnownParams(url, ['includeDeleted']);
+  return { includeDeleted: booleanParam(url, 'includeDeleted') };
+}
+
+// -------------------------------------------------------
 // DELETE /records/:id
 // -------------------------------------------------------
 

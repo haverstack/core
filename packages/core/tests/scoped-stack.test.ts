@@ -5237,7 +5237,7 @@ describe('ScopedStack — delegation', () => {
 
     // Soft delete is still reachable, so the refusal is about the verb.
     await stack.asActor({ principalId: OWNER, subjectId: MEMBER }).delete(record.id);
-    expect((await stack.get(record.id))?.deletedAt).toBeDefined();
+    expect((await stack.get(record.id, { includeDeleted: true }))?.deletedAt).toBeDefined();
   });
 
   test('an owner principal cannot delete attachments for its subject', async () => {
@@ -5795,7 +5795,7 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
   test('get() withholds content, associations and authorship', async () => {
     const record = await deletedRecord();
 
-    const got = await stack.asEntity(MEMBER).get(record.id);
+    const got = await stack.asEntity(MEMBER).get(record.id, { includeDeleted: true });
     expect(got).not.toBeNull();
     expect(got!.id).toBe(record.id);
     expect(got!.typeId).toBe(NOTE);
@@ -5808,13 +5808,13 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
 
   test('get() keeps permissions — the bit that decides whether undelete will work', async () => {
     const record = await deletedRecord();
-    const got = await stack.asEntity(MEMBER).get(record.id);
+    const got = await stack.asEntity(MEMBER).get(record.id, { includeDeleted: true });
     expect(got!.permissions).toEqual(writeBit);
   });
 
   test('the owner acting alone sees a tombstone too — state is the record’s, not the asker’s', async () => {
     const record = await deletedRecord();
-    const got = await stack.asEntity(OWNER).get(record.id);
+    const got = await stack.asEntity(OWNER).get(record.id, { includeDeleted: true });
     expect(got!.content).toEqual({});
     expect(got!.deletedAt).toBeInstanceOf(Date);
   });
@@ -5822,7 +5822,7 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
   test('an unreadable soft-deleted record is still null, not a tombstone', async () => {
     const record = await stack.create(NOTE, { text: 'private' });
     await stack.delete(record.id);
-    expect(await stack.asEntity(STRANGER).get(record.id)).toBeNull();
+    expect(await stack.asEntity(STRANGER).get(record.id, { includeDeleted: true })).toBeNull();
   });
 
   test('query(includeDeleted) returns tombstones, so it is no better a channel than get()', async () => {
@@ -5834,15 +5834,21 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
     expect(found!.deletedAt).toBeInstanceOf(Date);
   });
 
+  test('get() hides a tombstone unless includeDeleted is passed', async () => {
+    const record = await deletedRecord();
+    expect(await stack.asEntity(MEMBER).get(record.id)).toBeNull();
+    expect(await stack.asEntity(OWNER).get(record.id)).toBeNull();
+  });
+
   test('a live record is untouched by the projection', async () => {
     const record = await stack.create(NOTE, { text: 'still here' }, { permissions: writeBit });
-    const got = await stack.asEntity(MEMBER).get(record.id);
+    const got = await stack.asEntity(MEMBER).get(record.id, { includeDeleted: true });
     expect(got!.content).toEqual({ text: 'still here' });
   });
 
   test('the unscoped Stack still reads the whole record', async () => {
     const record = await deletedRecord();
-    const got = await stack.get(record.id);
+    const got = await stack.get(record.id, { includeDeleted: true });
     expect(got!.content).toEqual({ text: 'secret text' });
   });
 });

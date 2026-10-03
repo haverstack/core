@@ -296,6 +296,12 @@ export type GetRecordOptions = {
    * See docs/spec/data-model.md § Type migrations.
    */
   presentAt?: 'stored' | 'latest';
+  /**
+   * Soft-deleted records are hidden by default, as query() hides them: a
+   * tombstone reads as `null`. Pass true to read it back.
+   * See docs/spec/versioning.md § Deletion.
+   */
+  includeDeleted?: boolean;
 };
 
 export type DeleteRecordOptions = IfVersionOptions & {
@@ -1018,12 +1024,14 @@ export class Stack implements StackClient {
   /**
    * Get a record by ID, exactly as stored — no implicit migration. Pass
    * { presentAt: 'latest' } to migrate in memory; only migrateAll()
-   * commits migrations to disk.
+   * commits migrations to disk. A soft-deleted record answers `null` unless
+   * { includeDeleted: true } is passed.
    */
   async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
+    if (record.deletedAt && !opts.includeDeleted) return null;
     return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
   }
 
@@ -2545,7 +2553,7 @@ export class Stack implements StackClient {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
-        resolveRecord: (id) => this.get(id),
+        resolveRecord: (id) => this.get(id, { includeDeleted: true }),
       });
       if (covers) result.push(r);
     }

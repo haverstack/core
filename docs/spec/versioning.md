@@ -20,7 +20,7 @@ Filing them here anyway would cost a full duplicate copy of `content` apiece for
 
 A change set that names any of the four alongside a version-bumping aspect still produces exactly one version covering everything it moved; they just aren't among the aspects that decide whether the call bumps at all. The same completeness is why a restore leaves all four where they stand and why the no-bump verbs take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
 
-**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a purge leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
+**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` returns a `DeleteResult` rather than a Record, because it is the one verb with a variant that has no Record to return — a purge leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`). `deleteAndReturn()` is the call for a caller that needs the tombstone or the purged body; see [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
 
 ```ts
 type RecordVersion = {
@@ -124,11 +124,14 @@ Records are never purged by default. Two levels of deletion are supported:
 
 ```ts
 stack.query({ filter: { includeDeleted: true } });
+stack.get(id, { includeDeleted: true });
 ```
+
+`get()` follows the same rule as `query()`: a soft-deleted Record is hidden by default, and `get(id)` on one answers `null` — "not here", as far as a normal read is concerned. Any reader may pass `includeDeleted`; the Record's own `permissions` still decide whether they see it, so the flag discloses nothing. Writes stay explicit: [mutating a tombstone throws](#mutations-are-refused-not-applied-to-a-tombstone), because a refusal that explains itself beats a `null` that does not.
 
 ### The tombstone is literal
 
-Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get()` and `query({ filter: { includeDeleted: true } })` return:
+Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get(id, { includeDeleted: true })` and `query({ filter: { includeDeleted: true } })` return:
 
 ```ts
 {

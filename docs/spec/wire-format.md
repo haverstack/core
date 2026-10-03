@@ -200,6 +200,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `GET /records`                  | `parseQueryParams()`            |
 | `POST /records/query`           | `parseQueryBody()`              |
 | `POST /records`                 | `createOptionsFromWireRecord()` |
+| `GET /records/:id`              | `parseGetRecordParams()`        |
 | `PATCH /records/:id`            | `changesFromWireBody()`         |
 | `DELETE /records/:id`           | `parseDeleteParams()`           |
 | `POST /records/:id/migrate`     | `parseMigrationBody()`          |
@@ -271,7 +272,9 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them (or, for the association endpoints, off the request's own acting identity, since nothing was persisted to read it back from — see [Events § Attribution](./events.md#attribution)), so a frame cannot disagree with storage. A server answering an empty body to any of the above leaves a client unable to say what it just wrote.
 
-**A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
+**A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id?includeDeleted=true`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. A requester who fails the read check gets the usual `404`.
+
+**`GET /records/:id` hides a tombstone unless called with `?includeDeleted=true`**, as `GET /records` does: without the parameter a soft-deleted Record answers `404`, the status that already means "missing or unreadable". With it, a requester who passed the read check gets `200` and the tombstone, which confirms nothing a live read would have withheld. A non-boolean value is `400`. `APIAdapter.getRecord()` always sends it, because `Stack` decides whether to hide a tombstone and has to be able to find one.
 
 **Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./disclosure.md) exists to prevent.
 

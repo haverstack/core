@@ -673,12 +673,12 @@ describe('createRecord', () => {
 // -------------------------------------------------------
 
 describe('getRecord', () => {
-  test('sends GET /records/:id', async () => {
+  test('sends GET /records/:id, opting into tombstones', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     await adapter.getRecord('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123`,
+      `${BASE_URL}/records/rec-abc123?includeDeleted=true`,
       expect.objectContaining({ method: 'GET' }),
     );
   });
