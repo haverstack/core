@@ -1049,6 +1049,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
 
     // Checked before validation, so a caller that lost the race learns its
     // version is stale rather than that its patch is bad, and before the
@@ -1255,6 +1256,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
       return existing;
     }
@@ -1294,6 +1296,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     const matched = (existing.associations ?? []).find((a) => associationEqual(a, association));
     if (!matched) {
       return existing;
@@ -1387,6 +1390,21 @@ export class Stack implements StackClient {
   private assertPermissionSet(next: AuthorityAssociation[]): void {
     const errors = validatePermissions(next);
     if (errors.length > 0) throw new StackValidationError(errors);
+  }
+
+  /**
+   * A soft-deleted record has no current state to edit, so the verbs that
+   * edit one refuse it; undelete() and commitMigration() do not call this.
+   * Asked after the record is found and, under ScopedStack, after the
+   * authority decision. See docs/spec/versioning.md § Mutations are refused,
+   * not applied to a tombstone.
+   */
+  private refuseIfDeleted(record: StackRecord): void {
+    if (record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
+      );
+    }
   }
 
   /** The record, or the not-found refusal every mutating verb owes. */
@@ -1672,6 +1690,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
 
     const target = await this.adapter.getVersion(id, version);

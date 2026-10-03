@@ -63,7 +63,6 @@ import type {
   RecordChangeSet,
 } from './types.js';
 import {
-  StackConflictError,
   StackError,
   StackNotFoundError,
   StackPermissionError,
@@ -598,13 +597,11 @@ export class ScopedStack implements StackClient {
     id: string,
     opts: { mutating?: boolean } = {},
   ): Promise<StackRecord> {
-    const mutating = opts.mutating ?? true;
     // The `_grant` write fence applies to mutating callers only: reading a
     // grant Record's history is not the escalation that fence exists to stop.
-    const record = await this.requireVerb(id, ['update-own', 'update-any'], {
-      fenceGrantRecord: mutating,
+    return this.requireVerb(id, ['update-own', 'update-any'], {
+      fenceGrantRecord: opts.mutating ?? true,
     });
-    return this.refuseIfDeleted(record, mutating);
   }
 
   /**
@@ -631,22 +628,6 @@ export class ScopedStack implements StackClient {
         (await this.subjectAllows(record.typeId, actions, { record }))) &&
       (await this.principalAllows(record.typeId, actions));
     if (!allowed) throw await this.denialFor(record);
-    return record;
-  }
-
-  /**
-   * Refuse a mutation aimed at a soft-deleted Record. Asked only of a
-   * mutating caller, so the history readers borrowing this gate still work,
-   * and only after the authority decision, so "exists but deleted" is never
-   * a probe a stranger can run. See docs/spec/versioning.md § Mutations are
-   * refused, not applied to a tombstone.
-   */
-  private refuseIfDeleted(record: StackRecord, mutating: boolean): StackRecord {
-    if (mutating && record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
-      );
-    }
     return record;
   }
 
@@ -1104,10 +1085,7 @@ export class ScopedStack implements StackClient {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     await this.requireOwnerForGrantRecord(record);
     await this.requireReshareOf(record);
-    // Reached through its own gate rather than requireUpdatable(), so the
-    // soft-delete refusal has to be asked here too — after the authority
-    // decision above, for the reason refuseIfDeleted() gives.
-    return this.refuseIfDeleted(record, true);
+    return record;
   }
 
   /**
