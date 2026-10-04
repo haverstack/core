@@ -16,10 +16,14 @@ import { SYSTEM_TYPES } from './types.js';
  * claims one, and something later resolves through it. Every one of them is
  * immutable once set. See docs/spec/identity.md § DID bindings.
  */
-const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
+/** A content field something resolves through or pins. */
+export type BindingField = 'did' | 'appId' | 'publisher';
+
+const BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
   [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
-  [SYSTEM_TYPES.INSTALL, ['appId'] as const],
+  // `publisher` pins who may upgrade the install; see docs/spec/apps.md § Who publishes an app.
+  [SYSTEM_TYPES.INSTALL, ['appId', 'publisher'] as const],
 ]);
 
 /**
@@ -37,15 +41,15 @@ const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Ma
  * card onto another's `appId` is what immutability already refuses.
  * See docs/spec/identity.md § DID bindings.
  */
-const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
+const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
   [SYSTEM_TYPES.APP, ['did'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
   // One install answers for each app; see docs/spec/apps.md § The `_install` record.
   [SYSTEM_TYPES.INSTALL, ['appId'] as const],
 ]);
 
-export const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
+export const bindingFieldsOf = (family: string): readonly BindingField[] =>
   BINDING_FIELDS.get(family) ?? [];
 
-export const uniqueBindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
+export const uniqueBindingFieldsOf = (family: string): readonly BindingField[] =>
   UNIQUE_BINDING_FIELDS.get(family) ?? [];

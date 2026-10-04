@@ -35,8 +35,15 @@ export type {
   CollectAttachmentGarbageResult,
   MigrateAllOptions,
 } from './stack.js';
-export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
-export { isPlanEmpty } from './install.js';
+export type {
+  AppManifest,
+  InstallPlan,
+  ForeignRequest,
+  TypeChange,
+  SignedManifest,
+  PublisherVerifier,
+} from './install.js';
+export { isPlanEmpty, signManifest, manifestPayload, appIdVouchedBy } from './install.js';
 
 // Type handles
 export { typeHandle } from './type-handle.js';

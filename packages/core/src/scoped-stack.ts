@@ -90,6 +90,7 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
+import type { BindingField } from './identity-bindings.js';
 import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
 import { assertAttachmentSize } from './limits.js';
 import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
@@ -1275,7 +1276,7 @@ export class ScopedStack implements StackClient {
    */
   private requireOwnerForAppIdentity(
     typeId: TypeId,
-    touches: (field: 'did' | 'appId') => boolean,
+    touches: (field: BindingField) => boolean,
   ): void {
     if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
     if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;

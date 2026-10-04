@@ -39,6 +39,7 @@ import {
   getJournalFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
+  INSTALL_FIXTURE_PUBLISHER,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
@@ -65,6 +66,7 @@ import {
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
+  manifestPayload,
 } from '@haverstack/core';
 import {
   buildAuthChallengePayload,
@@ -72,7 +74,7 @@ import {
   base64urlDecode,
   didCredentialFromKeypair,
 } from '@haverstack/core/wire';
-import { generateDidKeypair } from '@haverstack/core/did';
+import { generateDidKeypair, verifyDidSignature } from '@haverstack/core/did';
 
 useFetchMock();
 
@@ -735,7 +737,7 @@ describe('install request fixtures', () => {
       const adapter = await openWithInstalls();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
+      const attempt = adapter.requestInstall(fixture.requestBody!);
       const body = fixture.responseBody!;
       if ('error' in body) {
         await expect(attempt).rejects.toBeInstanceOf(
@@ -758,11 +760,28 @@ describe('install request fixtures', () => {
     });
   }
 
+  // The signatures are real, so a server can verify them rather than trust
+  // its own derivation of the signed bytes. One fixture is forged on purpose.
+  test('every fixture signature but the forged one is the publisher’s', async () => {
+    for (const fixture of installRequestFixtures) {
+      const { manifest, signature } = fixture.requestBody!;
+      expect(manifest.publisher).toBe(INSTALL_FIXTURE_PUBLISHER);
+      const valid = await verifyDidSignature(
+        manifest.publisher,
+        base64urlDecode(signature),
+        manifestPayload(manifest),
+      );
+      expect(valid, fixture.name).toBe(
+        fixture.name !== 'install-request-signature-not-the-publishers',
+      );
+    }
+  });
+
   test('a server advertising no install requests is refused locally', async () => {
     const adapter = await openAdapter();
     const calls = mockFetch.mock.calls.length;
     await expect(
-      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
+      adapter.requestInstall(installRequestFixtures[0]!.requestBody!),
     ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
     expect(mockFetch.mock.calls.length).toBe(calls);
   });

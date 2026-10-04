@@ -2167,13 +2167,27 @@ export const commitMigrationFixtures: ConformanceFixture<
 // its own key for (docs/spec/wire-format.md § Installs). The owner
 // approves out of band; these pin only what the app sees. The key being
 // installed is always the session's — the body never names one.
+//
+// Every manifest carries a real Ed25519 signature by INSTALL_FIXTURE_PUBLISHER
+// over manifestPayload() from @haverstack/core, so a server can verify one
+// rather than trusting its own derivation of the signed bytes.
+
+/** The publisher whose key signed the install fixtures' manifests. */
+export const INSTALL_FIXTURE_PUBLISHER = 'did:key:z6Mkj5oEgHSkFTYqW9dZhhLxZdPSX6NSMxfbg9QYAERTALgf';
 
 const INSTALL_MANIFEST: WireInstallRequest['manifest'] = {
   appId: 'com.example.notes',
   name: 'Notes',
   version: '1.0.0',
+  publisher: INSTALL_FIXTURE_PUBLISHER,
   types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
   requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
+};
+
+const SIGNED_INSTALL: WireInstallRequest = {
+  manifest: INSTALL_MANIFEST,
+  signature:
+    'xQ7hCjIXyXJ9eNpadlOT2HPQzgnAUn-bxDuMQ2PQoVihasedwgmqw4VissRUgf8PhZ0gdHVBogL4fRLp14vTBA',
 };
 
 export const installRequestFixtures: ConformanceFixture<
@@ -2190,7 +2204,7 @@ export const installRequestFixtures: ConformanceFixture<
       'adding a version or changing a request — is pending again in the same way.',
     method: 'POST',
     path: '/installs',
-    requestBody: { manifest: INSTALL_MANIFEST },
+    requestBody: SIGNED_INSTALL,
     responseStatus: 202,
     responseBody: { status: 'pending' },
   },
@@ -2204,7 +2218,7 @@ export const installRequestFixtures: ConformanceFixture<
       "approved exactly this manifest for the session's key.",
     method: 'POST',
     path: '/installs',
-    requestBody: { manifest: INSTALL_MANIFEST },
+    requestBody: SIGNED_INSTALL,
     responseStatus: 200,
     responseBody: {
       status: 'installed',
@@ -2217,6 +2231,7 @@ export const installRequestFixtures: ConformanceFixture<
           appId: 'com.example.notes',
           name: 'Notes',
           version: '1.0.0',
+          publisher: INSTALL_FIXTURE_PUBLISHER,
           defines: ['com.example.notes/note@1'],
           requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
         },
@@ -2238,6 +2253,8 @@ export const installRequestFixtures: ConformanceFixture<
         ...INSTALL_MANIFEST,
         types: [{ id: 'com.example.tags/tag@1', name: 'Tag', schema: {} }],
       },
+      signature:
+        'RtkahKa-mw9f9DoQCNHJOKu-_W-5PyFVoW06oBJLVFC9PlSgc6qE_dz82C7vmUSK3bHcUgVLjAKrBOEdRS-DCw',
     },
     responseStatus: 422,
     responseBody: {
@@ -2256,6 +2273,57 @@ export const installRequestFixtures: ConformanceFixture<
     },
   },
   {
+    name: 'install-request-signature-not-the-publishers',
+    description:
+      "POST /installs whose signature is not the publisher's over this manifest — here a " +
+      'request widened after signing — answers 422 with code "validation" at "signature". ' +
+      "The publisher's signature is what lets an install refuse anyone else's upgrade, so a " +
+      'manifest that does not carry one is not considered at all. See docs/spec/apps.md § Who ' +
+      'publishes an app.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: {
+      manifest: {
+        ...INSTALL_MANIFEST,
+        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'update-any'] }],
+      },
+      signature: SIGNED_INSTALL.signature,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'signature',
+            message: 'The signature is not the publisher’s over this manifest',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'install-request-publisher-pinned',
+    description:
+      'POST /installs for an appId already installed from another publisher answers 409 with ' +
+      'code "conflict", whichever key asks. The first install pins its publisher, so only a ' +
+      'manifest the same publisher signed can upgrade it or link another key to it. Assumes ' +
+      '"com.example.notes" is installed from did:web:notes.example.com.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: SIGNED_INSTALL,
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message:
+          '"com.example.notes" is installed from did:web:notes.example.com; this manifest is ' +
+          `signed by ${INSTALL_FIXTURE_PUBLISHER}`,
+      },
+    },
+  },
+  {
     name: 'install-request-key-registered-to-another-app',
     description:
       'POST /installs from a key whose _app card names a different appId answers 409 with ' +
@@ -2263,7 +2331,7 @@ export const installRequestFixtures: ConformanceFixture<
       'Assumes the session\'s DID is registered to "com.example.other".',
     method: 'POST',
     path: '/installs',
-    requestBody: { manifest: INSTALL_MANIFEST },
+    requestBody: SIGNED_INSTALL,
     responseStatus: 409,
     responseBody: {
       error: {
@@ -2282,7 +2350,7 @@ export const installRequestFixtures: ConformanceFixture<
       'itself; a delegated token names someone else as the subject.',
     method: 'POST',
     path: '/installs',
-    requestBody: { manifest: INSTALL_MANIFEST },
+    requestBody: SIGNED_INSTALL,
     responseStatus: 403,
     responseBody: {
       error: { code: 'permission', message: 'An install request must come from the key itself' },

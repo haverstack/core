@@ -125,7 +125,10 @@ import {
 } from './grants.js';
 import type { GrantQuery } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+import type { BindingField } from './identity-bindings.js';
 import {
+  appIdVouchedBy,
+  assertManifestSigned,
   claimedFamilies,
   familyStanding,
   grantIsRequest,
@@ -142,6 +145,7 @@ import {
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
 } from './install.js';
+import type { PublisherVerifier, SignedManifest } from './install.js';
 import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
@@ -2182,7 +2186,7 @@ export class Stack implements StackClient {
    */
   private async checkBindingUnique(
     family: string,
-    field: 'did' | 'appId',
+    field: BindingField,
     value: unknown,
     excludeId?: RecordId,
   ): Promise<void> {
@@ -2218,7 +2222,7 @@ export class Stack implements StackClient {
    */
   private checkBindingImmutable(
     family: string,
-    field: 'did' | 'appId',
+    field: BindingField,
     existing: unknown,
     next: unknown,
   ): void {
@@ -2854,14 +2858,23 @@ export class Stack implements StackClient {
    * the commons, a request the grant rules refuse, or a `did` already
    * registered to a different app. See docs/spec/apps.md § Plan, then apply.
    */
-  async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
+  async planInstall(
+    signed: SignedManifest,
+    opts: { did: EntityId; verifyPublisher?: PublisherVerifier },
+  ): Promise<InstallPlan> {
     this.assertOpen();
     const { did } = opts;
-    const manifest = snapshotManifest(submitted);
+    const manifest = snapshotManifest(signed.manifest);
     this.checkManifest(manifest, did);
+    await assertManifestSigned({ manifest, signature: signed.signature }, opts.verifyPublisher);
 
     const installs = await this.loadInstalls();
     const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
+    if (existing && existing.content.publisher !== manifest.publisher) {
+      throw new StackConflictError(
+        `"${manifest.appId}" is installed from ${existing.content.publisher}; this manifest is signed by ${manifest.publisher}`,
+      );
+    }
     const ownVersions = ownTypeIds(manifest);
     const ownFamilies = new Set(ownVersions.map(baseIdOf));
 
@@ -2906,6 +2919,8 @@ export class Stack implements StackClient {
     return {
       manifest,
       did,
+      signature: signed.signature,
+      namespaceVerified: appIdVouchedBy(manifest.publisher) === manifest.appId,
       existing,
       newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
       newVersions: ownVersions.filter((id) => !defined.has(id)),
@@ -2926,9 +2941,15 @@ export class Stack implements StackClient {
    * what is applied is what was approved. Reinstalls a soft-deleted
    * install. See docs/spec/apps.md § Plan, then apply.
    */
-  async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
+  async installApp(
+    plan: InstallPlan,
+    opts: { verifyPublisher?: PublisherVerifier } = {},
+  ): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
-    const fresh = await this.planInstall(plan.manifest, { did: plan.did });
+    const fresh = await this.planInstall(
+      { manifest: plan.manifest, signature: plan.signature },
+      { did: plan.did, verifyPublisher: opts.verifyPublisher },
+    );
     if (planFingerprint(fresh) !== planFingerprint(plan)) {
       throw new StackConflictError(
         `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
@@ -2953,6 +2974,7 @@ export class Stack implements StackClient {
           appId: manifest.appId,
           name: manifest.name,
           ...(manifest.version !== undefined && { version: manifest.version }),
+          publisher: manifest.publisher,
           defines,
           requests,
         },
@@ -3262,6 +3284,7 @@ export class Stack implements StackClient {
         appId: { kind: 'string', required: true },
         name: { kind: 'string', required: true },
         version: { kind: 'string' },
+        publisher: { kind: 'string', required: true },
         defines: { kind: 'array', items: { kind: 'string' }, required: true },
         requests: {
           kind: 'array',

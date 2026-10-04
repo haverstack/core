@@ -14,14 +14,21 @@
  * families without the owner running its code — see
  * ScopedStack.commitMigration().
  *
+ * A manifest is signed by its publisher's key, and the install pins that
+ * publisher: only a manifest the same publisher signed can upgrade it, or
+ * link another key to it.
+ *
  * This module holds the parts that read an install as data: the write-time
- * shape rules, the family claim, and the plan diff. The verbs that write
+ * shape rules, the family claim, manifest signing, and the plan diff. The verbs that write
  * live on `Stack`. See docs/spec/apps.md.
  */
 
 import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES } from './grants.js';
 import { SYSTEM_TYPES } from './types.js';
+import { isValidDidKey, signWithDid, verifyDidSignature } from './did.js';
+import { base64urlDecode, base64urlEncode } from './auth.js';
+import { StackValidationError } from './errors.js';
 import type {
   AppId,
   AuthorityAssociation,
@@ -44,9 +51,32 @@ export type AppManifest = {
   appId: AppId;
   name: string;
   version?: string;
+  /**
+   * The DID of whoever publishes the app — a key of the author's, not one
+   * of the per-device keys being installed. See docs/spec/apps.md
+   * § Who publishes an app.
+   */
+  publisher: string;
   types: DefineTypeOptions[];
   requests: InstallRequest[];
 };
+
+/** A manifest with its publisher's signature over manifestPayload(). */
+export type SignedManifest = {
+  manifest: AppManifest;
+  /** base64url Ed25519 signature. */
+  signature: string;
+};
+
+/**
+ * Verifies a signature by a publisher whose DID method core does not
+ * resolve — `did:web`, say. `did:key` needs none: its public key is the DID.
+ */
+export type PublisherVerifier = (
+  publisher: string,
+  signature: Uint8Array,
+  payload: Uint8Array,
+) => Promise<boolean>;
 
 /** A request on a family this install does not define, and who owns that family. */
 export type ForeignRequest = InstallRequest & {
@@ -77,6 +107,14 @@ export type InstallPlan = {
   manifest: AppManifest;
   /** The key being installed. */
   did: EntityId;
+  /** The publisher's signature over `manifest`, carried so the plan can be verified again. */
+  signature: string;
+  /**
+   * Whether the publisher's DID is a `did:web` whose domain is the
+   * `appId` reversed — the domain vouching for the namespace, beyond the
+   * key alone. See docs/spec/apps.md § Who publishes an app.
+   */
+  namespaceVerified: boolean;
   /** The install as it stood when planned — null for a first install. */
   existing: (StackRecord & { content: InstallContent }) | null;
   /** Families this install would claim that it does not claim yet. */
@@ -253,6 +291,86 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+const MANIFEST_PAYLOAD_LABEL = 'haverstack-manifest-v1';
+
+/**
+ * The bytes a publisher signs: a label, then the manifest as canonical
+ * JSON — keys sorted at every depth, no whitespace — so the same manifest
+ * signs the same way however it was serialized.
+ */
+export function manifestPayload(manifest: AppManifest): Uint8Array {
+  return new TextEncoder().encode(`${MANIFEST_PAYLOAD_LABEL}\n${canonicalJson(manifest)}`);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.keys(value)
+      .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Sign `manifest` with the private key behind its `publisher`. */
+export async function signManifest(
+  manifest: AppManifest,
+  privateKey: CryptoKey,
+): Promise<SignedManifest> {
+  const signature = await signWithDid(privateKey, manifestPayload(manifest));
+  return { manifest, signature: base64urlEncode(signature) };
+}
+
+/**
+ * Refuse a manifest its publisher did not sign. A `did:key` publisher is
+ * verified from the DID itself; any other method needs `verifier`, and is
+ * refused without one rather than taken on trust.
+ */
+export async function assertManifestSigned(
+  signed: SignedManifest,
+  verifier?: PublisherVerifier,
+): Promise<void> {
+  const { publisher } = signed.manifest;
+  const fail = (path: string, message: string): never => {
+    throw new StackValidationError([{ path, message }]);
+  };
+  if (typeof publisher !== 'string' || !publisher.startsWith('did:')) {
+    fail('manifest.publisher', 'Expected the publisher’s DID');
+  }
+  let signature: Uint8Array;
+  try {
+    signature = base64urlDecode(signed.signature);
+  } catch {
+    return fail('signature', 'Expected a base64url signature');
+  }
+  const payload = manifestPayload(signed.manifest);
+  let valid: boolean;
+  if (isValidDidKey(publisher)) {
+    valid = await verifyDidSignature(publisher, signature, payload).catch(() => false);
+  } else if (verifier) {
+    valid = await verifier(publisher, signature, payload);
+  } else {
+    return fail(
+      'manifest.publisher',
+      `Cannot verify a ${publisher.split(':')[1]} publisher without a verifier for that DID method`,
+    );
+  }
+  if (!valid) fail('signature', 'The signature is not the publisher’s over this manifest');
+}
+
+/**
+ * The `appId` a `did:web` publisher's domain vouches for: its host
+ * reversed, so `did:web:notes.example.com` vouches for `com.example.notes`.
+ * Null for any other DID, or a `did:web` with a path or port.
+ */
+export function appIdVouchedBy(publisher: string): AppId | null {
+  const match = /^did:web:([a-z0-9.-]+)$/i.exec(publisher);
+  if (!match) return null;
+  return match[1]!.toLowerCase().split('.').reverse().join('.');
+}
+
 /** Whether two requests ask for the same family and exactly the same actions. */
 export function sameRequest(a: InstallRequest, b: InstallRequest): boolean {
   if (a.baseId !== b.baseId || a.actions.length !== b.actions.length) return false;
@@ -307,5 +425,6 @@ export function planFingerprint(plan: InstallPlan): string {
     plan.typeChanges,
     plan.newKey,
     plan.linkedKeys,
+    plan.namespaceVerified,
   ]);
 }

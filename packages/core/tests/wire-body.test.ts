@@ -214,31 +214,37 @@ describe('parseInstallBody', () => {
     appId: 'com.example.notes',
     name: 'Notes',
     version: '1.0.0',
+    publisher: DID,
     types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
     requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
   };
+  const signature = 'c2lnbmF0dXJl';
 
-  test('reads a manifest into what planInstall() takes', () => {
-    expect(parseInstallBody({ manifest })).toEqual(manifest);
+  test('reads a signed manifest into what planInstall() takes', () => {
+    expect(parseInstallBody({ manifest, signature })).toEqual({ manifest, signature });
   });
 
   test('an unknown key at either level, or a missing field, is not this request', () => {
-    expect(() => parseInstallBody({ manifest, did: DID })).toThrow(StackBadRequestError);
-    expect(() => parseInstallBody({ manifest: { ...manifest, did: DID } })).toThrow(
+    expect(() => parseInstallBody({ manifest, signature, did: DID })).toThrow(StackBadRequestError);
+    expect(() => parseInstallBody({ manifest: { ...manifest, did: DID }, signature })).toThrow(
       StackBadRequestError,
     );
-    const { requests: _, ...noRequests } = manifest;
-    expect(() => parseInstallBody({ manifest: noRequests })).toThrow(StackBadRequestError);
+    expect(() => parseInstallBody({ manifest })).toThrow(StackBadRequestError);
+    const { publisher: _, ...unpublished } = manifest;
+    expect(() => parseInstallBody({ manifest: unpublished, signature })).toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('a wrongly typed field names its path', () => {
-    expect(pathOf(() => parseInstallBody({ manifest: { ...manifest, types: {} } }))).toBe(
-      'manifest.types',
-    );
+    expect(
+      pathOf(() => parseInstallBody({ manifest: { ...manifest, types: {} }, signature })),
+    ).toBe('manifest.types');
     expect(
       pathOf(() =>
         parseInstallBody({
           manifest: { ...manifest, requests: [{ baseId: 'com.example.notes/note', actions: [1] }] },
+          signature,
         }),
       ),
     ).toBe('manifest.requests[0].actions[0]');
