@@ -148,6 +148,25 @@ import {
   isGroupRecord,
 } from './record-changes.js';
 import { ScopedStack, scopeToken } from './scoped-stack.js';
+import {
+  isTypeHandle,
+  typedCreate,
+  typedGet,
+  typedMutate,
+  typedQuery,
+  typedSubscribe,
+} from './type-handle.js';
+import type {
+  ContentOf,
+  PatchOf,
+  ReadonlyTypeSchema,
+  TypedChange,
+  TypedChangeSet,
+  TypedQuery,
+  TypedSubscribeOptions,
+  TypedRecord,
+  TypeHandle,
+} from './type-handle.js';
 
 // -------------------------------------------------------
 // Supporting types
@@ -349,7 +368,8 @@ export type DeleteAndReturnResult = DeleteResult & {
 export type DefineTypeOptions = {
   id: TypeId;
   name: string;
-  schema: TypeSchema;
+  /** A handle's `schema` is accepted as written, readonly members and all. */
+  schema: ReadonlyTypeSchema;
   migratesFrom?: TypeId;
 };
 
@@ -364,12 +384,33 @@ export type DefineTypeOptions = {
  */
 export interface StackClient {
   readonly capabilities: StackCapabilities;
+  create<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    content: ContentOf<S>,
+    opts?: CreateRecordOptions,
+  ): Promise<TypedRecord<S>>;
   create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
     opts?: CreateRecordOptions,
   ): Promise<StackRecord & { content: T }>;
+  /**
+   * Typed read: the record at `presentAt: 'latest'`, checked to be exactly
+   * the handle's Type with every enum field holding a value the handle
+   * lists, else it throws. Live records only — a tombstone reads as `null`,
+   * and there is no `includeDeleted`.
+   * See docs/spec/data-model.md § Type handles.
+   */
+  get<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+  ): Promise<TypedRecord<S> | null>;
   get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  /** Typed read of the handle's whole family — see the typed `get()`. */
+  query<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    query?: TypedQuery,
+  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
   query(query?: StackQuery): Promise<QueryResult>;
   /**
    * Resolve a DID to its `_entity` card — family-wide and soft-deleted
@@ -391,8 +432,20 @@ export interface StackClient {
    * one refused key refuses the call.
    * See docs/spec/data-model.md § Mutations.
    */
+  mutate<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    changes: TypedChangeSet<S>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>>;
   mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
   /** mutate() with `contentPatch` alone — the common case, named for it. */
+  patchContent<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    patch: PatchOf<S>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>>;
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
@@ -460,6 +513,16 @@ export interface StackClient {
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
+  /**
+   * Typed subscription: delivers only changes to records of exactly the
+   * handle's Type, each `record` typed as its content. See
+   * docs/spec/data-model.md § Type handles.
+   */
+  subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
@@ -640,8 +703,15 @@ export class Stack implements StackClient {
    * anything beyond additive evolution throws StackSchemaDriftError. See
    * docs/spec/data-model.md § Schema drift detection.
    */
-  async defineType({ id, name, schema, migratesFrom }: DefineTypeOptions): Promise<StackType> {
+  async defineType({
+    id,
+    name,
+    schema: declared,
+    migratesFrom,
+  }: DefineTypeOptions): Promise<StackType> {
     this.assertOpen();
+    // Only read below; the readonly view exists so a handle's literal fits.
+    const schema = declared as TypeSchema;
     const parsed = parseTypeId(id);
     if (!parsed) {
       throw new StackBadRequestError(
@@ -856,17 +926,30 @@ export class Stack implements StackClient {
    * — see BackdatableCreateRecordOptions and docs/spec/data-model.md §
    * Record IDs.
    */
+  async create<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    content: ContentOf<S>,
+    opts?: BackdatableCreateRecordOptions,
+  ): Promise<TypedRecord<S>>;
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
-    input: T,
+    content: T,
+    opts?: BackdatableCreateRecordOptions,
+  ): Promise<StackRecord & { content: T }>;
+  async create(
+    typeIdOrHandle: TypeId | TypeHandle,
+    input: Record<string, unknown>,
     opts: BackdatableCreateRecordOptions = {},
-  ): Promise<StackRecord & { content: T }> {
+  ): Promise<StackRecord> {
+    if (isTypeHandle(typeIdOrHandle))
+      return typedCreate(this, typeIdOrHandle, input as never, opts);
+    const typeId = typeIdOrHandle;
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
       throw new StackBadRequestError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
-    const content = dropAbsentFields(input, type.schema) as T;
+    const content = dropAbsentFields(input, type.schema);
 
     // Copied, never aliased: an import loop that reuses one Date across rows
     // (`d.setTime(...)` per record) would otherwise retro-edit every record
@@ -990,7 +1073,7 @@ export class Stack implements StackClient {
     const change = new PendingChange('create', { actor: Stack.createActor(record) });
     const created = await this.adapter.createRecord(record, { journal: change.journal });
     this.announce(change, created);
-    return created as StackRecord & { content: T };
+    return created;
   }
 
   /**
@@ -1034,7 +1117,18 @@ export class Stack implements StackClient {
    * commits migrations to disk. A soft-deleted record answers `null` unless
    * { includeDeleted: true } is passed.
    */
-  async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
+  async get<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+  ): Promise<TypedRecord<S> | null>;
+  async get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  async get(
+    idOrHandle: RecordId | TypeHandle,
+    idOrOpts: RecordId | GetRecordOptions = {},
+  ): Promise<StackRecord | null> {
+    if (isTypeHandle(idOrHandle)) return typedGet(this, idOrHandle, idOrOpts as RecordId);
+    const id = idOrHandle;
+    const opts = idOrOpts as GetRecordOptions;
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
@@ -1052,11 +1146,35 @@ export class Stack implements StackClient {
    * against the record's *current* stored type; `typeId` never changes here.
    * See docs/spec/data-model.md § Mutations.
    */
+  async mutate<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    changes: TypedChangeSet<S>,
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<TypedRecord<S>>;
   async mutate(
     id: RecordId,
     changes: RecordChangeSet,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<StackRecord>;
+  async mutate(
+    first: RecordId | TypeHandle,
+    second: RecordId | RecordChangeSet | TypedChangeSet<ReadonlyTypeSchema>,
+    third?: (IfVersionOptions & ActorOptions) | RecordChangeSet,
+    fourth: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
+    if (isTypeHandle(first)) {
+      return typedMutate(
+        this,
+        first,
+        second as RecordId,
+        third as TypedChangeSet<ReadonlyTypeSchema>,
+        fourth,
+      );
+    }
+    const id = first;
+    const changes = second as RecordChangeSet;
+    const opts = (third ?? {}) as IfVersionOptions & ActorOptions;
     this.assertOpen();
     assertNonEmptyChangeSet(changes);
 
@@ -1123,12 +1241,27 @@ export class Stack implements StackClient {
    * and named for what it does rather than for a symmetry with create()
    * that a patch does not have.
    */
+  async patchContent<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    patch: PatchOf<S>,
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<TypedRecord<S>>;
   async patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<StackRecord>;
+  async patchContent(
+    first: RecordId | TypeHandle,
+    second: RecordId | Record<string, unknown | null>,
+    third?: Record<string, unknown | null> | (IfVersionOptions & ActorOptions),
+    fourth?: IfVersionOptions & ActorOptions,
   ): Promise<StackRecord> {
-    return this.mutate(id, { contentPatch: patch }, opts);
+    if (isTypeHandle(first)) {
+      return this.mutate(first, second as RecordId, { contentPatch: third as never }, fourth);
+    }
+    return this.mutate(first, { contentPatch: second as Record<string, unknown | null> }, third);
   }
 
   /**
@@ -1623,7 +1756,17 @@ export class Stack implements StackClient {
    * stored; pass presentAt: 'latest' to migrate in memory. See
    * docs/spec/data-model.md § Queries.
    */
-  async query(query: StackQuery = {}): Promise<QueryResult> {
+  async query<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    query?: TypedQuery,
+  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
+  async query(query?: StackQuery): Promise<QueryResult>;
+  async query(
+    first: TypeHandle | StackQuery = {},
+    typedQueryArg?: TypedQuery,
+  ): Promise<QueryResult> {
+    if (isTypeHandle(first)) return typedQuery(this, first, typedQueryArg);
+    const query = first;
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
@@ -2412,10 +2555,30 @@ export class Stack implements StackClient {
    * makes subscribe-then-query the gap-free startup order everywhere. A
    * local stack is live immediately.
    */
+  async subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts: SubscribeOptions = {},
+    opts?: SubscribeOptions,
+  ): Promise<Unsubscribe>;
+  async subscribe(
+    first: TypeHandle | ((change: RecordChange) => void),
+    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
+    third?: TypedSubscribeOptions,
   ): Promise<Unsubscribe> {
+    if (isTypeHandle(first)) {
+      return typedSubscribe(
+        this,
+        first,
+        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
+        third,
+      );
+    }
+    const handler = first;
+    const opts = (second ?? {}) as SubscribeOptions;
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
     assertValidBaseIdFilter(opts.filter);

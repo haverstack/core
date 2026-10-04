@@ -1,0 +1,350 @@
+/**
+ * Stack — Type handles
+ * -------------------------------------------------------
+ * A Type's schema written once as a literal, from which the compiler derives
+ * the content type: `ContentOf` for a read or a create, `PatchOf` for a
+ * `contentPatch`. A handle is a plain value, so `StackClient` code can use it
+ * wherever it has no `defineType()` result.
+ *
+ * The derived types layer over runtime validation, which stays the guarantee.
+ * What a typed read adds is a runtime check that the record is the handle's
+ * Type. See docs/spec/data-model.md § Type handles.
+ */
+
+import { StackBadRequestError, StackValidationError } from './errors.js';
+import { parseTypeId } from './schema.js';
+import type { ValidationError } from './validate.js';
+import type { CreateRecordOptions, StackClient } from './stack.js';
+import type {
+  BaseId,
+  ChangeFilter,
+  IfVersionOptions,
+  RecordChange,
+  RecordChangeSet,
+  RecordId,
+  RecordFilter,
+  ScalarFieldKind,
+  StackQuery,
+  StackRecord,
+  SubscribeOptions,
+  TypeId,
+  Unsubscribe,
+} from './types.js';
+
+// -------------------------------------------------------
+// Schema literal types
+// -------------------------------------------------------
+
+/**
+ * `FieldDef` with readonly members, which is what a `const` type parameter
+ * infers for a literal (`enum` becomes a readonly tuple). Every mutable
+ * `TypeSchema` is assignable to it, so it is also what `defineType()` takes.
+ */
+export type ReadonlyFieldDef =
+  | {
+      readonly kind: 'string';
+      readonly enum?: readonly string[];
+      readonly required?: boolean;
+    }
+  | { readonly kind: Exclude<ScalarFieldKind, 'string'>; readonly required?: boolean }
+  | {
+      readonly kind: 'array';
+      readonly items: ReadonlyFieldDef;
+      readonly open?: false;
+      readonly required?: boolean;
+    }
+  | {
+      readonly kind: 'array';
+      readonly open: true;
+      readonly items?: undefined;
+      readonly required?: boolean;
+    }
+  | {
+      readonly kind: 'object';
+      readonly properties: ReadonlyTypeSchema;
+      readonly open?: false;
+      readonly required?: boolean;
+    }
+  | {
+      readonly kind: 'object';
+      readonly open: true;
+      readonly properties?: undefined;
+      readonly required?: boolean;
+    };
+
+export type ReadonlyTypeSchema = { readonly [fieldName: string]: ReadonlyFieldDef };
+
+// -------------------------------------------------------
+// Derived types
+// -------------------------------------------------------
+
+type IsRequired<D> = D extends { readonly required: true } ? true : false;
+
+type Simplify<T> = { [K in keyof T]: T[K] } & {};
+
+type ValueOf<D> = D extends { readonly kind: 'string'; readonly enum: readonly (infer E)[] }
+  ? E
+  : D extends { readonly kind: 'string' | 'text' | 'date' | 'record-ref' | 'file-ref' }
+    ? string
+    : D extends { readonly kind: 'number' }
+      ? number
+      : D extends { readonly kind: 'boolean' }
+        ? boolean
+        : D extends { readonly kind: 'array'; readonly open: true }
+          ? unknown[]
+          : D extends { readonly kind: 'array'; readonly items: infer I }
+            ? ValueOf<I>[]
+            : D extends { readonly kind: 'object'; readonly open: true }
+              ? Record<string, unknown>
+              : D extends { readonly kind: 'object'; readonly properties: infer P }
+                ? P extends ReadonlyTypeSchema
+                  ? ContentOf<P>
+                  : never
+                : never;
+
+/**
+ * The content a schema describes: a required field is present, any other may
+ * be absent. See docs/spec/data-model.md § Type handles.
+ */
+export type ContentOf<S extends ReadonlyTypeSchema> = Simplify<
+  {
+    -readonly [K in keyof S as IsRequired<S[K]> extends true ? K : never]: ValueOf<S[K]>;
+  } & {
+    -readonly [K in keyof S as IsRequired<S[K]> extends true ? never : K]?: ValueOf<S[K]>;
+  }
+>;
+
+/**
+ * The `contentPatch` a schema accepts: every field optional, and `null`
+ * (removal) only on a field that is not required — a required field can be
+ * replaced but not removed.
+ */
+export type PatchOf<S extends ReadonlyTypeSchema> = Simplify<{
+  -readonly [K in keyof S]?: IsRequired<S[K]> extends true ? ValueOf<S[K]> : ValueOf<S[K]> | null;
+}>;
+
+/** A record whose content is the handle's, as a typed read returns it. */
+export type TypedRecord<S extends ReadonlyTypeSchema> = Omit<StackRecord, 'content'> & {
+  content: ContentOf<S>;
+};
+
+// -------------------------------------------------------
+// The handle
+// -------------------------------------------------------
+
+/** One version of one Type: its `TypeId`, its family and its schema. */
+export type TypeHandle<S extends ReadonlyTypeSchema = ReadonlyTypeSchema> = {
+  readonly id: TypeId;
+  readonly baseId: BaseId;
+  readonly schema: S;
+};
+
+/**
+ * Name a Type and its schema in one literal. Pass the result to
+ * `defineType({ ...handle, name })` and to the typed overloads of
+ * `StackClient`. A handle names exactly one version: `Book.baseId` is the
+ * argument a call about the whole family takes.
+ */
+export const typeHandle = <const S extends ReadonlyTypeSchema>(
+  id: TypeId,
+  schema: S,
+): TypeHandle<S> => {
+  const parsed = parseTypeId(id);
+  if (!parsed) {
+    throw new StackBadRequestError(
+      `Invalid TypeId format: "${id}". Expected "namespace/name@version", e.g. "com.example.myapp/note@1".`,
+    );
+  }
+  return Object.freeze({ id, baseId: parsed.baseId, schema });
+};
+
+export const isTypeHandle = (value: unknown): value is TypeHandle =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as TypeHandle).id === 'string' &&
+  typeof (value as TypeHandle).baseId === 'string' &&
+  typeof (value as TypeHandle).schema === 'object';
+
+// -------------------------------------------------------
+// Typed read and write options
+// -------------------------------------------------------
+
+/**
+ * A typed read sees live records only and always reads at `presentAt:
+ * 'latest'`, so neither knob is offered. See docs/spec/data-model.md § Type
+ * handles.
+ */
+export type TypedQuery = Omit<StackQuery, 'filter' | 'presentAt'> & {
+  filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
+};
+
+/**
+ * A change whose `record`, when present, is the handle's content. Absent
+ * where an untyped change's would be, and also where the record holds an
+ * enum value the handle does not list — re-read it with the typed `get()`,
+ * which says why.
+ */
+export type TypedChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
+  record?: TypedRecord<S>;
+};
+
+/** The family and version are the handle's, so neither is a filter key. */
+export type TypedSubscribeOptions = Omit<SubscribeOptions, 'filter'> & {
+  filter?: Omit<ChangeFilter, 'typeId' | 'baseId'>;
+};
+
+export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet, 'contentPatch'> & {
+  contentPatch?: PatchOf<S>;
+};
+
+// -------------------------------------------------------
+// Runtime narrowing
+// -------------------------------------------------------
+
+/**
+ * Enum values the record holds that the handle's schema does not list. An
+ * enum may gain values within a version, so a reader older than the writer
+ * can meet one; throwing keeps the derived union exact.
+ */
+const unknownEnumValues = (
+  value: unknown,
+  def: ReadonlyFieldDef,
+  path: string,
+  errors: ValidationError[],
+): void => {
+  if (value === undefined || value === null) return;
+  if (def.kind === 'string') {
+    if (def.enum && typeof value === 'string' && !def.enum.includes(value)) {
+      errors.push({
+        path,
+        message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
+      });
+    }
+    return;
+  }
+  if (def.kind === 'array' && !def.open && Array.isArray(value)) {
+    value.forEach((item, i) => unknownEnumValues(item, def.items, `${path}[${i}]`, errors));
+    return;
+  }
+  if (def.kind === 'object' && !def.open && typeof value === 'object' && !Array.isArray(value)) {
+    walkEnums(value as Record<string, unknown>, def.properties, path, errors);
+  }
+};
+
+const walkEnums = (
+  content: Record<string, unknown>,
+  schema: ReadonlyTypeSchema,
+  prefix: string,
+  errors: ValidationError[],
+): void => {
+  for (const key of Object.keys(schema)) {
+    unknownEnumValues(content[key], schema[key], prefix ? `${prefix}.${key}` : key, errors);
+  }
+};
+
+/**
+ * Narrow a record to a handle's content type: it must be exactly the
+ * handle's Type, and every enum field must hold a value the handle lists.
+ * A record of another Type throws, and so does one whose family has moved
+ * past the handle's version.
+ */
+export const narrowRecord = <S extends ReadonlyTypeSchema>(
+  handle: TypeHandle<S>,
+  record: StackRecord,
+): TypedRecord<S> => {
+  if (record.typeId !== handle.id) {
+    throw new StackBadRequestError(`Record "${record.id}" is ${record.typeId}, not ${handle.id}`);
+  }
+  const errors: ValidationError[] = [];
+  walkEnums(record.content, handle.schema, '', errors);
+  if (errors.length > 0) throw new StackValidationError(errors);
+  return record as TypedRecord<S>;
+};
+
+/** The ways a typed read can be asked to see a tombstone. */
+export const assertLiveFilter = (filter: object | undefined): void => {
+  if ((filter as RecordFilter | undefined)?.includeDeleted) {
+    throw new StackBadRequestError(
+      'A typed read sees live records only; use the untyped read to include soft-deleted records.',
+    );
+  }
+};
+
+// -------------------------------------------------------
+// Typed operations, shared by Stack and ScopedStack
+// -------------------------------------------------------
+
+type TypedOps = Pick<StackClient, 'get' | 'query' | 'create' | 'mutate' | 'subscribe'>;
+
+export const typedGet = async <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  id: RecordId,
+): Promise<TypedRecord<S> | null> => {
+  const record = await client.get(id, { presentAt: 'latest' });
+  return record && narrowRecord(handle, record);
+};
+
+export const typedQuery = async <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  query: TypedQuery = {},
+): Promise<{ records: TypedRecord<S>[]; cursor: string | null }> => {
+  assertLiveFilter(query.filter);
+  // The family, not the handle's version: a record still at an older
+  // version must be migrated up, or refused as stale, never skipped.
+  const result = await client.query({
+    ...query,
+    filter: { ...query.filter, baseId: handle.baseId },
+    presentAt: 'latest',
+  });
+  return { ...result, records: result.records.map((r) => narrowRecord(handle, r)) };
+};
+
+export const typedCreate = async <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  content: ContentOf<S>,
+  opts?: CreateRecordOptions,
+): Promise<TypedRecord<S>> => client.create(handle.id, content, opts) as Promise<TypedRecord<S>>;
+
+export const typedMutate = async <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  id: RecordId,
+  changes: TypedChangeSet<S>,
+  opts?: IfVersionOptions,
+): Promise<TypedRecord<S>> => {
+  // A patch is validated against the record's own stored Type, so one made
+  // through a handle for another version would be checked by a schema it
+  // was not written for. A missing, unreadable or deleted record is left to
+  // mutate(), which refuses it in its own words.
+  const current = await client.get(id, { includeDeleted: true });
+  if (current && current.typeId !== handle.id) {
+    throw new StackBadRequestError(`Record "${id}" is ${current.typeId}, not ${handle.id}`);
+  }
+  return narrowRecord(handle, await client.mutate(id, changes, opts));
+};
+
+export const typedSubscribe = <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  handler: (change: TypedChange<S>) => void,
+  opts: TypedSubscribeOptions = {},
+): Promise<Unsubscribe> =>
+  // Exactly the handle's version: an event carries its record as stored, so
+  // a subscription cannot migrate it the way a typed read does, and a
+  // record of another version has no honest typing here.
+  client.subscribe(
+    (change) => {
+      const { record, ...rest } = change;
+      let narrowed: TypedRecord<S> | undefined;
+      try {
+        narrowed = record && narrowRecord(handle, record);
+      } catch (err) {
+        if (!(err instanceof StackValidationError)) throw err;
+      }
+      handler(narrowed ? { ...rest, record: narrowed } : rest);
+    },
+    { ...opts, filter: { ...opts.filter, typeId: handle.id } },
+  );
