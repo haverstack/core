@@ -131,11 +131,13 @@ import {
   grantIsRequest,
   installAppLink,
   installGrantLink,
+  installReader,
   linkedIds,
   namespaceOf,
   ownTypeIds,
   planFingerprint,
   sameRequest,
+  snapshotManifest,
   validateInstall,
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
@@ -2852,9 +2854,10 @@ export class Stack implements StackClient {
    * the commons, a request the grant rules refuse, or a `did` already
    * registered to a different app. See docs/spec/apps.md § Plan, then apply.
    */
-  async planInstall(manifest: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
+  async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
     this.assertOpen();
     const { did } = opts;
+    const manifest = snapshotManifest(submitted);
     this.checkManifest(manifest, did);
 
     const installs = await this.loadInstalls();
@@ -3107,28 +3110,33 @@ export class Stack implements StackClient {
     }
     let result = edits.length > 0 ? await this.amendAssociations(install.id, edits) : install;
 
-    // Each key may read its own install, which is how an app learns what
-    // was approved. See docs/spec/apps.md § Over the wire.
-    const readers = dids.filter(
-      (did) =>
-        !(result.permissions ?? []).some(
-          (p) =>
-            p.kind === 'permission' &&
-            p.label === 'read' &&
-            p.grantee.kind === 'entity' &&
-            p.grantee.entityId === did,
-        ),
+    // Each linked key may read its own install, which is how an app learns
+    // what was approved; a key of this app no longer linked may not.
+    // See docs/spec/apps.md § Over the wire.
+    const appKeys = new Set(
+      (
+        await queryAllPages((q) => this.query(q), {
+          filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
+        })
+      )
+        .map((r) => r.content as AppContent)
+        .filter((c) => c.appId === (install.content as InstallContent).appId)
+        .map((c) => c.did),
     );
-    if (readers.length > 0) {
-      result = await this.grantAccess(
-        install.id,
-        readers.map((entityId) => ({
-          kind: 'permission' as const,
-          label: 'read' as const,
-          grantee: { kind: 'entity' as const, entityId },
-        })),
-      );
-    }
+    const readerOf = (p: AuthorityAssociation): EntityId | null =>
+      p.kind === 'permission' && p.label === 'read' && p.grantee.kind === 'entity'
+        ? p.grantee.entityId
+        : null;
+    const current = (result.permissions ?? []).map(readerOf);
+    const access: AssociationEdit[] = [
+      ...dids
+        .filter((did) => !current.includes(did))
+        .map((entityId) => ({ op: 'add' as const, association: installReader(entityId) })),
+      ...current
+        .filter((did): did is EntityId => did !== null && appKeys.has(did) && !dids.includes(did))
+        .map((entityId) => ({ op: 'remove' as const, association: installReader(entityId) })),
+    ];
+    if (access.length > 0) result = await this.amendAccess(install.id, access);
     return result;
   }
 

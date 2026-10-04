@@ -24,6 +24,7 @@ import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES } from './grants.js';
 import { SYSTEM_TYPES } from './types.js';
 import type {
   AppId,
+  AuthorityAssociation,
   BaseId,
   EntityId,
   GrantAction,
@@ -113,6 +114,13 @@ export const installGrantLink = (recordId: RecordId): RelationshipAssociation =>
   kind: 'relationship',
   label: INSTALL_GRANT_LABEL,
   target: { kind: 'record', recordId },
+});
+
+/** Record-level `read` on an install for one of its keys. */
+export const installReader = (entityId: EntityId): AuthorityAssociation => ({
+  kind: 'permission',
+  label: 'read',
+  grantee: { kind: 'entity', entityId },
 });
 
 /** Record ids an install links to under `label`. */
@@ -227,6 +235,22 @@ export function ownTypeIds(manifest: AppManifest): TypeId[] {
     .map((t) => t.id)
     .filter((id) => familyStanding(baseIdOf(id), manifest.appId) === 'own');
   return [...new Set(ids)];
+}
+
+/**
+ * A deep-frozen copy of `manifest`, so the plan that holds it applies what
+ * was reviewed even if the caller's object changes afterwards.
+ */
+export function snapshotManifest(manifest: AppManifest): AppManifest {
+  return deepFreeze(structuredClone(manifest));
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value)) deepFreeze(v);
+  }
+  return value;
 }
 
 /** Whether two requests ask for the same family and exactly the same actions. */

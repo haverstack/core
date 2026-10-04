@@ -96,7 +96,7 @@ It refuses what no approval could make valid: a type outside the app's own names
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. Re-applying a manifest whose plan is empty changes nothing.
+**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing.
 
 ## Migrating an installed app's types
 
@@ -141,4 +141,4 @@ const result = await adapter.requestInstall(manifest);
 
 **A request is not an approval.** A pending request lives with the server, not in the stack, so a key that merely authenticated writes nothing into the owner's data. The stack holds only what the owner approved.
 
-**An app reads its own install.** `installApp()` gives every linked key record-level `read` on the install, so the app sees which versions and grants were approved with an ordinary read — by id, or `query({ filter: { baseId: '_install' } })`, which returns only installs it can read. Upgrading is the same request with the new manifest: `pending` until the owner approves, with the app reading at the older version through `presentAt: 'latest'` meanwhile.
+**An app reads its own install.** `installApp()` gives every linked key record-level `read` on the install, and withdraws it from any key of the app no longer linked — one whose `_app` card was deleted, say — leaving other readers the owner added alone, so the app sees which versions and grants were approved with an ordinary read — by id, or `query({ filter: { baseId: '_install' } })`, which returns only installs it can read. Upgrading is the same request with the new manifest: `pending` until the owner approves, with the app reading at the older version through `presentAt: 'latest'` meanwhile.

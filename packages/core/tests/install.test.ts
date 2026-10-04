@@ -278,6 +278,34 @@ describe('what an installed app sees', () => {
     expect(await stack.asEntity(PERSON).get(record.id)).toBeNull();
   });
 
+  test('a key no longer linked loses read on the install; other readers keep it', async () => {
+    await install(manifest());
+    const record = await install(manifest(), OTHER_DID);
+    await stack.grantAccess(record.id, [
+      { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: PERSON } },
+    ]);
+    const otherCard = (await stack.query({ filter: { baseId: '_app' } })).records.find(
+      (r) => (r.content as AppContent).did === OTHER_DID,
+    )!;
+    await stack.delete(otherCard.id);
+
+    await install(manifest());
+    expect(await stack.asEntity(OTHER_DID).get(record.id)).toBeNull();
+    expect(await stack.asEntity(APP_DID).get(record.id)).not.toBeNull();
+    expect(await stack.asEntity(PERSON).get(record.id)).not.toBeNull();
+  });
+
+  test('a plan applies the manifest as planned, whatever happens to the caller’s object', async () => {
+    const m = manifest();
+    const plan = await stack.planInstall(m, { did: APP_DID });
+    m.requests.push({ baseId: 'com.example.notes/note', actions: ['delete-any'] });
+    expect(() => {
+      (plan.manifest.requests as unknown[]).push({ baseId: '_entity', actions: ['read-any'] });
+    }).toThrow(TypeError);
+    const record = await stack.installApp(plan);
+    expect(record.content.requests).toEqual(manifest().requests);
+  });
+
   test('a plan is empty only once its key is installed and nothing would change', async () => {
     expect(isPlanEmpty(await stack.planInstall(manifest(), { did: APP_DID }))).toBe(false);
     await install(manifest());
