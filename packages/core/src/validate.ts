@@ -187,6 +187,11 @@ const validateField = (
     });
   } else if (typeof value === 'number' && !Number.isFinite(value)) {
     errors.push({ path, message: `Expected a finite number, got ${value}` });
+  } else if (def.kind === 'string' && def.enum && !def.enum.includes(value as string)) {
+    errors.push({
+      path,
+      message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
+    });
   }
 };
 
@@ -334,6 +339,22 @@ const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const validateEnumShape = (list: unknown, path: string, errors: ValidationError[]): void => {
+  if (!Array.isArray(list) || list.length === 0) {
+    errors.push({ path, message: '"enum" must be a non-empty array of strings' });
+    return;
+  }
+  const seen = new Set<string>();
+  for (const entry of list) {
+    if (typeof entry !== 'string') {
+      errors.push({ path, message: `"enum" entries must be strings, got ${typeName(entry)}` });
+    } else if (seen.has(entry)) {
+      errors.push({ path, message: `"enum" lists ${JSON.stringify(entry)} more than once` });
+    }
+    seen.add(entry as string);
+  }
+};
+
 const validateFieldDefShape = (
   def: unknown,
   path: string,
@@ -400,6 +421,15 @@ const validateFieldDefShape = (
       path,
       message: `"${def.kind}" is not a field kind`,
     });
+    return;
+  }
+
+  if (def.enum !== undefined) {
+    if (def.kind !== 'string') {
+      errors.push({ path, message: `"enum" is only allowed on a string field, not "${def.kind}"` });
+    } else {
+      validateEnumShape(def.enum, path, errors);
+    }
   }
 };
 

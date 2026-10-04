@@ -611,3 +611,68 @@ describe('validatePatchValues', () => {
     ]);
   });
 });
+
+// -------------------------------------------------------
+// String enums
+// -------------------------------------------------------
+
+describe('string enum', () => {
+  const schema: TypeSchema = {
+    status: { kind: 'string', enum: ['want', 'reading', 'finished'] },
+  };
+
+  test('a listed value is accepted', () => {
+    expect(errorsFor({ status: 'reading' }, schema)).toEqual([]);
+  });
+
+  test('an unlisted value is refused at its path, naming the allowed values', () => {
+    expect(errorsFor({ status: 'abandoned' }, schema)).toEqual([
+      {
+        path: 'status',
+        message: 'Expected one of "want", "reading", "finished", got "abandoned"',
+      },
+    ]);
+  });
+
+  test('a non-string is refused by the type check, not the enum', () => {
+    expect(errorsFor({ status: 3 }, schema)).toEqual([
+      { path: 'status', message: 'Expected string, got number' },
+    ]);
+  });
+
+  test('an enum constrains a string inside a declared array', () => {
+    const tags: TypeSchema = {
+      tags: { kind: 'array', items: { kind: 'string', enum: ['a', 'b'] } },
+    };
+    expect(paths({ tags: ['a', 'c'] }, tags)).toEqual(['tags[1]']);
+  });
+});
+
+describe('validateSchemaShape enum', () => {
+  const messages = (json: string) => validateSchemaShape(JSON.parse(json)).map((e) => e.message);
+
+  test('a non-empty list of distinct strings is well-formed', () => {
+    expect(messages('{"s": {"kind": "string", "enum": ["a", "b"]}}')).toEqual([]);
+  });
+
+  test('an empty or non-array enum is refused', () => {
+    const expected = ['"enum" must be a non-empty array of strings'];
+    expect(messages('{"s": {"kind": "string", "enum": []}}')).toEqual(expected);
+    expect(messages('{"s": {"kind": "string", "enum": "a"}}')).toEqual(expected);
+  });
+
+  test('non-string and duplicate entries are refused', () => {
+    expect(messages('{"s": {"kind": "string", "enum": ["a", 1]}}')).toEqual([
+      '"enum" entries must be strings, got number',
+    ]);
+    expect(messages('{"s": {"kind": "string", "enum": ["a", "a"]}}')).toEqual([
+      '"enum" lists "a" more than once',
+    ]);
+  });
+
+  test('an enum on a non-string kind is refused', () => {
+    expect(messages('{"s": {"kind": "text", "enum": ["a"]}}')).toEqual([
+      '"enum" is only allowed on a string field, not "text"',
+    ]);
+  });
+});
