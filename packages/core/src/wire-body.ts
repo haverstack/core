@@ -2,8 +2,8 @@
  * Stack — Wire Request Bodies
  * -------------------------------------------------------
  * The JSON bodies of the endpoints core specifies but runs no server for:
- * the auth handshake, `PATCH /entity`, `POST /types` and
- * `POST /records/:id/migrate`. Each parser names every key its endpoint
+ * the auth handshake, `PATCH /entity`, `POST /types`,
+ * `POST /records/:id/migrate` and `POST /installs`. Each parser names every key its endpoint
  * defines, so a server refuses the rest without keeping its own copy of
  * the list — a copy that drifts the first time core adds a field.
  *
@@ -20,7 +20,8 @@
 import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { DefineTypeOptions } from './stack.js';
 import { assertKnownKeys, validateAssociation } from './query-validation.js';
-import type { AssociationEdit, StackType, TypeId, TypeSchema } from './types.js';
+import type { AppManifest } from './install.js';
+import type { AssociationEdit, GrantAction, StackType, TypeId, TypeSchema } from './types.js';
 
 export function requireBody(body: unknown, label: string): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))
@@ -218,4 +219,65 @@ export function parseMigrationBody(body: unknown): WireMigrationRequest {
     toTypeId: requiredString(b, 'toTypeId', label),
     content: requiredObject(b, 'content', label),
   };
+}
+
+// -------------------------------------------------------
+// POST /installs
+// -------------------------------------------------------
+
+/**
+ * Parse a `POST /installs` body, `{ manifest }`, into the manifest
+ * `planInstall()` takes. Each type is read as a `POST /types` body is.
+ * Which families a manifest may define, and which requests the grant rules
+ * allow, are `planInstall()`'s to judge. See docs/spec/wire-format.md § Installs.
+ */
+export function parseInstallBody(body: unknown): AppManifest {
+  const b = requireKnownBody(body, ['manifest'], 'install body');
+  const m = requireKnownBody(
+    requiredObject(b, 'manifest', 'install body'),
+    ['appId', 'name', 'version', 'types', 'requests'],
+    'manifest',
+  );
+  const manifest: AppManifest = {
+    appId: nestedString(m, 'manifest', 'appId'),
+    name: nestedString(m, 'manifest', 'name'),
+    types: nestedArray(m, 'manifest', 'types').map((t, i) => {
+      if (typeof t !== 'object' || t === null || Array.isArray(t))
+        fieldError(`manifest.types[${i}]`, 'a type must be an object');
+      return parseTypeBody(t);
+    }),
+    requests: nestedArray(m, 'manifest', 'requests').map((r, i) => {
+      const path = `manifest.requests[${i}]`;
+      if (typeof r !== 'object' || r === null || Array.isArray(r))
+        fieldError(path, 'a request must be an object');
+      const req = requireKnownBody(r, ['baseId', 'actions'], path);
+      const actions = nestedArray(req, path, 'actions');
+      actions.forEach((a, j) => {
+        if (typeof a !== 'string')
+          fieldError(`${path}.actions[${j}]`, 'an action must be a string');
+      });
+      return { baseId: nestedString(req, path, 'baseId'), actions: actions as GrantAction[] };
+    }),
+  };
+  if (m.version !== undefined) {
+    if (typeof m.version !== 'string') fieldError('manifest.version', 'version must be a string');
+    manifest.version = m.version;
+  }
+  return manifest;
+}
+
+/** A required string inside a nested object, its 422 naming the full path. */
+function nestedString(obj: Record<string, unknown>, at: string, key: string): string {
+  const value = obj[key];
+  if (value === undefined) throw new StackBadRequestError(`Invalid ${at}: ${key} is required`);
+  if (typeof value !== 'string') fieldError(`${at}.${key}`, `${key} must be a string`);
+  return value;
+}
+
+/** A required array inside a nested object, its 422 naming the full path. */
+function nestedArray(obj: Record<string, unknown>, at: string, key: string): unknown[] {
+  const value = obj[key];
+  if (value === undefined) throw new StackBadRequestError(`Invalid ${at}: ${key} is required`);
+  if (!Array.isArray(value)) fieldError(`${at}.${key}`, `${key} must be an array`);
+  return value;
 }

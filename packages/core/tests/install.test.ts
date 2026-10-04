@@ -7,6 +7,7 @@ import {
   StackValidationError,
 } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
+import { isPlanEmpty } from '../src/install.js';
 import type { AppManifest } from '../src/install.js';
 import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types.js';
 
@@ -221,6 +222,29 @@ describe('installApp()', () => {
     );
     expect(await stack.getType(COMMONS_NOTE)).not.toBeNull();
     expect(record.content.defines).toEqual([NOTE_1]);
+  });
+});
+
+describe('what an installed app sees', () => {
+  test('each linked key can read its own install, and no one else can', async () => {
+    const record = await install(manifest());
+    expect((await stack.asEntity(APP_DID).get(record.id))?.content).toEqual(record.content);
+    expect(
+      (await stack.asEntity(APP_DID).query({ filter: { baseId: '_install' } })).records,
+    ).toHaveLength(1);
+    expect(await stack.asEntity(PERSON).get(record.id)).toBeNull();
+  });
+
+  test('a plan is empty only once its key is installed and nothing would change', async () => {
+    expect(isPlanEmpty(await stack.planInstall(manifest(), { did: APP_DID }))).toBe(false);
+    await install(manifest());
+    expect(isPlanEmpty(await stack.planInstall(manifest(), { did: APP_DID }))).toBe(true);
+    expect(isPlanEmpty(await stack.planInstall(manifest(), { did: OTHER_DID }))).toBe(false);
+    expect(isPlanEmpty(await stack.planInstall(manifest({ requests: [] }), { did: APP_DID }))).toBe(
+      false,
+    );
+    await stack.uninstallApp('com.example.notes');
+    expect(isPlanEmpty(await stack.planInstall(manifest(), { did: APP_DID }))).toBe(false);
   });
 });
 

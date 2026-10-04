@@ -6,6 +6,7 @@ import {
   parseEntityPatchBody,
   parseTypeBody,
   parseMigrationBody,
+  parseInstallBody,
 } from '../src/wire-entry.js';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
@@ -205,5 +206,41 @@ describe('parseAssociationEditsBody', () => {
         }),
       ),
     ).toBe('changes[0].association.label');
+  });
+});
+
+describe('parseInstallBody', () => {
+  const manifest = {
+    appId: 'com.example.notes',
+    name: 'Notes',
+    version: '1.0.0',
+    types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
+    requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
+  };
+
+  test('reads a manifest into what planInstall() takes', () => {
+    expect(parseInstallBody({ manifest })).toEqual(manifest);
+  });
+
+  test('an unknown key at either level, or a missing field, is not this request', () => {
+    expect(() => parseInstallBody({ manifest, did: DID })).toThrow(StackBadRequestError);
+    expect(() => parseInstallBody({ manifest: { ...manifest, did: DID } })).toThrow(
+      StackBadRequestError,
+    );
+    const { requests: _, ...noRequests } = manifest;
+    expect(() => parseInstallBody({ manifest: noRequests })).toThrow(StackBadRequestError);
+  });
+
+  test('a wrongly typed field names its path', () => {
+    expect(pathOf(() => parseInstallBody({ manifest: { ...manifest, types: {} } }))).toBe(
+      'manifest.types',
+    );
+    expect(
+      pathOf(() =>
+        parseInstallBody({
+          manifest: { ...manifest, requests: [{ baseId: 'com.example.notes/note', actions: [1] }] },
+        }),
+      ),
+    ).toBe('manifest.requests[0].actions[0]');
   });
 });

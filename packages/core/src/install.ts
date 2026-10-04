@@ -230,6 +230,24 @@ export function grantIsRequest(
 }
 
 /**
+ * Whether applying `plan` would change nothing: the install is live, this
+ * key is linked to it, and the manifest adds and removes nothing. A server
+ * answers such a request as already installed rather than queuing it.
+ * See docs/spec/wire-format.md § Installs.
+ */
+export function isPlanEmpty(plan: InstallPlan): boolean {
+  return (
+    plan.existing !== null &&
+    !plan.existing.deletedAt &&
+    !plan.newKey &&
+    plan.newFamilies.length === 0 &&
+    plan.newVersions.length === 0 &&
+    plan.requestsAdded.length === 0 &&
+    plan.requestsRemoved.length === 0
+  );
+}
+
+/**
  * The parts of a plan that depend on the stack's state — what
  * `installApp()` compares to refuse a stale one.
  */

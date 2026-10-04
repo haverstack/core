@@ -3088,7 +3088,31 @@ export class Stack implements StackClient {
         edits.push({ op: 'add', association: installGrantLink(grant.id) });
       }
     }
-    return edits.length > 0 ? this.amendAssociations(install.id, edits) : install;
+    let result = edits.length > 0 ? await this.amendAssociations(install.id, edits) : install;
+
+    // Each key may read its own install, which is how an app learns what
+    // was approved. See docs/spec/apps.md § Over the wire.
+    const readers = dids.filter(
+      (did) =>
+        !(result.permissions ?? []).some(
+          (p) =>
+            p.kind === 'permission' &&
+            p.label === 'read' &&
+            p.grantee.kind === 'entity' &&
+            p.grantee.entityId === did,
+        ),
+    );
+    if (readers.length > 0) {
+      result = await this.grantAccess(
+        install.id,
+        readers.map((entityId) => ({
+          kind: 'permission' as const,
+          label: 'read' as const,
+          grantee: { kind: 'entity' as const, entityId },
+        })),
+      );
+    }
+    return result;
   }
 
   // -------------------------------------------------------

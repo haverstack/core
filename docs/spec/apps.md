@@ -22,7 +22,7 @@ await stack.installApp(plan);
 
 Migration functions are not part of a manifest. They are app code, registered at every startup with `registerMigration()` (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
 
-`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. There is no wire endpoint for them; a server offering an install flow builds its approval step on these calls.
+`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
 
 ## The `_install` record
 
@@ -118,3 +118,19 @@ which migrates live, listed records and counts the soft-deleted ones it passed o
 `uninstallApp(appId)` revokes every grant linked to the install and soft-deletes it. The app's records stay: they are the owner's data, and purging them is a separate, deliberate act. Its `_app` cards stay too, since they are what its records' attribution resolves through (see [Identity § Attribution and what can be trusted](./identity.md#attribution-and-what-can-be-trusted)). A deleted install confers no migration authority.
 
 Installing the same `appId` again undeletes the install and grants its requests afresh.
+
+## Over the wire
+
+Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`.
+
+```ts
+const result = await adapter.requestInstall(manifest);
+// { status: 'pending' } until the owner approves this manifest for this key,
+// then { status: 'installed', install } once applying it would change nothing
+```
+
+**The key is the session's.** The request names no DID: the handshake already proved which key is asking, so no app can ask for an install on behalf of a key it does not hold.
+
+**A request is not an approval.** A pending request lives with the server, not in the stack, so a key that merely authenticated writes nothing into the owner's data. The stack holds only what the owner approved.
+
+**An app reads its own install.** `installApp()` gives every linked key record-level `read` on the install, so the app sees which versions and grants were approved with an ordinary read — by id, or `query({ filter: { baseId: '_install' } })`, which returns only installs it can read. Upgrading is the same request with the new manifest: `pending` until the owner approves, with the app reading at the older version through `presentAt: 'latest'` meanwhile.
