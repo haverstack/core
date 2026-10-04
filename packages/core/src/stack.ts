@@ -140,7 +140,7 @@ import {
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
 } from './install.js';
-import type { AppManifest, ForeignRequest, InstallPlan } from './install.js';
+import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateParentId,
@@ -2885,6 +2885,21 @@ export class Stack implements StackClient {
       foreignRequests.push({ ...r, owner });
     }
 
+    const typeChanges: TypeChange[] = [];
+    for (const t of manifest.types) {
+      const current = await this.getTypeCached(t.id);
+      if (!current) typeChanges.push({ id: t.id, change: 'new' });
+      else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
+        typeChanges.push({ id: t.id, change: 'schema' });
+      } else if (current.name !== t.name) typeChanges.push({ id: t.id, change: 'name' });
+    }
+
+    const linkedKeys: EntityId[] = [];
+    for (const id of existing ? linkedIds(existing, INSTALL_APP_LABEL) : []) {
+      const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
+      if (typeof key === 'string') linkedKeys.push(key);
+    }
+
     return {
       manifest,
       did,
@@ -2894,7 +2909,9 @@ export class Stack implements StackClient {
       requestsAdded: manifest.requests.filter((r) => !prior.some((p) => sameRequest(p, r))),
       requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
       foreignRequests,
+      typeChanges,
       newKey: !existing || !card || !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
+      linkedKeys,
     };
   }
 

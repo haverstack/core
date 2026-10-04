@@ -58,6 +58,16 @@ export type ForeignRequest = InstallRequest & {
 };
 
 /**
+ * A manifest type whose definition would write: one not yet defined, or
+ * defined with a different schema or name. Commons types included, since
+ * defining one claims nothing but still fixes its shape for every app.
+ */
+export type TypeChange = {
+  id: TypeId;
+  change: 'new' | 'schema' | 'name';
+};
+
+/**
  * What applying a manifest would change, for the owner to approve.
  * `installApp()` applies a plan only while it is still what planning the
  * same manifest would produce. See docs/spec/apps.md § Plan, then apply.
@@ -76,8 +86,16 @@ export type InstallPlan = {
   requestsRemoved: InstallRequest[];
   /** Requests on families the manifest does not define — the ones an approval most needs to show. */
   foreignRequests: ForeignRequest[];
+  /** Every manifest type `installApp()` would define or redefine. */
+  typeChanges: TypeChange[];
   /** Whether `did` is a key this install is not yet linked to. */
   newKey: boolean;
+  /**
+   * The keys already linked to the install. Each holds `requests`, so a
+   * plan that changes them changes every one — and a new key joins them
+   * as the same app. See docs/spec/apps.md § Plan, then apply.
+   */
+  linkedKeys: EntityId[];
 };
 
 /** Relationship label from an install to an `_app` card it was installed for. */
@@ -242,6 +260,7 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
     !plan.newKey &&
     plan.newFamilies.length === 0 &&
     plan.newVersions.length === 0 &&
+    plan.typeChanges.length === 0 &&
     plan.requestsAdded.length === 0 &&
     plan.requestsRemoved.length === 0
   );
@@ -261,6 +280,8 @@ export function planFingerprint(plan: InstallPlan): string {
     plan.requestsAdded,
     plan.requestsRemoved,
     plan.foreignRequests,
+    plan.typeChanges,
     plan.newKey,
+    plan.linkedKeys,
   ]);
 }

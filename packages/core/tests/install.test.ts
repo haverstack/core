@@ -144,6 +144,49 @@ describe('installApp()', () => {
     await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
   });
 
+  test('the plan lists every type it would write, commons types included', async () => {
+    const commons = { id: COMMONS_NOTE, name: 'Note', schema: { body: { kind: 'text' } } } as const;
+    const plan = await stack.planInstall(manifest({ types: [manifest().types[0]!, commons] }), {
+      did: APP_DID,
+    });
+    expect(plan.typeChanges).toEqual([
+      { id: NOTE_1, change: 'new' },
+      { id: COMMONS_NOTE, change: 'new' },
+    ]);
+    await stack.installApp(plan);
+
+    const renamed = await stack.planInstall(
+      manifest({ types: [{ ...manifest().types[0]!, name: 'Memo' }] }),
+      { did: APP_DID },
+    );
+    expect(renamed.typeChanges).toEqual([{ id: NOTE_1, change: 'name' }]);
+    expect(isPlanEmpty(renamed)).toBe(false);
+
+    const widened = await stack.planInstall(
+      manifest({
+        types: [
+          { ...manifest().types[0]!, schema: { text: { kind: 'text' }, x: { kind: 'string' } } },
+        ],
+      }),
+      { did: APP_DID },
+    );
+    expect(widened.typeChanges).toEqual([{ id: NOTE_1, change: 'schema' }]);
+  });
+
+  test('the plan names the keys already linked, whose grants it also sets', async () => {
+    expect((await stack.planInstall(manifest(), { did: APP_DID })).linkedKeys).toEqual([]);
+    await install(manifest());
+    const plan = await stack.planInstall(manifest({ requests: MIGRATING }), { did: OTHER_DID });
+    expect(plan.newKey).toBe(true);
+    expect(plan.linkedKeys).toEqual([APP_DID]);
+  });
+
+  test('a plan made before a type was defined is refused', async () => {
+    const plan = await stack.planInstall(manifest(), { did: APP_DID });
+    await stack.defineType(manifest().types[0]!);
+    await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
+  });
+
   test('a key registered to another app is refused', async () => {
     await stack.create('_app@1', { appId: 'com.example.other', name: 'Other', did: APP_DID });
     await expect(stack.planInstall(manifest(), { did: APP_DID })).rejects.toThrow(
@@ -332,6 +375,17 @@ describe('commitMigration() for an installed app', () => {
       .commitMigration(note.id, NOTE_2, { text: 'hello', pinned: false });
     expect(migrated.typeId).toBe(NOTE_2);
     expect(migrated.updatedBy).toEqual({ subjectId: APP_DID });
+  });
+
+  test('a soft-deleted record waits for an undelete', async () => {
+    const note = await installForMigration();
+    await stack.delete(note.id);
+    await expect(
+      stack.asEntity(APP_DID).commitMigration(note.id, NOTE_2, { text: 'overwritten' }),
+    ).rejects.toThrow(StackConflictError);
+    const tombstone = (await stack.get(note.id, { includeDeleted: true }))!;
+    expect(tombstone.typeId).toBe(NOTE_1);
+    expect(tombstone.content).toEqual({ text: 'hello' });
   });
 
   test('update-any has to be requested', async () => {

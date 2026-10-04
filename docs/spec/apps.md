@@ -59,7 +59,7 @@ Two kinds of family belong to no app. **System families** (`_entity`, `_grant`, 
 
 **Using a family is a request; owning one is control of its schema.** Any app may ask for grants on any grantable family — another app's, a commons one, `_entity` — and the owner sees each such request, with the family's owner, in the plan. Only the owner of a family defines its versions and migrates its records, so two apps can never publish rival versions of the same family. An app that wants to add to records it does not own defines a family of its own and links its records to them with `relationship` associations; the shared family is untouched.
 
-**Residual, stated rather than fixed:** `appId` is the app's own claim. On a stack where the real `com.example.notes` is not installed, another app can present a manifest under that `appId` and, if approved, own its families. The plan names the `appId` asking, so the owner is the check; closing the gap needs signed manifests.
+**Residual, stated rather than fixed:** `appId` is the app's own claim. Any key can present a manifest under `com.example.notes`. Where that app is not installed, approving it gives the key the app's families. Where it is, approving it links the key to the existing install: the key is registered as that app, holds its grants and may migrate its types, and the manifest's `requests` replace those of every key already linked. The plan names the `appId` asking and the keys already linked, so the owner is the check; closing the gap needs signed manifests.
 
 ## Plan, then apply
 
@@ -75,9 +75,15 @@ type InstallPlan = {
   requestsAdded: InstallRequest[];
   requestsRemoved: InstallRequest[];
   foreignRequests: (InstallRequest & { owner: AppId | 'commons' | 'system' | null })[];
+  typeChanges: { id: TypeId; change: 'new' | 'schema' | 'name' }[]; // types installApp() would write
   newKey: boolean; // whether `did` is not yet linked to this install
+  linkedKeys: EntityId[]; // keys already linked, whose grants the plan also sets
 };
 ```
+
+`typeChanges` lists every manifest type whose definition would write — not yet defined, or defined with a different schema or name — commons types included. Defining a commons type claims nothing, but the first definition of a version fixes its shape for every app that reads it, so the owner sees it like any other.
+
+`linkedKeys` matters most beside `newKey`: a new key on an existing install joins those keys as the same app (see [Who owns a family](#who-owns-a-family)), and `requestsAdded` and `requestsRemoved` apply to all of them.
 
 `foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
@@ -90,7 +96,7 @@ It refuses what no approval could make valid: a type outside the app's own names
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, or the key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. Re-applying a manifest whose plan is empty changes nothing.
+**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. Re-applying a manifest whose plan is empty changes nothing.
 
 ## Migrating an installed app's types
 
@@ -100,6 +106,8 @@ It refuses what no approval could make valid: a type outside the app's own names
 2. The target TypeId is in that install's `defines` — a version the owner approved.
 3. The requester holds `update-any` on each family through a grant naming its DID directly. Default and group grants do not count, on the terms they do not count for [a principal](./access-control.md#who-a-grant-reaches). The manifest has to request it, so the plan shows it.
 4. The requester is acting alone — not delegated — as the DID of an `_app` card linked to the install.
+
+The Record must also be live. The owner may migrate a soft-deleted Record, but an app cannot read one, so its migration is refused with `StackConflictError` until the Record is undeleted.
 
 The reasons migration is otherwise owner-only do not reach this case. A migration that crosses into `_attachment` or moves a DID binding needs a system family at one end, and no install can claim one; nor can it claim a commons family, which every app reads. Ordinary write access is not consent to move a Record between versions; the owner's approval of the version is. Every migration still snapshots the Record's prior content and type to [version history](./versioning.md#version-history), so it stays recoverable like any other write.
 

@@ -66,6 +66,7 @@ import type {
 } from './types.js';
 import {
   StackError,
+  StackConflictError,
   StackNotFoundError,
   StackPermissionError,
   RelayScopeError,
@@ -1611,6 +1612,14 @@ export class ScopedStack implements StackClient {
         allowGroup: false,
       });
       if (!held) return false;
+    }
+    // Asked only once authority is settled, as every mutating verb asks it.
+    // The owner may migrate a tombstone; an app sees it without content.
+    // See docs/spec/apps.md § Migrating an installed app's types.
+    if (record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${id}" is soft-deleted; undelete it before migrating it.`,
+      );
     }
     return true;
   }
