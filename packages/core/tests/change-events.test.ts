@@ -63,8 +63,8 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
@@ -129,7 +129,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'v2' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.patchContent(note.id, { text: 'v3' });
 
@@ -145,13 +145,13 @@ describe('a mutation that changes nothing emits nothing', () => {
   test.each([
     [
       're-adding an association already present',
-      async (id: string) => stack.associate(id, { kind: 'tag', label: 'starred' }),
-      async (id: string) => stack.associate(id, { kind: 'tag', label: 'starred' }),
+      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
+      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
     ],
     [
       'removing an association that is not there',
       async () => {},
-      async (id: string) => stack.dissociate(id, { kind: 'tag', label: 'absent' }),
+      async (id: string) => stack.dissociate(id, [{ kind: 'tag', label: 'absent' }]),
     ],
     [
       'setting a deep-equal permission set',
@@ -356,8 +356,8 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.asEntity(EDITOR).associate(note.id, { kind: 'tag', label: 'x' });
-    await stack.asEntity(EDITOR).dissociate(note.id, { kind: 'tag', label: 'x' });
+    await stack.asEntity(EDITOR).associate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.asEntity(EDITOR).dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
 
     expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
     expect(seen[1]!.actor).toEqual({ subjectId: EDITOR });
@@ -381,8 +381,8 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.associate(note.id, { kind: 'tag', label: 'x' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'x' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
 
     expect(seen[0]!.actor).toBeUndefined();
     expect(seen[1]!.actor).toBeUndefined();
@@ -465,7 +465,7 @@ describe('associationsAdded/associationsRemoved report the current change', () =
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsRemoved).toBeUndefined();
@@ -473,11 +473,11 @@ describe('associationsAdded/associationsRemoved report the current change', () =
 
   test('dissociate() reports the removed association by identity, nothing added', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsAdded).toBeUndefined();
@@ -489,21 +489,25 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('re-pointing an attachment reports only the new pointer; the old one appears nowhere', async () => {
     const { first, second, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     expect(seen[0]!.associationsAdded).toEqual([
       { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
@@ -515,16 +519,18 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('clearing a stored pointer reports the identity-only association as added', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, { kind: 'attachment', label: 'embed', fileId });
+    await stack.associate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
@@ -532,23 +538,25 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('dissociating a pointed attachment never repeats attachmentRecordId', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, { kind: 'attachment', label: 'embed', fileId });
+    await stack.dissociate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
 
   test('a mutate() change set swapping one tag for another reports both lists', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'draft' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'draft' }]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 

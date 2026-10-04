@@ -89,10 +89,10 @@ describe('attribution — updatedBy tracks the actor', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     const view = stack.asEntity(EDITOR);
 
-    await view.associate(created.id, { kind: 'tag', label: 'x' });
+    await view.associate(created.id, [{ kind: 'tag', label: 'x' }]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
 
-    await view.dissociate(created.id, { kind: 'tag', label: 'x' });
+    await view.dissociate(created.id, [{ kind: 'tag', label: 'x' }]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
   });
 

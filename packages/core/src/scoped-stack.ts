@@ -37,6 +37,7 @@ import type {
   AppId,
   PutAttachmentOptions,
   Association,
+  AssociationEdit,
   AttachmentContent,
   AuthorityAssociation,
   DataAssociation,
@@ -70,6 +71,7 @@ import {
   StackValidationError,
 } from './errors.js';
 import {
+  assertAssociationEdits,
   assertAuthorityAssociations,
   assertDataAssociations,
   assertSortCapability,
@@ -1207,23 +1209,45 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Gated on the write bit alone, which is why the kind refusal comes
-   * first: authority reached through this verb would be exactly the
+   * Gated on the write bit alone, which is why the list is held to its
+   * rules first: authority reached through this verb would be exactly the
    * escalation the partition exists to stop, decided before any record is
    * read so it cannot depend on who is asking.
    */
-  async associate(id: RecordId, association: DataAssociation): Promise<StackRecord> {
-    assertDataAssociations([association], 'associate()');
-    const record = await this.requireUpdatable(id);
-    await this.requireAssociationAccess(record.typeId, association);
-    return this.stack.associate(id, association, this.actor);
+  async associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'add', association })),
+      'associate()',
+    );
   }
 
   /** See associate() — the same write gate, the same kind refusal. */
-  async dissociate(id: RecordId, association: DataAssociation): Promise<StackRecord> {
-    assertDataAssociations([association], 'dissociate()');
-    await this.requireUpdatable(id);
-    return this.stack.dissociate(id, association, this.actor);
+  async dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'remove', association })),
+      'dissociate()',
+    );
+  }
+
+  /**
+   * The write gate, plus the per-element reference gate on each add: what a
+   * remove names is already on the record, so it is gated by the write bit
+   * alone. See associate().
+   */
+  async amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    surface = 'amendAssociations()',
+  ): Promise<StackRecord> {
+    assertAssociationEdits(changes, surface, 'data');
+    const record = await this.requireUpdatable(id);
+    for (const change of changes) {
+      if (change.op === 'add')
+        await this.requireAssociationAccess(record.typeId, change.association);
+    }
+    return this.stack.amendAssociations(id, changes, this.actor, surface);
   }
 
   /**
@@ -1234,17 +1258,32 @@ export class ScopedStack implements StackClient {
    * scoping access is for.
    * See docs/spec/access-control.md § Record-level permissions.
    */
-  async grantAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord> {
-    assertAuthorityAssociations([permission], 'grantAccess()');
-    await this.requireReshareable(id);
-    return this.stack.grantAccess(id, permission, this.actor);
+  async grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+    return this.amendAccess(
+      id,
+      permissions.map((association) => ({ op: 'add', association })),
+      'grantAccess()',
+    );
   }
 
-  /** Withdraw one element of who reaches a record — see grantAccess(). */
-  async revokeAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord> {
-    assertAuthorityAssociations([permission], 'revokeAccess()');
+  /** Withdraw elements of who reaches a record — see grantAccess(). */
+  async revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+    return this.amendAccess(
+      id,
+      permissions.map((association) => ({ op: 'remove', association })),
+      'revokeAccess()',
+    );
+  }
+
+  /** The reshare gate over an edit list — see grantAccess(). */
+  async amendAccess(
+    id: RecordId,
+    changes: AssociationEdit[],
+    surface = 'amendAccess()',
+  ): Promise<StackRecord> {
+    assertAssociationEdits(changes, surface, 'authority');
     await this.requireReshareable(id);
-    return this.stack.revokeAccess(id, permission, this.actor);
+    return this.stack.amendAccess(id, changes, this.actor, surface);
   }
 
   /**

@@ -45,20 +45,24 @@ type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 
 ### The inverse
 
-Undoing one entry's association change is a walk over `associations`, with no lookup into a sibling list:
+Undoing one entry's association changes is at most two calls, one per half of [the partition](./access-control.md#storage-unifies-the-api-does-not), passing each element's inverse to `amendAssociations()` / `amendAccess()`:
 
 ```ts
-for (const change of entry.associations ?? []) {
-  const element = change.op === 'repoint' ? change.previous : change.association;
-  const [add, remove] = isAuthority(element)
-    ? [stack.grantAccess, stack.revokeAccess]
-    : [stack.associate, stack.dissociate];
-  if (change.op === 'add') await remove(recordId, element);
-  else await add(recordId, element);
-}
+const inverse = (change: AssociationChange): AssociationEdit =>
+  change.op === 'add'
+    ? { op: 'remove', association: change.association }
+    : { op: 'add', association: change.op === 'repoint' ? change.previous : change.association };
+
+const edits = (entry.associations ?? []).map(inverse);
+const data = edits.filter((e) => !isAuthority(e.association));
+const authority = edits.filter((e) => isAuthority(e.association));
+if (data.length) await stack.amendAssociations(recordId, data);
+if (authority.length) await stack.amendAccess(recordId, authority);
 ```
 
-A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
+An entry's inverse is valid input as it stands: it names each identity once, and `repoint` never appears in it.
+
+A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` inverts to a `remove` of the same element. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
 
 Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
 

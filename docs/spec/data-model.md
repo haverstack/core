@@ -135,9 +135,28 @@ Content is a patch because uniformity costs more here than it buys. [`limits.con
 
 **`patchContent(id, patch, opts)`** is the content-only spelling, exactly `mutate()` with `contentPatch` alone. Content edits outnumber every other kind by a wide margin, and the name says what the operation does instead of promising a symmetry with `create()` that a patch does not have.
 
-**`associate()` and `dissociate()` are not the `associations` key.** Each adds or removes a single Association, matched by kind, label and payload, and is a no-op when the Record already stands that way. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
+**`associate()` and `dissociate()` are not the `associations` key.** Each takes a list of Associations to add or remove, matched by kind, label and payload, as one atomic write and one [journal entry](./journal.md#the-entry); an element the Record already stands that way on is a no-op for that element, and a call where every element is a no-op returns the Record without writing. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
 
-**`grantAccess()` and `revokeAccess()` stand in the same relation to the `permissions` key**, and carry the reshare gate rather than the write bit — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). The concurrency warning above applies to `permissions` exactly as it does to `associations`: two admins granting different people through the key clobber, where the verbs let both land.
+**`amendAssociations(id, changes)` is the atomic way to add and remove in one write.** It takes a list of `AssociationEdit` — the [journal's](./journal.md#the-entry) `{ op: 'add' | 'remove', association }` shape without `repoint` — and `associate()` and `dissociate()` are the same call with one half each. Swapping a cover is one call, one write and one journal entry:
+
+```ts
+stack.amendAssociations(bookId, [
+  { op: 'remove', association: oldCover },
+  { op: 'add', association: newCover },
+]);
+```
+
+`repoint` is the journal's word, never a request: it is refused with `StackValidationError` at the element, and `400 bad_request` on the wire. An `add` naming an attachment the Record already holds re-points it in place, which is all a `repoint` could say.
+
+**A list is held to one set of rules**, whichever verb carries it, before anything is read or written:
+
+- An empty list is refused with `StackValidationError`.
+- A list naming one identity twice is refused, as the `associations` key is ([Associations are keyed by identity](./adapters.md#associations-are-keyed-by-identity)). So is a list that both removes and adds one identity.
+- A list never mixes authority and data elements ([Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not)).
+- A `remove` matches on identity, as `dissociate()` does.
+- The [write-implies-read](./access-control.md#write-implies-read) and `_group` at-least-one-admin checks read the post-state of the whole call.
+
+**`grantAccess()`, `revokeAccess()` and `amendAccess()` stand in the same relation to the `permissions` key**, and carry the reshare gate rather than the write bit — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). `grantAccess()` and `revokeAccess()` take lists, and `amendAccess(id, changes)` is `amendAssociations()` for permissions. The concurrency warning above applies to `permissions` exactly as it does to `associations`: two admins granting different people through the key clobber, where the verbs let both land.
 
 **What the envelope does not carry.** `typeId` moves only through [`commitMigration()`](#type-migrations), which replaces content wholesale under a new schema and carries its own owner-only gate. `deletedAt` moves only through `delete()`/`undelete()`: a tombstone transition is a lifecycle step rather than an edit, and [mutations are refused against a tombstone](./versioning.md#mutations-are-refused-not-applied-to-a-tombstone) rather than bundled with one. `createdAt` and `updatedAt` are settable at [create time only, by the owner acting alone](#backdating-on-import). Every remaining native field is stamped by the write itself or is create-only — [Reparenting](#reparenting) gives the full split.
 

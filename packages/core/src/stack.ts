@@ -34,7 +34,7 @@ import {
   validateSchemaShape,
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
-import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
+import { hasGroupAdmin, validatePermissions } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
@@ -50,6 +50,7 @@ import type {
   RecordFilter,
   QueryResult,
   Association,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   Migration,
@@ -101,10 +102,10 @@ import {
   assertValidVersionsQuery,
   assertValidSort,
   normalizeSort,
+  assertAssociationEdits,
   assertAuthorityAssociations,
   assertDataAssociations,
   filtersContent,
-  validateAssociation,
   validateAssociations,
 } from './query-validation.js';
 import {
@@ -136,8 +137,8 @@ import {
   MAX_QUERY_LIMIT,
 } from './stack-reads.js';
 import {
+  applyAssociationEdits,
   associationDelta,
-  associationEqual,
   associationIdentical,
   assertNonEmptyChangeSet,
   changeSetOps,
@@ -399,22 +400,38 @@ export interface StackClient {
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   /**
-   * Add an association. Never bumps `version`/`updatedAt` and takes no
-   * `ifVersion` — a set-add composes regardless of write order.
-   * See docs/spec/versioning.md § Version history.
+   * Add associations in one atomic write and one journal entry. Never bumps
+   * `version`/`updatedAt` and takes no `ifVersion` — a set-add composes
+   * regardless of write order. See docs/spec/data-model.md § Mutations and
+   * docs/spec/versioning.md § Version history.
    */
-  associate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
-  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
+  associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
+  /** Remove associations, matched by identity — see associate(). */
+  dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
   /**
-   * Extend who reaches a record by one element — the record-level mirror of
-   * the type-level `grantType()`, and the amending spelling of the
-   * `permissions` key, which replaces the whole set. No-bump, like
-   * associate(). See docs/spec/access-control.md § Record-level permissions.
+   * Apply a list of adds and removes to a record's data associations as one
+   * atomic write — the cover swap. associate() and dissociate() are this with
+   * one half each; `mutate({ associations })` is the only whole-set write.
+   * `repoint` is not a request: an add naming an attachment the record
+   * already holds re-points it. See docs/spec/data-model.md § Mutations.
    */
-  grantAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
-  /** Withdraw one element of who reaches a record — see grantAccess(). */
-  revokeAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
+  amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
+  /**
+   * Extend who reaches a record — the record-level mirror of the type-level
+   * `grantType()`, and the amending spelling of the `permissions` key, which
+   * replaces the whole set. `write` never implies `read`: grant both,
+   * `grantAccess(id, [read, write])`. No-bump, like associate().
+   * See docs/spec/access-control.md § Write implies read.
+   */
+  grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
+  /** Withdraw elements of who reaches a record — see grantAccess(). */
+  revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
+  /**
+   * amendAssociations() for permissions: adds and removes in one atomic
+   * write, so a downgrade (remove `write`, keep `read`) is one change.
+   * See docs/spec/access-control.md § Record-level permissions.
+   */
+  amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
   delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   /**
    * delete(), plus the record it acted on — read and destroyed as one
@@ -1249,7 +1266,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add an association to a record — no-bump and no snapshot, per the
+   * Add associations to a record — no-bump and no snapshot, per the
    * StackClient declaration above.
    *
    * An association the record already holds, saying the same thing, is a
@@ -1261,154 +1278,141 @@ export class Stack implements StackClient {
    */
   async associate(
     id: RecordId,
-    association: DataAssociation,
+    associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertDataAssociations([association], 'associate()');
-    const errors = validateAssociation(association);
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    this.refuseIfDeleted(existing);
-    if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
-      return existing;
-    }
-    const replaced = (existing.associations ?? []).find((a) => associationEqual(a, association));
-    await this.checkAttachmentAssociationPointers([association]);
-
-    const change = new PendingChange('associate', {
-      actor: normalizeActor(opts.actor),
-      // A re-point carries what it overwrote: nothing else retains the
-      // attachmentRecordId that association held.
-      associations: [
-        replaced ? { op: 'repoint', association, previous: replaced } : { op: 'add', association },
-      ],
-    });
-    const updated = await this.adapter.amendAssociations(id, [{ op: 'add', association }], {
-      journal: change.journal,
-    });
-    this.announce(change, updated);
-    return updated;
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'add', association })),
+      opts,
+      'associate()',
+    );
   }
 
   /**
-   * Remove an association from a record — see associate(). Matched by kind,
-   * label and payload; a no-op if not found. The emitted event names the
-   * association by identity only, since an attachment's
+   * Remove associations from a record — see associate(). Matched by kind,
+   * label and payload; an element not found is a no-op. The emitted event
+   * names each association by identity only, since an attachment's
    * `attachmentRecordId` describes nothing current once it is gone; the
    * journal is where it survives.
    */
   async dissociate(
     id: RecordId,
-    association: DataAssociation,
+    associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertDataAssociations([association], 'dissociate()');
-    const errors = validateAssociation(association);
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    this.refuseIfDeleted(existing);
-    const matched = (existing.associations ?? []).find((a) => associationEqual(a, association));
-    if (!matched) {
-      return existing;
-    }
-    // Removing anything else cannot take the roster to zero, so only an
-    // admin entry is worth deriving the post-state for. Derived rather than
-    // counted so this path and the change set's reach the invariant through
-    // the same helper, asking the same question of the same shape of list.
-    if (isGroupAdminAssociation(association)) {
-      this.assertGroupAdminRemains(
-        existing,
-        (existing.associations ?? []).filter((a) => !associationEqual(a, association)),
-      );
-    }
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'remove', association })),
+      opts,
+      'dissociate()',
+    );
+  }
 
-    const change = new PendingChange('dissociate', {
-      actor: normalizeActor(opts.actor),
-      // In full, annotation included — what makes a removal as undoable
-      // from the log as a re-point is. The frame this becomes still names
-      // identity only. See docs/spec/journal.md § The entry.
-      associations: [{ op: 'remove', association: matched }],
-    });
-    const updated = await this.adapter.amendAssociations(id, [{ op: 'remove', association }], {
-      journal: change.journal,
-    });
+  /**
+   * The atomic form of associate() and dissociate(): one list of adds and
+   * removes, one adapter write, one journal entry. The journal records each
+   * element in full — a remove with its annotation, a re-point with what it
+   * overwrote — so the entry is as undoable as a single-element one.
+   * See docs/spec/data-model.md § Mutations.
+   */
+  async amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts: ActorOptions = {},
+    surface = 'amendAssociations()',
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertAssociationEdits(changes, surface, 'data');
+    const existing = await this.requireRecord(id);
+    this.refuseIfDeleted(existing);
+    const current = existing.associations ?? [];
+    const next = applyAssociationEdits(current, changes) as DataAssociation[];
+    const delta = associationDelta(current, next);
+    if (delta.length === 0) return existing;
+    // Only a roster can lose its last admin, and only the post-state says so.
+    this.assertGroupAdminRemains(existing, next);
+    await this.checkAttachmentAssociationPointers(
+      changes.flatMap((c) => (c.op === 'add' ? [c.association] : [])),
+      current,
+    );
+
+    const change = new PendingChange(
+      [
+        ...(delta.some((c) => c.op !== 'remove') ? (['associate'] as const) : []),
+        ...(delta.some((c) => c.op === 'remove') ? (['dissociate'] as const) : []),
+      ],
+      { actor: normalizeActor(opts.actor), associations: delta },
+    );
+    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
     this.announce(change, updated);
     return updated;
   }
 
   /**
-   * Extend who reaches a record by one element. The spelling that survives
-   * two admins sharing a record at once: a `permissions` key write replaces
-   * the whole set, so the later of two concurrent ones drops what the
-   * earlier granted. No-bump, like associate(); an element the record
-   * already carries is a no-op.
+   * Extend who reaches a record. The spelling that survives two admins
+   * sharing a record at once: a `permissions` key write replaces the whole
+   * set, so the later of two concurrent ones drops what the earlier
+   * granted. No-bump, like associate(); an element the record already
+   * carries is a no-op. `write` never implies `read` — name both.
    */
   async grantAccess(
     id: RecordId,
-    permission: AuthorityAssociation,
+    permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertAuthorityAssociations([permission], 'grantAccess()');
-    const errors = validateAssociation(permission, 'permission');
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.requireRecord(id);
-    this.refuseIfDeleted(existing);
-    const current = existing.permissions ?? [];
-    if (current.some((p) => associationEqual(p, permission))) return existing;
-    this.assertPermissionSet([...current, permission]);
-
-    const change = new PendingChange('reshare', {
-      actor: normalizeActor(opts.actor),
-      associations: [{ op: 'add', association: permission }],
-    });
-    const updated = await this.adapter.amendAssociations(
+    return this.amendAccess(
       id,
-      [{ op: 'add', association: permission }],
-      { journal: change.journal },
+      permissions.map((association) => ({ op: 'add', association })),
+      opts,
+      'grantAccess()',
     );
-    this.announce(change, updated);
-    return updated;
   }
 
   /**
-   * Withdraw one element of who reaches a record — see grantAccess() for
-   * why this is a verb rather than a key write. An element the record does
-   * not carry is a no-op. Returns the record as it now stands.
+   * Withdraw elements of who reaches a record — see grantAccess() for why
+   * this is a verb rather than a key write. An element the record does not
+   * carry is a no-op. Returns the record as it now stands.
    */
   async revokeAccess(
     id: RecordId,
-    permission: AuthorityAssociation,
+    permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    return this.amendAccess(
+      id,
+      permissions.map((association) => ({ op: 'remove', association })),
+      opts,
+      'revokeAccess()',
+    );
+  }
+
+  /**
+   * The atomic form of grantAccess() and revokeAccess(). The
+   * write-implies-read invariant is asked once, of the set the whole list
+   * produces. See docs/spec/access-control.md § Write implies read.
+   */
+  async amendAccess(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts: ActorOptions = {},
+    surface = 'amendAccess()',
+  ): Promise<StackRecord> {
     this.assertOpen();
-    assertAuthorityAssociations([permission], 'revokeAccess()');
-    const errors = validateAssociation(permission, 'permission');
-    if (errors.length > 0) throw new StackValidationError(errors);
+    assertAssociationEdits(changes, surface, 'authority');
     const existing = await this.requireRecord(id);
     this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
-    const matched = current.find((p) => associationEqual(p, permission));
-    if (!matched) return existing;
-    this.assertPermissionSet(current.filter((p) => !associationEqual(p, permission)));
+    const next = applyAssociationEdits(current, changes) as AuthorityAssociation[];
+    const delta = associationDelta(current, next);
+    if (delta.length === 0) return existing;
+    this.assertPermissionSet(next);
 
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
-      associations: [{ op: 'remove', association: matched }],
+      associations: delta,
     });
-    const updated = await this.adapter.amendAssociations(
-      id,
-      [{ op: 'remove', association: permission }],
-      { journal: change.journal },
-    );
+    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
     this.announce(change, updated);
     return updated;
   }
@@ -2655,7 +2659,7 @@ export class Stack implements StackClient {
       if (!companions) return;
       errors.push({
         path: `actions[${j}]`,
-        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read`,
+        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
       });
     });
     if (errors.length > 0) {

@@ -26,6 +26,7 @@ import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   AnyoneAssociation,
   Association,
+  AssociationEdit,
   AttachmentAssociation,
   AuthorityAssociation,
   DataAssociation,
@@ -508,6 +509,63 @@ export function validateAssociations(
         : [],
     ),
   ];
+}
+
+/**
+ * Hold an association edit list to the rules every verb shares: non-empty,
+ * every element a known `op` over a well-formed association, one surface,
+ * and each identity named once — a list that both removes and adds one
+ * identity is the same ambiguity as naming it twice. `repoint` is the
+ * journal's word, never a request. Asked of the whole list before anything
+ * is read or written. See docs/spec/data-model.md § Mutations.
+ */
+export function assertAssociationEdits(
+  changes: unknown,
+  surface: string,
+  half: 'data' | 'authority',
+): asserts changes is AssociationEdit[] {
+  if (!Array.isArray(changes) || changes.length === 0) {
+    throw new StackValidationError([
+      { path: 'changes', message: `${surface} names at least one change.` },
+    ]);
+  }
+  const errors: ValidationError[] = [];
+  changes.forEach((raw: unknown, i) => {
+    const path = `changes[${i}]`;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      errors.push({ path, message: `${path} must be an object.` });
+      return;
+    }
+    const edit = raw as { op?: unknown; association?: unknown };
+    if (edit.op !== 'repoint') assertKnownKeys(edit, ['op', 'association'], path);
+    if (edit.op === 'repoint') {
+      errors.push({
+        path: `${path}.op`,
+        message:
+          'op: "repoint" is recorded by the journal, not requested. ' +
+          "Send { op: 'add', association }: an add naming an attachment the record already holds re-points it in place.",
+      });
+    } else if (edit.op !== 'add' && edit.op !== 'remove') {
+      errors.push({ path: `${path}.op`, message: 'op must be "add" or "remove".' });
+    }
+    errors.push(...validateAssociation(edit.association as Association, `${path}.association`));
+  });
+  if (errors.length > 0) throw new StackValidationError(errors);
+
+  const associations = (changes as AssociationEdit[]).map((c) => c.association);
+  if (half === 'data') assertDataAssociations(associations, surface);
+  else assertAuthorityAssociations(associations, surface);
+
+  const duplicates: ValidationError[] = [];
+  associations.forEach((a, i) => {
+    if (associations.slice(0, i).some((b) => associationEqual(a, b))) {
+      duplicates.push({
+        path: `changes[${i}]`,
+        message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
+      });
+    }
+  });
+  if (duplicates.length > 0) throw new StackValidationError(duplicates);
 }
 
 /**
