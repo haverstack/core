@@ -689,6 +689,25 @@ describe('getRecord', () => {
     );
   });
 
+  test('an id is sent as one encoded path segment', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.getRecord('x?purge=true#/../types');
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/x%3Fpurge%3Dtrue%23%2F..%2Ftypes?includeDeleted=true`,
+      expect.anything(),
+    );
+  });
+
+  test('an id of "." or ".." is refused before any request', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockClear();
+    for (const id of ['.', '..']) {
+      await expect(adapter.deleteRecord(id)).rejects.toBeInstanceOf(StackBadRequestError);
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   test('parses response into StackRecord with Date objects', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
