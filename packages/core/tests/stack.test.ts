@@ -1036,21 +1036,22 @@ describe('query — content filter null semantics', () => {
   // The same contract the SQL adapters honor by quoting the key into a JSON
   // path: a content key is a field name, never a path expression, so both
   // sides of the wire agree on what a dotted key asks for.
-  // The field-name walk and the filter-path cap are sized together: a name
-  // the walk stops short of is one no path can address.
-  test('a name the field-name walk cannot reach is a name no path can address', async () => {
+  // The field-name walk and the content depth cap are sized together: a
+  // name the walk stops short of sits in content too deep to be stored.
+  test('a name the field-name walk cannot reach is content too deep to store', async () => {
     const deep = (d: number): Record<string, unknown> =>
       d === 0 ? { 'bad.name': 1 } : { n: deep(d - 1) };
 
     await expect(stack.create(NOTE_V1, { text: 'a', ...deep(31) })).rejects.toThrow(
-      StackValidationError,
+      /reserved character/,
     );
-    const beyond = await stack.create(NOTE_V1, { text: 'b', ...deep(33) });
+    await expect(stack.create(NOTE_V1, { text: 'b', ...deep(33) })).rejects.toThrow(
+      /Content nesting exceeds maximum depth of 32/,
+    );
     const path = [...Array(33).fill('n'), 'bad', 'name'].join('.');
     await expect(stack.query({ filter: { content: { [path]: 1 } } })).rejects.toThrow(
       StackBadRequestError,
     );
-    expect(beyond.id).toBeDefined();
   });
 
   // A dotted key is a path, and a field literally named `a.b` is refused
