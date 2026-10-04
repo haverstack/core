@@ -148,13 +148,22 @@ import {
   isGroupRecord,
 } from './record-changes.js';
 import { ScopedStack, scopeToken } from './scoped-stack.js';
-import { isTypeHandle, typedCreate, typedGet, typedMutate, typedQuery } from './type-handle.js';
+import {
+  isTypeHandle,
+  typedCreate,
+  typedGet,
+  typedMutate,
+  typedQuery,
+  typedSubscribe,
+} from './type-handle.js';
 import type {
   ContentOf,
   PatchOf,
   ReadonlyTypeSchema,
+  TypedChange,
   TypedChangeSet,
   TypedQuery,
+  TypedSubscribeOptions,
   TypedRecord,
   TypeHandle,
 } from './type-handle.js';
@@ -504,6 +513,16 @@ export interface StackClient {
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
+  /**
+   * Typed subscription: delivers only changes to records of exactly the
+   * handle's Type, each `record` typed as its content. See
+   * docs/spec/data-model.md § Type handles.
+   */
+  subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
@@ -2522,10 +2541,30 @@ export class Stack implements StackClient {
    * makes subscribe-then-query the gap-free startup order everywhere. A
    * local stack is live immediately.
    */
+  async subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts: SubscribeOptions = {},
+    opts?: SubscribeOptions,
+  ): Promise<Unsubscribe>;
+  async subscribe(
+    first: TypeHandle | ((change: RecordChange) => void),
+    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
+    third?: TypedSubscribeOptions,
   ): Promise<Unsubscribe> {
+    if (isTypeHandle(first)) {
+      return typedSubscribe(
+        this,
+        first,
+        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
+        third,
+      );
+    }
+    const handler = first;
+    const opts = (second ?? {}) as SubscribeOptions;
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
     assertValidBaseIdFilter(opts.filter);

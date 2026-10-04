@@ -17,14 +17,18 @@ import type { ValidationError } from './validate.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
 import type {
   BaseId,
+  ChangeFilter,
   IfVersionOptions,
+  RecordChange,
   RecordChangeSet,
   RecordId,
   RecordFilter,
   ScalarFieldKind,
   StackQuery,
   StackRecord,
+  SubscribeOptions,
   TypeId,
+  Unsubscribe,
 } from './types.js';
 
 // -------------------------------------------------------
@@ -174,6 +178,21 @@ export type TypedQuery = Omit<StackQuery, 'filter' | 'presentAt'> & {
   filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
 };
 
+/**
+ * A change whose `record`, when present, is the handle's content. Absent
+ * where an untyped change's would be, and also where the record holds an
+ * enum value the handle does not list — re-read it with the typed `get()`,
+ * which says why.
+ */
+export type TypedChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
+  record?: TypedRecord<S>;
+};
+
+/** The family and version are the handle's, so neither is a filter key. */
+export type TypedSubscribeOptions = Omit<SubscribeOptions, 'filter'> & {
+  filter?: Omit<ChangeFilter, 'typeId' | 'baseId'>;
+};
+
 export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet, 'contentPatch'> & {
   contentPatch?: PatchOf<S>;
 };
@@ -255,7 +274,7 @@ export const assertLiveFilter = (filter: object | undefined): void => {
 // Typed operations, shared by Stack and ScopedStack
 // -------------------------------------------------------
 
-type TypedOps = Pick<StackClient, 'get' | 'query' | 'create' | 'mutate'>;
+type TypedOps = Pick<StackClient, 'get' | 'query' | 'create' | 'mutate' | 'subscribe'>;
 
 export const typedGet = async <S extends ReadonlyTypeSchema>(
   client: TypedOps,
@@ -306,3 +325,26 @@ export const typedMutate = async <S extends ReadonlyTypeSchema>(
   }
   return narrowRecord(handle, await client.mutate(id, changes, opts));
 };
+
+export const typedSubscribe = <S extends ReadonlyTypeSchema>(
+  client: TypedOps,
+  handle: TypeHandle<S>,
+  handler: (change: TypedChange<S>) => void,
+  opts: TypedSubscribeOptions = {},
+): Promise<Unsubscribe> =>
+  // Exactly the handle's version: an event carries its record as stored, so
+  // a subscription cannot migrate it the way a typed read does, and a
+  // record of another version has no honest typing here.
+  client.subscribe(
+    (change) => {
+      const { record, ...rest } = change;
+      let narrowed: TypedRecord<S> | undefined;
+      try {
+        narrowed = record && narrowRecord(handle, record);
+      } catch (err) {
+        if (!(err instanceof StackValidationError)) throw err;
+      }
+      handler(narrowed ? { ...rest, record: narrowed } : rest);
+    },
+    { ...opts, filter: { ...opts.filter, typeId: handle.id } },
+  );

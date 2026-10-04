@@ -106,13 +106,22 @@ import {
 // Every import from stack.js is type-only: a ScopedStack never constructs
 // a Stack, so nothing here closes a runtime cycle with stack.ts, which does
 // construct a ScopedStack.
-import { isTypeHandle, typedCreate, typedGet, typedMutate, typedQuery } from './type-handle.js';
+import {
+  isTypeHandle,
+  typedCreate,
+  typedGet,
+  typedMutate,
+  typedQuery,
+  typedSubscribe,
+} from './type-handle.js';
 import type {
   ContentOf,
   PatchOf,
   ReadonlyTypeSchema,
+  TypedChange,
   TypedChangeSet,
   TypedQuery,
+  TypedSubscribeOptions,
   TypedRecord,
   TypeHandle,
 } from './type-handle.js';
@@ -1537,10 +1546,30 @@ export class ScopedStack implements StackClient {
    * disclosure, the same reasoning that keeps a count of the whole match
    * off a query result. See docs/spec/events.md § Permission scoping.
    */
+  async subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts: SubscribeOptions = {},
+    opts?: SubscribeOptions,
+  ): Promise<Unsubscribe>;
+  async subscribe(
+    first: TypeHandle | ((change: RecordChange) => void),
+    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
+    third?: TypedSubscribeOptions,
   ): Promise<Unsubscribe> {
+    if (isTypeHandle(first)) {
+      return typedSubscribe(
+        this,
+        first,
+        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
+        third,
+      );
+    }
+    const handler = first;
+    const opts = (second ?? {}) as SubscribeOptions;
     this.assertStackOpen();
     if (this.relaysChanges) {
       throw new RelayScopeError(

@@ -2,12 +2,15 @@ import { describe, test, expect, expectTypeOf, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { typeHandle } from '../src/type-handle.js';
-import type { ContentOf, PatchOf, TypedRecord } from '../src/type-handle.js';
+import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError, StackValidationError } from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
 import type { TypeSchema } from '../src/types.js';
 
 const OWNER = 'owner-123';
+
+// Scoped delivery is asynchronous: the permission check is.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const Book = typeHandle('com.example.reading/book@2', {
   title: { kind: 'string', required: true },
@@ -286,6 +289,60 @@ describe.each([
     });
     expect(updated.content.status).toBe('finished');
     expect(updated.unlistedAt).toBeDefined();
+  });
+
+  test("subscribe() delivers only the handle's Type, with the record typed", async () => {
+    const seen: TypedChange<typeof Book.schema>[] = [];
+    const stop = await client.subscribe(Book, (change) => seen.push(change), {
+      includeRecords: true,
+    });
+    await client.create(Shelf, { name: 'Fiction' });
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+    await settle();
+    stop();
+
+    expect(seen.map((c) => c.recordId)).toEqual([book.id]);
+    expectTypeOf(seen[0].record).toEqualTypeOf<TypedRecord<typeof Book.schema> | undefined>();
+    expect(seen[0].record?.content).toEqual({ title: 'Dune', status: 'want' });
+  });
+
+  test('subscribe() takes the rest of the change filter', async () => {
+    const seen: string[] = [];
+    const stop = await client.subscribe(Book, (c) => seen.push(c.kind), {
+      filter: { kinds: ['removed'] },
+    });
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+    await client.delete(book.id);
+    await settle();
+    stop();
+    expect(seen).toEqual(['removed']);
+  });
+
+  test('subscribe() withholds a record holding an enum value the handle does not list', async () => {
+    const seen: TypedChange<typeof Book.schema>[] = [];
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+    await stack.defineType({
+      id: Book.id,
+      name: 'Book',
+      schema: {
+        ...Book.schema,
+        status: {
+          kind: 'string',
+          enum: ['want', 'reading', 'finished', 'abandoned', 'paused'],
+          required: true,
+        },
+      },
+    });
+    const stop = await client.subscribe(Book, (change) => seen.push(change), {
+      includeRecords: true,
+    });
+    await stack.patchContent(book.id, { status: 'paused' });
+    await settle();
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].recordId).toBe(book.id);
+    expect(seen[0].record).toBeUndefined();
   });
 
   test('a typed write to a record of another Type throws before writing', async () => {

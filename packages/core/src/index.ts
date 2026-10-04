@@ -43,7 +43,9 @@ export type {
   PatchOf,
   TypedRecord,
   TypedQuery,
+  TypedChange,
   TypedChangeSet,
+  TypedSubscribeOptions,
   ReadonlyFieldDef,
   ReadonlyTypeSchema,
 } from './type-handle.js';
