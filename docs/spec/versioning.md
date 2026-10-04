@@ -156,7 +156,7 @@ A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent
 
 The refusal is asked **after** the authority decision, never before: `ScopedStack` authorizes first and only then calls into `Stack`. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
 
-`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see [Undelete](#undelete)), and it is owner-acting-alone only.
+`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see [Undelete](#undelete)), and it is owner-acting-alone, save for an [installed app within its own families](./apps.md#migrating-an-installed-apps-types).
 
 ### Purge
 

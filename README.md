@@ -41,6 +41,13 @@ await stack.grantType('com.example.myapp/note', {
 });
 ```
 
+An app can instead ship those steps as a manifest — its types and the grants it asks for — which the owner reviews and applies in one call. The stack keeps the approval as an `_install` record, so the grants it made can be listed, upgraded and withdrawn together, and the app can migrate its own types without the owner running its code. See [App installs](./docs/spec/apps.md).
+
+```ts
+const plan = await stack.planInstall(manifest, { did: notesAppDid }); // show this to the owner
+await stack.installApp(plan);
+```
+
 The containment is the **type list**, not the `-own` suffix. When a delegated app acts for someone, `-own` is read as the bare verb and the subject decides which records are in reach — so in a personal stack, where nearly everything is owner-authored, `read-own` is close to `read-any`. Grant an app the types it needs and no more.
 
 On the app's side, connecting is the keypair plus a URL. `APIAdapter` performs the challenge–response handshake on open and re-runs it whenever the token expires, so there is no token to obtain, store, or refresh by hand:

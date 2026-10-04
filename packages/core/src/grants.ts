@@ -306,12 +306,14 @@ async function resolveGroupRoleMemoized(
  * System type families grantType() refuses to target: a grant on any of them
  * would let the grantee mint their own grants, touch stack config, or
  * register an app card claiming a DID that isn't theirs — the last of which
- * is what verified app attribution rests on.
+ * is what verified app attribution rests on — or approve an install, which
+ * decides grants and migration authority.
  */
 export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.GRANT,
   SYSTEM_TYPES.CONFIG,
   SYSTEM_TYPES.APP,
+  SYSTEM_TYPES.INSTALL,
 ]);
 
 /**
