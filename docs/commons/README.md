@@ -74,10 +74,11 @@ Three postures, in order of preference:
    can then read your records even though they've never heard of your type. Each type
    file documents its **read-compat core** — the minimal shape consumers should code
    against.
-3. **Migrate in later.** An existing app with its own type can add a lens to the commons
-   type when ready; the library's migration machinery only covers versions of the _same_
-   type, so this is an app-level export/import — which is still a one-time cost paid by
-   the app author, not a per-user export ritual.
+3. **Migrate in later.** An existing app with its own type can register a migration
+   into the commons type when ready and commit it with `migrateAll()` — a migration
+   path may cross type families (see
+   [Type migrations](../spec/data-model.md#type-migrations)). It is a one-time cost paid
+   by the app author, not a per-user export ritual.
 
 Consumers should filter by exact `typeId` when they need commons semantics, and use
 `isCompatible()` with the read-compat core when they want maximum reach.
@@ -101,9 +102,10 @@ these.
    that is one app's or one user's _view_ of the record — pinned, starred, read/unread,
    sort order, UI state — is not commons content. Use tag associations or app sidecar
    types.
-4. **Queryable fields are top-level scalars.** Only top-level scalar fields support
-   content filtering, so anything apps will plausibly filter on (`task.done`) must not
-   be nested. Arrays and objects are for data that is only ever read, not queried.
+4. **Sortable fields are top-level scalars.** A content filter reaches nested paths
+   and matches arrays element-wise, but only top-level scalars are indexed for sorting
+   and as file references, and a nested path is an unindexed walk. Anything apps will
+   plausibly sort or routinely filter on (`task.done`) stays at the top level.
 5. **Use the native machinery, don't duplicate it in content.** Tags are tag
    associations, not a `tags: string[]` field. Cross-references are relationship
    associations or `parentId`, not bare ID strings in content. Files are attachment
@@ -165,8 +167,8 @@ sense for it.
   `{ ns: 'email', id: 'alice@example.com' }`. It is the resolution primitive — an
   inbound record whose author arrives as a foreign identifier is matched back to a
   known entity with one indexed `relatedTo` query — which is why it is an association
-  and not a content field: array fields are opaque to the query engine, so the same
-  list inside `_entity.content` would force a scan of every entity record. Machine
+  and not a content field: a nested content path is an unindexed walk, so the same
+  list inside `_entity.content` would scan every entity record. Machine
   identifiers only; a person's own words about someone belong on a `contact`.
 - **`syndicated-to`** — `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
   records that a copy of this record was published elsewhere. The canonical copy stays
