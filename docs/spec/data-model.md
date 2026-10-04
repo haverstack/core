@@ -572,6 +572,8 @@ By default, `query()` (like `get()`) returns Records exactly as stored — see [
 
 **Unlisted Records are excluded by default too**, the same posture as soft-deleted ones: `includeUnlisted` opts a query back in, and — unlike `includeDeleted` — `ScopedStack` restricts that opt-in to the owner acting alone. See [Unlisted records](./unlisted.md).
 
+**A query hides exactly those three things by default, and nothing else**: soft-deleted Records (`includeDeleted`), unlisted Records (`includeUnlisted`) and `_config` (always). So an unfiltered `query()` returns every Record the caller can read, from every app, system types such as `_entity@1` and `_grant@1` included. An app filters by `typeId`, `baseId` or `appId` to get its own. System Records are not hidden because anything that must see the whole stack — a reference check before deleting a file, a backup or export — would otherwise have to opt back in, and a missed opt-out would lose data silently.
+
 ### Sorting and pagination
 
 ```ts

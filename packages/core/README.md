@@ -76,7 +76,8 @@ await stack.mutate(note.id, {
   unlisted: false,
 });
 
-// Query
+// Query. With no filter, query() returns every record you can read, from every
+// app and system types included, so filter by typeId, baseId or appId to get your own.
 const notes = await stack.query({
   filter: { typeId: 'com.example.myapp/note@1', tags: ['favourite'] },
   sort: { field: 'createdAt', direction: 'desc' },
