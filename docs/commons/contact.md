@@ -57,8 +57,10 @@ do different jobs: an `alias` relationship is what an app resolves an inbound re
 author _through_, while `contact.emails` is what a person reads. A contact that is also
 a known principal carries both — see the conventions below.
 
-Note that array fields are opaque to the query engine; apps filter contacts by `name`
-or via associations, not by address.
+A content path reaches into the array, so `{ content: { 'emails.value': … } }` finds
+the contact holding an address — an unindexed walk, so cheap on a personal stack and
+worth bounding on a server (see
+[Nested content paths](../spec/data-model.md#nested-content-paths)).
 
 ## Conventions
 

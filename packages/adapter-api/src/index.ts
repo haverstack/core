@@ -296,6 +296,19 @@ const isLoopbackUrl = (url: string): boolean => {
 };
 
 /**
+ * One caller-supplied value as one URL path segment, so an ID can never
+ * reach a different endpoint than the one the method names. `.` and `..`
+ * are refused outright: URL parsing collapses them even percent-encoded.
+ */
+const pathSegment = (value: string | number): string => {
+  const s = String(value);
+  if (s === '' || s === '.' || s === '..') {
+    throw new StackBadRequestError(`Invalid path segment ${JSON.stringify(s)}`);
+  }
+  return encodeURIComponent(s);
+};
+
+/**
  * fetch(), with a transport failure reported as this adapter's own error.
  * `baseUrl` names the server in the message even when `url` is a longer
  * path under it — what failed is the connection, not the endpoint.
@@ -1053,11 +1066,11 @@ export class APIAdapter implements StackAdapter {
   async getRecord(id: RecordId): Promise<StackRecord | null> {
     const raw = await this.request<WireRecord | null | undefined>(
       'GET',
-      `/records/${id}?includeDeleted=true`,
+      `/records/${pathSegment(id)}?includeDeleted=true`,
       undefined,
       { nullOn404: true },
     );
-    const body = requireNullableBody(raw, `GET /records/${id}`);
+    const body = requireNullableBody(raw, `GET /records/${pathSegment(id)}`);
     return body ? parseRecord(body) : null;
   }
 
@@ -1070,10 +1083,15 @@ export class APIAdapter implements StackAdapter {
     // updatedAt) ride along. The server applies it against its own current
     // state and assigns the new version/updatedAt; the response is
     // authoritative. One If-Match fences the whole set.
-    const raw = await this.request<WireRecord | undefined>('PATCH', `/records/${id}`, changes, {
-      ifMatch: opts.ifVersion,
-    });
-    return requireRecordBody(raw, `PATCH /records/${id}`);
+    const raw = await this.request<WireRecord | undefined>(
+      'PATCH',
+      `/records/${pathSegment(id)}`,
+      changes,
+      {
+        ifMatch: opts.ifVersion,
+      },
+    );
+    return requireRecordBody(raw, `PATCH /records/${pathSegment(id)}`);
   }
 
   /**
@@ -1114,11 +1132,11 @@ export class APIAdapter implements StackAdapter {
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/migrate`,
+      `/records/${pathSegment(id)}/migrate`,
       { toTypeId, content },
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/migrate`);
+    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/migrate`);
   }
 
   /**
@@ -1131,7 +1149,9 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     opts: { purge?: boolean; ifVersion?: number } = {},
   ): Promise<StackRecord | null> {
-    const path = opts.purge ? `/records/${id}?purge=true` : `/records/${id}`;
+    const path = opts.purge
+      ? `/records/${pathSegment(id)}?purge=true`
+      : `/records/${pathSegment(id)}`;
     const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
       ifMatch: opts.ifVersion,
       // An unconditional purge of a record that isn't there purged
@@ -1144,17 +1164,17 @@ export class APIAdapter implements StackAdapter {
     // report of what it referenced, and every other row naming those files
     // is gone. See docs/spec/wire-format.md § Records.
     if (opts.purge) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
-    return requireRecordBody(raw ?? undefined, `DELETE /records/${id}`);
+    return requireRecordBody(raw ?? undefined, `DELETE /records/${pathSegment(id)}`);
   }
 
   async undeleteRecord(id: RecordId, opts: { ifVersion?: number } = {}): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/undelete`,
+      `/records/${pathSegment(id)}/undelete`,
       undefined,
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/undelete`);
+    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/undelete`);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -1235,7 +1255,7 @@ export class APIAdapter implements StackAdapter {
    */
   async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord> {
     assertOneSurface(changes);
-    const path = `/records/${id}/${APIAdapter.associationPath(changes[0]?.association)}`;
+    const path = `/records/${pathSegment(id)}/${APIAdapter.associationPath(changes[0]?.association)}`;
     const raw = await this.request<WireRecord | undefined>('POST', path, { changes });
     return requireRecordBody(raw, `POST ${path}`);
   }
@@ -1260,7 +1280,7 @@ export class APIAdapter implements StackAdapter {
       if (beforeVersion !== undefined) params.set('beforeVersion', String(beforeVersion));
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
-      const path = `/records/${id}/versions${qs ? `?${qs}` : ''}`;
+      const path = `/records/${pathSegment(id)}/versions${qs ? `?${qs}` : ''}`;
       const raw = await this.request<WireVersionsResponse | undefined>('GET', path);
       const body = requireBody(raw, `GET ${path}`);
       for (const v of body.versions) versions.push(parseVersion(v));
@@ -1300,7 +1320,7 @@ export class APIAdapter implements StackAdapter {
       if (afterSeq !== undefined) params.set('afterSeq', String(afterSeq));
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
-      const path = `/records/${id}/journal${qs ? `?${qs}` : ''}`;
+      const path = `/records/${pathSegment(id)}/journal${qs ? `?${qs}` : ''}`;
       const raw = await this.request<WireJournalResponse | undefined>('GET', path);
       const body = requireBody(raw, `GET ${path}`);
       // Appended one at a time rather than spread: a spread is an argument
@@ -1325,11 +1345,14 @@ export class APIAdapter implements StackAdapter {
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
     const raw = await this.request<WireVersion | null | undefined>(
       'GET',
-      `/records/${id}/versions/${version}`,
+      `/records/${pathSegment(id)}/versions/${pathSegment(version)}`,
       undefined,
       { nullOn404: true },
     );
-    const body = requireNullableBody(raw, `GET /records/${id}/versions/${version}`);
+    const body = requireNullableBody(
+      raw,
+      `GET /records/${pathSegment(id)}/versions/${pathSegment(version)}`,
+    );
     return body ? parseVersion(body) : null;
   }
 
@@ -1351,11 +1374,14 @@ export class APIAdapter implements StackAdapter {
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/restore/${version}`,
+      `/records/${pathSegment(id)}/restore/${pathSegment(version)}`,
       undefined,
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/restore/${version}`);
+    return requireRecordBody(
+      raw,
+      `POST /records/${pathSegment(id)}/restore/${pathSegment(version)}`,
+    );
   }
 
   // -------------------------------------------------------
@@ -1369,7 +1395,7 @@ export class APIAdapter implements StackAdapter {
   async getType(id: TypeId): Promise<StackType | null> {
     const raw = await this.request<WireType | null | undefined>(
       'GET',
-      `/types/${encodeURIComponent(id)}`,
+      `/types/${pathSegment(id)}`,
       undefined,
       { nullOn404: true },
     );
@@ -1417,11 +1443,11 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getBlob(fileId: FileId): Promise<Uint8Array> {
-    return this.requestBinary(`/attachments/${fileId}`);
+    return this.requestBinary(`/attachments/${pathSegment(fileId)}`);
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
-    await this.request<void>('DELETE', `/attachments/${fileId}`);
+    await this.request<void>('DELETE', `/attachments/${pathSegment(fileId)}`);
   }
 
   // -------------------------------------------------------

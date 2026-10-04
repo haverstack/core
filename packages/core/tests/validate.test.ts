@@ -354,6 +354,23 @@ describe('plain JSON content', () => {
     meta.self = meta;
     expect(paths({ meta }, schema)).toEqual(['meta.self']);
   });
+
+  test('an open value nested past the depth cap is refused, not overflowed', () => {
+    const schema: TypeSchema = { xs: { kind: 'array', open: true } };
+    const deep = JSON.parse('['.repeat(10_000) + ']'.repeat(10_000));
+    expect(errorsFor({ xs: deep }, schema)).toEqual([
+      {
+        path: `xs${'[0]'.repeat(33)}`,
+        message: 'Content nesting exceeds maximum depth of 32',
+      },
+    ]);
+  });
+
+  test('an open value at the depth cap is accepted', () => {
+    const schema: TypeSchema = { xs: { kind: 'array', open: true } };
+    const atCap = JSON.parse('['.repeat(33) + ']'.repeat(33));
+    expect(errorsFor({ xs: atCap }, schema)).toEqual([]);
+  });
 });
 
 describe('open containers', () => {

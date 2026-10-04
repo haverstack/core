@@ -219,7 +219,7 @@ The body parsers split errors the way [Records](#records) does for a create: a b
 
 ### The taxonomy root
 
-Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `UseAfterCloseError`, `InvalidAdapterError`, `RelayScopeError`) stay outside the hierarchy for that reason.
+Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `RelayScopeError`) stay outside the hierarchy for that reason.
 
 **The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 
@@ -232,7 +232,7 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 ```json
 {
   "error": {
-    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request" | "schema_drift" | "payload_too_large",
+    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request" | "schema_drift" | "payload_too_large" | "timeout",
     "message": "human-readable description",
     "details": [ { "path": "title", "message": "expected string, got number" } ],
     "versionConflict": { "recordId": "rec-abc123", "expectedVersion": 5, "actualVersion": 7 },
@@ -264,6 +264,8 @@ DELETE /records/:id?purge=true — purge
 POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
+
+**A path parameter is one percent-encoded segment.** `:id`, `:version` and `:fileId` are sent through `encodeURIComponent`, so a value holding `/`, `?` or `#` addresses the endpoint the client named and no other. `.` and `..` cannot be encoded safely — URL parsing collapses them even as `%2e` — so `APIAdapter` refuses them with `StackBadRequestError` before sending anything.
 
 **Every mutation answers with a record** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with the Record they produced. This holds for the association endpoints too, even though they never bump `version` — the record they answer with simply carries whatever `version`/`updatedAt` it already had, as does a `PATCH` naming only no-bump keys (see [Versioning § Version history](./versioning.md#version-history)).
 
@@ -386,7 +388,7 @@ For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of gr
 
 ### Migration commit
 
-`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending lazy migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner**, and to an installed app migrating within the families its install claims (see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types)), and answers `403` otherwise: migration is owner-driven, and no grant alone confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner**, and to an installed app migrating within the families its install claims (see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types)), and answers `403` otherwise: migration is owner-driven, and no grant alone confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
 
 ### Response envelope
 
@@ -478,7 +480,7 @@ The second durable tier a mutation writes is [the change journal](./journal.md),
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). It settles `content` and `typeId` alone, so it never moves the record and never lists or unlists it: neither the **403** nor the **409** a change set's `parentId` can earn has a site here. A snapshot naming a `file-ref` the requester cannot currently reach still answers **403**, which is the only reference a restore can re-convey. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus the association endpoints (which report `associate`/`dissociate` without ever bumping `version` or snapshotting), plus create and purge. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge, the association and permission endpoints, and a `PATCH` naming only no-bump keys — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
 
 ## Journal
 

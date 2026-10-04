@@ -62,14 +62,24 @@ const isPlainJsonObject = (value: object): boolean => {
 /**
  * Content is plain JSON at every depth, including inside `open` containers,
  * so adapters that store the value as given and adapters that serialize it
- * read back the same thing. See docs/spec/data-model.md § Types.
+ * read back the same thing. Nesting is held to the cap declared fields
+ * already meet, so an open value cannot buy an unbounded walk.
+ * See docs/spec/data-model.md § Types.
  */
 const validateJsonValue = (
   value: unknown,
   path: string,
   errors: ValidationError[],
+  depth: number,
   ancestors: object[] = [],
 ): void => {
+  if (depth > MAX_VALIDATION_DEPTH) {
+    errors.push({
+      path,
+      message: `Content nesting exceeds maximum depth of ${MAX_VALIDATION_DEPTH}`,
+    });
+    return;
+  }
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
@@ -88,11 +98,11 @@ const validateJsonValue = (
   }
   const next = [...ancestors, value];
   if (isArray) {
-    value.forEach((item, i) => validateJsonValue(item, `${path}[${i}]`, errors, next));
+    value.forEach((item, i) => validateJsonValue(item, `${path}[${i}]`, errors, depth + 1, next));
     return;
   }
   for (const [key, child] of Object.entries(value)) {
-    validateJsonValue(child, `${path}.${key}`, errors, next);
+    validateJsonValue(child, `${path}.${key}`, errors, depth + 1, next);
   }
 };
 
@@ -119,7 +129,7 @@ const validateField = (
     // An open array is the list-shaped counterpart of an open object: the
     // schema places a list here and says nothing about what it holds.
     if (def.open) {
-      validateJsonValue(value, path, errors);
+      validateJsonValue(value, path, errors, depth);
       return;
     }
     const items = def.items;
@@ -140,7 +150,7 @@ const validateField = (
     // An open object says "an object lives here" and nothing about its
     // interior, so there is no set of declared keys to hold it to.
     if (def.open) {
-      validateJsonValue(value, path, errors);
+      validateJsonValue(value, path, errors, depth);
       return;
     }
     validateContent(value as Record<string, unknown>, def.properties, path, errors, depth + 1);
