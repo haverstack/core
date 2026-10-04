@@ -72,24 +72,24 @@ type RecordChange = {
 
 **Every op is a verb, named after the call that produced it.** Most share the method's name. Three don't, because the method covers more than one op:
 
-| op        | produced by                                                                       |
-| --------- | --------------------------------------------------------------------------------- |
-| `patch`   | `mutate()`'s `contentPatch` key, or `patchContent()`                              |
-| `reshare` | `grantAccess()`/`revokeAccess()`, or `mutate()`'s `permissions` key               |
-| `purge`   | `delete(id, { purge: true })`, which is also where `kind: 'purged'` gets its name |
+| op        | produced by                                                                         |
+| --------- | ----------------------------------------------------------------------------------- |
+| `patch`   | `mutate()`'s `contentPatch` key, or `patchContent()`                                |
+| `reshare` | `grantAccess()`/`revokeAccess()`/`amendAccess()`, or `mutate()`'s `permissions` key |
+| `purge`   | `delete(id, { purge: true })`, which is also where `kind: 'purged'` gets its name   |
 
-`delete` is the soft delete, and `reparent`, `unlist` and `list` are `mutate()`'s `parentId` and `unlisted` keys. One word means one thing everywhere it appears: the option you pass, the op in `ops`, the entry in [the journal](./journal.md#the-entry) and the `kind`.
+`delete` is the soft delete, `amendAssociations()` reports `associate` for its adds and `dissociate` for its removes, and `reparent`, `unlist` and `list` are `mutate()`'s `parentId` and `unlisted` keys. One word means one thing everywhere it appears: the option you pass, the op in `ops`, the entry in [the journal](./journal.md#the-entry) and the `kind`.
 
 **`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
 
-Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `purge`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set, and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
+Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `purge`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set or an `amendAssociations()` that both adds and removes (`['associate', 'dissociate']`), and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**`associationsAdded`/`associationsRemoved` are the live report of what an `associate()`/`dissociate()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./journal.md), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
+**`associationsAdded`/`associationsRemoved` are the live report of what an `associate()`/`dissociate()`/`amendAssociations()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./journal.md), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
 
 - `associationsAdded` is each association as it now stands, current annotation included. A re-point (a new `attachmentRecordId` on an association the record already held) surfaces here under its new value; the value it replaced is not on this frame or any other, because a frame reports what is current — the journal's [`repoint`](./journal.md#the-entry) is what keeps it.
 - `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. An attachment's `attachmentRecordId` is not repeated on removal, the same way a `purged` frame never carries the content it destroyed: the field names what happened, not a payload that is no longer current. The journal's [`remove`](./journal.md#the-entry) keeps the annotation, because putting an association back is exactly what that tier is read for.
 
-Neither list is ever present on an op other than `associate`/`dissociate`, and a `mutate()` change set that swaps one association for another (`ops: ['associate', 'dissociate']`) carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
+Neither list is ever present on an op other than `associate`/`dissociate`, and a swap of one association for another (`ops: ['associate', 'dissociate']`), through `amendAssociations()` or a `mutate()` change set, carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
 
 **Both lists carry the data half alone.** Permission elements share the association delta in storage and in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `reshare` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op, the journal entry and [the reshare gate](./access-control.md#storage-unifies-the-api-does-not) cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
 

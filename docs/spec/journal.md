@@ -86,7 +86,7 @@ It is **not** the [change feed's `cursor`](./change-feed.md#frames), which is an
 
 ## Atomicity
 
-**An entry lands in the same atomic write as the mutation it describes.** Adapters accept it as an option on every mutating method — `associate()`/`dissociate()` included, which take no other — and append it inside their own transaction, after the write, reading `version`, `typeId` and `parentId` off the row it produced. `Stack` supplies only the half the record cannot report afterwards. A crash cannot leave a change unjournaled, and a failed mutation leaves no entry.
+**An entry lands in the same atomic write as the mutation it describes.** Adapters accept it as an option on every mutating method — `amendAssociations()` included, which takes no other — and append it inside their own transaction, after the write, reading `version`, `typeId` and `parentId` off the row it produced. `Stack` supplies only the half the record cannot report afterwards. A crash cannot leave a change unjournaled, and a failed mutation leaves no entry.
 
 ## A purge destroys the journal
 

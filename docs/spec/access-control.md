@@ -256,7 +256,7 @@ A revocation is a soft delete like any other mutation — the owner can `undelet
 
 ### The two layers use different granularities
 
-Record-level `write` is one coarse bit (above); grants are precise per verb. Type-wide access for a third-party app warrants verb precision in a way per-record sharing among intimates doesn't. `associate()`/`dissociate()` don't get their own grant action — they ride `update-own`/`update-any`, the same as content changes, keeping the grant vocabulary from growing a verb for every mutation kind.
+Record-level `write` is one coarse bit (above); grants are precise per verb. Type-wide access for a third-party app warrants verb precision in a way per-record sharing among intimates doesn't. `associate()`/`dissociate()`/`amendAssociations()` don't get their own grant action — they ride `update-own`/`update-any`, the same as content changes, keeping the grant vocabulary from growing a verb for every mutation kind.
 
 ## Enforcement: `Stack.asEntity()`
 
@@ -354,7 +354,7 @@ Two consequences worth stating plainly rather than leaving to be discovered:
 
 ### Reference-creation gating
 
-A `create` grant on a type authorizes writing Records of that type — it does not, by itself, authorize referencing arbitrary other Records or files through that Record. `ScopedStack.create()` and `ScopedStack.associate()` both additionally check that the requester may create the specific reference being written, since a reference elsewhere confers access (an `attachment` association or file-ref content field makes the referenced file downloadable via `getAttachment()`):
+A `create` grant on a type authorizes writing Records of that type — it does not, by itself, authorize referencing arbitrary other Records or files through that Record. `ScopedStack.create()` and `ScopedStack.associate()`/`amendAssociations()` additionally check that the requester may create the specific reference being written, since a reference elsewhere confers access (an `attachment` association or file-ref content field makes the referenced file downloadable via `getAttachment()`):
 
 - **`attachment` associations and file-ref content fields** require file access: the requester is the owner, uploaded the file themselves (holds an `_attachment@1` Record for it), or can already read some Record referencing it. This is exactly `getAttachment()`'s own access rule — reference creation requires what reference possession would grant.
 - **`parentId`, and a `relationship` whose target is a Record in this stack** (`{ kind: 'record' }` naming no `stackUrl`), require read access to that Record. The gate tests `stackUrl` for a value rather than for presence, because absent and empty are one target everywhere else — storage, association identity, and the filter all read both as this stack — so both spellings meet the same check. This gate runs before the target's shape is validated, so a reference is refused for the access it names rather than reporting what was wrong with it.
