@@ -57,8 +57,9 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
     };
   }
 
-  // Scalar
+  // Scalar. `enum` is sorted so reordering the values is not a change.
   return {
+    ...(def.kind === 'string' && def.enum && { enum: [...def.enum].sort() }),
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
   };
@@ -215,6 +216,22 @@ const diffField = (
       path,
       message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
     });
+  }
+  // An enum narrows what a string field accepts when it is added or loses
+  // values, and widens it when it is removed or gains them.
+  if (stored.kind === 'string' && candidate.kind === 'string') {
+    if (!stored.enum && candidate.enum) {
+      violations.push({ path, message: 'enum added to an existing string field' });
+    } else if (stored.enum && candidate.enum) {
+      const kept = new Set(candidate.enum);
+      const removed = stored.enum.filter((v) => !kept.has(v));
+      if (removed.length > 0) {
+        violations.push({
+          path,
+          message: `enum values removed: ${removed.map((v) => JSON.stringify(v)).join(', ')}`,
+        });
+      }
+    }
   }
   // Opening a declared container, or closing an open one, changes which
   // content it accepts in a way no field-by-field diff would show.

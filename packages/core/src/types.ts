@@ -307,10 +307,19 @@ export type ScalarFieldKind =
   | 'record-ref' // Reference to another record by ID
   | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex) — indexed, unlike a plain `string` fileId
 
-export type ScalarFieldDef = {
-  kind: ScalarFieldKind;
+/**
+ * `enum` is a non-empty, duplicate-free list of the strings the field may
+ * hold. See docs/spec/data-model.md § Types.
+ */
+export type StringFieldDef = {
+  kind: 'string';
+  enum?: string[];
   required?: boolean;
 };
+
+export type ScalarFieldDef =
+  | StringFieldDef
+  | { kind: Exclude<ScalarFieldKind, 'string'>; required?: boolean };
 
 /**
  * A list. `open: true` leaves its elements unvalidated,

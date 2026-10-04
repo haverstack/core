@@ -52,6 +52,50 @@ const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   }
 };
 
+const typeName = (value: unknown): string => (value instanceof Date ? 'a Date' : typeof value);
+
+const isPlainJsonObject = (value: object): boolean => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+/**
+ * Content is plain JSON at every depth, including inside `open` containers,
+ * so adapters that store the value as given and adapters that serialize it
+ * read back the same thing. See docs/spec/data-model.md § Types.
+ */
+const validateJsonValue = (
+  value: unknown,
+  path: string,
+  errors: ValidationError[],
+  ancestors: object[] = [],
+): void => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      errors.push({ path, message: `Expected a finite number, got ${value}` });
+    }
+    return;
+  }
+  const isArray = Array.isArray(value);
+  if (typeof value !== 'object' || (!isArray && !isPlainJsonObject(value))) {
+    errors.push({ path, message: `Expected a JSON value, got ${typeName(value)}` });
+    return;
+  }
+  if (ancestors.includes(value)) {
+    errors.push({ path, message: 'Expected a JSON value, got a circular reference' });
+    return;
+  }
+  const next = [...ancestors, value];
+  if (isArray) {
+    value.forEach((item, i) => validateJsonValue(item, `${path}[${i}]`, errors, next));
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    validateJsonValue(child, `${path}.${key}`, errors, next);
+  }
+};
+
 const validateField = (
   value: unknown,
   def: FieldDef,
@@ -69,30 +113,49 @@ const validateField = (
 
   if (def.kind === 'array') {
     if (!Array.isArray(value)) {
-      errors.push({ path, message: `Expected array, got ${typeof value}` });
+      errors.push({ path, message: `Expected array, got ${typeName(value)}` });
       return;
     }
     // An open array is the list-shaped counterpart of an open object: the
     // schema places a list here and says nothing about what it holds.
-    if (def.open) return;
+    if (def.open) {
+      validateJsonValue(value, path, errors);
+      return;
+    }
     const items = def.items;
     value.forEach((item, i) => validateField(item, items, `${path}[${i}]`, errors, depth + 1));
     return;
   }
 
   if (def.kind === 'object') {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      errors.push({ path, message: `Expected object, got ${typeof value}` });
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      !isPlainJsonObject(value)
+    ) {
+      errors.push({ path, message: `Expected object, got ${typeName(value)}` });
       return;
     }
     // An open object says "an object lives here" and nothing about its
     // interior, so there is no set of declared keys to hold it to.
-    if (def.open) return;
+    if (def.open) {
+      validateJsonValue(value, path, errors);
+      return;
+    }
     validateContent(value as Record<string, unknown>, def.properties, path, errors, depth + 1);
     return;
   }
 
   if (def.kind === 'date') {
+    if (value instanceof Date) {
+      errors.push({
+        path,
+        message:
+          'Expected an ISO 8601 date string, got a Date. Pass date.toISOString() for a moment in time, or a "YYYY-MM-DD" string for a calendar day.',
+      });
+      return;
+    }
     if (
       typeof value !== 'string' ||
       !ISO_8601_RE.test(value) ||
@@ -100,7 +163,7 @@ const validateField = (
     ) {
       errors.push({
         path,
-        message: `Expected ISO 8601 date string, got ${typeof value}`,
+        message: `Expected ISO 8601 date string, got ${typeName(value)}`,
       });
     }
     return;
@@ -120,7 +183,14 @@ const validateField = (
   if (typeof value !== expected) {
     errors.push({
       path,
-      message: `Expected ${expected}, got ${typeof value}`,
+      message: `Expected ${expected}, got ${typeName(value)}`,
+    });
+  } else if (typeof value === 'number' && !Number.isFinite(value)) {
+    errors.push({ path, message: `Expected a finite number, got ${value}` });
+  } else if (def.kind === 'string' && def.enum && !def.enum.includes(value as string)) {
+    errors.push({
+      path,
+      message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
     });
   }
 };
@@ -269,6 +339,22 @@ const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const validateEnumShape = (list: unknown, path: string, errors: ValidationError[]): void => {
+  if (!Array.isArray(list) || list.length === 0) {
+    errors.push({ path, message: '"enum" must be a non-empty array of strings' });
+    return;
+  }
+  const seen = new Set<string>();
+  for (const entry of list) {
+    if (typeof entry !== 'string') {
+      errors.push({ path, message: `"enum" entries must be strings, got ${typeName(entry)}` });
+    } else if (seen.has(entry)) {
+      errors.push({ path, message: `"enum" lists ${JSON.stringify(entry)} more than once` });
+    }
+    seen.add(entry as string);
+  }
+};
+
 const validateFieldDefShape = (
   def: unknown,
   path: string,
@@ -335,6 +421,15 @@ const validateFieldDefShape = (
       path,
       message: `"${def.kind}" is not a field kind`,
     });
+    return;
+  }
+
+  if (def.enum !== undefined) {
+    if (def.kind !== 'string') {
+      errors.push({ path, message: `"enum" is only allowed on a string field, not "${def.kind}"` });
+    } else {
+      validateEnumShape(def.enum, path, errors);
+    }
   }
 };
 

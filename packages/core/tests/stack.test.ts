@@ -5460,11 +5460,12 @@ describe('undefined patch values', () => {
     expect(updated.content).toEqual({ text: 'edited', extra: 'kept' });
   });
 
-  test('a nested undefined is left alone — the whole value is being replaced', async () => {
+  test('a nested undefined inside an open value is refused at its path', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hi' });
 
-    const updated = await stack.patchContent(record.id, { meta: { a: 1, b: undefined } });
-    expect(updated.content).toEqual({ text: 'hi', meta: { a: 1 } });
+    await expect(stack.patchContent(record.id, { meta: { a: 1, b: undefined } })).rejects.toThrow(
+      /meta\.b: Expected a JSON value, got undefined/,
+    );
   });
 
   test('create() takes an undefined field as a field the record does not have', async () => {

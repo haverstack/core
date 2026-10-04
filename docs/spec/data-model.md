@@ -240,7 +240,8 @@ type ScalarFieldKind =
   | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex)
 
 type FieldDef =
-  | { kind: ScalarFieldKind; required?: boolean }
+  | { kind: 'string'; enum?: string[]; required?: boolean }
+  | { kind: Exclude<ScalarFieldKind, 'string'>; required?: boolean }
   | { kind: 'array'; items: FieldDef; open?: false; required?: boolean } // recursive
   | { kind: 'array'; open: true; required?: boolean } // elements unvalidated
   | { kind: 'object'; properties: TypeSchema; open?: false; required?: boolean } // recursive
@@ -284,7 +285,13 @@ await stack.defineType({
 
 **Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)). **`open: true` declares the container open** — a list or object whose interior the schema does not describe, and the one way to store content the schema cannot name. A container declares either its interior or `open`, never neither: opacity is a claim the schema makes, not something inferred from a missing `items`/`properties`, so a schema that forgets to describe its elements is a mistake rather than a silently unchecked field. Query reach is unaffected: a path still walks into an open container, since the query engine reads the content rather than the schema. See [Undeclared content fields](#undeclared-content-fields).
 
+**A `string` field can declare `enum`, a non-empty list of the values it may hold.** A value outside the list is a `StackValidationError` at its path, naming the allowed values. `defineType()` refuses an empty list, non-string or duplicate entries, and `enum` on any kind but `string`. The schema is then the one place the allowed values live, so an app's union type (`'want' | 'reading' | 'finished'`) has something to derive from rather than drifting from it. The [schema hash](#schema-drift-detection) sorts the values, so reordering them is not a change.
+
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
+
+**A `date` field holds a string, and a `Date` is refused.** The error says what to pass instead: `date.toISOString()` for a moment in time, or a `"YYYY-MM-DD"` string for a calendar day. A `Date` is a moment, a `date` field often means a calendar day, and core cannot tell which the app meant, so it makes the app choose rather than converting. Converting would also store a time-zone-dependent day, and a `Date` written in could not be read back as one: content is JSON, and the stored form is a string. Wherever validation names the type it got, a `Date` is named `a Date`.
+
+**Content is plain JSON at every depth, `open` containers included.** Only `null`, booleans, finite numbers, strings, arrays and plain objects (prototype `Object.prototype` or `null`) are accepted; anything else — a `Date`, `NaN`, `Infinity`, `undefined` inside an open value, a class instance, a `Map`, a function, a circular reference — is a `StackValidationError` at its path. `open` says the schema does not describe the shape, not that the content may stop being JSON; without the check, adapters that store a value as given and adapters that serialize it would read back different things.
 
 **`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`referencesFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. **Indexing a content field, whether as a reference or [for sorting](#sorting-by-a-content-field), reaches top-level scalars only**, while query reach extends to depth: they are separate mechanisms, and one rule covers both.
 
@@ -300,7 +307,7 @@ This matters because `defineType()` takes a `TypeSchema` but a schema arriving a
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, and no container [opened or closed](#undeclared-content-fields). An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no `enum` that narrows what a string field accepts: adding an `enum` to a field, or removing values from one, needs a new version, while removing an `enum` or adding values to one accepts strictly more and stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -379,6 +386,8 @@ Not every schema change needs a version bump. **Additive-in-place** changes — 
 - **Writers preserve fields they don't touch** — [a content patch](#mutations) retains any field the caller didn't name.
 
 This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it. Adding the field to the schema is what licenses writing it — see [Undeclared content fields](#undeclared-content-fields) — and that is a `defineType()` call, not a version bump.
+
+Widening a string field's `enum` (adding values, or removing it) is additive for the same reason a new optional field is: the schema accepts strictly more. Narrowing one is not, and needs a version bump. See [Schema drift detection](#schema-drift-detection).
 
 **A version bump is a consolidation point**, warranted when:
 
