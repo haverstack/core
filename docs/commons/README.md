@@ -281,7 +281,9 @@ materialized in @1), `file`/`document` (a first-class `file` type is expected to
 [`@haverstack/commons`](../../packages/commons) exports the canonical schemas for
 every Draft-status type as constants and a `defineCommonsTypes(stack, [...])` helper,
 so registering a type exactly as written is a one-liner and the transcription drift
-the governance process exists to prevent is structurally impossible. Apps should
+the governance process exists to prevent is structurally impossible. Each constant is
+a [type handle](../spec/data-model.md#type-handles), so reads and writes through it
+are typed from the same schema. Apps should
 depend on the package rather than transcribing a fenced code block from this
 directory. These files are the design record: rationale, conventions, and read-compat
 cores live here, and the package's constants are kept in lockstep with them. Proposed
