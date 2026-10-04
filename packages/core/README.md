@@ -19,7 +19,7 @@ You'll also need a storage adapter:
 ## Quick start
 
 ```ts
-import { Stack } from '@haverstack/core';
+import { Stack, typeHandle } from '@haverstack/core';
 import { generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
 import { writeFile } from 'node:fs/promises';
@@ -46,24 +46,25 @@ const adapter = await LocalAdapter.open({
 // safe to keep passing on every open, it's a no-op once the record exists.
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
-// Define a type
-await stack.defineType({
-  id: 'com.example.myapp/note@1',
-  name: 'Note',
-  schema: {
-    text: { kind: 'text', required: true },
-    title: { kind: 'string' },
-  },
+// Define a type. The handle carries the id and schema, and the compiler
+// derives the content type from it — no separate interface to keep in step.
+const Note = typeHandle('com.example.myapp/note@1', {
+  text: { kind: 'text', required: true },
+  title: { kind: 'string' },
 });
+await stack.defineType({ ...Note, name: 'Note' });
 
 // Create a record
-const note = await stack.create('com.example.myapp/note@1', {
+const note = await stack.create(Note, {
   text: 'Hello, Haverstack!',
   title: 'My first note',
 });
 
 // Update its content (partial merge — only changed fields needed)
-await stack.patchContent(note.id, { title: 'Updated title' });
+await stack.patchContent(Note, note.id, { title: 'Updated title' });
+
+// Read it back, typed: `content.text` is a string
+const same = await stack.get(Note, note.id);
 
 // Tag it
 await stack.associate(note.id, { kind: 'tag', label: 'favourite' });

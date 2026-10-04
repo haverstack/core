@@ -378,6 +378,23 @@ The migration registry is **per-stack-instance** — different stacks can be at 
 
 **Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it's registered _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
 
+### Type handles
+
+A schema written once as a literal gives the compiler everything it needs to type content. `typeHandle(id, schema)` returns a plain value carrying the `TypeId` (`id`), its family (`baseId`) and the `schema`; `ContentOf<S>` derives the content type from the schema and `PatchOf<S>` the `contentPatch` type. A required field is present in `ContentOf`; every other field is optional. `PatchOf` makes every field optional and allows `null` only on a field that is not required, since a required field can be replaced but not removed. `defineType()` takes `{ ...handle, name }`, so one literal serves both.
+
+A handle names exactly one version. A call that means the whole family takes `handle.baseId`, never `handle.id`.
+
+`get()`, `query()`, `create()`, `mutate()` and `patchContent()` each have an overload taking the handle first. A typed read:
+
+- reads at [`presentAt: 'latest'`](#type-migrations), so the stale-writer error applies;
+- throws `StackBadRequestError` unless the record's `typeId` is exactly the handle's `id`, so a record of another Type, or one whose family has moved past the handle's version, is refused rather than cast;
+- throws `StackValidationError` when an `enum` field holds a value the handle's schema does not list. An enum may gain values within a version ([additive evolution](#additive-evolution-within-a-version)), so a reader older than the writer can meet one; throwing keeps the derived union exact, and the reader fails loudly until it upgrades;
+- sees live records only. `includeDeleted` is not offered and is refused at runtime, so a tombstone, whose `content` is `{}`, is never typed as the handle's content. A caller who wants tombstones uses the untyped read.
+
+A typed `query()` matches the handle's whole family, then applies the checks above to every record. A typed write first reads the record and refuses one stored at another `typeId`, since a patch is validated against the record's own stored Type; a missing, unreadable or deleted record is left to the untyped write to refuse.
+
+The derived types are a convenience over [runtime validation](#types), which stays the guarantee. A Type known only at runtime has no static shape and stays `Record<string, unknown>`.
+
 ### Additive evolution within a version
 
 Not every schema change needs a version bump. **Additive-in-place** changes — new optional fields only — can be added to a Type's schema without minting a new version, and are the default path for evolving a type family:

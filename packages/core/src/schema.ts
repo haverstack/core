@@ -10,6 +10,7 @@
  */
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
+import type { ReadonlyTypeSchema } from './type-handle.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -170,8 +171,10 @@ const isCompatibleAtDepth = (
  * read-compatible kind; array/object fields recurse. See
  * docs/spec/data-model.md § Type compatibility.
  */
-export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSchema): boolean =>
-  isCompatibleAtDepth(candidateSchema, requiredSchema, 0);
+export const isCompatible = (
+  candidateSchema: ReadonlyTypeSchema,
+  requiredSchema: ReadonlyTypeSchema,
+): boolean => isCompatibleAtDepth(candidateSchema as TypeSchema, requiredSchema as TypeSchema, 0);
 
 // -------------------------------------------------------
 // Schema evolution legality (drift detection)

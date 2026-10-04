@@ -35,6 +35,19 @@ export type {
   CollectAttachmentGarbageResult,
 } from './stack.js';
 
+// Type handles
+export { typeHandle } from './type-handle.js';
+export type {
+  TypeHandle,
+  ContentOf,
+  PatchOf,
+  TypedRecord,
+  TypedQuery,
+  TypedChangeSet,
+  ReadonlyFieldDef,
+  ReadonlyTypeSchema,
+} from './type-handle.js';
+
 // The error taxonomy
 export {
   StackError,
