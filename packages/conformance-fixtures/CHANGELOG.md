@@ -1,5 +1,32 @@
 # @haverstack/conformance-fixtures
 
+## 0.34.0
+
+### Minor Changes
+
+- [#390](https://github.com/haverstack/core/pull/390) [`a23b58b`](https://github.com/haverstack/core/commit/a23b58bf2cb911bb094dcfa9533c57454f06ca24) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.associate()` and `dissociate()` are replaced by `amendAssociations(id, changes, opts?)`, which applies a list of `AssociationEdit` as one write. `POST /records/:id/associations` and `/permissions` take `{ changes }` and the `/delete` sub-paths are removed. `parseAssociationEditsBody()` and `assertOneSurface()` are exported from `@haverstack/core`.
+
+- [#386](https://github.com/haverstack/core/pull/386) [`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa) Thanks [@cuibonobo](https://github.com/cuibonobo)! - An argument that means a whole type family takes a `BaseId` and refuses a versioned `TypeId` with a `StackValidationError` naming the family to pass instead. This covers `migrateAll()`, `grantType()`, `revokeType()` (whose `typeOrBaseId` is now `baseId`), and `RecordFilter.baseId` / `ChangeFilter.baseId`.
+
+  `GrantContent.typeId` is renamed `baseId`, and the `_grant@1` schema with it. Every `_grant` write now refuses a versioned or protected-system-type target, not only `grantType()`, and a stored grant whose `baseId` carries an `@version` suffix confers nothing. The `_grant@1` fixtures carry `baseId`, and two new fixtures pin the `POST /records` refusals.
+
+- [#385](https://github.com/haverstack/core/pull/385) [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Adds `getRecordSequenceFixtures`: `GET /records/:id` answers `404` for a soft-deleted record unless `?includeDeleted=true`.
+
+- [#390](https://github.com/haverstack/core/pull/390) [`c5da1f5`](https://github.com/haverstack/core/commit/c5da1f53bddfcf8f68cabb10a9d2df48104c8d71) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A journal `remove` names its subject `association` instead of `previous`, so `previous` appears only on `repoint`. `AssociationEdit` is exported: the journal's shape without `repoint`.
+
+- [#394](https://github.com/haverstack/core/pull/394) [`38e7e9a`](https://github.com/haverstack/core/commit/38e7e9a852b69871ef591cea6506ed0d42b9839d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `associate()`, `dissociate()`, `grantAccess()` and `revokeAccess()` take arrays, each call one atomic write and one journal entry, and `amendAssociations()` / `amendAccess()` apply a list of adds and removes as one write. Granting edit access is `grantAccess(id, [read, write])`; `write` never implies `read`. `repoint` is refused as input.
+
+- [#383](https://github.com/haverstack/core/pull/383) [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `getVersions()` takes an optional `VersionsQuery` (`beforeVersion`, `limit`) and pages newest first, in the shape of `getJournal()`'s `JournalQuery`; omitting both reads every version. `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=` and answers `{ versions, cursor }`, with `parseVersionsParams()` in `@haverstack/core/wire` to decode them. `APIAdapter` follows `cursor` to the end when no `limit` is given.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the change kind `deleted` to `removed`. It names what a subscriber does with its copy, and covers both a soft delete and an unlist; `ops` still says which. The set stays `created`, `changed`, `removed`, `purged`, and the `?kind=` filter and journal `kind` column take the new value.
+
+- [#384](https://github.com/haverstack/core/pull/384) [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A sort that names a field now defaults to ascending, native or content field alike, as `ORDER BY` does; a query with no sort still returns `createdAt`, newest first. `Stack.query()` resolves both defaults before an adapter sees the query, so `queryRecords()` always receives an explicit `direction`. `listTypeGrants()` states its newest-first order rather than inheriting it.
+
+### Patch Changes
+
+- Updated dependencies [[`a23b58b`](https://github.com/haverstack/core/commit/a23b58bf2cb911bb094dcfa9533c57454f06ca24), [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d)]:
+  - @haverstack/wire-types@0.39.0
+
 ## 0.33.0
 
 ### Minor Changes

@@ -1,5 +1,16 @@
 # @haverstack/blob-adapter-disk
 
+## 0.38.0
+
+### Minor Changes
+
+- [#387](https://github.com/haverstack/core/pull/387) [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `getBlob()`, and so `getAttachment()`, returns a plain `Uint8Array` rather than a `Buffer`.
+
+### Patch Changes
+
+- Updated dependencies [[`a23b58b`](https://github.com/haverstack/core/commit/a23b58bf2cb911bb094dcfa9533c57454f06ca24), [`20f636a`](https://github.com/haverstack/core/commit/20f636abf14ff485e1c493707e1e1e35a051d07b), [`fb55e1f`](https://github.com/haverstack/core/commit/fb55e1fb992f106d42239b295cf9ba93b2b2c81b), [`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa), [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4), [`c5da1f5`](https://github.com/haverstack/core/commit/c5da1f53bddfcf8f68cabb10a9d2df48104c8d71), [`38e7e9a`](https://github.com/haverstack/core/commit/38e7e9a852b69871ef591cea6506ed0d42b9839d), [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1), [`1963d5d`](https://github.com/haverstack/core/commit/1963d5da5d5d268768641b18f2f66bc50cc29a11), [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d), [`1568139`](https://github.com/haverstack/core/commit/15681396bd7e8c40f8fe7c4674dc25bd34ae64d4), [`9326323`](https://github.com/haverstack/core/commit/9326323f9a0546deedafe21db09cbaee32e5f77e), [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a), [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736), [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5), [`a4f7b74`](https://github.com/haverstack/core/commit/a4f7b74849941e5b84d062879090e46359aad827), [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8), [`22a33cb`](https://github.com/haverstack/core/commit/22a33cbf42e80f2311090ae67341607c7f4d976e), [`9e33c53`](https://github.com/haverstack/core/commit/9e33c53e6fb963c62ba36161acedeedea32167ab), [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070)]:
+  - @haverstack/core@0.40.0
+
 ## 0.37.0
 
 ### Minor Changes
