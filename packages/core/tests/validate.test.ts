@@ -286,6 +286,76 @@ describe('validateSchemaShape', () => {
   });
 });
 
+describe('plain JSON content', () => {
+  const when = new Date('2026-09-28T00:00:00Z');
+
+  test('a Date in a date field is refused with guidance', () => {
+    const schema: TypeSchema = { finishedOn: { kind: 'date' } };
+    expect(errorsFor({ finishedOn: when }, schema)).toEqual([
+      {
+        path: 'finishedOn',
+        message:
+          'Expected an ISO 8601 date string, got a Date. Pass date.toISOString() for a moment in time, or a "YYYY-MM-DD" string for a calendar day.',
+      },
+    ]);
+  });
+
+  test('a Date is named as "a Date" in a string field', () => {
+    const schema: TypeSchema = { title: { kind: 'string' } };
+    expect(errorsFor({ title: when }, schema)).toEqual([
+      { path: 'title', message: 'Expected string, got a Date' },
+    ]);
+  });
+
+  test('a Date in a closed object field is refused at its path', () => {
+    const schema: TypeSchema = {
+      meta: { kind: 'object', properties: { a: { kind: 'string' } } },
+    };
+    expect(errorsFor({ meta: when }, schema)).toEqual([
+      { path: 'meta', message: 'Expected object, got a Date' },
+    ]);
+  });
+
+  test('a Date inside an open object is refused at its path', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    expect(errorsFor({ meta: { nested: { when } } }, schema)).toEqual([
+      { path: 'meta.nested.when', message: 'Expected a JSON value, got a Date' },
+    ]);
+  });
+
+  test('NaN and Infinity inside an open array are refused', () => {
+    const schema: TypeSchema = { xs: { kind: 'array', open: true } };
+    expect(paths({ xs: [1, NaN, Infinity] }, schema)).toEqual(['xs[1]', 'xs[2]']);
+  });
+
+  test('a non-finite number in a number field is refused', () => {
+    const schema: TypeSchema = { n: { kind: 'number' } };
+    expect(paths({ n: NaN }, schema)).toEqual(['n']);
+  });
+
+  test('values that are not plain objects, and undefined, are refused inside open values', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    class Point {}
+    expect(
+      paths({ meta: { p: new Point(), m: new Map(), u: undefined, f: () => 1 } }, schema),
+    ).toEqual(['meta.p', 'meta.m', 'meta.u', 'meta.f']);
+  });
+
+  test('null-prototype objects and nulls are plain JSON', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    expect(
+      errorsFor({ meta: { a: null, b: Object.assign(Object.create(null), { c: 1 }) } }, schema),
+    ).toEqual([]);
+  });
+
+  test('a circular open value is refused rather than looping', () => {
+    const schema: TypeSchema = { meta: { kind: 'object', open: true } };
+    const meta: Record<string, unknown> = {};
+    meta.self = meta;
+    expect(paths({ meta }, schema)).toEqual(['meta.self']);
+  });
+});
+
 describe('open containers', () => {
   // Opacity is declared, never inferred from a missing `items`/`properties`:
   // a schema that forgets to describe its interior does not compile, so it
