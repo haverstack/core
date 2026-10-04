@@ -379,6 +379,10 @@ const validateFieldDefShape = (
     return;
   }
 
+  if (def.enum !== undefined && (def.kind === 'array' || def.kind === 'object')) {
+    errors.push({ path, message: `"enum" is only allowed on a string field, not "${def.kind}"` });
+  }
+
   if (def.kind === 'array') {
     if (isOpen) {
       if (def.items !== undefined) {

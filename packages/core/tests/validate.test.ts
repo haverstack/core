@@ -675,4 +675,13 @@ describe('validateSchemaShape enum', () => {
       '"enum" is only allowed on a string field, not "text"',
     ]);
   });
+
+  test('an enum on an array or object is refused', () => {
+    expect(messages('{"a": {"kind": "array", "open": true, "enum": ["a"]}}')).toEqual([
+      '"enum" is only allowed on a string field, not "array"',
+    ]);
+    expect(messages('{"o": {"kind": "object", "open": true, "enum": ["a"]}}')).toEqual([
+      '"enum" is only allowed on a string field, not "object"',
+    ]);
+  });
 });
