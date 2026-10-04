@@ -4134,7 +4134,9 @@ describe('ScopedStack.create — attachment association gating', () => {
     }
     expect(nonexistentError).toBeInstanceOf(StackPermissionError);
     expect(forbiddenError).toBeInstanceOf(StackPermissionError);
-    expect(nonexistentError?.message).toBe(forbiddenError?.message);
+    expect(nonexistentError?.message.replace(/"[^"]*"/, '"<id>"')).toBe(
+      forbiddenError?.message.replace(/"[^"]*"/, '"<id>"'),
+    );
   });
 
   test('tag associations are never gated', async () => {
@@ -4516,7 +4518,9 @@ describe('ScopedStack.create — relationship association and parentId gating', 
     }
     expect(missingError).toBeInstanceOf(StackPermissionError);
     expect(unreadableError).toBeInstanceOf(StackPermissionError);
-    expect(missingError?.message).toBe(unreadableError?.message);
+    expect(missingError?.message.replace(/"[^"]*"/, '"<id>"')).toBe(
+      unreadableError?.message.replace(/"[^"]*"/, '"<id>"'),
+    );
   });
 
   test('_group roster relationship associations are exempt from the target-read check', async () => {
@@ -4623,7 +4627,9 @@ describe('ScopedStack.create — relationship association and parentId gating', 
       .catch((e: Error) => e);
     expect(missing).toBeInstanceOf(StackPermissionError);
     expect(unreadable).toBeInstanceOf(StackPermissionError);
-    expect((missing as Error).message).toBe((unreadable as Error).message);
+    expect((missing as Error).message.replace(/"[^"]*"/, '"<id>"')).toBe(
+      (unreadable as Error).message.replace(/"[^"]*"/, '"<id>"'),
+    );
   });
 });
 

@@ -7139,7 +7139,7 @@ describe('collectAttachmentGarbage', () => {
 const everyStackError = (): StackError[] => [
   new StackValidationError([{ path: 'text', message: 'expected string' }]),
   new StackMigrationError('no migration path'),
-  new StackPermissionError(),
+  new StackPermissionError('denied'),
   new StackNotFoundError('Record "1hk153x0a00b" not found.'),
   new StackConflictError('Attachment is still referenced.'),
   new StackVersionConflictError('Version mismatch.', '1hk153x0a00b', 3, 5),

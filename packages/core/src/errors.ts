@@ -83,7 +83,7 @@ export class StackMigrationError extends StackError {
 export class StackPermissionError extends StackError {
   static readonly code = 'permission' as const;
   override readonly code = StackPermissionError.code;
-  constructor(message = 'Permission denied') {
+  constructor(message: string) {
     super(message);
     this.name = 'StackPermissionError';
   }
