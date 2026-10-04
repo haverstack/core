@@ -152,7 +152,7 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 
 ### Mutations are refused, not applied to a tombstone
 
-A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent()`, `associate()`, `dissociate()` and `restoreVersion()` throw `StackConflictError` (`409`) on `Stack` and `ScopedStack` alike. The rule is about the Record's state, not the surface the call came through, so it is enforced in `Stack` and every surface inherits it. A change set is refused whole, whichever of its keys would otherwise have applied. `undelete()` is the way back, and it is deliberately not gated this way.
+A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()` and `restoreVersion()` throw `StackConflictError` (`409`) on `Stack` and `ScopedStack` alike. The rule is about the Record's state, not the surface the call came through, so it is enforced in `Stack` and every surface inherits it. A change set is refused whole, whichever of its keys would otherwise have applied. `undelete()` is the way back, and it is deliberately not gated this way.
 
 The refusal is asked **after** the authority decision, never before: `ScopedStack` authorizes first and only then calls into `Stack`. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
 
