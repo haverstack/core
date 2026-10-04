@@ -50,7 +50,7 @@ import type {
   RecordChangeSet,
   StackCapabilities,
   MissingCapability,
-  SignedManifest,
+  InstallSubmission,
   InstallContent,
 } from '@haverstack/core';
 import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
@@ -1101,7 +1101,7 @@ export class APIAdapter implements StackAdapter {
    * applying it would change nothing. Refused locally when the server does
    * not advertise install requests. See docs/spec/wire-format.md § Installs.
    */
-  async requestInstall(signed: SignedManifest): Promise<InstallRequestResult> {
+  async requestInstall(submission: InstallSubmission): Promise<InstallRequestResult> {
     if (!this.installRequests) {
       throw new APIAdapterCapabilityError(
         'installs',
@@ -1110,8 +1110,11 @@ export class APIAdapter implements StackAdapter {
       );
     }
     const raw = await this.request<WireInstallResponse | undefined>('POST', '/installs', {
-      manifest: signed.manifest,
-      signature: signed.signature,
+      manifest: submission.manifest,
+      signature: submission.signature,
+      ...(submission.keyCertificate !== undefined && {
+        keyCertificate: submission.keyCertificate,
+      }),
     });
     if (raw?.status === 'pending') return { status: 'pending' };
     if (raw?.status === 'installed' && raw.install) {

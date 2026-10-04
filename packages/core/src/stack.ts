@@ -128,6 +128,7 @@ import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import type { BindingField } from './identity-bindings.js';
 import {
   appIdVouchedBy,
+  assertKeyCertified,
   assertManifestSigned,
   claimedFamilies,
   familyStanding,
@@ -145,7 +146,7 @@ import {
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
 } from './install.js';
-import type { PublisherVerifier, SignedManifest } from './install.js';
+import type { InstallSubmission, PublisherVerifier } from './install.js';
 import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
@@ -2859,20 +2860,33 @@ export class Stack implements StackClient {
    * registered to a different app. See docs/spec/apps.md § Plan, then apply.
    */
   async planInstall(
-    signed: SignedManifest,
+    submission: InstallSubmission,
     opts: { did: EntityId; verifyPublisher?: PublisherVerifier },
   ): Promise<InstallPlan> {
     this.assertOpen();
-    const { did } = opts;
-    const manifest = snapshotManifest(signed.manifest);
+    const { did, verifyPublisher } = opts;
+    const manifest = snapshotManifest(submission.manifest);
     this.checkManifest(manifest, did);
-    await assertManifestSigned({ manifest, signature: signed.signature }, opts.verifyPublisher);
+    await assertManifestSigned({ manifest, signature: submission.signature }, verifyPublisher);
+    const { keyCertificate } = submission;
+    if (keyCertificate !== undefined) {
+      await assertKeyCertified(manifest, did, keyCertificate, verifyPublisher);
+    }
 
     const installs = await this.loadInstalls();
     const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
-    if (existing && existing.content.publisher !== manifest.publisher) {
+    // A live install is pinned to its publisher; an uninstalled one may be
+    // taken up by another, which is how an owner accepts a rotated key.
+    // See docs/spec/apps.md § Who publishes an app.
+    const publisherChanged = !!existing && existing.content.publisher !== manifest.publisher;
+    if (existing && publisherChanged && !existing.deletedAt) {
       throw new StackConflictError(
         `"${manifest.appId}" is installed from ${existing.content.publisher}; this manifest is signed by ${manifest.publisher}`,
+      );
+    }
+    if (existing && !publisherChanged && manifest.release < existing.content.release) {
+      throw new StackConflictError(
+        `"${manifest.appId}" is installed at release ${existing.content.release}; this manifest is release ${manifest.release}`,
       );
     }
     const ownVersions = ownTypeIds(manifest);
@@ -2911,7 +2925,8 @@ export class Stack implements StackClient {
     }
 
     const linkedKeys: EntityId[] = [];
-    for (const id of existing ? linkedIds(existing, INSTALL_APP_LABEL) : []) {
+    const keptLinks = existing && !publisherChanged ? linkedIds(existing, INSTALL_APP_LABEL) : [];
+    for (const id of keptLinks) {
       const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
       if (typeof key === 'string') linkedKeys.push(key);
     }
@@ -2919,7 +2934,10 @@ export class Stack implements StackClient {
     return {
       manifest,
       did,
-      signature: signed.signature,
+      signature: submission.signature,
+      ...(keyCertificate !== undefined && { keyCertificate }),
+      keyCertified: keyCertificate !== undefined,
+      publisherChanged,
       namespaceVerified: appIdVouchedBy(manifest.publisher) === manifest.appId,
       existing,
       newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
@@ -2928,7 +2946,7 @@ export class Stack implements StackClient {
       requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
       foreignRequests,
       typeChanges,
-      newKey: !existing || !card || !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
+      newKey: !card || !keptLinks.includes(card.id),
       linkedKeys,
     };
   }
@@ -2947,7 +2965,11 @@ export class Stack implements StackClient {
   ): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
     const fresh = await this.planInstall(
-      { manifest: plan.manifest, signature: plan.signature },
+      {
+        manifest: plan.manifest,
+        signature: plan.signature,
+        ...(plan.keyCertificate !== undefined && { keyCertificate: plan.keyCertificate }),
+      },
       { did: plan.did, verifyPublisher: opts.verifyPublisher },
     );
     if (planFingerprint(fresh) !== planFingerprint(plan)) {
@@ -2955,7 +2977,7 @@ export class Stack implements StackClient {
         `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
       );
     }
-    const { manifest, did, existing } = fresh;
+    const { manifest, did, existing, publisherChanged } = fresh;
 
     for (const type of manifest.types) await this.defineType(type);
     const card = await this.ensureAppCard(manifest, did);
@@ -2975,16 +2997,32 @@ export class Stack implements StackClient {
           name: manifest.name,
           ...(manifest.version !== undefined && { version: manifest.version }),
           publisher: manifest.publisher,
+          release: manifest.release,
           defines,
           requests,
         },
         { associations: [installAppLink(card.id)] },
       );
     } else {
-      const current = existing.deletedAt ? await this.undelete(existing.id) : existing;
+      let current = existing.deletedAt ? await this.undelete(existing.id) : existing;
+      const oldKeys = publisherChanged ? linkedIds(current, INSTALL_APP_LABEL) : [];
+      if (oldKeys.length > 0) {
+        // The keys the old publisher's app linked are not this publisher's.
+        current = await this.amendAssociations(
+          current.id,
+          oldKeys.map((id) => ({ op: 'remove' as const, association: installAppLink(id) })),
+        );
+      }
       install = await this.patchContent(
         existing.id,
-        { name: manifest.name, version: manifest.version ?? null, defines, requests },
+        {
+          name: manifest.name,
+          version: manifest.version ?? null,
+          publisher: manifest.publisher,
+          release: manifest.release,
+          defines,
+          requests,
+        },
         { ifVersion: current.version },
       );
       if (!linkedIds(install, INSTALL_APP_LABEL).includes(card.id)) {
@@ -3029,6 +3067,9 @@ export class Stack implements StackClient {
     }
     if (typeof manifest.name !== 'string' || manifest.name === '') {
       errors.push({ path: 'name', message: 'Expected a non-empty name' });
+    }
+    if (!Number.isSafeInteger(manifest.release) || manifest.release < 1) {
+      errors.push({ path: 'release', message: 'Expected a positive integer release' });
     }
     manifest.types.forEach((t, i) => {
       const parsed = parseTypeId(t.id);
@@ -3285,6 +3326,7 @@ export class Stack implements StackClient {
         name: { kind: 'string', required: true },
         version: { kind: 'string' },
         publisher: { kind: 'string', required: true },
+        release: { kind: 'number', required: true },
         defines: { kind: 'array', items: { kind: 'string' }, required: true },
         requests: {
           kind: 'array',

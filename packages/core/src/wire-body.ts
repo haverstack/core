@@ -20,7 +20,7 @@
 import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { DefineTypeOptions } from './stack.js';
 import { assertKnownKeys, validateAssociation } from './query-validation.js';
-import type { AppManifest, SignedManifest } from './install.js';
+import type { AppManifest, InstallSubmission } from './install.js';
 import type { AssociationEdit, GrantAction, StackType, TypeId, TypeSchema } from './types.js';
 
 export function requireBody(body: unknown, label: string): Record<string, unknown> {
@@ -226,23 +226,27 @@ export function parseMigrationBody(body: unknown): WireMigrationRequest {
 // -------------------------------------------------------
 
 /**
- * Parse a `POST /installs` body, `{ manifest, signature }`, into the
- * signed manifest `planInstall()` takes. Each type is read as a `POST /types` body is.
+ * Parse a `POST /installs` body, `{ manifest, signature, keyCertificate? }`,
+ * into the submission `planInstall()` takes. Each type is read as a `POST /types` body is.
  * Which families a manifest may define, and which requests the grant rules
  * allow, are `planInstall()`'s to judge. See docs/spec/wire-format.md § Installs.
  */
-export function parseInstallBody(body: unknown): SignedManifest {
-  const b = requireKnownBody(body, ['manifest', 'signature'], 'install body');
+export function parseInstallBody(body: unknown): InstallSubmission {
+  const b = requireKnownBody(body, ['manifest', 'signature', 'keyCertificate'], 'install body');
   const signature = requiredString(b, 'signature', 'install body');
+  if (b.keyCertificate !== undefined && typeof b.keyCertificate !== 'string') {
+    fieldError('keyCertificate', 'keyCertificate must be a string');
+  }
   const m = requireKnownBody(
     requiredObject(b, 'manifest', 'install body'),
-    ['appId', 'name', 'version', 'publisher', 'types', 'requests'],
+    ['appId', 'name', 'version', 'publisher', 'release', 'types', 'requests'],
     'manifest',
   );
   const manifest: AppManifest = {
     appId: nestedString(m, 'manifest', 'appId'),
     name: nestedString(m, 'manifest', 'name'),
     publisher: nestedString(m, 'manifest', 'publisher'),
+    release: nestedRelease(m),
     types: nestedArray(m, 'manifest', 'types').map((t, i) => {
       if (typeof t !== 'object' || t === null || Array.isArray(t))
         fieldError(`manifest.types[${i}]`, 'a type must be an object');
@@ -265,7 +269,20 @@ export function parseInstallBody(body: unknown): SignedManifest {
     if (typeof m.version !== 'string') fieldError('manifest.version', 'version must be a string');
     manifest.version = m.version;
   }
-  return { manifest, signature };
+  return {
+    manifest,
+    signature,
+    ...(b.keyCertificate !== undefined && { keyCertificate: b.keyCertificate as string }),
+  };
+}
+
+/** `manifest.release`, a positive integer. */
+function nestedRelease(m: Record<string, unknown>): number {
+  const value = m.release;
+  if (value === undefined) throw new StackBadRequestError('Invalid manifest: release is required');
+  if (!Number.isSafeInteger(value) || (value as number) < 1)
+    fieldError('manifest.release', 'release must be a positive integer');
+  return value as number;
 }
 
 /** A required string inside a nested object, its 422 naming the full path. */

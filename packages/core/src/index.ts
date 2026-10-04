@@ -41,9 +41,17 @@ export type {
   ForeignRequest,
   TypeChange,
   SignedManifest,
+  InstallSubmission,
   PublisherVerifier,
 } from './install.js';
-export { isPlanEmpty, signManifest, manifestPayload, appIdVouchedBy } from './install.js';
+export {
+  isPlanEmpty,
+  signManifest,
+  manifestPayload,
+  appIdVouchedBy,
+  certifyKey,
+  keyCertificatePayload,
+} from './install.js';
 
 // Type handles
 export { typeHandle } from './type-handle.js';

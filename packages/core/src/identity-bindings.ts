@@ -16,14 +16,13 @@ import { SYSTEM_TYPES } from './types.js';
  * claims one, and something later resolves through it. Every one of them is
  * immutable once set. See docs/spec/identity.md § DID bindings.
  */
-/** A content field something resolves through or pins. */
-export type BindingField = 'did' | 'appId' | 'publisher';
+/** A content field something resolves through. */
+export type BindingField = 'did' | 'appId';
 
 const BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
   [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
-  // `publisher` pins who may upgrade the install; see docs/spec/apps.md § Who publishes an app.
-  [SYSTEM_TYPES.INSTALL, ['appId', 'publisher'] as const],
+  [SYSTEM_TYPES.INSTALL, ['appId'] as const],
 ]);
 
 /**

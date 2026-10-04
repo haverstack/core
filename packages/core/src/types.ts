@@ -514,10 +514,12 @@ export type InstallContent = {
   name: string;
   version?: string;
   /**
-   * The DID that signed the approved manifest. A binding: only a manifest
-   * the same publisher signed can change this install.
+   * The DID that signed the approved manifest. While the install is live,
+   * only a manifest the same publisher signed can change it.
    */
   publisher: string;
+  /** The approved manifest's release; an older one is refused. */
+  release: number;
   /**
    * Every type version the owner has approved for this app. The families
    * they name are claimed by this install and by no other.

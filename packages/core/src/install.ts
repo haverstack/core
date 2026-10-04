@@ -14,12 +14,13 @@
  * families without the owner running its code — see
  * ScopedStack.commitMigration().
  *
- * A manifest is signed by its publisher's key, and the install pins that
- * publisher: only a manifest the same publisher signed can upgrade it, or
- * link another key to it.
+ * A manifest is signed by its publisher's key and numbered by release.
+ * A live install pins that publisher and refuses an older release, so only
+ * a newer manifest the same publisher signed can upgrade it. A publisher
+ * may also certify each key of its app, which the plan reports.
  *
  * This module holds the parts that read an install as data: the write-time
- * shape rules, the family claim, manifest signing, and the plan diff. The verbs that write
+ * shape rules, the family claim, manifest and key signing, and the plan diff. The verbs that write
  * live on `Stack`. See docs/spec/apps.md.
  */
 
@@ -57,6 +58,12 @@ export type AppManifest = {
    * § Who publishes an app.
    */
   publisher: string;
+  /**
+   * A positive integer the publisher raises with every manifest it signs,
+   * so an older one cannot be replayed over a newer install.
+   * See docs/spec/apps.md § Who publishes an app.
+   */
+  release: number;
   types: DefineTypeOptions[];
   requests: InstallRequest[];
 };
@@ -66,6 +73,16 @@ export type SignedManifest = {
   manifest: AppManifest;
   /** base64url Ed25519 signature. */
   signature: string;
+};
+
+/**
+ * What an install request carries: the signed manifest and, optionally,
+ * the publisher's certificate for the key being installed.
+ * See docs/spec/apps.md § Certified keys.
+ */
+export type InstallSubmission = SignedManifest & {
+  /** base64url Ed25519 signature by the publisher over keyCertificatePayload(). */
+  keyCertificate?: string;
 };
 
 /**
@@ -109,6 +126,18 @@ export type InstallPlan = {
   did: EntityId;
   /** The publisher's signature over `manifest`, carried so the plan can be verified again. */
   signature: string;
+  /** The publisher's certificate for `did`, when one was presented. */
+  keyCertificate?: string;
+  /**
+   * Whether the publisher certified `did` as a key of this app. An
+   * uncertified key may still be approved; the owner is then the only check.
+   */
+  keyCertified: boolean;
+  /**
+   * Whether an uninstalled install is being taken up by a different
+   * publisher. Its keys are unlinked, so each must be installed again.
+   */
+  publisherChanged: boolean;
   /**
    * Whether the publisher's DID is a `did:web` whose domain is the
    * `appId` reversed — the domain vouching for the namespace, beyond the
@@ -324,28 +353,30 @@ export async function signManifest(
 }
 
 /**
- * Refuse a manifest its publisher did not sign. A `did:key` publisher is
- * verified from the DID itself; any other method needs `verifier`, and is
- * refused without one rather than taken on trust.
+ * Whether `publisher` signed `payload`. A `did:key` publisher is verified
+ * from the DID itself; any other method needs `verifier`, and is refused
+ * without one rather than taken on trust.
  */
-export async function assertManifestSigned(
-  signed: SignedManifest,
+async function assertPublisherSigned(
+  publisher: string,
+  encoded: string,
+  payload: Uint8Array,
+  path: string,
+  what: string,
   verifier?: PublisherVerifier,
 ): Promise<void> {
-  const { publisher } = signed.manifest;
-  const fail = (path: string, message: string): never => {
-    throw new StackValidationError([{ path, message }]);
+  const fail = (at: string, message: string): never => {
+    throw new StackValidationError([{ path: at, message }]);
   };
   if (typeof publisher !== 'string' || !publisher.startsWith('did:')) {
     fail('manifest.publisher', 'Expected the publisher’s DID');
   }
   let signature: Uint8Array;
   try {
-    signature = base64urlDecode(signed.signature);
+    signature = base64urlDecode(encoded);
   } catch {
-    return fail('signature', 'Expected a base64url signature');
+    return fail(path, 'Expected a base64url signature');
   }
-  const payload = manifestPayload(signed.manifest);
   let valid: boolean;
   if (isValidDidKey(publisher)) {
     valid = await verifyDidSignature(publisher, signature, payload).catch(() => false);
@@ -357,7 +388,63 @@ export async function assertManifestSigned(
       `Cannot verify a ${publisher.split(':')[1]} publisher without a verifier for that DID method`,
     );
   }
-  if (!valid) fail('signature', 'The signature is not the publisher’s over this manifest');
+  if (!valid) fail(path, `The signature is not the publisher’s over this ${what}`);
+}
+
+/** Refuse a manifest its publisher did not sign. */
+export async function assertManifestSigned(
+  signed: SignedManifest,
+  verifier?: PublisherVerifier,
+): Promise<void> {
+  await assertPublisherSigned(
+    signed.manifest.publisher,
+    signed.signature,
+    manifestPayload(signed.manifest),
+    'signature',
+    'manifest',
+    verifier,
+  );
+}
+
+const KEY_CERTIFICATE_LABEL = 'haverstack-app-key-v1';
+
+/**
+ * The bytes a publisher signs to certify `did` as a key of `appId`. The
+ * label keeps a certificate from ever verifying as a manifest, or the
+ * reverse.
+ */
+export function keyCertificatePayload(cert: { appId: AppId; did: EntityId }): Uint8Array {
+  return new TextEncoder().encode(
+    `${KEY_CERTIFICATE_LABEL}\n${canonicalJson({ appId: cert.appId, did: cert.did })}`,
+  );
+}
+
+/** Certify `did` as a key of `appId`, with the private key behind the app's publisher. */
+export async function certifyKey(
+  cert: { appId: AppId; did: EntityId },
+  privateKey: CryptoKey,
+): Promise<string> {
+  return base64urlEncode(await signWithDid(privateKey, keyCertificatePayload(cert)));
+}
+
+/**
+ * Refuse a certificate that does not verify: one presented and wrong is a
+ * forgery or a mistake, not an uncertified key.
+ */
+export async function assertKeyCertified(
+  manifest: AppManifest,
+  did: EntityId,
+  keyCertificate: string,
+  verifier?: PublisherVerifier,
+): Promise<void> {
+  await assertPublisherSigned(
+    manifest.publisher,
+    keyCertificate,
+    keyCertificatePayload({ appId: manifest.appId, did }),
+    'keyCertificate',
+    'key',
+    verifier,
+  );
 }
 
 /**
@@ -426,5 +513,7 @@ export function planFingerprint(plan: InstallPlan): string {
     plan.newKey,
     plan.linkedKeys,
     plan.namespaceVerified,
+    plan.keyCertified,
+    plan.publisherChanged,
   ]);
 }

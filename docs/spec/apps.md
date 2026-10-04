@@ -10,12 +10,14 @@ type AppManifest = {
   name: string;
   version?: string;
   publisher: string; // the DID that signs the manifest — see Who publishes an app
+  release: number; // a positive integer the publisher raises with every manifest it signs
   types: DefineTypeOptions[]; // the types the app defines
   requests: InstallRequest[]; // the grants its keys hold
 };
 
 type InstallRequest = { baseId: BaseId; actions: GrantAction[] };
 type SignedManifest = { manifest: AppManifest; signature: string }; // base64url Ed25519
+type InstallSubmission = SignedManifest & { keyCertificate?: string }; // see Certified keys
 
 const signed = await signManifest(manifest, publisherPrivateKey); // the app author, once per release
 const plan = await stack.planInstall(signed, { did: appDid });
@@ -34,7 +36,8 @@ type InstallContent = {
   appId: AppId; // a binding: immutable, unique among installs
   name: string;
   version?: string;
-  publisher: string; // a binding: immutable once set
+  publisher: string; // pinned while the install is live
+  release: number; // the approved manifest's release
   defines: TypeId[]; // every version the owner has approved
   requests: InstallRequest[]; // the grants each of the app's keys holds
 };
@@ -45,7 +48,7 @@ type InstallContent = {
 - **It cannot be granted.** `grantType()` refuses `_install` beside `_grant`, `_config` and `_app` (see [Access control § What a grant covers](./access-control.md#what-a-grant-covers)), and a `request` naming any of the four is refused at the write.
 - **Only the owner acting alone writes one.** `ScopedStack` refuses every write to an `_install` Record on the same terms as a `_grant` Record, whatever the Record's own `permissions` say.
 - **`appId` is a binding**, immutable and unique on the terms [Identity § DID bindings](./identity.md#did-bindings) sets out: one install answers for each app, and an existing install cannot be relabelled to answer for another.
-- **`publisher` is a binding too**, immutable but not unique — one publisher may ship many apps. It is what [pins the install](#who-publishes-an-app) to whoever signed its first manifest.
+- **`publisher` is pinned while the install is live**: `planInstall()` refuses a manifest from any other publisher until the owner uninstalls (see [Who publishes an app](#who-publishes-an-app)). It is not unique — one publisher may ship many apps.
 - **It claims only its own families.** Every `defines` entry must be a versioned TypeId in the install's own namespace (see [Who owns a family](#who-owns-a-family)); anything else is refused with `StackValidationError` on create, patch, migration and restore alike. `appId` being unique is what makes each family's owner single.
 
 Every `request` must name a family and actions from the grant vocabulary; `StackValidationError` otherwise.
@@ -70,7 +73,11 @@ An `appId` is a claim the manifest makes, and [Who publishes an app](#who-publis
 
 Every manifest names a **publisher** — a DID belonging to the app's author, distinct from the per-device keys an install links — and carries the publisher's signature over `manifestPayload(manifest)`: the label `haverstack-manifest-v1`, a newline, and the manifest as canonical JSON (keys sorted at every depth, no whitespace), so the same manifest signs the same way however it was serialized. `signManifest(manifest, privateKey)` produces one. `planInstall()` refuses a manifest whose signature does not verify with `StackValidationError` at `signature`, before it looks at anything else the stack holds.
 
-**The first install pins its publisher.** `_install.publisher` is a binding, so once a stack has installed `com.example.notes` from one publisher, a manifest under that `appId` signed by anyone else is refused with `StackConflictError` — whichever key presents it, so another key cannot join the install as the same app, and no one else can upgrade it. A publisher that loses its key is in the position [key rotation](./identity.md#deferred-key-rotation) describes: a new key is a new identity, and the owner uninstalls and reinstalls to accept it.
+**A live install is pinned to its publisher.** Once a stack has installed `com.example.notes` from one publisher, a manifest under that `appId` signed by anyone else is refused with `StackConflictError`, whichever key presents it, so no one else can upgrade the install. A publisher that loses its key is in the position [key rotation](./identity.md#deferred-key-rotation) describes: a new key is a new identity. The owner accepts it by uninstalling, after which a manifest from the new publisher may take the install up. The plan says so with `publisherChanged`, and applying it unlinks every key the old publisher's app had linked — each must be installed again — while `defines` and the install's version history carry over.
+
+**Releases only go forward.** A signature never expires, so `release` is what keeps an older manifest from being replayed over a newer install: `planInstall()` refuses a manifest whose `release` is below the installed one with `StackConflictError`. An equal release is accepted, which is how a second key installs the manifest the first already has. The check does not cross a publisher change, since a new publisher numbers its own releases.
+
+**The pin is on the publisher, not on the key presenting the manifest.** A signed manifest ships with its app, so any key can copy one and present it as its own. That is what [Certified keys](#certified-keys) are for.
 
 **How strongly a publisher is known depends on its DID method**, following the [method table](./identity.md):
 
@@ -79,15 +86,26 @@ Every manifest names a **publisher** — a DID belonging to the app's author, di
 
 Nothing requires a domain. An app with only a key gets pinning; an app that wants its namespace proven publishes from `did:web`.
 
+## Certified keys
+
+A publisher may vouch for a key as one of its app's by signing `keyCertificatePayload({ appId, did })` — the label `haverstack-app-key-v1`, a newline, and `{ appId, did }` as canonical JSON — with `certifyKey()`. The app presents the result as `keyCertificate` beside its signed manifest. `planInstall()` verifies it as it verifies the manifest's signature, and the plan's `keyCertified` says whether the key came with one.
+
+**It is optional.** An uncertified key may still be approved; the owner is then the only check on whether it is really the app. A certificate that is presented and does not verify for this `appId` and key is refused with `StackValidationError` at `keyCertificate` rather than treated as absent: it is a forgery or a copy.
+
+**It proves what the publisher's issuing does.** For an app the publisher runs on its own servers, the publisher certifies the keys it holds, and a certified key is the app. For an app running on its users' devices, the publisher's private key cannot ship with it, so a device asks the publisher for a certificate — and the certificate then means only what the publisher checked before issuing it: a platform attestation, an account login, or nothing. The owner sees that a publisher vouches for the key; how much that is worth is the publisher's to earn.
+
 ## Plan, then apply
 
-`planInstall(signed, { did, verifyPublisher? })` writes nothing. It reports what applying the manifest for that key would change:
+`planInstall(submission, { did, verifyPublisher? })` writes nothing. It reports what applying the manifest for that key would change:
 
 ```ts
 type InstallPlan = {
   manifest: AppManifest;
   did: EntityId;
   signature: string; // carried so installApp() verifies it again
+  keyCertificate?: string; // likewise, when one was presented
+  keyCertified: boolean; // the publisher certified `did` — see Certified keys
+  publisherChanged: boolean; // an uninstalled install taken up by a new publisher
   namespaceVerified: boolean; // a did:web publisher whose domain is the appId reversed
   existing: (StackRecord & { content: InstallContent }) | null;
   newFamilies: BaseId[]; // families the install would claim for the first time
@@ -103,17 +121,17 @@ type InstallPlan = {
 
 `typeChanges` lists every manifest type whose definition would write — not yet defined, or defined with a different schema or name — commons types included. Defining a commons type claims nothing, but the first definition of a version fixes its shape for every app that reads it, so the owner sees it like any other.
 
-`linkedKeys` matters most beside `newKey`: a new key on an existing install joins those keys as the same app (see [Who owns a family](#who-owns-a-family)), and `requestsAdded` and `requestsRemoved` apply to all of them.
+`linkedKeys` matters most beside `newKey`: a new key on an existing install joins those keys as the same app, and `requestsAdded` and `requestsRemoved` apply to all of them. `keyCertified` is what says whether the publisher vouches for that key (see [Certified keys](#certified-keys)).
 
 `foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
-It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign (`StackValidationError`), one under an `appId` already installed from another publisher, and a `did` whose `_app` card names a different `appId` (both `StackConflictError`).
+It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign or a key certificate that does not verify (`StackValidationError`), and a manifest under an `appId` live from another publisher, one older than the installed release, or a `did` whose `_app` card names a different `appId` (`StackConflictError`).
 
 `installApp(plan, { verifyPublisher? })` applies the plan:
 
 1. Defines each of the manifest's types, with [schema drift](./data-model.md#schema-drift-detection) applying as it does to any `defineType()`.
 2. Registers the key on an `_app` card when it has none, undeleting a soft-deleted one. An existing card's `name` is left alone: it is the owner's label.
-3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
+3. Creates the install, or patches it — undeleting it first if it was uninstalled, and unlinking the old keys if its publisher changed. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
 **Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing.
@@ -152,12 +170,12 @@ Installing the same `appId` again undeletes the install and grants its requests 
 Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`.
 
 ```ts
-const result = await adapter.requestInstall(signed);
+const result = await adapter.requestInstall({ ...signed, keyCertificate }); // keyCertificate optional
 // { status: 'pending' } until the owner approves this manifest for this key,
 // then { status: 'installed', install } once applying it would change nothing
 ```
 
-**The key is the session's; the publisher is the signature's.** The request names no installing DID: the handshake already proved which key is asking, so no app can ask for an install on behalf of a key it does not hold. The manifest's signature proves who published it, so no key can present a manifest its publisher did not sign.
+**The key is the session's; the publisher is the signature's.** The request names no installing DID: the handshake already proved which key is asking, so no app can ask for an install on behalf of a key it does not hold. The manifest's signature proves who published it, so no key can present a manifest its publisher did not sign; a key certificate, when present, proves the publisher vouches for the key presenting it.
 
 **A request is not an approval.** A pending request lives with the server, not in the stack, so a key that merely authenticated writes nothing into the owner's data. The stack holds only what the owner approved.
 

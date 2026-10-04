@@ -2169,17 +2169,22 @@ export const commitMigrationFixtures: ConformanceFixture<
 // installed is always the session's — the body never names one.
 //
 // Every manifest carries a real Ed25519 signature by INSTALL_FIXTURE_PUBLISHER
-// over manifestPayload() from @haverstack/core, so a server can verify one
-// rather than trusting its own derivation of the signed bytes.
+// over manifestPayload() from @haverstack/core, and every key certificate
+// one over keyCertificatePayload(), so a server can verify one rather than
+// trusting its own derivation of the signed bytes.
 
 /** The publisher whose key signed the install fixtures' manifests. */
-export const INSTALL_FIXTURE_PUBLISHER = 'did:key:z6Mkj5oEgHSkFTYqW9dZhhLxZdPSX6NSMxfbg9QYAERTALgf';
+export const INSTALL_FIXTURE_PUBLISHER = 'did:key:z6Mkf2zQmvB1cfYsgtiWAJu9F9axVsp95LFGw8TVhkf6BpBw';
+
+/** The session key the certified fixtures are certified for. */
+export const INSTALL_FIXTURE_KEY = 'did:key:z6Mkfsz9oK6i2355mvEwtDYdAmqCN6kmQETThJtARfj9iGum';
 
 const INSTALL_MANIFEST: WireInstallRequest['manifest'] = {
   appId: 'com.example.notes',
   name: 'Notes',
   version: '1.0.0',
   publisher: INSTALL_FIXTURE_PUBLISHER,
+  release: 1,
   types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
   requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
 };
@@ -2187,7 +2192,13 @@ const INSTALL_MANIFEST: WireInstallRequest['manifest'] = {
 const SIGNED_INSTALL: WireInstallRequest = {
   manifest: INSTALL_MANIFEST,
   signature:
-    'xQ7hCjIXyXJ9eNpadlOT2HPQzgnAUn-bxDuMQ2PQoVihasedwgmqw4VissRUgf8PhZ0gdHVBogL4fRLp14vTBA',
+    '9YCWMoIrzmJQUcQCO30ijsrYtAg4Nu6fxCF0k-qFHU2p-dHgvtOEeeP1yeNcT-8qByvLO7-Qe7hMZEr3q0_zBA',
+};
+
+const CERTIFIED_INSTALL: WireInstallRequest = {
+  ...SIGNED_INSTALL,
+  keyCertificate:
+    '0DUpaK8BYrGUWLQYQCmNrMEo81zsdNHV913q_Oa5L-FV2yoHBQEQdExRDE93pFF3rCr3Z1QHBQKReuV6ZSXtDA',
 };
 
 export const installRequestFixtures: ConformanceFixture<
@@ -2207,6 +2218,67 @@ export const installRequestFixtures: ConformanceFixture<
     requestBody: SIGNED_INSTALL,
     responseStatus: 202,
     responseBody: { status: 'pending' },
+  },
+  {
+    name: 'install-request-certified-key-pending',
+    description:
+      "POST /installs carrying keyCertificate — the publisher's signature over " +
+      "keyCertificatePayload({ appId, did }) for the session's key — answers 202 pending like " +
+      'any other request; the certificate lets the owner see the publisher vouches for this ' +
+      `key. Assumes the session's DID is ${INSTALL_FIXTURE_KEY}. See docs/spec/apps.md ` +
+      '§ Certified keys.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: CERTIFIED_INSTALL,
+    responseStatus: 202,
+    responseBody: { status: 'pending' },
+  },
+  {
+    name: 'install-request-certificate-not-for-this-key',
+    description:
+      "POST /installs whose keyCertificate does not verify for the session's key — here one " +
+      'the publisher issued to a different key — answers 422 with code "validation" at ' +
+      '"keyCertificate". A certificate that is presented and wrong is refused, never treated ' +
+      "as an uncertified key: it is a forgery or a copied certificate. Assumes the session's " +
+      `DID is ${INSTALL_FIXTURE_KEY}.`,
+    method: 'POST',
+    path: '/installs',
+    requestBody: {
+      ...SIGNED_INSTALL,
+      keyCertificate:
+        'Zqqu77XqEmDFiKDOKbHgESPoPivm7BAHq8CrS98qK53YruMbkEuVoRkwocNzt_v7sta-cLYjYi1Wzj7xxR2sDA',
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'keyCertificate',
+            message: 'The signature is not the publisher’s over this key',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'install-request-older-release',
+    description:
+      'POST /installs with a manifest whose release is lower than the installed one answers ' +
+      '409 with code "conflict". A signature never expires, so the release is what keeps an ' +
+      'older signed manifest from being replayed over a newer install. Assumes ' +
+      '"com.example.notes" is installed from the same publisher at release 2.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: SIGNED_INSTALL,
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message: '"com.example.notes" is installed at release 2; this manifest is release 1',
+      },
+    },
   },
   {
     name: 'install-request-already-installed',
@@ -2232,6 +2304,7 @@ export const installRequestFixtures: ConformanceFixture<
           name: 'Notes',
           version: '1.0.0',
           publisher: INSTALL_FIXTURE_PUBLISHER,
+          release: 1,
           defines: ['com.example.notes/note@1'],
           requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
         },
@@ -2254,7 +2327,7 @@ export const installRequestFixtures: ConformanceFixture<
         types: [{ id: 'com.example.tags/tag@1', name: 'Tag', schema: {} }],
       },
       signature:
-        'RtkahKa-mw9f9DoQCNHJOKu-_W-5PyFVoW06oBJLVFC9PlSgc6qE_dz82C7vmUSK3bHcUgVLjAKrBOEdRS-DCw',
+        'BgnK_89lwtE_kwWEVDibw_UEug8Z0DCwzenqNZorq0RDDnKWzPISdzWyji2HOknIFWTUokw5SjfkDZKJf-MHDA',
     },
     responseStatus: 422,
     responseBody: {
@@ -2307,8 +2380,8 @@ export const installRequestFixtures: ConformanceFixture<
     name: 'install-request-publisher-pinned',
     description:
       'POST /installs for an appId already installed from another publisher answers 409 with ' +
-      'code "conflict", whichever key asks. The first install pins its publisher, so only a ' +
-      'manifest the same publisher signed can upgrade it or link another key to it. Assumes ' +
+      'code "conflict", whichever key asks. A live install is pinned to its publisher, so only ' +
+      'a manifest the same publisher signed can upgrade it or link another key to it. Assumes ' +
       '"com.example.notes" is installed from did:web:notes.example.com.',
     method: 'POST',
     path: '/installs',

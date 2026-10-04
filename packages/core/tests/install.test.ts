@@ -7,7 +7,7 @@ import {
   StackValidationError,
 } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { appIdVouchedBy, isPlanEmpty, signManifest } from '../src/install.js';
+import { appIdVouchedBy, certifyKey, isPlanEmpty, signManifest } from '../src/install.js';
 import type { AppManifest } from '../src/install.js';
 import { generateDidKeypair } from '../src/did.js';
 import type { DidKeypair } from '../src/did.js';
@@ -28,6 +28,7 @@ const manifest = (overrides: Partial<AppManifest> = {}): AppManifest => ({
   name: 'Notes',
   version: '1.0.0',
   publisher: publisherKey.did,
+  release: 1,
   types: [{ id: NOTE_1, name: 'Note', schema: { text: { kind: 'text' } } }],
   requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
   ...overrides,
@@ -87,6 +88,7 @@ describe('installApp()', () => {
       name: 'Notes',
       version: '1.0.0',
       publisher: publisherKey.did,
+      release: 1,
       defines: [NOTE_1],
       requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
     });
@@ -337,6 +339,7 @@ describe('the _install record', () => {
           appId: 'com.example.rival',
           name: 'Rival',
           publisher: publisherKey.did,
+          release: 1,
           defines: [id],
           requests: [],
         }),
@@ -351,6 +354,7 @@ describe('the _install record', () => {
         appId: 'com.example.notes',
         name: 'Notes again',
         publisher: publisherKey.did,
+        release: 1,
         defines: [],
         requests: [],
       }),
@@ -551,14 +555,46 @@ describe('the publisher', () => {
     );
   });
 
-  test('is pinned: no other publisher can upgrade the install or link a key to it', async () => {
-    const record = await install(manifest());
+  test('is pinned: no other publisher can upgrade a live install or link a key to it', async () => {
+    await install(manifest());
     const impostor = await generateDidKeypair();
     const theirs = manifest({ publisher: impostor.did, requests: MIGRATING });
     for (const did of [APP_DID, OTHER_DID]) {
       await expect(planSigned(theirs, { did }, impostor)).rejects.toThrow(StackConflictError);
     }
-    await expect(stack.patchContent(record.id, { publisher: impostor.did })).rejects.toThrow(
+  });
+
+  test('an uninstalled install may be taken up by a new publisher, unlinking the old keys', async () => {
+    await install(manifest());
+    await install(manifest(), OTHER_DID);
+    await stack.uninstallApp('com.example.notes');
+
+    const rotated = await generateDidKeypair();
+    const next = manifest({ publisher: rotated.did, release: 1 });
+    const plan = await planSigned(next, { did: APP_DID }, rotated);
+    expect(plan.publisherChanged).toBe(true);
+    expect(plan.newKey).toBe(true);
+    expect(plan.linkedKeys).toEqual([]);
+
+    const record = await stack.installApp(plan);
+    expect(record.deletedAt).toBeUndefined();
+    expect(record.content.publisher).toBe(rotated.did);
+    expect(
+      (await stack.listTypeGrants()).map(
+        (g) => (g.content.grantee as { entityId: string }).entityId,
+      ),
+    ).toEqual([APP_DID]);
+    expect(await stack.asEntity(OTHER_DID).get(record.id)).toBeNull();
+    await expect(planSigned(manifest(), { did: APP_DID })).rejects.toThrow(StackConflictError);
+  });
+
+  test('a release older than the installed one is refused', async () => {
+    await install(manifest({ release: 2, requests: [] }));
+    await expect(
+      planSigned(manifest({ release: 1, requests: MIGRATING }), { did: APP_DID }),
+    ).rejects.toThrow(StackConflictError);
+    expect((await planSigned(manifest({ release: 2 }), { did: OTHER_DID })).newKey).toBe(true);
+    await expect(planSigned(manifest({ release: 0 }), { did: APP_DID })).rejects.toThrow(
       StackValidationError,
     );
   });
@@ -586,6 +622,39 @@ describe('the publisher', () => {
       (await planSigned(manifest({ appId: 'com.example.keyed', types: [] }), { did: PERSON }))
         .namespaceVerified,
     ).toBe(false);
+  });
+
+  test('a key the publisher certified is marked so; a wrong certificate is refused', async () => {
+    const signed = await signManifest(manifest(), publisherKey.privateKey);
+    expect((await stack.planInstall(signed, { did: APP_DID })).keyCertified).toBe(false);
+
+    const keyCertificate = await certifyKey(
+      { appId: 'com.example.notes', did: APP_DID },
+      publisherKey.privateKey,
+    );
+    const plan = await stack.planInstall({ ...signed, keyCertificate }, { did: APP_DID });
+    expect(plan.keyCertified).toBe(true);
+    await stack.installApp(plan);
+
+    for (const [cert, did] of [
+      [keyCertificate, OTHER_DID],
+      [
+        await certifyKey({ appId: 'com.example.tags', did: OTHER_DID }, publisherKey.privateKey),
+        OTHER_DID,
+      ],
+      [
+        await certifyKey(
+          { appId: 'com.example.notes', did: OTHER_DID },
+          (await generateDidKeypair()).privateKey,
+        ),
+        OTHER_DID,
+      ],
+      [signed.signature, APP_DID],
+    ] as const) {
+      await expect(stack.planInstall({ ...signed, keyCertificate: cert }, { did })).rejects.toThrow(
+        StackValidationError,
+      );
+    }
   });
 
   test('appIdVouchedBy() reverses a bare did:web host and nothing else', () => {

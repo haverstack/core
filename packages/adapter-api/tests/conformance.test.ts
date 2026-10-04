@@ -39,6 +39,7 @@ import {
   getJournalFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
+  INSTALL_FIXTURE_KEY,
   INSTALL_FIXTURE_PUBLISHER,
   discoveryFixtures,
   errorResponseFixtures,
@@ -67,6 +68,7 @@ import {
   StackPayloadTooLargeError,
   StackTimeoutError,
   manifestPayload,
+  keyCertificatePayload,
 } from '@haverstack/core';
 import {
   buildAuthChallengePayload,
@@ -773,6 +775,21 @@ describe('install request fixtures', () => {
       );
       expect(valid, fixture.name).toBe(
         fixture.name !== 'install-request-signature-not-the-publishers',
+      );
+    }
+  });
+
+  test('every fixture key certificate but the misdirected one is the publisher’s', async () => {
+    for (const fixture of installRequestFixtures) {
+      const { manifest, keyCertificate } = fixture.requestBody!;
+      if (keyCertificate === undefined) continue;
+      const valid = await verifyDidSignature(
+        manifest.publisher,
+        base64urlDecode(keyCertificate),
+        keyCertificatePayload({ appId: manifest.appId, did: INSTALL_FIXTURE_KEY }),
+      );
+      expect(valid, fixture.name).toBe(
+        fixture.name !== 'install-request-certificate-not-for-this-key',
       );
     }
   });

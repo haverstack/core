@@ -215,6 +215,7 @@ describe('parseInstallBody', () => {
     name: 'Notes',
     version: '1.0.0',
     publisher: DID,
+    release: 1,
     types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
     requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
   };
@@ -222,6 +223,11 @@ describe('parseInstallBody', () => {
 
   test('reads a signed manifest into what planInstall() takes', () => {
     expect(parseInstallBody({ manifest, signature })).toEqual({ manifest, signature });
+    expect(parseInstallBody({ manifest, signature, keyCertificate: signature })).toEqual({
+      manifest,
+      signature,
+      keyCertificate: signature,
+    });
   });
 
   test('an unknown key at either level, or a missing field, is not this request', () => {
@@ -248,5 +254,13 @@ describe('parseInstallBody', () => {
         }),
       ),
     ).toBe('manifest.requests[0].actions[0]');
+    for (const release of [0, 1.5, '1']) {
+      expect(
+        pathOf(() => parseInstallBody({ manifest: { ...manifest, release }, signature })),
+      ).toBe('manifest.release');
+    }
+    expect(pathOf(() => parseInstallBody({ manifest, signature, keyCertificate: 1 }))).toBe(
+      'keyCertificate',
+    );
   });
 });
