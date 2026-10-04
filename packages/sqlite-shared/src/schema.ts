@@ -43,7 +43,7 @@ export const RECORD_SCHEMA_SQL = `
   --
   -- attachment_record_id stays out of the primary key: it annotates a
   -- reference rather than naming one, so re-pointing it updates the row an
-  -- associate() lands on instead of writing a second reference to the same
+  -- an amendAssociations() add lands on instead of writing a second reference to the same
   -- file. See docs/spec/attachments.md § Naming the upload a reference came from.
   --
   -- The primary key leads with record_id, so its implicit index already

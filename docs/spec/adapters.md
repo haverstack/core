@@ -30,7 +30,19 @@ type StackAdapter = StackRecordAdapter &
 
 ### Associations are keyed by identity
 
-Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `amendAssociations()` add landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+
+### Amending associations
+
+`StackRecordAdapter.amendAssociations(id, changes, opts?)` is the adapter's one association write: a list of `AssociationEdit` — `add` and `remove`, the [journal's shape](./journal.md#the-entry) without `repoint` — applied as **one write**, so a swap or a paired grant never exposes an intermediate state.
+
+- **All or none.** A SQL adapter runs the list in one transaction; a failure part-way leaves the record as it stood.
+- **Removes, then adds.** An add landing on an identity already stored overwrites it in place, and edits naming one identity [collapse on it](#associations-are-keyed-by-identity), last wins.
+- **One surface per list.** A list mixing authority and data elements is refused with `StackBadRequestError`: `Stack` never builds one, and `APIAdapter` could not send it as one request. See [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
+- **Never bumps `version` or `updatedAt`, and never snapshots.** One call appends at most one [journal entry](./journal.md#the-entry), carrying the `JournalEntryInput` the caller passed.
+- **A record that is not there is `StackNotFoundError`**, never an orphan row.
+
+`repoint` is not an input: `Stack` computes it against the record it read and hands it to the adapter only inside the journal entry.
 
 ## Package naming convention
 
@@ -113,7 +125,7 @@ The invariants above are easy to state in prose and easy to violate silently —
 
 `SqlExecutor` is synchronous. Every SQLite binding in scope executes queries in-process without yielding, and the shared logic's explicit transaction boundaries (`SqlExecutor.transaction(fn)`) depend on that — an engine reached over a network (D1, libsql over HTTP) does not fit this interface without making it async throughout. `transaction(fn)` — not raw `BEGIN`/`COMMIT`/`ROLLBACK` strings — is the interface's transaction primitive specifically because it isn't universal SQL text: `record-adapter-sqlite` implements it as literal `BEGIN`/`COMMIT`/`ROLLBACK` around `fn()`, while `record-adapter-do-sqlite` implements it as `ctx.storage.transactionSync(fn)`, because Durable Object SQLite storage rejects raw multi-statement transaction SQL outright and does not auto-commit-then-roll-back on a later exception — verified against the real Workers runtime, not assumed. A binding that only had the three raw statements to work with couldn't reach that primitive at all.
 
-SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `amendAssociations()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
 
 **File compatibility:** the adapter produces a standard SQLite file with an FTS5 `records_fts` index. Any adapter reading it needs FTS5, not merely SQLite.
 

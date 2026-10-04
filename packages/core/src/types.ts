@@ -840,8 +840,8 @@ export type SnapshotOptions = {
  * Whether a mutateRecord() call advances `version`/`updatedAt` at all.
  * `Stack` computes this from which aspects a change set actually moves — a
  * change set touching only `associations`, `parentId` and/or `unlisted`
- * doesn't bump, the same rule StackRecordAdapter.associate()/dissociate()
- * follow unconditionally. Absent means `true`; every other mutating method
+ * doesn't bump, the same rule StackRecordAdapter.amendAssociations()
+ * follows unconditionally. Absent means `true`; every other mutating method
  * bumps every time, so only mutateRecord() takes this. See
  * docs/spec/versioning.md § Version history.
  */
@@ -911,7 +911,7 @@ export type RecordJournalEntry = JournalEntryInput & {
 
 /**
  * Accepted by every mutating StackRecordAdapter method, and by
- * associate()/dissociate(), which take no other options. The adapter
+ * amendAssociations(), which takes no other options. The adapter
  * appends the entry inside the SAME write as the mutation, so a crash
  * between the two cannot leave a change unjournaled.
  *
@@ -1175,12 +1175,12 @@ export interface StackRecordAdapter {
    * The content patch merges at the top level only — each key it names is
    * replaced whole. Never touches `typeId`; a type change goes through
    * commitMigration() instead. `associations` replaces the stored set,
-   * where associate()/dissociate() amend it.
+   * where amendAssociations() amends it.
    *
    * `opts.bumpsVersion` says whether this call advances `version`/
    * `updatedAt` and stores the snapshot — `false` for a change set that
    * touches only association sets, `permissions` among them, matching
-   * associate()/dissociate() below, which never bump. `Stack` computes it; an adapter never has to infer it
+   * amendAssociations() below, which never bumps. `Stack` computes it; an adapter never has to infer it
    * from the change set's own keys.
    *
    * `Stack` owns everything above storage: validation, the acyclicity
@@ -1218,13 +1218,17 @@ export interface StackRecordAdapter {
 
   // Associations
   /**
-   * Add an association. Never bumps `version`/`updatedAt` and never
-   * snapshots — a set-add composes regardless of write order.
-   * See docs/spec/versioning.md § Version history.
+   * Apply a list of adds and removes as one write, all or none, removes
+   * before adds. Never bumps `version`/`updatedAt` and never snapshots — a
+   * set-add composes regardless of write order. A list mixing authority
+   * and data elements is refused.
+   * See docs/spec/adapters.md § Amending associations.
    */
-  associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
-  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
+  amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts?: JournalOptions,
+  ): Promise<StackRecord>;
 
   // Versions
   /**

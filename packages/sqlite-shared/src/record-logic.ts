@@ -14,6 +14,7 @@ import {
   StackNotFoundError,
   StackBadRequestError,
   applyMergePatch,
+  assertOneSurface,
 } from '@haverstack/core';
 import type {
   RecordJournalEntry,
@@ -28,6 +29,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  AssociationEdit,
   ActorOptions,
   IfVersionOptions,
   ScalarFieldKind,
@@ -852,35 +854,24 @@ export class SharedSqlRecordLogic {
 
   /**
    * Never bumps `version`/`updatedAt` and never snapshots — see
-   * StackRecordAdapter.associate(). The records row is untouched entirely;
-   * only the associations table changes.
+   * StackRecordAdapter.amendAssociations(). The records row is untouched
+   * entirely; only the associations table changes, in one transaction:
+   * removes first, then adds.
    */
-  async associate(
+  async amendAssociations(
     recordId: string,
-    association: Association,
+    changes: AssociationEdit[],
     opts: JournalOptions = {},
   ): Promise<StackRecord> {
+    assertOneSurface(changes);
     this.exec.transaction(() => {
       if (!this.readRecord(recordId))
         throw new StackNotFoundError(`Record not found: "${recordId}"`);
-      this.insertAssociations(recordId, [association]);
-      this.appendJournal(recordId, opts.journal);
-    });
-
-    return this.reread(recordId, 'associate');
-  }
-
-  /** Never bumps `version`/`updatedAt` — see associate(). */
-  async dissociate(
-    recordId: string,
-    association: Association,
-    opts: JournalOptions = {},
-  ): Promise<StackRecord> {
-    this.exec.transaction(() => {
-      if (!this.readRecord(recordId))
-        throw new StackNotFoundError(`Record not found: "${recordId}"`);
-      this.exec.run(
-        `DELETE FROM associations
+      for (const change of changes) {
+        if (change.op !== 'remove') continue;
+        const { association } = change;
+        this.exec.run(
+          `DELETE FROM associations
        WHERE record_id = ?
          AND kind = ?
          AND label = ?
@@ -890,12 +881,15 @@ export class SharedSqlRecordLogic {
          AND related_ns    = ?
          AND related_stack = ?
          AND related_role  = ?`,
-        [recordId, association.kind, association.label, ...associationKeyColumns(association)],
-      );
+          [recordId, association.kind, association.label, ...associationKeyColumns(association)],
+        );
+      }
+      const adds = changes.flatMap((c) => (c.op === 'add' ? [c.association] : []));
+      if (adds.length) this.insertAssociations(recordId, adds);
       this.appendJournal(recordId, opts.journal);
     });
 
-    return this.reread(recordId, 'dissociate');
+    return this.reread(recordId, 'amendAssociations');
   }
 
   /** The kinds each change-set key replaces, and nothing else. */
@@ -942,7 +936,7 @@ export class SharedSqlRecordLogic {
    *
    * FK enforcement (PRAGMA_FOREIGN_KEYS_ON) means inserting an
    * association against a record that doesn't exist throws — mapped
-   * here to StackNotFoundError so associate() on a nonexistent record
+   * here to StackNotFoundError so amendAssociations() on a nonexistent record
    * fails loudly instead of silently creating an orphan row.
    */
   private insertAssociations(recordId: string, associations: Association[]): void {

@@ -96,6 +96,7 @@ export type { WireCreateRequest } from './wire-record.js';
 // so a server refuses a key they do not define without keeping its own
 // list of the ones they do. See docs/spec/wire-format.md § Unrecognized input.
 export {
+  parseAssociationEditsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
   parseEntityPatchBody,

@@ -24,7 +24,7 @@
  * adapter.
  */
 
-import { StackError, StackBadRequestError } from '@haverstack/core';
+import { StackError, StackBadRequestError, assertOneSurface } from '@haverstack/core';
 import type {
   JournalQuery,
   VersionsQuery,
@@ -40,6 +40,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  AssociationEdit,
   RecordId,
   FileId,
   EntityId,
@@ -1179,29 +1180,21 @@ export class APIAdapter implements StackAdapter {
    * `ScopedStack`, which is the partition doing its job.
    * See docs/spec/access-control.md § Storage unifies; the API does not.
    */
-  private static associationPath(association: Association): string {
-    return association.kind === 'permission' || association.kind === 'anyone'
+  private static associationPath(association: Association | undefined): string {
+    return association?.kind === 'permission' || association?.kind === 'anyone'
       ? 'permissions'
       : 'associations';
   }
 
   /**
-   * No `If-Match` — associate()/dissociate() never bump `version`, so
+   * No `If-Match` — amendAssociations() never bumps `version`, so
    * there's nothing an `ifVersion` precondition could guard here. See
    * docs/spec/versioning.md § Version history.
    */
-  async associate(id: RecordId, association: Association): Promise<StackRecord> {
-    const path = `/records/${id}/${APIAdapter.associationPath(association)}`;
-    const raw = await this.request<WireRecord | undefined>('POST', path, association);
-    return requireRecordBody(raw, `POST ${path}`);
-  }
-
-  /** No `If-Match` — see associate(). */
-  async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
-    // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
-    // §9.3.5) and proxies/gateways are free to drop or reject it.
-    const path = `/records/${id}/${APIAdapter.associationPath(association)}/delete`;
-    const raw = await this.request<WireRecord | undefined>('POST', path, association);
+  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord> {
+    assertOneSurface(changes);
+    const path = `/records/${id}/${APIAdapter.associationPath(changes[0]?.association)}`;
+    const raw = await this.request<WireRecord | undefined>('POST', path, { changes });
     return requireRecordBody(raw, `POST ${path}`);
   }
 

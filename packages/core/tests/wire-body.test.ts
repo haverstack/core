@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import {
+  parseAssociationEditsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
   parseEntityPatchBody,
@@ -167,5 +168,42 @@ describe('parseMigrationBody', () => {
     expect(() => parseMigrationBody({ toTypeId: 'a@2' })).toThrow(StackBadRequestError);
     expect(pathOf(() => parseMigrationBody({ toTypeId: 2, content: {} }))).toBe('toTypeId');
     expect(pathOf(() => parseMigrationBody({ toTypeId: 'a@2', content: 'x' }))).toBe('content');
+  });
+});
+
+describe('parseAssociationEditsBody', () => {
+  const tag = { kind: 'tag', label: 'starred' };
+
+  test('returns the edits in the order they were sent', () => {
+    const changes = [
+      { op: 'remove', association: tag },
+      { op: 'add', association: { kind: 'tag', label: 'new' } },
+    ];
+    expect(parseAssociationEditsBody({ changes })).toEqual(changes);
+  });
+
+  test.each([
+    ['a body that is not an object', []],
+    ['a missing changes list', {}],
+    ['an empty changes list', { changes: [] }],
+    ['an unknown body key', { changes: [{ op: 'add', association: tag }], extra: 1 }],
+    ['an unknown edit key', { changes: [{ op: 'add', association: tag, extra: 1 }] }],
+    [
+      'a repoint, which only the journal records',
+      { changes: [{ op: 'repoint', association: tag }] },
+    ],
+    ['an unknown op', { changes: [{ op: 'replace', association: tag }] }],
+  ])('refuses %s with 400', (_name, body) => {
+    expect(() => parseAssociationEditsBody(body)).toThrow(StackBadRequestError);
+  });
+
+  test('a malformed element is a 422 naming its path', () => {
+    expect(
+      pathOf(() =>
+        parseAssociationEditsBody({
+          changes: [{ op: 'add', association: { kind: 'anyone', label: 'write' } }],
+        }),
+      ),
+    ).toBe('changes[0].association.label');
   });
 });

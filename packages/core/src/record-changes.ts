@@ -19,6 +19,7 @@ import { SYSTEM_TYPES, RECORD_CHANGE_SET_KEYS } from './types.js';
 import type {
   Association,
   AssociationChange,
+  AssociationEdit,
   AuthorityAssociation,
   ChangeOp,
   DataAssociation,
@@ -181,6 +182,42 @@ export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boole
   if (a.kind === 'entity' && b.kind === 'entity') return a.entityId === b.entityId;
   if (a.kind === 'external' && b.kind === 'external') return a.ns === b.ns && a.id === b.id;
   return false;
+}
+
+/**
+ * An association edit list travels one surface: authority and data share
+ * storage and a delta, and never share a call. Refused here so every
+ * adapter inherits the same rule.
+ * See docs/spec/access-control.md § Storage unifies; the API does not.
+ */
+export function assertOneSurface(changes: readonly AssociationEdit[]): void {
+  const authority = changes.filter((c) => isAuthorityAssociation(c.association)).length;
+  if (authority === 0 || authority === changes.length) return;
+  throw new StackBadRequestError(
+    'An association edit list carries authority or data, never both: permission and anyone ' +
+      'elements travel on the permissions surface.',
+  );
+}
+
+/**
+ * The set a list of edits leaves behind: removes first, then adds, an add
+ * landing on an identity already held in place. Edits naming one identity
+ * collapse, last wins. See docs/spec/adapters.md § Amending associations.
+ */
+export function applyAssociationEdits(
+  current: Association[],
+  changes: readonly AssociationEdit[],
+): Association[] {
+  let next = current.filter(
+    (a) => !changes.some((c) => c.op === 'remove' && associationEqual(c.association, a)),
+  );
+  for (const c of changes) {
+    if (c.op !== 'add') continue;
+    next = next.some((a) => associationEqual(a, c.association))
+      ? next.map((a) => (associationEqual(a, c.association) ? c.association : a))
+      : [...next, c.association];
+  }
+  return next;
 }
 
 /**

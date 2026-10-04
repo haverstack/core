@@ -15,6 +15,7 @@ import type {
   QueryResult,
   RecordFilter,
   Association,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   StackCapabilities,
@@ -33,7 +34,7 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
-import { associationEqual } from './record-changes.js';
+import { applyAssociationEdits, assertOneSurface, associationEqual } from './record-changes.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
 const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
@@ -488,30 +489,15 @@ export class MemoryAdapter implements StackAdapter {
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
-  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.associate(). */
-  async associate(id: string, association: Association, opts: JournalOptions = {}) {
+  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.amendAssociations(). */
+  async amendAssociations(id: string, changes: AssociationEdit[], opts: JournalOptions = {}) {
+    assertOneSurface(changes);
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
-    // re-pointed `attachmentRecordId` lands on the association already
-    // there rather than adding a second reference to the same file. Both
-    // halves of the partition share one table, so both reach this verb.
-    const assocs = allAssociations(record);
-    const next = assocs.some((a) => associationEqual(a, association))
-      ? assocs.map((a) => (associationEqual(a, association) ? association : a))
-      : [...assocs, association];
-    const updated = withAssociationSet(record, next);
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
-  }
-
-  /** Never bumps `version`/`updatedAt` — see associate(). */
-  async dissociate(id: string, association: Association, opts: JournalOptions = {}) {
-    const record = this.records.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const assocs = allAssociations(record).filter((a) => !associationEqual(a, association));
-    const updated = withAssociationSet(record, assocs);
+    const updated = withAssociationSet(
+      record,
+      applyAssociationEdits(allAssociations(record), changes),
+    );
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;
@@ -742,7 +728,7 @@ const isAuthority = (a: Association): a is AuthorityAssociation =>
 
 /**
  * A record's whole association table, both projections rejoined — what
- * associate()/dissociate() act on, since storage keys all kinds alike.
+ * amendAssociations() acts on, since storage keys all kinds alike.
  */
 function allAssociations(record: StackRecord): Association[] {
   return [...(record.associations ?? []), ...(record.permissions ?? [])];

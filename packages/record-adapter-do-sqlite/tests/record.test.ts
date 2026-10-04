@@ -17,7 +17,7 @@ import type {
   StackRecord,
   StackQuery,
   QueryResult,
-  Association,
+  AssociationEdit,
   RecordVersion,
   StackType,
   StackCapabilities,
@@ -65,14 +65,9 @@ type TestStub = {
   ): Promise<StackRecord | null>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
-  associate(
+  amendAssociations(
     recordId: string,
-    association: Association,
-    opts?: Record<string, unknown>,
-  ): Promise<StackRecord>;
-  dissociate(
-    recordId: string,
-    association: Association,
+    changes: AssociationEdit[],
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
   commitMigration(
@@ -237,7 +232,7 @@ describe('ifVersion / transactional rollback', () => {
    * into exec.transaction(), where snapshotBeforeMutation() writes a real
    * row into `versions` and versionedUpdate()'s CAS then fails on the
    * stale ifVersion and throws — both inside the same transaction
-   * callback. (associate()/dissociate() cannot stand in for this: they
+   * callback. (amendAssociations() cannot stand in for this: they
    * never bump and never snapshot, so they touch neither `versions` nor the
    * CAS path — see docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
    * row would survive a mutation that reported failure.
@@ -457,27 +452,33 @@ describe('records — sorting by a content field', () => {
 });
 
 describe('associations', () => {
-  test('associate adds a tag, dissociate removes it, neither bumps version', async () => {
+  test('an add puts a tag on the record, a remove takes it off, neither bumps version', async () => {
     const stub = getStub();
     const record = makeRecord();
     await stub.createRecord(record);
-    await stub.associate(record.id, { kind: 'tag', label: 'starred' });
+    await stub.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const withTag = await stub.getRecord(record.id);
     expect(withTag?.associations?.some((a) => a.kind === 'tag' && a.label === 'starred')).toBe(
       true,
     );
     expect(withTag?.version).toBe(1);
 
-    await stub.dissociate(record.id, { kind: 'tag', label: 'starred' });
+    await stub.amendAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const withoutTag = await stub.getRecord(record.id);
     expect(withoutTag?.associations).toBeUndefined();
     expect(withoutTag?.version).toBe(1);
   });
 
-  test('associate on a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
+  test('amending a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
     const stub = getStub();
     const err = await stub
-      .associate('nonexistent', { kind: 'tag', label: 'starred' })
+      .amendAssociations('nonexistent', [
+        { op: 'add', association: { kind: 'tag', label: 'starred' } },
+      ])
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('not_found');
   });

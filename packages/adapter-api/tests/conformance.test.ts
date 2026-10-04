@@ -22,10 +22,8 @@ import {
   patchContentFixtures,
   deleteRecordFixtures,
   undeleteRecordFixtures,
-  associateFixtures,
-  dissociateFixtures,
-  grantAccessFixtures,
-  revokeAccessFixtures,
+  amendAssociationsFixtures,
+  amendPermissionsFixtures,
   permissionsChangeFixtures,
   unlistedChangeFixtures,
   parentChangeFixtures,
@@ -49,7 +47,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { Association, RecordChangeSet, StackType } from '@haverstack/core';
+import type { AssociationEdit, RecordChangeSet, StackType } from '@haverstack/core';
 import type { WireAuthError } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -464,36 +462,15 @@ const expectNoIfMatch = (init: RequestInit) => {
   expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
 };
 
-describe('associate fixtures', () => {
-  for (const fixture of associateFixtures) {
+describe('amendAssociations fixtures', () => {
+  for (const fixture of amendAssociationsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.associate(
+      const result = await adapter.amendAssociations(
         idFromPath(fixture.path),
-        fixture.requestBody as Association,
-      );
-
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
-      expect(init.method).toBe(fixture.method);
-      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
-      expect(result.version).toBe(fixture.responseBody!.version);
-      expectNoIfMatch(init);
-    });
-  }
-});
-
-describe('dissociate fixtures', () => {
-  for (const fixture of dissociateFixtures) {
-    test(fixture.name, async () => {
-      const adapter = await openAdapter();
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
-
-      const result = await adapter.dissociate(
-        idFromPath(fixture.path),
-        fixture.requestBody as Association,
+        (fixture.requestBody as { changes: AssociationEdit[] }).changes,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -511,15 +488,15 @@ describe('dissociate fixtures', () => {
 // server built on ScopedStack, so the routing is what keeps the client
 // honest. See docs/spec/access-control.md
 // § Storage unifies; the API does not.
-describe('grantAccess fixtures', () => {
-  for (const fixture of grantAccessFixtures) {
+describe('amendPermissions fixtures', () => {
+  for (const fixture of amendPermissionsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.associate(
+      const result = await adapter.amendAssociations(
         idFromPath(fixture.path),
-        fixture.requestBody as Association,
+        (fixture.requestBody as { changes: AssociationEdit[] }).changes,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -527,27 +504,6 @@ describe('grantAccess fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.permissions).toEqual(fixture.responseBody!.permissions);
-      expectNoIfMatch(init);
-    });
-  }
-});
-
-describe('revokeAccess fixtures', () => {
-  for (const fixture of revokeAccessFixtures) {
-    test(fixture.name, async () => {
-      const adapter = await openAdapter();
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
-
-      const result = await adapter.dissociate(
-        idFromPath(fixture.path),
-        fixture.requestBody as Association,
-      );
-
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
-      expect(init.method).toBe(fixture.method);
-      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
-      expect(result.permissions).toBeUndefined();
       expectNoIfMatch(init);
     });
   }
@@ -825,10 +781,13 @@ describe('error response fixtures', () => {
           });
         }
         // An `anyone`/`permission` element travels on the permissions
-        // endpoint, which associate() selects from the element's own kind —
+        // endpoint, which amendAssociations() selects from the element's own kind —
         // see APIAdapter.associationPath().
         if (fixture.method === 'POST' && fixture.path.endsWith('/permissions')) {
-          return adapter.associate(idFromPath(fixture.path), fixture.requestBody as Association);
+          return adapter.amendAssociations(
+            idFromPath(fixture.path),
+            (fixture.requestBody as { changes: AssociationEdit[] }).changes,
+          );
         }
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
           const version = Number(fixture.path.split('/').pop());

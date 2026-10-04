@@ -73,14 +73,14 @@ describe('appendJournal', () => {
     const b = makeRecord();
     await adapter.createRecord(a, { journal: entry() });
     await adapter.createRecord(b, { journal: entry() });
-    await adapter.associate(
+    await adapter.amendAssociations(
       a.id,
-      { kind: 'tag', label: 'x' },
+      [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
-    await adapter.associate(
+    await adapter.amendAssociations(
       b.id,
-      { kind: 'tag', label: 'y' },
+      [{ op: 'add', association: { kind: 'tag', label: 'y' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
 
@@ -92,7 +92,9 @@ describe('appendJournal', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, { kind: 'tag', label: 'x' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]);
 
     expect(await adapter.getJournal(record.id)).toEqual([]);
   });
@@ -127,9 +129,19 @@ describe('appendJournal', () => {
     await adapter.createRecord(record);
 
     const fileId = 'a'.repeat(64);
-    await adapter.associate(
+    await adapter.amendAssociations(
       record.id,
-      { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: 'rec-new' },
+      [
+        {
+          op: 'add',
+          association: {
+            kind: 'attachment',
+            label: 'cover',
+            fileId,
+            attachmentRecordId: 'rec-new',
+          },
+        },
+      ],
       {
         journal: entry({
           ops: ['associate'],
@@ -200,9 +212,9 @@ describe('a purge leaves no journal rows', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
-    await adapter.associate(
+    await adapter.amendAssociations(
       record.id,
-      { kind: 'tag', label: 'sensitive' },
+      [{ op: 'add', association: { kind: 'tag', label: 'sensitive' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
 
@@ -224,9 +236,9 @@ describe('a purge leaves no journal rows', () => {
     await adapter.deleteRecord(record.id, { purge: true });
 
     await expect(
-      adapter.associate(
+      adapter.amendAssociations(
         record.id,
-        { kind: 'tag', label: 'x' },
+        [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
         { journal: entry({ ops: ['associate'], kind: 'changed' }) },
       ),
     ).rejects.toThrow();
@@ -242,9 +254,9 @@ describe('the log outlives the process that wrote it', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
-    await adapter.associate(
+    await adapter.amendAssociations(
       record.id,
-      { kind: 'tag', label: 'draft' },
+      [{ op: 'add', association: { kind: 'tag', label: 'draft' } }],
       {
         journal: entry({
           ops: ['associate'],
@@ -275,9 +287,9 @@ describe('getJournal', () => {
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
     for (const label of ['a', 'b', 'c']) {
-      await adapter.associate(
+      await adapter.amendAssociations(
         record.id,
-        { kind: 'tag', label },
+        [{ op: 'add', association: { kind: 'tag', label } }],
         { journal: entry({ ops: ['associate'], kind: 'changed' }) },
       );
     }
