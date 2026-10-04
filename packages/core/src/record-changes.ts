@@ -144,7 +144,7 @@ export function associationDelta(before: Association[], after: Association[]): A
   return changes.concat(
     before
       .filter((b) => !after.some((a) => associationEqual(a, b)))
-      .map((previous) => ({ op: 'remove', previous })),
+      .map((association) => ({ op: 'remove', association })),
   );
 }
 
@@ -163,7 +163,7 @@ export function feedAssociationDelta(changes: AssociationChange[]): {
   const removed: DataAssociation[] = [];
   for (const c of changes) {
     if (c.op === 'remove') {
-      const identity = stripAssociationAnnotation(c.previous);
+      const identity = stripAssociationAnnotation(c.association);
       if (!isAuthorityAssociation(identity)) removed.push(identity);
     } else if (!isAuthorityAssociation(c.association)) {
       added.push(c.association);
@@ -375,7 +375,7 @@ export const presentDeleted = (record: StackRecord): StackRecord =>
  * every consumer that serves one half alone asks this.
  */
 export function movesAuthority(change: AssociationChange): boolean {
-  return isAuthorityAssociation(change.op === 'remove' ? change.previous : change.association);
+  return isAuthorityAssociation(change.association);
 }
 
 /**

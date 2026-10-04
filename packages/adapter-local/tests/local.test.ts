@@ -372,12 +372,12 @@ describe('journal', () => {
       journal: {
         kind: 'changed',
         ops: ['dissociate'],
-        associations: [{ op: 'remove', previous: association }],
+        associations: [{ op: 'remove', association }],
       },
     });
 
     const entries = await adapter.getJournal('rec1');
     expect(entries.map((e) => e.ops)).toEqual([['dissociate']]);
-    expect(entries[0]!.associations).toEqual([{ op: 'remove', previous: association }]);
+    expect(entries[0]!.associations).toEqual([{ op: 'remove', association }]);
   });
 });

@@ -182,13 +182,20 @@ export type Association = DataAssociation | AuthorityAssociation;
  * One association a write moved, and what it moved from. Every inverse is
  * local to one element — there is no join back to a sibling list, so there
  * is no join key to get wrong. `previous` is carried in full, annotation
- * included, which is what makes both a `repoint` and a `remove` undoable.
+ * included, which is what makes a `repoint` undoable; a `remove` names the
+ * element it took away in `association`, in full.
  * See docs/spec/journal.md § The entry.
  */
 export type AssociationChange =
   | { op: 'add'; association: Association }
   | { op: 'repoint'; association: Association; previous: Association }
-  | { op: 'remove'; previous: Association };
+  | { op: 'remove'; association: Association };
+
+/**
+ * What a caller sends: the journal's shape without `repoint`, which the
+ * journal records and no caller requests. See docs/spec/journal.md § The entry.
+ */
+export type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 
 /**
  * The aspects of an existing record one mutate() call may move, in any

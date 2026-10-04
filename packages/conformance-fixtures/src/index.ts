@@ -1921,7 +1921,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
   {
     name: 'get-journal-entry-keeps-what-a-dissociate-removed',
     description:
-      'A removal is as undoable from the log as a re-point: `previous` is the association in ' +
+      'A removal is as undoable from the log as a re-point: `association` is the element in ' +
       'full, attachmentRecordId included. The change frame for the same write names identity ' +
       'only — kind, label and fileId — because a notification reports what is true now, and ' +
       'the annotation no longer describes anything current. That asymmetry is the tier: the ' +
@@ -1943,7 +1943,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           associations: [
             {
               op: 'remove',
-              previous: {
+              association: {
                 kind: 'attachment',
                 label: 'embed',
                 fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',

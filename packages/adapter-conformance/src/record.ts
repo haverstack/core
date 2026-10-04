@@ -534,7 +534,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             journal: {
               ops: ['dissociate'],
               kind: 'changed',
-              associations: [{ op: 'remove', previous: { kind: 'tag', label: 'starred' } }],
+              associations: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }],
             },
           },
         );
@@ -545,7 +545,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           { op: 'add', association: { kind: 'tag', label: 'starred' } },
         ]);
         expect(log[1]!.associations).toEqual([
-          { op: 'remove', previous: { kind: 'tag', label: 'starred' } },
+          { op: 'remove', association: { kind: 'tag', label: 'starred' } },
         ]);
       });
 
@@ -598,12 +598,12 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             journal: {
               ops: ['dissociate'],
               kind: 'changed',
-              associations: [{ op: 'remove', previous }],
+              associations: [{ op: 'remove', association: previous }],
             },
           },
         );
         const [entry] = await adapter.getJournal(record.id);
-        expect(entry!.associations).toEqual([{ op: 'remove', previous }]);
+        expect(entry!.associations).toEqual([{ op: 'remove', association: previous }]);
       });
 
       test('an association list is keyed by identity, last wins', async () => {

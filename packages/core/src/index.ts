@@ -96,6 +96,7 @@ export type {
   AuthorityAssociation,
   DataAssociation,
   AssociationChange,
+  AssociationEdit,
   RelationshipTarget,
   RecordTarget,
   EntityTarget,

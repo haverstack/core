@@ -4718,7 +4718,7 @@ describe('Stack.grantAccess/revokeAccess', () => {
     expect(granted.ops).toEqual(['reshare']);
     expect(granted.associations).toEqual([{ op: 'add', association: readFor('entity-a') }]);
     expect(revoked.ops).toEqual(['reshare']);
-    expect(revoked.associations).toEqual([{ op: 'remove', previous: readFor('entity-a') }]);
+    expect(revoked.associations).toEqual([{ op: 'remove', association: readFor('entity-a') }]);
     // Neither moved the record's own version.
     expect(revoked.version).toBe(1);
   });
@@ -4820,8 +4820,8 @@ describe('Stack.mutate — the `permissions` key', () => {
     expect(journal[1].ops).toEqual(['reshare']);
     expect(journal[1].associations).toEqual([
       { op: 'add', association: { kind: 'permission', label: 'read', grantee: entityB } },
-      { op: 'remove', previous: { kind: 'permission', label: 'read', grantee: entityA } },
-      { op: 'remove', previous: { kind: 'anyone', label: 'read' } },
+      { op: 'remove', association: { kind: 'permission', label: 'read', grantee: entityA } },
+      { op: 'remove', association: { kind: 'anyone', label: 'read' } },
     ]);
   });
 
