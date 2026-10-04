@@ -109,8 +109,7 @@ describe('every record frame', () => {
 
   // The envelope describes the change; the record describes the record.
   // A provenance field here would be read as "who changed this" and mean
-  // "who wrote it first", which is how the earlier shape misled its own
-  // worked example.
+  // "who wrote it first".
   it('carries no record provenance beside the actor', () => {
     for (const { connection, frame } of recordFrames) {
       const data = frame.data as Record<string, unknown>;

@@ -1,9 +1,8 @@
 /**
  * Record adapter conformance suite
  * -------------------------------------------------------
- * The middle ground docs/spec/adapters.md describes in prose and, until
- * now, nothing runnable checked a third-party StackRecordAdapter against:
- * an adapter author calls runRecordAdapterConformance() with a way to open
+ * A runnable check of what docs/spec/adapters.md describes in prose for a
+ * third-party StackRecordAdapter: an adapter author calls runRecordAdapterConformance() with a way to open
  * their adapter and the capabilities it declares, and gets back the
  * invariants every first-party adapter is held to — FTS5-style search
  * consistency, content-path semantics, version snapshots, `_config`
