@@ -24,7 +24,7 @@ import {
 const everyStackError = [
   new StackValidationError([{ path: 'title', message: 'expected string' }]),
   new StackMigrationError('no migration path from note@1 to note@3'),
-  new StackPermissionError(),
+  new StackPermissionError('denied'),
   new StackNotFoundError('Record "1hk153x0a00b" not found.'),
   new StackConflictError('Attachment is still referenced.'),
   new StackVersionConflictError('Version mismatch.', '1hk153x0a00b', 3, 5),
@@ -84,7 +84,7 @@ describe('serializeError', () => {
     });
     expect(drift.body.error.details).toBeUndefined();
 
-    const permission = serializeError(new StackPermissionError())!;
+    const permission = serializeError(new StackPermissionError('denied'))!;
     expect(permission.body.error.details).toBeUndefined();
     expect(permission.body.error.versionConflict).toBeUndefined();
     expect(permission.body.error.schemaDrift).toBeUndefined();

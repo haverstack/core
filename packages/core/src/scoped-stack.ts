@@ -556,7 +556,7 @@ export class ScopedStack implements StackClient {
    * only ever reaches someone holding the record already.
    * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
-  private async denialFor(record: StackRecord, message?: string): Promise<StackError> {
+  private async denialFor(record: StackRecord, message: string): Promise<StackError> {
     // Prefetched here rather than threaded down from the gate: a write
     // carried by a record-level permission settles without reading a grant
     // at all, and that path must not pay for this one. Both halves of
@@ -642,14 +642,28 @@ export class ScopedStack implements StackClient {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
-      if (!this.isGroupManager(record)) throw await this.denialFor(record);
+      if (!this.isGroupManager(record)) {
+        throw await this.denialFor(
+          record,
+          `Cannot change group "${id}": only its admins can manage it`,
+        );
+      }
       return record;
     }
-    const allowed =
-      ((await this.checkWrite(record)) ||
-        (await this.subjectAllows(record.typeId, actions, { record }))) &&
-      (await this.principalAllows(record.typeId, actions));
-    if (!allowed) throw await this.denialFor(record);
+    const subjectReaches =
+      (await this.checkWrite(record)) ||
+      (await this.subjectAllows(record.typeId, actions, { record }));
+    const principalHolds = await this.principalAllows(record.typeId, actions);
+    if (!subjectReaches || !principalHolds) {
+      const verb = actions[0]!.split('-')[0]!;
+      const what = `Cannot ${verb} "${id}" (${record.typeId})`;
+      throw await this.denialFor(
+        record,
+        subjectReaches
+          ? `${what}: the app acting for this entity holds no ${verb} grant`
+          : `${what}: requires ${actions.join(' or ')}`,
+      );
+    }
     return record;
   }
 
@@ -779,7 +793,11 @@ export class ScopedStack implements StackClient {
     for (const field of await this.fileRefFieldNames(typeId)) {
       const value = content[field];
       if (typeof value !== 'string') continue;
-      if (!(await this.canAccessFile(value))) throw new StackPermissionError();
+      if (!(await this.canAccessFile(value))) {
+        throw new StackPermissionError(
+          `Cannot reference file "${value}" in field "${field}": it does not exist or you cannot read it`,
+        );
+      }
     }
   }
 
@@ -797,7 +815,11 @@ export class ScopedStack implements StackClient {
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
-      if (!(await this.canAccessFile(association.fileId))) throw new StackPermissionError();
+      if (!(await this.canAccessFile(association.fileId))) {
+        throw new StackPermissionError(
+          `Cannot reference file "${association.fileId}": it does not exist or you cannot read it`,
+        );
+      }
     } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
       const { target } = association;
       // `stackUrl` is tested for a value, not for presence: absent and
@@ -805,7 +827,11 @@ export class ScopedStack implements StackClient {
       // read them as this stack — so a check on presence alone would
       // leave one spelling of a local Record ungated.
       if (target.kind !== 'record' || target.stackUrl) return;
-      if (!(await this.canReadReferent(target.recordId))) throw new StackPermissionError();
+      if (!(await this.canReadReferent(target.recordId))) {
+        throw new StackPermissionError(
+          `Cannot reference record "${target.recordId}": it does not exist or you cannot read it`,
+        );
+      }
     }
   }
 
@@ -861,7 +887,9 @@ export class ScopedStack implements StackClient {
     if (!this.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
       const fileId = (content as Record<string, unknown>).fileId;
       if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
-        throw new StackPermissionError();
+        throw new StackPermissionError(
+          `Cannot reference file "${String(fileId)}": it does not exist or you cannot read it`,
+        );
       }
     }
     if (opts.permissions?.length && !this.mayGrantAccess()) {
@@ -889,7 +917,9 @@ export class ScopedStack implements StackClient {
       }
     }
     if (opts.parentId !== undefined && !(await this.canReadReferent(opts.parentId))) {
-      throw new StackPermissionError();
+      throw new StackPermissionError(
+        `Cannot reference record "${opts.parentId}" as parent: it does not exist or you cannot read it`,
+      );
     }
     for (const assoc of opts.associations ?? []) {
       await this.requireAssociationAccess(typeId, assoc);
@@ -1141,7 +1171,9 @@ export class ScopedStack implements StackClient {
     }
 
     if (changes.parentId != null && !(await this.canReadReferent(changes.parentId))) {
-      throw new StackPermissionError();
+      throw new StackPermissionError(
+        `Cannot reference record "${changes.parentId}" as parent: it does not exist or you cannot read it`,
+      );
     }
 
     return this.stack.mutate(id, authorized, { ...opts, ...this.actor });
@@ -1200,7 +1232,12 @@ export class ScopedStack implements StackClient {
 
   /** The reshare decision alone, for a record already read and write-gated. */
   private async requireReshareOf(record: StackRecord): Promise<void> {
-    if (!this.canReshare(record)) throw await this.denialFor(record);
+    if (!this.canReshare(record)) {
+      throw await this.denialFor(
+        record,
+        `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
+      );
+    }
   }
 
   /**
@@ -1551,7 +1588,11 @@ export class ScopedStack implements StackClient {
    * predicate as the reference-creation gate (canAccessFile).
    */
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    if (!(await this.canAccessFile(fileId))) throw new StackPermissionError();
+    if (!(await this.canAccessFile(fileId))) {
+      throw new StackPermissionError(
+        `Cannot read file "${fileId}": it does not exist or you cannot read it`,
+      );
+    }
     return this.stack.getAttachment(fileId);
   }
 
