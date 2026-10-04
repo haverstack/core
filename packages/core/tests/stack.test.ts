@@ -4671,6 +4671,21 @@ describe('Stack.grantAccess/revokeAccess', () => {
     expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
+  test('refuse a soft-deleted record, so a tombstone keeps the permissions it had', async () => {
+    const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.delete(record.id);
+
+    await expect(stack.grantAccess(record.id, readFor('entity-b'))).rejects.toThrow(
+      StackConflictError,
+    );
+    await expect(stack.revokeAccess(record.id, readFor('entity-a'))).rejects.toThrow(
+      StackConflictError,
+    );
+    const tombstone = await stack.get(record.id, { includeDeleted: true });
+    expect(tombstone?.permissions).toEqual([readFor('entity-a')]);
+  });
+
   test('a grant already held is a no-op — no journal entry', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await stack.grantAccess(record.id, readFor('entity-a'));

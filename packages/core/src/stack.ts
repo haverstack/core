@@ -1361,6 +1361,7 @@ export class Stack implements StackClient {
     const errors = validateAssociation(permission, 'permission');
     if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.requireRecord(id);
+    this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
     if (current.some((p) => associationEqual(p, permission))) return existing;
     this.assertPermissionSet([...current, permission]);
@@ -1393,6 +1394,7 @@ export class Stack implements StackClient {
     const errors = validateAssociation(permission, 'permission');
     if (errors.length > 0) throw new StackValidationError(errors);
     const existing = await this.requireRecord(id);
+    this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
     const matched = current.find((p) => associationEqual(p, permission));
     if (!matched) return existing;
