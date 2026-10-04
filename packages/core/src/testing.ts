@@ -677,7 +677,7 @@ export class MemoryAdapter implements StackAdapter {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
     if (!this.blobs.has(fileId)) {
-      this.blobs.set(fileId, { data: data.slice(), modifiedAt: new Date() });
+      this.blobs.set(fileId, { data: new Uint8Array(data), modifiedAt: new Date() });
     }
     return fileId;
   }
@@ -687,7 +687,7 @@ export class MemoryAdapter implements StackAdapter {
     }
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
-    return blob.data.slice();
+    return new Uint8Array(blob.data);
   }
   async deleteBlob(fileId: string) {
     this.blobs.delete(fileId);
