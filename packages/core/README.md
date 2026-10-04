@@ -86,6 +86,66 @@ const notes = await stack.query({
 await stack.close();
 ```
 
+## Writing an app
+
+An app has two layers, because the stack draws a line between them:
+
+- **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
+- **An install function that takes a `Stack`**, run by the owner. Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`. Over the wire, `POST /types` and `POST /records/:id/migrate` are served to the owner acting alone.
+
+`registerMigration()` belongs to neither. Its registry lives in memory on each `Stack` instance, so it runs at **every startup**, right after `Stack.open()` — an install function that registers migrations and runs once leaves every later start without them.
+
+```ts
+import { Stack, typeHandle, type StackClient } from '@haverstack/core';
+
+const NoteV1 = typeHandle('com.example.myapp/note@1', {
+  text: { kind: 'text', required: true },
+});
+export const Note = typeHandle('com.example.myapp/note@2', {
+  text: { kind: 'text', required: true },
+  pinned: { kind: 'boolean', required: true },
+});
+
+// Data layer: whoever the stack lets in.
+export class Notes {
+  constructor(private readonly client: StackClient) {}
+  add(text: string) {
+    return this.client.create(Note, { text, pinned: false });
+  }
+  pin(id: string) {
+    return this.client.patchContent(Note, id, { pinned: true });
+  }
+  list() {
+    return this.client.query(Note);
+  }
+}
+
+// Startup: every open, every Stack instance.
+export function registerNoteMigrations(stack: Stack) {
+  stack.registerMigration({
+    from: NoteV1.id,
+    to: Note.id,
+    migrate: (content) => ({ ...content, pinned: false }),
+  });
+}
+
+// Install: the owner, once per stack and again after a schema change.
+// defineType() is a no-op for a schema already stored, so re-running is safe.
+export async function installNotes(stack: Stack, appDid?: string) {
+  await stack.defineType({ ...NoteV1, name: 'Note' });
+  await stack.defineType({ ...Note, name: 'Note', migratesFrom: NoteV1.id });
+  await stack.migrateAll(Note.baseId);
+  if (appDid) {
+    await stack.grantType(Note.baseId, {
+      actions: ['create', 'read-own', 'update-own', 'delete-own'],
+      grantee: { kind: 'entity', entityId: appDid },
+    });
+  }
+}
+```
+
+The owner's own app calls `registerNoteMigrations(stack)` and `installNotes(stack)`, then `new Notes(stack)`. A server hands each requester `new Notes(stack.asActor(session))`. An app that isn't the owner has no way to install its own types yet; the owner runs its install function for it.
+
 ## Core concepts
 
 ### Records
@@ -142,7 +202,7 @@ stack.registerMigration({
 });
 ```
 
-Migration is **lazy** — records are migrated in memory on read and committed to disk on the next update. Use `stack.migrateAll()` to commit eagerly.
+Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Register migrations at every startup — see [Writing an app](#writing-an-app).
 
 ## License
 

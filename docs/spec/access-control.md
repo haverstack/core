@@ -174,19 +174,19 @@ The grantee lives in `content.grantee`, not in `createdBy`. `createdBy` means "a
 
 ```ts
 // Grant a specific entity permission to create comments and manage their own
-await stack.grantType('com.example/comment@1', {
+await stack.grantType('com.example/comment', {
   actions: ['create', 'read-own', 'update-own', 'delete-own'],
   grantee: { kind: 'entity', entityId: 'bob-entity-id' },
 });
 
 // Grant a _group Record's roster — `member` reaches members and admins alike
-await stack.grantType('com.example/comment@1', {
+await stack.grantType('com.example/comment', {
   actions: ['create', 'read-any'],
   grantee: { kind: 'group', groupId: 'editors-group-id', role: 'member' },
 });
 
 // Default grant — applies to any authenticated entity, and to no anonymous requester
-await stack.grantType('com.example/comment@1', {
+await stack.grantType('com.example/comment', {
   actions: ['create', 'read-own'],
   grantee: { kind: 'authenticated' },
 });
@@ -202,11 +202,11 @@ await stack.listTypeGrants({ kind: 'group', groupId: 'editors-group-id', role: '
 // writes at. The grantee is matched whole, role included.
 // Returns the grants it withdrew, as they stood. An empty array means
 // nothing matched — a grant already withdrawn, or never written.
-const withdrawn = await stack.revokeType('com.example/comment@1', {
+const withdrawn = await stack.revokeType('com.example/comment', {
   actions: ['create'],
   grantee: { kind: 'entity', entityId: 'bob-entity-id' },
 });
-await stack.revokeType('com.example/comment@1', {
+await stack.revokeType('com.example/comment', {
   actions: ['create'],
   grantee: { kind: 'group', groupId: 'editors-group-id', role: 'member' },
 });
@@ -222,6 +222,8 @@ await stack.revokeType('com.example/comment@1', {
   The restriction is what makes the verb safe to expose. `commitMigration()` replaces `content` and `typeId` wholesale, so it is create-shaped at the destination and update-shaped over the Record as it stands: a grant-based version would have to re-derive every gate `create()` applies _and_ every gate `mutate()` applies, and would reopen each one it missed. The sharpest is the non-owner `_attachment@1` refusal (see [Attachments](./attachments.md#creating-_attachment1-records-directly)) — a requester holding a create grant on `_attachment@1` and write access to any Record they authored could otherwise migrate that Record into the family naming any `fileId`, then read the bytes through the uploader clause. Ordinary write access to a Record is not consent to move it between families.
 
 **The fence is on writes only.** `get()`, `query()`, `getVersions()` and `getVersion()` on a `_grant` Record stay on their ordinary gates. Reading how a Record you can already reach came to be is not the escalation the fence exists to stop, and taking history away would leave a write-holder unable to audit the grant they hold — [history](./versioning.md#history-access) is the recovery surface, so losing it costs more than it protects. A snapshot carries no `permissions` at all (see [Versioning § Version history](./versioning.md#version-history)), so a grant's history discloses no more of the sharing graph than its current state does. `restoreVersion()` is a write and stays refused, even though reading the snapshot it would restore does not. `_config` is already unreachable through `Stack.get()`; `_app` keeps record-level `write` for its display fields, fenced only on the bindings a trust decision reads (see [DID bindings](./identity.md#did-bindings)).
+
+- **Defining a Type is owner-acting-alone too.** `defineType()` lives on `Stack` and is absent from `StackClient`, so a scoped caller has no route to it, and a server serves [`POST /types`](./wire-format.md#types) to the owner acting alone and to no one else. A Type is read by every app that touches its family, so defining one is at least as stack-wide as committing a migration, and no grant names it.
 
 - **Grants target the type family, not the exact version**: a grant naming `com.example/comment` covers `com.example/comment@1` and `@2` alike — matching is by the stored `baseId`, and a grant whose `baseId` carries an `@n` suffix names no family and confers nothing. This keeps a version bump from silently orphaning existing grants (grants are checked in memory _before_ any migration applies). `revokeType()` matches at the same granularity.
 - **Actions are independent, with one dependency**: `'create'` does not imply `'read-own'`, and so on — each action must be listed explicitly. `['create', 'read-own', 'update-own', 'delete-own']` is the common bundle for contributor access. The dependency is that a mutate action needs a read action of matching scope in the same grant, or it conveys nothing; `'create'` alone stays valid and is the [blind-write](#write-implies-read) shape.

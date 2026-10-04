@@ -605,6 +605,8 @@ GET  /types/:id    — get one type definition (id is URL-encoded)
 POST /types        — register a type, or evolve an existing one in place
 ```
 
+**`POST /types` is served to the stack owner acting alone** and answers `403` otherwise, delegation included — the same rule as [`POST /records/:id/migrate`](#migration-commit). A Type is stack-wide: every app reading the family validates against it, and no grant confers defining one (see [Access control § Type-level grants](./access-control.md#type-level-grants)). `ScopedStack` has no `defineType()`, so a server serves this endpoint through an unscoped `Stack` after checking `isOwnerActingAlone()`. `GET /types` and `GET /types/:id` stay open to any authenticated requester, since a client needs a schema to validate and render the records it can reach.
+
 **The body is a whole Type**, as `GET /types/:id` returns one. `id`, `name` and `schema` are read, as is `migratesFrom` when present; `baseId`, `version`, `schemaHash` and `createdAt` are accepted and ignored, since `defineType()` derives or stamps each of them. Any other key is refused (see [Unrecognized input](#unrecognized-input)).
 
 `POST /types` on an `id` that already has a stored Type runs the same [schema drift check](./data-model.md#schema-drift-detection) as `Stack.defineType()` — the server-side storage layer never blindly overwrites a Type definition; legality is decided once, in the same invariant layer both the local and wire paths share.

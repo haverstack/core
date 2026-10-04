@@ -380,7 +380,7 @@ stack.registerMigration({
 });
 ```
 
-The migration registry is **per-stack-instance** — different stacks can be at different migration states without interfering. Registration is part of app startup, immediately after creating the Stack.
+The migration registry is **per-stack-instance** and lives in memory — different stacks can be at different migration states without interfering. Nothing about it is stored, so registration runs at **every** startup, for every `Stack` instance, including one opened over `APIAdapter`: immediately after `Stack.open()`, before the first read that asks for `presentAt: 'latest'` or the first `migrateAll()`. It is not an install step. An install function that registers migrations beside `defineType()` and runs once leaves every later instance with an empty registry.
 
 **What the library does with registered migrations:**
 
