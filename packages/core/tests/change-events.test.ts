@@ -484,7 +484,7 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   });
 
   // The whole point of this pair: a re-point is lossy (nothing snapshots
-  // associations any more), so the old attachmentRecordId must not surface
+  // associations), so the old attachmentRecordId must not surface
   // anywhere in the event — not as "removed", not tucked into "added".
   test('re-pointing an attachment reports only the new pointer; the old one appears nowhere', async () => {
     const { first, second, fileId } = await twoUploads();

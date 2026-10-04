@@ -97,7 +97,7 @@ Neither list is ever present on an op other than `associate`/`dissociate`, and a
 
 **`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `removed` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
-Named events per verb (`record:create`, `record:update`, `record:delete`) were rejected: a subscriber wiring three of them silently misses the other ten verbs, and the bug is invisible until an index drifts from the records it describes.
+**One event shape, not one event per verb.** A subscriber wiring named events (`record:create`, `record:update`, `record:delete`) would silently miss every verb it didn't name, and the bug would stay invisible until an index drifted from the records it describes.
 
 **`record` is shared, and a handler must not mutate it.** One emission is delivered to every subscription, and they receive the same record object rather than a copy each — copying per subscriber would cost every consumer for a defect none of them have. A handler that needs to alter what it received copies first; mutating in place corrupts what the other subscribers on that stack see.
 

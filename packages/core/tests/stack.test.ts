@@ -1791,9 +1791,8 @@ describe('Stack.restoreVersion — containment', () => {
     expect(restored.parentId).toBeUndefined();
   });
 
-  // A purged container never cost a record its content rollback, and
-  // now has nothing to do with one: the record stays where it is, dangling
-  // parent and all.
+  // A purged container has nothing to do with a record's content
+  // rollback: the record stays where it is, dangling parent and all.
   test('a record whose container was purged still rolls its content back', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });

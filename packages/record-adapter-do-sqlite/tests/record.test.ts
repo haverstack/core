@@ -5,7 +5,7 @@
  * Workers runtime (@cloudflare/vitest-pool-workers), not `environment:
  * 'node'`: the executor's translation of get/all/run onto SqlStorage's
  * cursor API, FK/unique constraint mapping, FTS5, cursor-codec pagination,
- * and — the one thing the #161 spike found couldn't be assumed — that
+ * and — the one thing that can't be assumed — that
  * exec.transaction() reaching ctx.storage.transactionSync() actually
  * rolls back a rejected mutation's partial writes (see the
  * mid-transaction-failure test below), since DO SQLite has no raw

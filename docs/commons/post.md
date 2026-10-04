@@ -56,10 +56,9 @@ essentially every record ever written, which design rule 5 forbids by name
 (_"timestamps are `createdAt`/`updatedAt` — never mirrored into content"_).
 
 This makes native `createdAt` the only ordering key a post will ever have. Importing an
-existing archive of dated posts therefore depends on
-[#203](https://github.com/haverstack/core/issues/203) (settable `createdAt` for
-owner-side imports on unscoped `Stack`) — a dependency on _importing into_ the type, not
-on the type's definition, which is fully expressible today.
+existing archive of dated posts sets it at create time, which the owner may do on
+unscoped `Stack` (see
+[Data model § Authorship and attribution](../spec/data-model.md#authorship-and-attribution)).
 
 **Scheduled posts**, the strongest objection to no date field: the position taken here
 is that scheduling is the scheduler's state, not the utterance's — a queued post is

@@ -126,14 +126,14 @@ describe('scalar field validation', () => {
     expect(paths({ dueAt: 1704067200000 }, schema)).toContain('dueAt');
   });
 
-  // bare Date.parse accepted these — engine-dependent, non-ISO formats
-  // that contradicted the "Expected ISO 8601 date string" error message.
-  test('date field rejects a long-form date previously accepted by bare Date.parse', () => {
+  // Date.parse accepts these, but they are engine-dependent and not ISO
+  // 8601, which is what the error message promises.
+  test('date field rejects a long-form date', () => {
     const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
     expect(paths({ dueAt: 'March 1 2020' }, schema)).toContain('dueAt');
   });
 
-  test('date field rejects a slash-formatted date previously accepted by bare Date.parse', () => {
+  test('date field rejects a slash-formatted date', () => {
     const schema: TypeSchema = { dueAt: { kind: 'date', required: true } };
     expect(paths({ dueAt: '3/1/2020' }, schema)).toContain('dueAt');
   });

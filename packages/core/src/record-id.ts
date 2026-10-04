@@ -87,7 +87,7 @@ export function validateRecordId(id: string): void {
  */
 export function validateClockField(value: Date | undefined, path: string): ValidationError[] {
   if (value === undefined) return [];
-  // Type-checked callers always pass a Date, but this option is now
+  // Type-checked callers always pass a Date, but this option is
   // reachable from the wire: JSON has no Date, so a server that forwards a
   // parsed `POST /records` body hands us the ISO *string* it deserialized.
   // Without this the very next line is `"2020-…".getTime()` — an unhandled

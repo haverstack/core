@@ -489,7 +489,7 @@ A content filter key is a **dot-separated path** (see [Filter](#filter)), so a f
 
 The reserved set is wider than what SQLite's JSON path grammar treats as syntax today (`.`, `[`, `]`, `$`, `"`). `*` and `#` are held back against a path grammar that later grows a wildcard or a last-element form. Reserving a character costs nothing while no record contains one and costs every stored record afterward, so the choice is deliberately made early and wide.
 
-The escape-convention alternative — a filter key of `emails\.value` meaning the literal field — was rejected because it fails silently in the one case that matters: app code building a key from a variable field name forgets to escape and gets a different question answered, with no error anywhere. A write-time rule fails loudly, at the moment a caller can still choose another name.
+Field names are refused rather than escaped. An escape convention — a filter key of `emails\.value` meaning the literal field — fails silently in the one case that matters: app code building a key from a variable field name forgets to escape and gets a different question answered, with no error anywhere. A write-time rule fails loudly, at the moment a caller can still choose another name.
 
 ## Queries
 
