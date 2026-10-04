@@ -17,7 +17,8 @@ const PERSON = 'did:key:person';
 
 const NOTE_1 = 'com.example.notes/note@1';
 const NOTE_2 = 'com.example.notes/note@2';
-const TAG_1 = 'com.example.notes/tag@1';
+const TAG_1 = 'com.example.tags/tag@1';
+const COMMONS_NOTE = 'org.haverstack/note@1';
 
 const manifest = (overrides: Partial<AppManifest> = {}): AppManifest => ({
   appId: 'com.example.notes',
@@ -162,7 +163,26 @@ describe('installApp()', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('requests outside the families the manifest defines name their owner', async () => {
+  test('requests outside the app’s own namespace name the family’s owner', async () => {
+    const plan = await stack.planInstall(
+      manifest({
+        requests: [
+          { baseId: 'com.example.notes/note', actions: ['create'] },
+          { baseId: 'com.example.tags/tag', actions: ['read-any'] },
+          { baseId: 'org.haverstack/note', actions: ['read-any'] },
+          { baseId: '_entity', actions: ['read-any'] },
+        ],
+      }),
+      { did: APP_DID },
+    );
+    expect(plan.foreignRequests).toEqual([
+      { baseId: 'com.example.tags/tag', actions: ['read-any'], owner: 'com.example.tags' },
+      { baseId: 'org.haverstack/note', actions: ['read-any'], owner: 'commons' },
+      { baseId: '_entity', actions: ['read-any'], owner: 'system' },
+    ]);
+  });
+
+  test('another app’s family can be used through a request, never defined', async () => {
     await install(
       manifest({
         appId: 'com.example.tags',
@@ -172,38 +192,50 @@ describe('installApp()', () => {
       }),
       OTHER_DID,
     );
-    const plan = await stack.planInstall(
+    await expect(
+      stack.planInstall(manifest({ types: [{ id: TAG_1, name: 'Tag', schema: {} }] }), {
+        did: APP_DID,
+      }),
+    ).rejects.toThrow(StackValidationError);
+
+    const record = await install(
+      manifest({ requests: [{ baseId: 'com.example.tags/tag', actions: ['read-any'] }] }),
+    );
+    expect(await linkedGrants(record)).toEqual([
+      {
+        baseId: 'com.example.tags/tag',
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: APP_DID },
+      },
+    ]);
+  });
+
+  test('commons types are defined by an install but never claimed', async () => {
+    const record = await install(
       manifest({
-        requests: [
-          { baseId: 'com.example.notes/note', actions: ['create'] },
-          { baseId: 'com.example.notes/tag', actions: ['read-any'] },
-          { baseId: '_entity', actions: ['read-any'] },
-          { baseId: 'org.example/bookmark', actions: ['read-any'] },
+        types: [
+          ...manifest().types,
+          { id: COMMONS_NOTE, name: 'Note', schema: { body: { kind: 'text' } } },
         ],
       }),
-      { did: APP_DID },
     );
-    expect(plan.foreignRequests).toEqual([
-      { baseId: 'com.example.notes/tag', actions: ['read-any'], owner: 'com.example.tags' },
-      { baseId: '_entity', actions: ['read-any'], owner: 'system' },
-      { baseId: 'org.example/bookmark', actions: ['read-any'], owner: null },
-    ]);
+    expect(await stack.getType(COMMONS_NOTE)).not.toBeNull();
+    expect(record.content.defines).toEqual([NOTE_1]);
   });
 });
 
 describe('the _install record', () => {
-  test('a family is claimed by one install only', async () => {
-    await install(manifest());
-    const rival = manifest({ appId: 'com.example.rival', name: 'Rival' });
-    await expect(stack.planInstall(rival, { did: OTHER_DID })).rejects.toThrow(StackConflictError);
-    await expect(
-      stack.create<InstallContent>('_install@1', {
-        appId: 'com.example.rival',
-        name: 'Rival',
-        defines: [NOTE_2],
-        requests: [],
-      }),
-    ).rejects.toThrow(StackConflictError);
+  test('defines names only families in the install’s own namespace', async () => {
+    for (const id of [NOTE_2, COMMONS_NOTE, '_grant@1']) {
+      await expect(
+        stack.create<InstallContent>('_install@1', {
+          appId: 'com.example.rival',
+          name: 'Rival',
+          defines: [id],
+          requests: [],
+        }),
+      ).rejects.toThrow(StackValidationError);
+    }
   });
 
   test('one install answers for each appId, and appId is immutable', async () => {
@@ -219,17 +251,6 @@ describe('the _install record', () => {
     await expect(stack.patchContent(record.id, { appId: 'com.example.other' })).rejects.toThrow(
       StackValidationError,
     );
-  });
-
-  test('defines cannot name a system family', async () => {
-    await expect(
-      stack.create<InstallContent>('_install@1', {
-        appId: 'com.example.x',
-        name: 'X',
-        defines: ['_grant@1'],
-        requests: [],
-      }),
-    ).rejects.toThrow(StackValidationError);
   });
 
   test('cannot be granted, and only the owner acting alone writes one', async () => {
@@ -315,6 +336,22 @@ describe('commitMigration() for an installed app', () => {
     });
     await expect(
       stack.asEntity(APP_DID).commitMigration(note.id, 'org.example/other@1', {}),
+    ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('a commons family is never the app’s to migrate', async () => {
+    await install(
+      manifest({
+        types: [
+          { id: COMMONS_NOTE, name: 'Note', schema: { body: { kind: 'text' } } },
+          { id: 'org.haverstack/note@2', name: 'Note', schema: { body: { kind: 'text' } } },
+        ],
+        requests: [{ baseId: 'org.haverstack/note', actions: ['read-any', 'update-any'] }],
+      }),
+    );
+    const note = await stack.create(COMMONS_NOTE, { body: 'hi' });
+    await expect(
+      stack.asEntity(APP_DID).commitMigration(note.id, 'org.haverstack/note@2', { body: 'hi' }),
     ).rejects.toThrow(StackPermissionError);
   });
 

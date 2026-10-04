@@ -127,11 +127,13 @@ import type { GrantQuery } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import {
   claimedFamilies,
+  familyStanding,
   grantIsRequest,
   installAppLink,
   installGrantLink,
-  isSystemFamily,
   linkedIds,
+  namespaceOf,
+  ownTypeIds,
   planFingerprint,
   sameRequest,
   validateInstall,
@@ -1061,7 +1063,6 @@ export class Stack implements StackClient {
     await this.checkAttachmentAssociationPointers(opts.associations);
 
     await this.checkBindingsOnCreate(typeId, content as Record<string, unknown>);
-    await this.checkInstallClaims(typeId, content);
 
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -1402,7 +1403,6 @@ export class Stack implements StackClient {
       }
 
       await this.checkBindingsOnUpdate(existing.typeId, id, contentPatch, existing.content, merged);
-      if ('defines' in contentPatch) await this.checkInstallClaims(existing.typeId, merged, id);
 
       if (id === SYSTEM_TYPES.CONFIG) {
         this.checkConfigEntityIdUnchanged(
@@ -1959,10 +1959,6 @@ export class Stack implements StackClient {
       );
     }
 
-    // Unlike a DID, a family can have been claimed by another install
-    // since this snapshot was taken.
-    await this.checkInstallClaims(target.typeId, target.content, id);
-
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
     // gate. See docs/spec/versioning.md § Restore semantics.
@@ -2081,7 +2077,6 @@ export class Stack implements StackClient {
     }
 
     await this.checkBindingsOnMigrate(existing.typeId, toTypeId, id, existingContent, content);
-    await this.checkInstallClaims(toTypeId, content, id);
 
     if (id === SYSTEM_TYPES.CONFIG) {
       this.checkConfigEntityIdUnchanged(
@@ -2853,9 +2848,9 @@ export class Stack implements StackClient {
   /**
    * What applying `manifest` for the key `did` would change, for the owner
    * to review before installApp(). Writes nothing. Refuses outright what no
-   * approval could make valid: a type in a system family or in a family
-   * another install claims, a request the grant rules refuse, or a `did`
-   * already registered to a different app. See docs/spec/apps.md § Plan, then apply.
+   * approval could make valid: a type outside the app's own namespace and
+   * the commons, a request the grant rules refuse, or a `did` already
+   * registered to a different app. See docs/spec/apps.md § Plan, then apply.
    */
   async planInstall(manifest: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
     this.assertOpen();
@@ -2864,20 +2859,8 @@ export class Stack implements StackClient {
 
     const installs = await this.loadInstalls();
     const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
-    const owners = new Map<BaseId, AppId>();
-    for (const r of installs) {
-      for (const family of claimedFamilies(r.content)) owners.set(family, r.content.appId);
-    }
-
-    const manifestFamilies = new Set(manifest.types.map((t) => baseIdOf(t.id)));
-    for (const family of manifestFamilies) {
-      const owner = owners.get(family);
-      if (owner !== undefined && owner !== manifest.appId) {
-        throw new StackConflictError(
-          `Type family "${family}" is claimed by the install for "${owner}"`,
-        );
-      }
-    }
+    const ownVersions = ownTypeIds(manifest);
+    const ownFamilies = new Set(ownVersions.map(baseIdOf));
 
     const card = await this.findAppCard(did);
     if (card && (card.content as AppContent).appId !== manifest.appId) {
@@ -2887,22 +2870,27 @@ export class Stack implements StackClient {
     }
 
     const claimed = existing ? claimedFamilies(existing.content) : new Set<BaseId>();
-    const owned = new Set([...claimed, ...manifestFamilies]);
     const defined = new Set(existing?.content.defines ?? []);
     const prior = existing?.content.requests ?? [];
-    const foreignRequests: ForeignRequest[] = manifest.requests
-      .filter((r) => !owned.has(r.baseId))
-      .map((r) => ({
-        ...r,
-        owner: isSystemFamily(r.baseId) ? 'system' : (owners.get(r.baseId) ?? null),
-      }));
+    const foreignRequests: ForeignRequest[] = [];
+    for (const r of manifest.requests) {
+      const standing = familyStanding(r.baseId, manifest.appId);
+      if (standing === 'own') continue;
+      const owner =
+        standing === 'foreign'
+          ? namespaceOf(r.baseId)
+          : standing === 'commons'
+            ? 'commons'
+            : 'system';
+      foreignRequests.push({ ...r, owner });
+    }
 
     return {
       manifest,
       did,
       existing,
-      newFamilies: [...manifestFamilies].filter((f) => !claimed.has(f)),
-      newVersions: [...new Set(manifest.types.map((t) => t.id))].filter((id) => !defined.has(id)),
+      newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
+      newVersions: ownVersions.filter((id) => !defined.has(id)),
       requestsAdded: manifest.requests.filter((r) => !prior.some((p) => sameRequest(p, r))),
       requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
       foreignRequests,
@@ -2931,9 +2919,7 @@ export class Stack implements StackClient {
     for (const type of manifest.types) await this.defineType(type);
     const card = await this.ensureAppCard(manifest, did);
 
-    const defines = [
-      ...new Set([...(existing?.content.defines ?? []), ...manifest.types.map((t) => t.id)]),
-    ];
+    const defines = [...new Set([...(existing?.content.defines ?? []), ...ownTypeIds(manifest)])];
     const requests: InstallRequest[] = manifest.requests.map((r) => ({
       baseId: r.baseId,
       actions: [...r.actions],
@@ -3006,11 +2992,17 @@ export class Stack implements StackClient {
       const parsed = parseTypeId(t.id);
       if (!parsed) {
         errors.push({ path: `types[${i}].id`, message: 'Expected a versioned TypeId' });
-      } else if (isSystemFamily(parsed.baseId)) {
-        errors.push({
-          path: `types[${i}].id`,
-          message: `"${parsed.baseId}" is a system type; no app can define it`,
-        });
+      } else {
+        const standing = familyStanding(parsed.baseId, manifest.appId);
+        if (standing === 'system' || standing === 'foreign') {
+          errors.push({
+            path: `types[${i}].id`,
+            message:
+              standing === 'system'
+                ? `"${parsed.baseId}" is a system type; no app can define it`
+                : `"${parsed.baseId}" is outside the namespace "${manifest.appId}"; request access to it instead of defining it`,
+          });
+        }
       }
     });
     if (errors.length > 0) throw new StackValidationError(errors);
@@ -3023,31 +3015,6 @@ export class Stack implements StackClient {
       filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
     });
     return records as (StackRecord & { content: InstallContent })[];
-  }
-
-  /**
-   * One install per family. A soft-deleted install keeps its claim for the
-   * reason a soft-deleted card keeps its DID: it can be undeleted.
-   * See docs/spec/apps.md § The `_install` record.
-   */
-  private async checkInstallClaims(
-    typeId: TypeId,
-    content: unknown,
-    excludeId?: RecordId,
-  ): Promise<void> {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.INSTALL) return;
-    const claimed = claimedFamilies(content);
-    if (claimed.size === 0) return;
-    for (const other of await this.loadInstalls()) {
-      if (other.id === excludeId) continue;
-      for (const family of claimedFamilies(other.content)) {
-        if (claimed.has(family)) {
-          throw new StackConflictError(
-            `Type family "${family}" is claimed by the install for "${other.content.appId}"`,
-          );
-        }
-      }
-    }
   }
 
   /** The `_app` card claiming `did`, deleted and unlisted included. */

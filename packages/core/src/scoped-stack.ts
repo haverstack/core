@@ -89,7 +89,7 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
-import { claimedFamilies, linkedIds, INSTALL_APP_LABEL } from './install.js';
+import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
 import { assertAttachmentSize } from './limits.js';
 import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
 import {
@@ -1559,7 +1559,7 @@ export class ScopedStack implements StackClient {
   /**
    * Whether this request is an installed app migrating a record within its
    * own families: the app acting as itself, its key linked to the one live
-   * install claiming both families, `toTypeId` a version the owner
+   * install claiming both families in its own namespace, `toTypeId` a version the owner
    * approved, and an `update-any` grant on each family made out to the key
    * directly. Read as data, so a family two installs claim — however that
    * came to be — confers nothing.
@@ -1583,6 +1583,7 @@ export class ScopedStack implements StackClient {
     for (const family of families) {
       const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));
       if (claimants.length !== 1) return false;
+      if (familyStanding(family, claimants[0]!.content.appId) !== 'own') return false;
       if (install && install.id !== claimants[0]!.id) return false;
       install = claimants[0];
     }

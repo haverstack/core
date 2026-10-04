@@ -41,15 +41,25 @@ type InstallContent = {
 - **It cannot be granted.** `grantType()` refuses `_install` beside `_grant`, `_config` and `_app` (see [Access control § What a grant covers](./access-control.md#what-a-grant-covers)), and a `request` naming any of the four is refused at the write.
 - **Only the owner acting alone writes one.** `ScopedStack` refuses every write to an `_install` Record on the same terms as a `_grant` Record, whatever the Record's own `permissions` say.
 - **`appId` is a binding**, immutable and unique on the terms [Identity § DID bindings](./identity.md#did-bindings) sets out: one install answers for each app, and an existing install cannot be relabelled to answer for another.
-- **A family is claimed by one install.** The families named by an install's `defines` are its own, and a write that would have a second install claim one is refused with `StackConflictError`, on create, patch, migration and restore alike. A soft-deleted install keeps its claims, for the reason a soft-deleted card keeps its DID: it can be undeleted. No install can claim a system family.
+- **It claims only its own families.** Every `defines` entry must be a versioned TypeId in the install's own namespace (see [Who owns a family](#who-owns-a-family)); anything else is refused with `StackValidationError` on create, patch, migration and restore alike. `appId` being unique is what makes each family's owner single.
 
-Every `defines` entry must be a versioned TypeId, and every `request` must name a family and actions from the grant vocabulary; `StackValidationError` otherwise.
+Every `request` must name a family and actions from the grant vocabulary; `StackValidationError` otherwise.
 
 **An install and an `_app` card answer different questions.** A card is one per _key_: an app on two devices, or after a key change, has two cards sharing an `appId`. An install is one per _software_. A card says who a key is; an install says what the owner agreed to let that software do. They are linked rather than merged so neither has to answer the other's question.
 
 **Associations hold the links.** An install carries a `relationship` labelled `install.app` to each `_app` card it was installed for, and one labelled `install.grant` to each `_grant` Record it produced. That is what tells a grant the install made from one the owner wrote by hand, and it is what uninstalling withdraws.
 
 **Version history is the upgrade log.** Applying a changed manifest patches the install, so what was approved at any earlier point is a [version](./versioning.md#version-history) of it.
+
+## Who owns a family
+
+**A family belongs to the app whose `appId` is its namespace** — the part of the `BaseId` before the `/`. `com.example.notes/note` is `com.example.notes`'s, whether or not that app is installed, so ownership never depends on which app reached a stack first. A Type's namespace is already how its author is named ([Data model § Types](./data-model.md#types)); an install only makes that enforceable.
+
+Two kinds of family belong to no app. **System families** (`_entity`, `_grant`, …) are the library's. **Commons families** (`org.haverstack/…`) are governed in the open by the [Schema Commons](../commons/README.md), precisely so that no single app controls a shape every app reads. A manifest may list commons types so that installing it defines them, but defining one claims nothing, and no app may migrate a commons family.
+
+**Using a family is a request; owning one is control of its schema.** Any app may ask for grants on any grantable family — another app's, a commons one, `_entity` — and the owner sees each such request, with the family's owner, in the plan. Only the owner of a family defines its versions and migrates its records, so two apps can never publish rival versions of the same family. An app that wants to add to records it does not own defines a family of its own and links its records to them with `relationship` associations; the shared family is untouched.
+
+**Residual, stated rather than fixed:** `appId` is the app's own claim. On a stack where the real `com.example.notes` is not installed, another app can present a manifest under that `appId` and, if approved, own its families. The plan names the `appId` asking, so the owner is the check; closing the gap needs signed manifests.
 
 ## Plan, then apply
 
@@ -64,14 +74,14 @@ type InstallPlan = {
   newVersions: TypeId[]; // versions not yet in `defines`
   requestsAdded: InstallRequest[];
   requestsRemoved: InstallRequest[];
-  foreignRequests: (InstallRequest & { owner: AppId | 'system' | null })[];
+  foreignRequests: (InstallRequest & { owner: AppId | 'commons' | 'system' | null })[];
   newKey: boolean; // whether `did` is not yet linked to this install
 };
 ```
 
-`foreignRequests` are the requests on families the install does not define, each naming who owns the family: another install's `appId`, `'system'`, or `null` when nothing claims it. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
+`foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
-It refuses what no approval could make valid: a type in a system family or in a family another install claims (`StackConflictError`), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), and a `did` whose `_app` card names a different `appId` (`StackConflictError`).
+It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), and a `did` whose `_app` card names a different `appId` (`StackConflictError`).
 
 `installApp(plan)` applies the plan:
 
@@ -80,18 +90,18 @@ It refuses what no approval could make valid: a type in a system family or in a 
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — another install claiming a family, the install changing, the key being linked. The remedy is to plan again and show the owner the new plan. Re-applying a manifest whose plan is empty changes nothing.
+**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, or the key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. Re-applying a manifest whose plan is empty changes nothing.
 
 ## Migrating an installed app's types
 
 [Migration is owner-acting-alone](./access-control.md#what-a-grant-covers), and an installed app's migration functions are its own code, which the owner should not have to run with owner authority. An install closes the gap: a contained app may commit migrations within its own families. `ScopedStack.commitMigration()` — and so `migrateAll()` run by the app over `APIAdapter`, which commits through `POST /records/:id/migrate` — admits a request that is not the owner acting alone when **all** of these hold:
 
-1. The source and target families are both claimed by one live install, and by no other.
+1. The source and target families are both in the namespace of one live install, and both in its `defines`.
 2. The target TypeId is in that install's `defines` — a version the owner approved.
 3. The requester holds `update-any` on each family through a grant naming its DID directly. Default and group grants do not count, on the terms they do not count for [a principal](./access-control.md#who-a-grant-reaches). The manifest has to request it, so the plan shows it.
 4. The requester is acting alone — not delegated — as the DID of an `_app` card linked to the install.
 
-The reasons migration is otherwise owner-only do not reach this case. A migration that crosses into `_attachment` or moves a DID binding needs a system family at one end, and no install can claim one. Ordinary write access is not consent to move a Record between versions; the owner's approval of the version is. Every migration still snapshots the Record's prior content and type to [version history](./versioning.md#version-history), so it stays recoverable like any other write.
+The reasons migration is otherwise owner-only do not reach this case. A migration that crosses into `_attachment` or moves a DID binding needs a system family at one end, and no install can claim one; nor can it claim a commons family, which every app reads. Ordinary write access is not consent to move a Record between versions; the owner's approval of the version is. Every migration still snapshots the Record's prior content and type to [version history](./versioning.md#version-history), so it stays recoverable like any other write.
 
 Approving a new version is therefore also approving its migration. Until the owner approves it, the app reads records at the older version through [`presentAt: 'latest'`](./data-model.md#type-migrations).
 
@@ -107,4 +117,4 @@ which migrates live, listed records and counts the soft-deleted ones it passed o
 
 `uninstallApp(appId)` revokes every grant linked to the install and soft-deletes it. The app's records stay: they are the owner's data, and purging them is a separate, deliberate act. Its `_app` cards stay too, since they are what its records' attribution resolves through (see [Identity § Attribution and what can be trusted](./identity.md#attribution-and-what-can-be-trusted)). A deleted install confers no migration authority.
 
-Installing the same `appId` again undeletes the install and grants its requests afresh. Its families stay claimed in between, so no other app can take them over while it is uninstalled.
+Installing the same `appId` again undeletes the install and grants its requests afresh.

@@ -392,7 +392,7 @@ Per key, over a Record in no system family:
 | `parentId`                | the same, plus read access to the destination                                                                                                          |
 | `permissions`, `unlisted` | owner or the Record's creator, on both sides of a delegation — and never a delegated principal, as at [create time](#delegation-principal-and-subject) |
 
-The family fences apply to every key alike, whatever the table says: a `_group` Record is writable only by an admin or the owner, a `_grant` Record only by the owner acting alone, and an `_app` card's `did`/`appId` only by the owner acting alone (see [Identity § DID bindings](./identity.md#did-bindings)).
+The family fences apply to every key alike, whatever the table says: a `_group` Record is writable only by an admin or the owner, a `_grant` or `_install` Record only by the owner acting alone, and an `_app` card's `did`/`appId` only by the owner acting alone (see [Identity § DID bindings](./identity.md#did-bindings)).
 
 **A single coarse gate over the whole verb is deliberately not the rule.** Requiring the strictest of them — the owner acting alone — for any multi-key call would be simpler to state, and would leave every collaborator back at one call per aspect, which is the cost the verb exists to remove. Requiring the loosest would hand a write-holder the reshare the [`write` bit](#the-write-bit-a-recoverability-trust-model) is defined not to carry. Per-key composition is the only one that changes nobody's reach.
 

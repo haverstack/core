@@ -49,8 +49,12 @@ export type AppManifest = {
 
 /** A request on a family this install does not define, and who owns that family. */
 export type ForeignRequest = InstallRequest & {
-  /** The `appId` of the install claiming the family, `'system'`, or null when nothing claims it. */
-  owner: AppId | 'system' | null;
+  /**
+   * The app whose namespace the family is in, whether or not it is
+   * installed; `'commons'` or `'system'` for families no app owns; null
+   * for a family with no namespace.
+   */
+  owner: AppId | 'commons' | 'system' | null;
 };
 
 /**
@@ -108,6 +112,32 @@ const SYSTEM_FAMILIES: ReadonlySet<string> = new Set(Object.values(SYSTEM_TYPES)
 
 export const isSystemFamily = (baseId: BaseId): boolean => SYSTEM_FAMILIES.has(baseId);
 
+/** The Schema Commons namespace: families no app owns. See docs/commons/README.md. */
+export const COMMONS_NAMESPACE = 'org.haverstack';
+
+/** The part of a family before its `/` — `com.example.notes` for `com.example.notes/note`. */
+export const namespaceOf = (baseId: BaseId): string | null => {
+  const slash = baseId.indexOf('/');
+  return slash > 0 ? baseId.slice(0, slash) : null;
+};
+
+/**
+ * How a family stands toward the app `appId`: its own (the family's
+ * namespace is the `appId`), a commons or system family nobody owns, or
+ * another app's. Only an app's own families can be claimed, so which app
+ * owns a family never depends on which was installed first.
+ * See docs/spec/apps.md § Who owns a family.
+ */
+export function familyStanding(
+  baseId: BaseId,
+  appId: AppId,
+): 'own' | 'commons' | 'system' | 'foreign' {
+  if (isSystemFamily(baseId)) return 'system';
+  const namespace = namespaceOf(baseId);
+  if (namespace === COMMONS_NAMESPACE) return 'commons';
+  return namespace === appId ? 'own' : 'foreign';
+}
+
 /**
  * The families an install claims, read as data: entries that are not
  * well-formed TypeIds claim nothing.
@@ -138,10 +168,10 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
       const parsed = typeof id === 'string' ? parseTypeId(id) : null;
       if (!parsed) {
         errors.push({ path: `defines[${i}]`, message: 'Expected a versioned TypeId' });
-      } else if (isSystemFamily(parsed.baseId)) {
+      } else if (typeof c?.appId === 'string' && familyStanding(parsed.baseId, c.appId) !== 'own') {
         errors.push({
           path: `defines[${i}]`,
-          message: `"${parsed.baseId}" is a system type; no install can define it`,
+          message: `"${parsed.baseId}" is outside the namespace "${c.appId}"; an install claims only its own families`,
         });
       }
     });
@@ -171,6 +201,14 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
     });
   }
   return errors;
+}
+
+/** The manifest's types in its own namespace — the versions an install of it defines. */
+export function ownTypeIds(manifest: AppManifest): TypeId[] {
+  const ids = manifest.types
+    .map((t) => t.id)
+    .filter((id) => familyStanding(baseIdOf(id), manifest.appId) === 'own');
+  return [...new Set(ids)];
 }
 
 /** Whether two requests ask for the same family and exactly the same actions. */
