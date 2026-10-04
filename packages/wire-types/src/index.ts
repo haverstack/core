@@ -18,6 +18,7 @@ import type {
   StackType,
   RecordVersion,
   AssociationChange,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   ValidationError,
@@ -96,7 +97,7 @@ export type WireType = {
  * (a change set's `parentId`, a `parentId=null` filter) and never appears
  * on a response. See docs/spec/wire-format.md § Versions.
  *
- * No `associations` field: associate()/dissociate() don't bump `version`,
+ * No `associations` field: association changes don't bump `version`,
  * so no version ever snapshots the association set. See
  * docs/spec/versioning.md § Version history.
  */
@@ -777,3 +778,9 @@ export function isProtocolCompatible(version: string, against = WIRE_PROTOCOL_VE
   const client = parseProtocolVersion(against);
   return server !== null && client !== null && server.major === client.major;
 }
+
+/**
+ * The body of `POST /records/:id/associations` and `/permissions`: one
+ * list, applied as one write. See docs/spec/wire-format.md § Associations.
+ */
+export type WireAssociationEditsRequest = { changes: AssociationEdit[] };

@@ -319,9 +319,9 @@ describe('journal', () => {
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'attachment', label: 'embed', fileId: 'file-1' } as const;
 
-    await adapter.associate(
+    await adapter.amendAssociations(
       'rec1',
-      { ...association, attachmentRecordId: 'meta1' },
+      [{ op: 'add', association: { ...association, attachmentRecordId: 'meta1' } }],
       {
         journal: {
           kind: 'changed',
@@ -332,9 +332,9 @@ describe('journal', () => {
         },
       },
     );
-    await adapter.associate(
+    await adapter.amendAssociations(
       'rec1',
-      { ...association, attachmentRecordId: 'meta2' },
+      [{ op: 'add', association: { ...association, attachmentRecordId: 'meta2' } }],
       {
         journal: {
           kind: 'changed',
@@ -367,17 +367,17 @@ describe('journal', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'tag', label: 'draft' } as const;
-    await adapter.associate('rec1', association);
-    await adapter.dissociate('rec1', association, {
+    await adapter.amendAssociations('rec1', [{ op: 'add', association: association }]);
+    await adapter.amendAssociations('rec1', [{ op: 'remove', association: association }], {
       journal: {
         kind: 'changed',
         ops: ['dissociate'],
-        associations: [{ op: 'remove', previous: association }],
+        associations: [{ op: 'remove', association }],
       },
     });
 
     const entries = await adapter.getJournal('rec1');
     expect(entries.map((e) => e.ops)).toEqual([['dissociate']]);
-    expect(entries[0]!.associations).toEqual([{ op: 'remove', previous: association }]);
+    expect(entries[0]!.associations).toEqual([{ op: 'remove', association }]);
   });
 });

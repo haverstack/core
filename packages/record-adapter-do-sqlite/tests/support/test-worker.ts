@@ -12,7 +12,7 @@ import { DoSQLiteRecordAdapter } from '../../src/index.js';
 import type {
   StackRecord,
   StackQuery,
-  Association,
+  AssociationEdit,
   RecordChangeSet,
   RecordVersion,
   StackType,
@@ -155,14 +155,9 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.listTypes();
   }
 
-  async associate(recordId: string, association: Association) {
+  async amendAssociations(recordId: string, changes: AssociationEdit[]) {
     await this.ready;
-    return this.adapter.associate(recordId, association);
-  }
-
-  async dissociate(recordId: string, association: Association) {
-    await this.ready;
-    return this.adapter.dissociate(recordId, association);
+    return this.adapter.amendAssociations(recordId, changes);
   }
 }
 

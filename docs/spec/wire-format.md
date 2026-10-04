@@ -195,24 +195,25 @@ Three things sit outside it:
 
 A server built on core reaches this through the wire parsers in `@haverstack/core/wire`, one per endpoint that takes input, each of which refuses what its endpoint does not define:
 
-| Endpoint                        | Parser                          |
-| ------------------------------- | ------------------------------- |
-| `GET /records`                  | `parseQueryParams()`            |
-| `POST /records/query`           | `parseQueryBody()`              |
-| `POST /records`                 | `createOptionsFromWireRecord()` |
-| `GET /records/:id`              | `parseGetRecordParams()`        |
-| `PATCH /records/:id`            | `changesFromWireBody()`         |
-| `DELETE /records/:id`           | `parseDeleteParams()`           |
-| `POST /records/:id/migrate`     | `parseMigrationBody()`          |
-| `GET /records/:id/journal`      | `parseJournalParams()`          |
-| `GET /records/:id/versions`     | `parseVersionsParams()`         |
-| `GET /records/:id/associations` | `parseAssociationParams()`      |
-| `GET /changes`                  | `parseChangeParams()`           |
-| `GET /attachments/:fileId`      | `parseDownloadParams()`         |
-| `POST /types`                   | `parseTypeBody()`               |
-| `PATCH /entity`                 | `parseEntityPatchBody()`        |
-| `POST /auth/challenge`          | `parseAuthChallengeBody()`      |
-| `POST /auth/token`              | `parseAuthTokenBody()`          |
+| Endpoint                                            | Parser                          |
+| --------------------------------------------------- | ------------------------------- |
+| `GET /records`                                      | `parseQueryParams()`            |
+| `POST /records/query`                               | `parseQueryBody()`              |
+| `POST /records`                                     | `createOptionsFromWireRecord()` |
+| `GET /records/:id`                                  | `parseGetRecordParams()`        |
+| `PATCH /records/:id`                                | `changesFromWireBody()`         |
+| `DELETE /records/:id`                               | `parseDeleteParams()`           |
+| `POST /records/:id/migrate`                         | `parseMigrationBody()`          |
+| `POST /records/:id/associations` and `/permissions` | `parseAssociationEditsBody()`   |
+| `GET /records/:id/journal`                          | `parseJournalParams()`          |
+| `GET /records/:id/versions`                         | `parseVersionsParams()`         |
+| `GET /records/:id/associations`                     | `parseAssociationParams()`      |
+| `GET /changes`                                      | `parseChangeParams()`           |
+| `GET /attachments/:fileId`                          | `parseDownloadParams()`         |
+| `POST /types`                                       | `parseTypeBody()`               |
+| `PATCH /entity`                                     | `parseEntityPatchBody()`        |
+| `POST /auth/challenge`                              | `parseAuthChallengeBody()`      |
+| `POST /auth/token`                                  | `parseAuthTokenBody()`          |
 
 The body parsers split errors the way [Records](#records) does for a create: a body that is not an object, carries a key its endpoint does not define, or lacks a field the endpoint requires is not that request at all, so it is **400**; a known field whose value is the wrong type is **422**, carrying the field's path. Endpoints a server defines beyond this spec owe the same refusal, parsed by the server itself.
 
@@ -428,11 +429,10 @@ Three content-key rules are `Stack` invariants that a server built on core inher
 
 ```
 GET  /records/:id/permissions         — get current permissions
-POST /records/:id/permissions         — grant one element
-POST /records/:id/permissions/delete  — revoke one element (by body)
+POST /records/:id/permissions         — apply a list of permission changes
 ```
 
-`GET` uses the envelope `{ "permissions": [...] }` as its response body. The two `POST`s are `grantAccess()`/`revokeAccess()`: each takes one permission element as its body, amends the set, and answers `200` with the updated Record. They mirror the association endpoints in shape — including the `/delete` sub-path, for the reason given [there](#associations) — and carry the reshare gate rather than the write bit, so a write-holder who is neither owner nor creator gets `403`.
+`GET` uses the envelope `{ "permissions": [...] }` as its response body. The `POST` takes `{ "changes": [...] }`, a list of `AssociationEdit` — `{ "op": "add" | "remove", "association": <permission element> }` — and applies it as one write, so granting `read` and `write` together never passes through a state holding only the `write`. It answers `200` with the updated Record. It mirrors the association endpoint in shape and carries the reshare gate rather than the write bit, so a write-holder who is neither owner nor creator gets `403`. A list naming a `tag`, `attachment` or `relationship` element is `400`: see [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
 
 **The `permissions` key on `PATCH /records/:id` is the declarative spelling**, replacing the whole set — `[]` makes the record private. The endpoints amend it, which is what survives two admins sharing one record at once.
 
@@ -526,7 +526,7 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **This endpoint is not optional**, and a server answering `404` for a record it holds leaves `APIAdapter` unable to honor a method `StackClient` requires. Because an empty log means _nothing changed_ unconditionally ([Journal § Reading it](./journal.md#reading-it)), a record the server does not have is the one `404` this endpoint gives — and it is required, since an empty log for a nonexistent or purged record would be the one answer a server must not give.
 
-**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and the two that displace something carry `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
+**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and a `repoint` carries `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
 
 **`seq` here is the entry's, not the feed's** — a dense integer from 1 per record, never [the feed's opaque whole-stack `cursor`](./change-feed.md#frames), and no value crosses between them. See [Journal § Ordering](./journal.md#ordering).
 
@@ -552,15 +552,14 @@ GET    /records/:id/associations?kind=tag
 GET    /records/:id/associations?kind=attachment
 GET    /records/:id/associations?kind=relationship
 GET    /records/:id/associations?label=avatar  — filter by label across all kinds
-POST   /records/:id/associations               — add an association
-POST   /records/:id/associations/delete        — remove an association (by body)
+POST   /records/:id/associations               — apply a list of association changes
 ```
 
-Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
+The `POST` takes `{ "changes": [...] }`, a list of `AssociationEdit`: `{ "op": "add" | "remove", "association": <element> }`. The list is applied as one write, removes before adds, so swapping one association for another is a single request with no intermediate state and one [journal entry](./journal.md#the-entry). `repoint` is something the journal records, never something a caller sends, so it is `400` like any other unknown `op`. There is no `/delete` sub-path: removes ride in the same body, which also spares the `DELETE`-with-a-body spelling, whose request bodies have no defined semantics (RFC 9110 §9.3.5) behind arbitrary proxies and gateways.
 
-Neither endpoint reads `If-Match`, and one sent to either is ignored rather than refused — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had, and produces no new entry in `GET .../versions`.
+The endpoint does not read `If-Match`, and one sent to it is ignored rather than refused — see [Optimistic concurrency](#records) above — and it answers `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had, and produces no new entry in `GET .../versions`.
 
-**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. See [Data model § Mutations](./data-model.md#mutations).
+**This endpoint amends the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoint rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoint to add or remove some. See [Data model § Mutations](./data-model.md#mutations).
 
 `GET .../associations` response shape is consistent regardless of kind:
 

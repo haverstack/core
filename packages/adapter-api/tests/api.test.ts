@@ -27,7 +27,13 @@ import { OwnerMismatchError } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
-import type { StackRecord, StackType, RecordVersion, DataAssociation } from '@haverstack/core';
+import type {
+  StackRecord,
+  StackType,
+  RecordVersion,
+  DataAssociation,
+  AuthorityAssociation,
+} from '@haverstack/core';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -1237,51 +1243,57 @@ describe('queryRecords', () => {
 });
 
 // -------------------------------------------------------
-// associate / dissociate
+// amendAssociations
 // -------------------------------------------------------
 
-describe('associate', () => {
+describe('amendAssociations', () => {
+  const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
+  const grant: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+
   test('sends POST /records/:id/associations', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.associate('rec-abc123', assoc);
+    await adapter.amendAssociations('rec-abc123', [{ op: 'add', association: assoc }]);
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/associations`,
       expect.objectContaining({ method: 'POST' }),
     );
   });
 
-  test('sends the association as JSON body', async () => {
+  test('sends the whole list as one request body', async () => {
     const adapter = await openAdapter();
+    mockFetch.mockClear();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.associate('rec-abc123', assoc);
+    const changes = [
+      { op: 'remove' as const, association: assoc },
+      { op: 'add' as const, association: { kind: 'tag' as const, label: 'new' } },
+    ];
+    await adapter.amendAssociations('rec-abc123', changes);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual(assoc);
+    expect(JSON.parse(init.body as string)).toEqual({ changes });
   });
-});
 
-describe('dissociate', () => {
-  // POST, not DELETE — a DELETE body has no defined wire semantics.
-  test('sends POST /records/:id/associations/delete', async () => {
+  test('routes a list of authority elements to /permissions', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.dissociate('rec-abc123', assoc);
+    await adapter.amendAssociations('rec-abc123', [{ op: 'add', association: grant }]);
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123/associations/delete`,
+      `${BASE_URL}/records/rec-abc123/permissions`,
       expect.objectContaining({ method: 'POST' }),
     );
   });
 
-  test('sends the association as JSON body', async () => {
+  test('refuses a list mixing authority and data before sending anything', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.dissociate('rec-abc123', assoc);
-    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual(assoc);
+    mockFetch.mockClear();
+    await expect(
+      adapter.amendAssociations('rec-abc123', [
+        { op: 'add', association: assoc },
+        { op: 'add', association: grant },
+      ]),
+    ).rejects.toThrow(StackBadRequestError);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -1296,19 +1308,15 @@ describe('a mutation that bumps a version must answer with a Record', () => {
     target: { kind: 'record', recordId: 'rec-other' },
   };
 
-  test('associate reports an empty body as a protocol error', async () => {
+  test('amendAssociations reports an empty body as a protocol error', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    const thrown = await adapter.associate('rec-abc123', ASSOC).catch((err: unknown) => err);
+    const thrown = await adapter
+      .amendAssociations('rec-abc123', [{ op: 'add', association: ASSOC }])
+      .catch((err: unknown) => err);
     expect(thrown).toBeInstanceOf(APIAdapterError);
     // The endpoint is named, so a foreign server's gap is identifiable.
     expect((thrown as Error).message).toContain('POST /records/rec-abc123/associations');
-  });
-
-  test('dissociate reports an empty body as a protocol error', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.dissociate('rec-abc123', ASSOC)).rejects.toThrow(APIAdapterError);
   });
 
   test('a change set reports an empty body as a protocol error', async () => {
@@ -1487,8 +1495,10 @@ describe('a mutation answering with no Record body', () => {
     ['commitMigration', (a: APIAdapter) => a.commitMigration('rec-abc123', 'x/note@2', {})],
     ['deleteRecord', (a: APIAdapter) => a.deleteRecord('rec-abc123')],
     ['undeleteRecord', (a: APIAdapter) => a.undeleteRecord('rec-abc123')],
-    ['associate', (a: APIAdapter) => a.associate('rec-abc123', tag)],
-    ['dissociate', (a: APIAdapter) => a.dissociate('rec-abc123', tag)],
+    [
+      'amendAssociations',
+      (a: APIAdapter) => a.amendAssociations('rec-abc123', [{ op: 'add', association: tag }]),
+    ],
     ['restoreVersion', (a: APIAdapter) => a.restoreVersion('rec-abc123', 1)],
   ] as const)('%s reports it as a wire-format failure', async (_name, call) => {
     const adapter = await openAdapter();

@@ -27,7 +27,7 @@ import type {
   StackRecord,
   StackQuery,
   QueryResult,
-  Association,
+  AssociationEdit,
   RecordChangeSet,
   StackCapabilities,
 } from '@haverstack/core';
@@ -184,20 +184,12 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   // Associations
   // -------------------------------------------------------
 
-  associate(
+  amendAssociations(
     recordId: string,
-    association: Association,
+    changes: AssociationEdit[],
     opts?: JournalOptions,
   ): Promise<StackRecord> {
-    return this.record.associate(recordId, association, opts);
-  }
-
-  dissociate(
-    recordId: string,
-    association: Association,
-    opts?: JournalOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(recordId, association, opts);
+    return this.record.amendAssociations(recordId, changes, opts);
   }
 
   // -------------------------------------------------------

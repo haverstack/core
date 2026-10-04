@@ -96,6 +96,7 @@ export type {
   AuthorityAssociation,
   DataAssociation,
   AssociationChange,
+  AssociationEdit,
   RelationshipTarget,
   RecordTarget,
   EntityTarget,
@@ -139,3 +140,4 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
+export { assertOneSurface } from './record-changes.js';

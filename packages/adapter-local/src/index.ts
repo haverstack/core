@@ -26,7 +26,7 @@ import type {
   ActorOptions,
   StackQuery,
   QueryResult,
-  Association,
+  AssociationEdit,
   RecordId,
   FileId,
   RecordChangeSet,
@@ -171,20 +171,12 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
-  async associate(
+  async amendAssociations(
     id: RecordId,
-    association: Association,
+    changes: AssociationEdit[],
     opts?: JournalOptions,
   ): Promise<StackRecord> {
-    return this.record.associate(id, association, opts);
-  }
-
-  async dissociate(
-    id: RecordId,
-    association: Association,
-    opts?: JournalOptions,
-  ): Promise<StackRecord> {
-    return this.record.dissociate(id, association, opts);
+    return this.record.amendAssociations(id, changes, opts);
   }
 
   async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {

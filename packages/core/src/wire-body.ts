@@ -19,7 +19,8 @@
 
 import { StackBadRequestError, StackValidationError } from './errors.js';
 import type { DefineTypeOptions } from './stack.js';
-import type { StackType, TypeId, TypeSchema } from './types.js';
+import { assertKnownKeys, validateAssociation } from './query-validation.js';
+import type { AssociationEdit, StackType, TypeId, TypeSchema } from './types.js';
 
 export function requireBody(body: unknown, label: string): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))
@@ -115,6 +116,41 @@ export function parseEntityPatchBody(body: unknown): WireEntityPatch {
   const label = 'entity body';
   const b = requireKnownBody(body, ['contentPatch'], label);
   return { contentPatch: requiredObject(b, 'contentPatch', label) };
+}
+
+// -------------------------------------------------------
+// POST /records/:id/associations, POST /records/:id/permissions
+// -------------------------------------------------------
+
+/**
+ * Parse an association or permission amend body into the edits
+ * `amendAssociations()` takes. `repoint` is something the journal records,
+ * never something a caller sends, so it is refused with the other unknown
+ * ops. Which surface an element belongs to is the endpoint's to judge.
+ * See docs/spec/wire-format.md § Associations.
+ */
+export function parseAssociationEditsBody(body: unknown): AssociationEdit[] {
+  const label = 'association edits body';
+  const b = requireKnownBody(body, ['changes'], label);
+  const changes = b.changes;
+  if (changes === undefined)
+    throw new StackBadRequestError(`Invalid ${label}: changes is required`);
+  if (!Array.isArray(changes)) fieldError('changes', 'changes must be an array');
+  if (changes.length === 0)
+    throw new StackBadRequestError(`Invalid ${label}: changes names at least one edit`);
+  return changes.map((raw: unknown, i) => {
+    const path = `changes[${i}]`;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+      fieldError(path, `${path} must be an object`);
+    const edit = raw as Record<string, unknown>;
+    assertKnownKeys(edit, ['op', 'association'], path);
+    if (edit.op !== 'add' && edit.op !== 'remove')
+      throw new StackBadRequestError(`Invalid ${label}: ${path}.op must be "add" or "remove"`);
+    const association = requiredObject(edit, 'association', `${label} ${path}`);
+    const errors = validateAssociation(association as never, `${path}.association`);
+    if (errors.length > 0) throw new StackValidationError(errors);
+    return { op: edit.op, association } as AssociationEdit;
+  });
 }
 
 // -------------------------------------------------------

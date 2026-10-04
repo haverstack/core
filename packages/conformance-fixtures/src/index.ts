@@ -1037,9 +1037,16 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'POST',
         path: '/records/1hk153x0000c/associations',
         requestBody: {
-          kind: 'attachment',
-          label: 'late-arrival',
-          fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+          changes: [
+            {
+              op: 'add',
+              association: {
+                kind: 'attachment',
+                label: 'late-arrival',
+                fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+              },
+            },
+          ],
         },
         responseStatus: 200,
         responseBody: {
@@ -1121,157 +1128,206 @@ export const undeleteRecordFixtures: ConformanceFixture<undefined, WireRecord>[]
 // Associations
 // -------------------------------------------------------
 
-export const associateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
-  {
-    name: 'associate-tag',
-    description:
-      'POST /records/:id/associations adds an association without bumping version or touching ' +
-      'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
-      'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
-      'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
-      'its value. See docs/spec/wire-format.md § Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [{ kind: 'tag', label: 'starred' }],
+export const amendAssociationsFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] =
+  [
+    {
+      name: 'amend-associations-add-tag',
+      description:
+        'POST /records/:id/associations takes a list of changes and applies it as one write, ' +
+        'here a single add, without bumping version or touching ' +
+        'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
+        'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
+        'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
+        'its value. See docs/spec/wire-format.md § Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [{ kind: 'tag', label: 'starred' }],
+      },
     },
-  },
-  {
-    name: 'associate-attachment-record-id',
-    description:
-      'An attachment association may name the `_attachment` record whose upload established it, ' +
-      'so a reference to shared bytes can resolve its own filename. The field travels verbatim ' +
-      'in both directions and is outside association identity. See docs/spec/attachments.md ' +
-      '§ Naming the upload a reference came from.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: {
-      kind: 'attachment',
-      label: 'embed',
-      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-      attachmentRecordId: '1hk153x00009',
-    },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [
-        {
-          kind: 'attachment',
-          label: 'embed',
-          fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-          attachmentRecordId: '1hk153x00009',
-        },
-      ],
-    },
-  },
-  {
-    name: 'associate-relationship-external-target',
-    description:
-      'A relationship association carries its target as a discriminated union — the kind names ' +
-      'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
-      'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
-      '§ Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
-    },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [
-        {
-          kind: 'relationship',
-          label: 'syndicated-to',
-          target: {
-            kind: 'external',
-            ns: 'atproto',
-            id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+    {
+      name: 'amend-associations-add-attachment-record-id',
+      description:
+        'An attachment association may name the `_attachment` record whose upload established it, ' +
+        'so a reference to shared bytes can resolve its own filename. The field travels verbatim ' +
+        'in both directions and is outside association identity. See docs/spec/attachments.md ' +
+        '§ Naming the upload a reference came from.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'add',
+            association: {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x00009',
+            },
           },
-        },
-      ],
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [
+          {
+            kind: 'attachment',
+            label: 'embed',
+            fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            attachmentRecordId: '1hk153x00009',
+          },
+        ],
+      },
     },
-  },
-];
-
-export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
-  {
-    name: 'dissociate-attachment-by-identity',
-    description:
-      'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
-      'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
-      'Like associate(), this never bumps version or touches updatedAt, and never reads ' +
-      'If-Match — a header sent here is ignored rather than refused. See ' +
-      'docs/spec/data-model.md § Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations/delete',
-    requestBody: {
-      kind: 'attachment',
-      label: 'embed',
-      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    {
+      name: 'amend-associations-add-relationship-external-target',
+      description:
+        'A relationship association carries its target as a discriminated union — the kind names ' +
+        'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
+        'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
+        '§ Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'add',
+            association: {
+              kind: 'relationship',
+              label: 'syndicated-to',
+              target: {
+                kind: 'external',
+                ns: 'atproto',
+                id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+              },
+            },
+          },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'syndicated-to',
+            target: {
+              kind: 'external',
+              ns: 'atproto',
+              id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+            },
+          },
+        ],
+      },
     },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
+    {
+      name: 'amend-associations-swap-in-one-request',
+      description:
+        'One list mixes a remove and an add, so replacing an association lands as a single ' +
+        'write with no intermediate state and a single journal entry. Removes apply before ' +
+        'adds. See docs/spec/adapters.md § Amending associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          { op: 'remove', association: { kind: 'tag', label: 'draft' } },
+          { op: 'add', association: { kind: 'tag', label: 'published' } },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [{ kind: 'tag', label: 'published' }],
+      },
     },
-  },
-  {
-    name: 'dissociate-tag',
-    description:
-      'POST /records/:id/associations/delete removes an association without bumping version or ' +
-      'touching updatedAt, answering with the record it produced — here with associations gone ' +
-      'entirely and version/updatedAt exactly as they already stood. POST, not DELETE — a ' +
-      'DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a portability ' +
-      'landmine for proxies/gateways that drop or reject it.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations/delete',
-    requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
+    {
+      name: 'amend-associations-remove-attachment-by-identity',
+      description:
+        'A remove names (kind, label, fileId) — the association it takes away may ' +
+        'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
+        'Like an add, this never bumps version or touches updatedAt, and never reads ' +
+        'If-Match — a header sent here is ignored rather than refused. See ' +
+        'docs/spec/data-model.md § Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'remove',
+            association: {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            },
+          },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+      },
     },
-  },
-];
+    {
+      name: 'amend-associations-remove-tag',
+      description:
+        'A remove in the same list body takes an association away without bumping version or ' +
+        'touching updatedAt, answering with the record it produced — here with associations ' +
+        'gone entirely and version/updatedAt exactly as they already stood. There is no ' +
+        'separate delete path: a DELETE request body has no defined semantics (RFC 9110 ' +
+        '§9.3.5), and one POST carries adds and removes alike.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: { changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+      },
+    },
+  ];
 
 // -------------------------------------------------------
 // Permissions
 // -------------------------------------------------------
 
-export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
+export const amendPermissionsFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
-    name: 'grant-access-entity',
+    name: 'amend-permissions-add-entity',
     description:
-      'POST /records/:id/permissions adds one permission element, amending the set rather than ' +
+      'POST /records/:id/permissions takes a list of changes, here adding one element and amending the set rather than ' +
       'replacing it, and answering with the record it produced. Permission elements are ' +
       'associations, so this bumps no version and does not touch updatedAt, and the endpoint ' +
       'never reads If-Match. It carries the reshare gate, not the write bit: a write-holder who ' +
@@ -1279,9 +1335,16 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
     },
     responseStatus: 200,
     responseBody: {
@@ -1301,7 +1364,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     },
   },
   {
-    name: 'grant-access-group-role',
+    name: 'amend-permissions-add-group-role',
     description:
       'A group grantee always names a role: `member` is the wider set and `admin` the narrower, ' +
       'matching the roster labels where admin implies member. There is no absent-role spelling ' +
@@ -1309,9 +1372,16 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
+          },
+        },
+      ],
     },
     responseStatus: 200,
     responseBody: {
@@ -1330,20 +1400,69 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
       ],
     },
   },
-];
-
-export const revokeAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
-    name: 'revoke-access-anyone',
+    name: 'amend-permissions-grant-read-and-write-together',
     description:
-      'POST /records/:id/permissions/delete removes one permission element, answering with the ' +
-      'record it produced — here with permissions gone entirely and version/updatedAt exactly ' +
-      'as they already stood. POST, not DELETE, for the reason the association endpoint gives. ' +
+      'Granting edit access takes a `read` and a `write` for one grantee, and a `write` is ' +
+      'refused without the `read` beside it. One list carries both, so the set is judged as it ' +
+      'will stand and no write lands holding the invalid intermediate. ' +
+      'See docs/spec/access-control.md § Write implies read.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'write',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 1,
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+      ],
+    },
+  },
+  {
+    name: 'amend-permissions-remove-anyone',
+    description:
+      'A remove on POST /records/:id/permissions takes one permission element away, answering ' +
+      'with the record it produced — here with permissions gone entirely and version/updatedAt ' +
+      'exactly as they already stood. One POST carries adds and removes, as on the association ' +
+      'endpoint. ' +
       'Reach to the world is its own kind, so withdrawing it names that kind rather than ' +
       'clearing a field. See docs/spec/wire-format.md § Permissions.',
     method: 'POST',
-    path: '/records/1hk153x00001/permissions/delete',
-    requestBody: { kind: 'anyone', label: 'read' },
+    path: '/records/1hk153x00001/permissions',
+    requestBody: { changes: [{ op: 'remove', association: { kind: 'anyone', label: 'read' } }] },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -1921,7 +2040,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
   {
     name: 'get-journal-entry-keeps-what-a-dissociate-removed',
     description:
-      'A removal is as undoable from the log as a re-point: `previous` is the association in ' +
+      'A removal is as undoable from the log as a re-point: `association` is the element in ' +
       'full, attachmentRecordId included. The change frame for the same write names identity ' +
       'only — kind, label and fileId — because a notification reports what is true now, and ' +
       'the annotation no longer describes anything current. That asymmetry is the tier: the ' +
@@ -1943,7 +2062,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           associations: [
             {
               op: 'remove',
-              previous: {
+              association: {
                 kind: 'attachment',
                 label: 'embed',
                 fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
@@ -2331,13 +2450,23 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember', scope: 'comments' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember', scope: 'comments' },
+          },
+        },
+      ],
     },
     responseStatus: 400,
     responseBody: {
-      error: { code: 'bad_request', message: 'Unknown key in permission.grantee: scope' },
+      error: {
+        code: 'bad_request',
+        message: 'Unknown key in changes[0].association.grantee: scope',
+      },
     },
   },
   {
@@ -2806,14 +2935,17 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'See docs/spec/access-control.md § Record-level permissions.',
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
-    requestBody: { kind: 'anyone', label: 'write' },
+    requestBody: { changes: [{ op: 'add', association: { kind: 'anyone', label: 'write' } }] },
     responseStatus: 422,
     responseBody: {
       error: {
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'permission.label', message: 'An `anyone` association carries only `read`.' },
+          {
+            path: 'changes[0].association.label',
+            message: 'An `anyone` association carries only `read`.',
+          },
         ],
       },
     },
@@ -4002,7 +4134,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'A contributor tags the note.',
           method: 'POST',
           path: '/records/1hk153x00001/associations',
-          requestBody: { kind: 'tag', label: 'starred' },
+          requestBody: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -4051,8 +4183,10 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-dissociate-frame-mutation',
           description: 'A contributor untags the note.',
           method: 'POST',
-          path: '/records/1hk153x00001/associations/delete',
-          requestBody: { kind: 'tag', label: 'starred' },
+          path: '/records/1hk153x00001/associations',
+          requestBody: {
+            changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }],
+          },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -4982,10 +5116,8 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,
-  ...associateFixtures,
-  ...dissociateFixtures,
-  ...grantAccessFixtures,
-  ...revokeAccessFixtures,
+  ...amendAssociationsFixtures,
+  ...amendPermissionsFixtures,
   ...permissionsChangeFixtures,
   ...unlistedChangeFixtures,
   ...parentChangeFixtures,

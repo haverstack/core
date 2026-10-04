@@ -1287,7 +1287,9 @@ export class Stack implements StackClient {
         replaced ? { op: 'repoint', association, previous: replaced } : { op: 'add', association },
       ],
     });
-    const updated = await this.adapter.associate(id, association, { journal: change.journal });
+    const updated = await this.adapter.amendAssociations(id, [{ op: 'add', association }], {
+      journal: change.journal,
+    });
     this.announce(change, updated);
     return updated;
   }
@@ -1333,9 +1335,11 @@ export class Stack implements StackClient {
       // In full, annotation included — what makes a removal as undoable
       // from the log as a re-point is. The frame this becomes still names
       // identity only. See docs/spec/journal.md § The entry.
-      associations: [{ op: 'remove', previous: matched }],
+      associations: [{ op: 'remove', association: matched }],
     });
-    const updated = await this.adapter.dissociate(id, association, { journal: change.journal });
+    const updated = await this.adapter.amendAssociations(id, [{ op: 'remove', association }], {
+      journal: change.journal,
+    });
     this.announce(change, updated);
     return updated;
   }
@@ -1365,7 +1369,11 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       associations: [{ op: 'add', association: permission }],
     });
-    const updated = await this.adapter.associate(id, permission, { journal: change.journal });
+    const updated = await this.adapter.amendAssociations(
+      id,
+      [{ op: 'add', association: permission }],
+      { journal: change.journal },
+    );
     this.announce(change, updated);
     return updated;
   }
@@ -1392,9 +1400,13 @@ export class Stack implements StackClient {
 
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
-      associations: [{ op: 'remove', previous: matched }],
+      associations: [{ op: 'remove', association: matched }],
     });
-    const updated = await this.adapter.dissociate(id, permission, { journal: change.journal });
+    const updated = await this.adapter.amendAssociations(
+      id,
+      [{ op: 'remove', association: permission }],
+      { journal: change.journal },
+    );
     this.announce(change, updated);
     return updated;
   }

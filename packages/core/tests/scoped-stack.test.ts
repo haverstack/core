@@ -3664,7 +3664,7 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
       await stack.getJournal(record.id),
     ]) {
       expect(entries[0].associations).toEqual([{ op: 'add', association: readFor(STRANGER) }]);
-      expect(entries[1].associations).toEqual([{ op: 'remove', previous: readFor(STRANGER) }]);
+      expect(entries[1].associations).toEqual([{ op: 'remove', association: readFor(STRANGER) }]);
     }
 
     const own = await adapter.createRecord(

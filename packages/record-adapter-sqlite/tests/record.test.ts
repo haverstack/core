@@ -588,8 +588,12 @@ describe('ifVersion', () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
-    await adapter.associate(record.id, { kind: 'tag', label: 'x' });
-    await adapter.dissociate(record.id, { kind: 'tag', label: 'x' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'x' } },
+    ]);
 
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
@@ -669,9 +673,11 @@ describe('ifVersion', () => {
 
   test('associate on a nonexistent record throws StackNotFoundError', async () => {
     const adapter = await initAdapter();
-    await expect(adapter.associate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      adapter.amendAssociations('nonexistent', [
+        { op: 'add', association: { kind: 'tag', label: 'x' } },
+      ]),
+    ).rejects.toThrow(StackNotFoundError);
   });
 });
 
@@ -1436,7 +1442,9 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.associations?.some((a) => a.kind === 'tag' && a.label === 'starred')).toBe(
       true,
@@ -1447,8 +1455,12 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    await adapter.dissociate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const retrieved = await adapter.getRecord(record.id);
     const hasStarred = (retrieved?.associations ?? []).some((a) => a.label === 'starred');
     expect(hasStarred).toBe(false);
@@ -1462,8 +1474,12 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const retrieved = await adapter.getRecord(record.id);
     const stars = retrieved?.associations?.filter((a) => a.kind === 'tag' && a.label === 'starred');
     expect(stars?.length).toBe(1);
@@ -1473,7 +1489,9 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.version).toBe(1);
   });
@@ -1481,7 +1499,9 @@ describe('associations', () => {
   test('associate on a nonexistent record throws StackNotFoundError instead of creating an orphan row', async () => {
     const adapter = await initAdapter();
     await expect(
-      adapter.associate('does-not-exist', { kind: 'tag', label: 'starred' }),
+      adapter.amendAssociations('does-not-exist', [
+        { op: 'add', association: { kind: 'tag', label: 'starred' } },
+      ]),
     ).rejects.toThrow(StackNotFoundError);
   });
 
@@ -1496,7 +1516,7 @@ describe('associations', () => {
       attachmentRecordId: '1hk153x00001',
     };
 
-    await adapter.associate(record.id, association);
+    await adapter.amendAssociations(record.id, [{ op: 'add', association: association }]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
   });
@@ -1507,7 +1527,7 @@ describe('associations', () => {
     await adapter.createRecord(record);
     const association = { kind: 'attachment' as const, label: 'embed', fileId: 'a'.repeat(64) };
 
-    await adapter.associate(record.id, association);
+    await adapter.amendAssociations(record.id, [{ op: 'add', association: association }]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
   });
@@ -1519,19 +1539,29 @@ describe('associations', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     const fileId = 'a'.repeat(64);
-    await adapter.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: '1hk153x00001',
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: '1hk153x00001',
+        },
+      },
+    ]);
 
-    await adapter.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: '1hk153x00002',
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: '1hk153x00002',
+        },
+      },
+    ]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([
       { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: '1hk153x00002' },
@@ -1543,14 +1573,21 @@ describe('associations', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     const fileId = 'a'.repeat(64);
-    await adapter.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: '1hk153x00001',
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: '1hk153x00001',
+        },
+      },
+    ]);
 
-    await adapter.associate(record.id, { kind: 'attachment', label: 'embed', fileId });
+    await adapter.amendAssociations(record.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'embed', fileId } },
+    ]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([
       { kind: 'attachment', label: 'embed', fileId },
@@ -1568,7 +1605,9 @@ describe('associations', () => {
       { kind: 'external' as const, ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     ];
     for (const target of targets) {
-      await adapter.associate(record.id, { kind: 'relationship', label: 'ref', target });
+      await adapter.amendAssociations(record.id, [
+        { op: 'add', association: { kind: 'relationship', label: 'ref', target } },
+      ]);
     }
 
     const retrieved = await adapter.getRecord(record.id);
@@ -1585,16 +1624,26 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
-    await adapter.associate(record.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
+      },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        },
+      },
+    ]);
 
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.associations).toHaveLength(2);
@@ -1604,21 +1653,36 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
-    await adapter.associate(record.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
-    });
-    await adapter.dissociate(record.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
+      },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        },
+      },
+    ]);
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'remove',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
+      },
+    ]);
 
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.associations).toEqual([
@@ -1642,21 +1706,40 @@ describe('records — relatedTo filter', () => {
     const authored = makeRecord({ id: 'rec-authored', content: { text: 'by someone' } });
     const bare = makeRecord({ id: 'rec-bare', content: { text: 'unrelated' } });
     for (const r of [series, syndicated, authored, bare]) await adapter.createRecord(r);
-    await adapter.associate(series.id, {
-      kind: 'relationship',
-      label: 'series',
-      target: { kind: 'record', recordId: 'rec-subject' },
-    });
-    await adapter.associate(syndicated.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
-    });
-    await adapter.associate(authored.id, {
-      kind: 'relationship',
-      label: 'author',
-      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
-    });
+    await adapter.amendAssociations(series.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'series',
+          target: { kind: 'record', recordId: 'rec-subject' },
+        },
+      },
+    ]);
+    await adapter.amendAssociations(syndicated.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: {
+            kind: 'external',
+            ns: 'atproto',
+            id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+          },
+        },
+      },
+    ]);
+    await adapter.amendAssociations(authored.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'author',
+          target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+        },
+      },
+    ]);
   };
 
   const ids = (result: { records: StackRecord[] }) => result.records.map((r) => r.id).sort();
@@ -1712,15 +1795,20 @@ describe('records — relatedTo filter', () => {
     await seed(adapter);
     const remote = makeRecord({ id: 'rec-remote' });
     await adapter.createRecord(remote);
-    await adapter.associate(remote.id, {
-      kind: 'relationship',
-      label: 'reply-to',
-      target: {
-        kind: 'record',
-        recordId: 'rec-elsewhere',
-        stackUrl: 'https://alice.example/stack',
+    await adapter.amendAssociations(remote.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'reply-to',
+          target: {
+            kind: 'record',
+            recordId: 'rec-elsewhere',
+            stackUrl: 'https://alice.example/stack',
+          },
+        },
       },
-    });
+    ]);
 
     const local = await adapter.queryRecords({
       filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-elsewhere' } } },
@@ -1747,9 +1835,15 @@ describe('records — attachment filter', () => {
     const both = makeRecord({ id: 'rec-both' });
     const cover = makeRecord({ id: 'rec-cover' });
     for (const r of [both, cover]) await adapter.createRecord(r);
-    await adapter.associate(both.id, { kind: 'attachment', label: 'cover', fileId: 'file-1' });
-    await adapter.associate(both.id, { kind: 'attachment', label: 'thumb', fileId: 'file-2' });
-    await adapter.associate(cover.id, { kind: 'attachment', label: 'cover', fileId: 'file-2' });
+    await adapter.amendAssociations(both.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: 'file-1' } },
+    ]);
+    await adapter.amendAssociations(both.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'thumb', fileId: 'file-2' } },
+    ]);
+    await adapter.amendAssociations(cover.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: 'file-2' } },
+    ]);
   };
 
   const ids = (result: { records: StackRecord[] }) => result.records.map((r) => r.id).sort();
@@ -1852,11 +1946,13 @@ describe('mutateRecord — the `permissions` key', () => {
       label: 'read',
       grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
     };
-    const granted = await adapter.associate(record.id, grant);
+    const granted = await adapter.amendAssociations(record.id, [{ op: 'add', association: grant }]);
     expect(granted.permissions).toEqual([grant]);
     expect(granted.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
 
-    const revoked = await adapter.dissociate(record.id, grant);
+    const revoked = await adapter.amendAssociations(record.id, [
+      { op: 'remove', association: grant },
+    ]);
     expect(revoked.permissions).toBeUndefined();
     expect(revoked.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
   });
@@ -2370,11 +2466,16 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId: 'file-1',
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: 'file-1',
+        },
+      },
+    ]);
 
     await expect(
       adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
@@ -2451,11 +2552,16 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.associate(record.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId: 'file-1',
-    });
+    await adapter.amendAssociations(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: 'file-1',
+        },
+      },
+    ]);
 
     await expect(adapter.deleteUnreferencedAttachmentRecords('file-1', [])).rejects.toThrow(
       StackConflictError,
@@ -2478,11 +2584,16 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     );
     const referencing = makeRecord({ id: 'referencing' });
     await adapter.createRecord(referencing);
-    await adapter.associate(referencing.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId: 'file-1',
-    });
+    await adapter.amendAssociations(referencing.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: 'file-1',
+        },
+      },
+    ]);
 
     await expect(
       adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
@@ -2574,10 +2685,14 @@ describe('actor attribution', () => {
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.associate(r.id, { kind: 'tag', label: 'x' });
+    await adapter.amendAssociations(r.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]);
     expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
-    await adapter.dissociate(r.id, { kind: 'tag', label: 'x' });
+    await adapter.amendAssociations(r.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'x' } },
+    ]);
     expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
     await adapter.close();
   });

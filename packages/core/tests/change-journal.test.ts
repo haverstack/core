@@ -119,7 +119,7 @@ describe('association history survives without a subscriber', () => {
     const labels = new Set<string>();
     for (const entry of await stack.getJournal(note.id)) {
       for (const change of entry.associations ?? []) {
-        if (change.op === 'remove') labels.delete(change.previous.label);
+        if (change.op === 'remove') labels.delete(change.association.label);
         else labels.add(change.association.label);
       }
     }
@@ -171,7 +171,7 @@ describe('association history survives without a subscriber', () => {
     const removal = (await stack.getJournal(note.id)).at(-1)!.associations![0]!;
     expect(removal).toEqual({
       op: 'remove',
-      previous: { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: first.id },
+      association: { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: first.id },
     });
   });
 
@@ -215,9 +215,9 @@ describe('an association change is reversible from the log alone', () => {
   const invert = async (recordId: string, e: RecordJournalEntry) => {
     for (const change of e.associations ?? []) {
       // Every inverse is local to its own element: an add is dropped, and
-      // both a re-point and a removal are put back to `previous`. Which
-      // verb carries it is the element's own half of the partition.
-      const element = change.op === 'add' ? change.association : change.previous;
+      // both a re-point and a removal are put back to the element
+      // the entry holds. Which verb carries it is its own half of the partition.
+      const element = change.op === 'repoint' ? change.previous : change.association;
       if (isAuthority(element)) {
         if (change.op === 'add') await stack.revokeAccess(recordId, element);
         else await stack.grantAccess(recordId, element);
@@ -461,9 +461,9 @@ describe('the journal and the feed report the same change', () => {
     expect(
       log[0]!.associations!.flatMap((c) => (c.op === 'remove' ? [] : [c.association])),
     ).toEqual(seen[0]!.associationsAdded);
-    expect(log[1]!.associations!.flatMap((c) => (c.op === 'remove' ? [c.previous] : []))).toEqual(
-      seen[1]!.associationsRemoved,
-    );
+    expect(
+      log[1]!.associations!.flatMap((c) => (c.op === 'remove' ? [c.association] : [])),
+    ).toEqual(seen[1]!.associationsRemoved);
   });
 });
 
