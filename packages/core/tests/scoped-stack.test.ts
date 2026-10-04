@@ -137,15 +137,15 @@ describe('ScopedStack — a group keeps at least one admin', () => {
   // who passes the first still meets the second.
   test('an admin cannot remove themselves as the last admin', async () => {
     const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
-    await expect(stack.asEntity(MEMBER).dissociate(group.id, admin(MEMBER))).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).dissociate(group.id, [admin(MEMBER)])).rejects.toThrow(
       StackConflictError,
     );
   });
 
   test('an admin may remove themselves once a second admin exists', async () => {
     const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
-    await stack.asEntity(MEMBER).associate(group.id, admin(OWNER));
-    const updated = await stack.asEntity(MEMBER).dissociate(group.id, admin(MEMBER));
+    await stack.asEntity(MEMBER).associate(group.id, [admin(OWNER)]);
+    const updated = await stack.asEntity(MEMBER).dissociate(group.id, [admin(MEMBER)]);
     expect(updated.associations).toEqual([admin(OWNER)]);
   });
 
@@ -530,17 +530,17 @@ describe('ScopedStack — write access', () => {
     const tag: DataAssociation = { kind: 'tag', label: 'starred' };
     const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
 
-    await expect(stack.asEntity(STRANGER).associate(record.id, tag)).rejects.toThrow(
+    await expect(stack.asEntity(STRANGER).associate(record.id, [tag])).rejects.toThrow(
       StackNotFoundError,
     );
-    await expect(stack.asEntity(STRANGER).dissociate(record.id, tag)).rejects.toThrow(
+    await expect(stack.asEntity(STRANGER).dissociate(record.id, [tag])).rejects.toThrow(
       StackNotFoundError,
     );
     await expect(
       stack.asEntity(STRANGER).mutate(record.id, { permissions: perms }),
     ).rejects.toThrow(StackNotFoundError);
 
-    await stack.asEntity(OWNER).associate(record.id, tag);
+    await stack.asEntity(OWNER).associate(record.id, [tag]);
     expect((await adapter.getRecord(record.id))?.associations).toContainEqual(tag);
   });
 
@@ -622,10 +622,10 @@ describe('ScopedStack mutators return the record they produced', () => {
     const record = await adapter.createRecord(makeRecord({ createdBy: { subjectId: OWNER } }));
     const scoped = stack.asEntity(OWNER);
 
-    const associated = await scoped.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const associated = await scoped.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(associated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
 
-    const dissociated = await scoped.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    const dissociated = await scoped.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(dissociated.associations).toBeUndefined();
 
     const permissioned = await scoped.mutate(record.id, {
@@ -633,18 +633,20 @@ describe('ScopedStack mutators return the record they produced', () => {
     });
     expect(permissioned.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
 
-    const granted = await scoped.grantAccess(record.id, {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: MEMBER },
-    });
+    const granted = await scoped.grantAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     expect(granted.permissions).toContainEqual({
       kind: 'permission',
       label: 'read',
       grantee: { kind: 'entity', entityId: MEMBER },
     });
 
-    const revoked = await scoped.revokeAccess(record.id, { kind: 'anyone', label: 'read' });
+    const revoked = await scoped.revokeAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     expect(revoked.permissions).toEqual([
       { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
     ]);
@@ -676,8 +678,8 @@ describe('ScopedStack — record-existence disclosure', () => {
     view.delete(id),
     view.delete(id, { purge: true }),
     view.undelete(id),
-    view.associate(id, tag),
-    view.dissociate(id, tag),
+    view.associate(id, [tag]),
+    view.dissociate(id, [tag]),
     view.mutate(id, { permissions: perms }),
     view.getVersions(id),
     view.getVersion(id, 1),
@@ -1845,11 +1847,13 @@ describe('ScopedStack — group-targeted grants', () => {
     // Any Record's relationship associations would otherwise serve as a
     // roster, and a group migrated out of the family would keep resolving.
     const notAGroup = await stack.create(COMMENT, { text: 'not a group' });
-    await stack.associate(notAGroup.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(notAGroup.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     await stack.grantType(fam(COMMENT), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
@@ -1925,11 +1929,13 @@ describe('ScopedStack — group-targeted grants', () => {
   // plain member does not satisfy it. See docs/spec/identity.md § Group.
   test('an admin-targeted grant does not cover a plain member', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     await stack.grantType(fam(COMMENT), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'admin' },
@@ -1941,11 +1947,13 @@ describe('ScopedStack — group-targeted grants', () => {
 
   test('a member-targeted grant covers an admin, the wider set holding the narrower', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'admin',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'admin',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     await stack.grantType(fam(COMMENT), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
@@ -1957,11 +1965,13 @@ describe('ScopedStack — group-targeted grants', () => {
 
   test('an admin-targeted grant covers an admin', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'admin',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'admin',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     await stack.grantType(fam(COMMENT), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'admin' },
@@ -1977,11 +1987,13 @@ describe('ScopedStack — group-targeted grants', () => {
   // unnoticed — the direction that must never go stale.
   test('a roster change takes effect on a ScopedStack that has already been used', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     await stack.grantType(fam(COMMENT), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
@@ -1991,11 +2003,13 @@ describe('ScopedStack — group-targeted grants', () => {
     const view = stack.asEntity(MEMBER);
     expect((await view.get(record.id))?.id).toBe(record.id);
 
-    await stack.dissociate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.dissociate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     expect(await view.get(record.id)).toBeNull();
   });
 });
@@ -2221,18 +2235,20 @@ describe('ScopedStack — write implies read', () => {
     await expect(view.getVersion(record.id, 1)).rejects.toThrow(StackNotFoundError);
     await expect(view.restoreVersion(record.id, 1)).rejects.toThrow(StackNotFoundError);
     await expect(view.delete(record.id)).rejects.toThrow(StackNotFoundError);
-    await expect(view.associate(record.id, { kind: 'tag', label: 'x' })).rejects.toThrow(
+    await expect(view.associate(record.id, [{ kind: 'tag', label: 'x' }])).rejects.toThrow(
       StackNotFoundError,
     );
   });
 
   test('a group entry conveys no write without read either', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     const record = await recordWithHistory([
       {
         kind: 'permission',
@@ -2357,14 +2373,14 @@ describe('ScopedStack — an `anyone` read carries the write bit', () => {
     const record = await stack.create(NOTE, { text: 'public draft' });
     await stack.mutate(record.id, { permissions: [anyone, writeFor(MEMBER)] });
 
-    await expect(stack.revokeAccess(record.id, anyone)).rejects.toThrow(StackValidationError);
+    await expect(stack.revokeAccess(record.id, [anyone])).rejects.toThrow(StackValidationError);
     await expect(stack.mutate(record.id, { permissions: [writeFor(MEMBER)] })).rejects.toThrow(
       StackValidationError,
     );
 
     // Withdrawing the writer first leaves a set the invariant accepts.
-    await stack.revokeAccess(record.id, writeFor(MEMBER));
-    const privated = await stack.revokeAccess(record.id, anyone);
+    await stack.revokeAccess(record.id, [writeFor(MEMBER)]);
+    const privated = await stack.revokeAccess(record.id, [anyone]);
     expect(privated.permissions).toBeUndefined();
   });
 
@@ -2898,11 +2914,13 @@ describe('ScopedStack.getAttachment', () => {
       grantee: { kind: 'entity', entityId: MEMBER },
     });
     const record = await stack.create(NOTE, { text: 'has attachment' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
 
     const bytes = await stack.asEntity(MEMBER).getAttachment(fileId);
     expect(bytes).toBeInstanceOf(Uint8Array);
@@ -2971,7 +2989,7 @@ describe('ScopedStack.getAttachment', () => {
       grantee: { kind: 'entity', entityId: MEMBER },
     });
     const record = await stack.create(NOTE, { text: 'has attachment' });
-    await stack.associate(record.id, { kind: 'attachment', label: 'cover', fileId });
+    await stack.associate(record.id, [{ kind: 'attachment', label: 'cover', fileId }]);
     await stack.mutate(record.id, { unlisted: true });
 
     expect(await stack.asEntity(MEMBER).getAttachment(fileId)).toBeInstanceOf(Uint8Array);
@@ -3107,7 +3125,7 @@ describe('ScopedStack.getAttachment', () => {
       grantee: { kind: 'entity', entityId: MEMBER },
     });
     const own = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
-    await stack.asEntity(MEMBER).associate(own.id, { kind: 'attachment', label: 'y', fileId });
+    await stack.asEntity(MEMBER).associate(own.id, [{ kind: 'attachment', label: 'y', fileId }]);
 
     const updated = await stack.get(own.id);
     expect(updated?.associations).toContainEqual({ kind: 'attachment', label: 'y', fileId });
@@ -3241,7 +3259,7 @@ describe('ScopedStack — group role gating', () => {
       label: 'member',
       target: { kind: 'entity', entityId: STRANGER },
     };
-    await expect(stack.asEntity(MEMBER).associate(group.id, newMember)).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).associate(group.id, [newMember])).rejects.toThrow(
       StackNotFoundError,
     );
     const existingMember: DataAssociation = {
@@ -3249,7 +3267,7 @@ describe('ScopedStack — group role gating', () => {
       label: 'member',
       target: { kind: 'entity', entityId: MEMBER },
     };
-    await expect(stack.asEntity(MEMBER).dissociate(group.id, existingMember)).rejects.toThrow(
+    await expect(stack.asEntity(MEMBER).dissociate(group.id, [existingMember])).rejects.toThrow(
       StackNotFoundError,
     );
   });
@@ -3270,10 +3288,10 @@ describe('ScopedStack — group role gating', () => {
       label: 'member',
       target: { kind: 'entity', entityId: STRANGER },
     };
-    await stack.asEntity(ADMIN).associate(group.id, newMember);
+    await stack.asEntity(ADMIN).associate(group.id, [newMember]);
     expect((await adapter.getRecord(group.id))?.associations).toContainEqual(newMember);
 
-    await stack.asEntity(ADMIN).dissociate(group.id, newMember);
+    await stack.asEntity(ADMIN).dissociate(group.id, [newMember]);
     expect((await adapter.getRecord(group.id))?.associations).not.toContainEqual(newMember);
 
     await stack.asEntity(ADMIN).delete(group.id);
@@ -3312,7 +3330,7 @@ describe('ScopedStack — group role gating', () => {
       label: 'member',
       target: { kind: 'entity', entityId: STRANGER },
     };
-    await expect(stack.asEntity(STRANGER).associate(group.id, newMember)).rejects.toThrow(
+    await expect(stack.asEntity(STRANGER).associate(group.id, [newMember])).rejects.toThrow(
       StackPermissionError,
     );
   });
@@ -3462,13 +3480,13 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
     const record = await shared();
     const scoped = stack.asEntity(MEMBER);
 
-    await expect(scoped.associate(record.id, asData(readFor(STRANGER)))).rejects.toThrow(
+    await expect(scoped.associate(record.id, [asData(readFor(STRANGER))])).rejects.toThrow(
       StackBadRequestError,
     );
     await expect(
-      scoped.associate(record.id, asData({ kind: 'anyone', label: 'read' })),
+      scoped.associate(record.id, [asData({ kind: 'anyone', label: 'read' })]),
     ).rejects.toThrow(StackBadRequestError);
-    await expect(scoped.dissociate(record.id, asData(readFor(MEMBER)))).rejects.toThrow(
+    await expect(scoped.dissociate(record.id, [asData(readFor(MEMBER))])).rejects.toThrow(
       StackBadRequestError,
     );
     expect((await stack.get(record.id))?.permissions).toEqual([readFor(MEMBER), writeFor(MEMBER)]);
@@ -3479,21 +3497,21 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
   test('grantAccess()/revokeAccess() refuse a data kind, for the owner too', async () => {
     const record = await shared();
     const tag = asAuthority({ kind: 'tag', label: 'draft' });
-    await expect(stack.asEntity(OWNER).grantAccess(record.id, tag)).rejects.toThrow(
+    await expect(stack.asEntity(OWNER).grantAccess(record.id, [tag])).rejects.toThrow(
       StackBadRequestError,
     );
-    await expect(stack.asEntity(OWNER).revokeAccess(record.id, tag)).rejects.toThrow(
+    await expect(stack.asEntity(OWNER).revokeAccess(record.id, [tag])).rejects.toThrow(
       StackBadRequestError,
     );
   });
 
   test('grantAccess() is refused to a write-holder and allowed to the owner', async () => {
     const record = await shared();
-    await expect(stack.asEntity(MEMBER).grantAccess(record.id, readFor(STRANGER))).rejects.toThrow(
-      StackPermissionError,
-    );
+    await expect(
+      stack.asEntity(MEMBER).grantAccess(record.id, [readFor(STRANGER)]),
+    ).rejects.toThrow(StackPermissionError);
 
-    const granted = await stack.asEntity(OWNER).grantAccess(record.id, readFor(STRANGER));
+    const granted = await stack.asEntity(OWNER).grantAccess(record.id, [readFor(STRANGER)]);
     expect(granted.permissions).toContainEqual(readFor(STRANGER));
   });
 
@@ -3505,10 +3523,10 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
       }),
     );
     await expect(
-      stack.asEntity(STRANGER).revokeAccess(record.id, readFor(STRANGER)),
+      stack.asEntity(STRANGER).revokeAccess(record.id, [readFor(STRANGER)]),
     ).rejects.toThrow(StackPermissionError);
 
-    const revoked = await stack.asEntity(MEMBER).revokeAccess(record.id, readFor(STRANGER));
+    const revoked = await stack.asEntity(MEMBER).revokeAccess(record.id, [readFor(STRANGER)]);
     expect(revoked.permissions).toEqual([readFor(MEMBER)]);
   });
 
@@ -3516,13 +3534,13 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
   // of the read — not the write — that the set refuses.
   test('revokeAccess() of a read while the write stands is refused', async () => {
     const record = await shared();
-    await expect(stack.asEntity(OWNER).revokeAccess(record.id, readFor(MEMBER))).rejects.toThrow(
+    await expect(stack.asEntity(OWNER).revokeAccess(record.id, [readFor(MEMBER)])).rejects.toThrow(
       StackValidationError,
     );
 
     // Taking the write first leaves a set the invariant accepts.
-    await stack.asEntity(OWNER).revokeAccess(record.id, writeFor(MEMBER));
-    const revoked = await stack.asEntity(OWNER).revokeAccess(record.id, readFor(MEMBER));
+    await stack.asEntity(OWNER).revokeAccess(record.id, [writeFor(MEMBER)]);
+    const revoked = await stack.asEntity(OWNER).revokeAccess(record.id, [readFor(MEMBER)]);
     expect(revoked.permissions).toBeUndefined();
   });
 
@@ -3578,7 +3596,7 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
       const found = await read(id, opts);
       if (!interleaved) {
         interleaved = true;
-        await stack.grantAccess(record.id, readFor(STRANGER));
+        await stack.grantAccess(record.id, [readFor(STRANGER)]);
       }
       return found;
     });
@@ -3604,7 +3622,7 @@ describe('ScopedStack — the write bit reaches no part of the ACL', () => {
       const found = await read(id, opts);
       if (!interleaved) {
         interleaved = true;
-        await stack.grantAccess(record.id, readFor(STRANGER));
+        await stack.grantAccess(record.id, [readFor(STRANGER)]);
       }
       return found;
     });
@@ -3643,8 +3661,8 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
         permissions: [readFor(MEMBER), writeFor(MEMBER)],
       }),
     );
-    await stack.asEntity(OWNER).grantAccess(record.id, readFor(STRANGER));
-    await stack.asEntity(OWNER).revokeAccess(record.id, readFor(STRANGER));
+    await stack.asEntity(OWNER).grantAccess(record.id, [readFor(STRANGER)]);
+    await stack.asEntity(OWNER).revokeAccess(record.id, [readFor(STRANGER)]);
     return record;
   };
 
@@ -3673,7 +3691,7 @@ describe('ScopedStack — the journal names the ACL only to a resharer', () => {
         permissions: [readFor(MEMBER), writeFor(MEMBER)],
       }),
     );
-    await stack.asEntity(MEMBER).grantAccess(own.id, readFor(STRANGER));
+    await stack.asEntity(MEMBER).grantAccess(own.id, [readFor(STRANGER)]);
     const byCreator = await stack.asEntity(MEMBER).getJournal(own.id);
     expect(byCreator[0].associations).toEqual([{ op: 'add', association: readFor(STRANGER) }]);
   });
@@ -4060,11 +4078,13 @@ describe('ScopedStack.create — attachment association gating', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const owned = await stack.create(NOTE, { text: 'owner note' });
-    await stack.associate(owned.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(owned.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
     await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -4251,11 +4271,13 @@ describe('ScopedStack.create — non-owner _attachment@1 refusal', () => {
       filename: 'owner.png',
     });
     const owned = await stack.create(NOTE, { text: 'owner note' });
-    await stack.associate(owned.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(owned.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
     await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: MEMBER },
@@ -4748,11 +4770,13 @@ describe('ScopedStack.associate — reference-creation gating', () => {
 
   test('associate() rejects an attachment association to a file the requester cannot access', async () => {
     await expect(
-      stack.asEntity(MEMBER).associate(ownedRecord.id, {
-        kind: 'attachment',
-        label: 'x',
-        fileId: 'unknown',
-      }),
+      stack.asEntity(MEMBER).associate(ownedRecord.id, [
+        {
+          kind: 'attachment',
+          label: 'x',
+          fileId: 'unknown',
+        },
+      ]),
     ).rejects.toThrow(StackPermissionError);
   });
 
@@ -4766,7 +4790,7 @@ describe('ScopedStack.associate — reference-creation gating', () => {
     } = await stack.asEntity(MEMBER).putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     await stack
       .asEntity(MEMBER)
-      .associate(ownedRecord.id, { kind: 'attachment', label: 'x', fileId });
+      .associate(ownedRecord.id, [{ kind: 'attachment', label: 'x', fileId }]);
     expect((await adapter.getRecord(ownedRecord.id))?.associations).toContainEqual({
       kind: 'attachment',
       label: 'x',
@@ -4777,16 +4801,18 @@ describe('ScopedStack.associate — reference-creation gating', () => {
   test('associate() rejects a relationship association to an unreadable record', async () => {
     const unreadableNote = await adapter.createRecord(makeRecord());
     await expect(
-      stack.asEntity(MEMBER).associate(ownedRecord.id, {
-        kind: 'relationship',
-        label: 'related',
-        target: { kind: 'record', recordId: unreadableNote.id },
-      }),
+      stack.asEntity(MEMBER).associate(ownedRecord.id, [
+        {
+          kind: 'relationship',
+          label: 'related',
+          target: { kind: 'record', recordId: unreadableNote.id },
+        },
+      ]),
     ).rejects.toThrow(StackPermissionError);
   });
 
   test('associate() never gates tag associations', async () => {
-    await stack.asEntity(MEMBER).associate(ownedRecord.id, { kind: 'tag', label: 'starred' });
+    await stack.asEntity(MEMBER).associate(ownedRecord.id, [{ kind: 'tag', label: 'starred' }]);
     expect((await adapter.getRecord(ownedRecord.id))?.associations).toContainEqual({
       kind: 'tag',
       label: 'starred',
@@ -5210,11 +5236,13 @@ describe('ScopedStack — delegation', () => {
 
   test('an app delegated for a group admin cannot manage the group', async () => {
     const group = await stack.create('_group@1', { name: 'Book Club' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'admin',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'admin',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     expect(await stack.asEntity(MEMBER).patchContent(group.id, { name: 'Renamed' })).toBeTruthy();
     await expect(
       stack
@@ -5275,11 +5303,13 @@ describe('ScopedStack — delegation', () => {
     ).rejects.toThrow(StackNotFoundError);
 
     // An admin subject reaches it, since both identities then manage it.
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'admin',
-      target: { kind: 'entity', entityId: MEMBER },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'admin',
+        target: { kind: 'entity', entityId: MEMBER },
+      },
+    ]);
     expect(
       await stack
         .asActor({ principalId: OWNER, subjectId: MEMBER })
@@ -5888,7 +5918,7 @@ describe('ScopedStack — mutating a soft-deleted record', () => {
   test('associate() is refused the same way', async () => {
     const record = await deleted();
     await expect(
-      stack.asEntity(MEMBER).associate(record.id, { kind: 'tag', label: 'late' }),
+      stack.asEntity(MEMBER).associate(record.id, [{ kind: 'tag', label: 'late' }]),
     ).rejects.toThrow(StackConflictError);
   });
 

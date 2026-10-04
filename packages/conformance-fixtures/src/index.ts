@@ -2571,9 +2571,72 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
           {
             path: 'permissions[0]',
             message:
-              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
           },
         ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-amend-permissions-write-without-read',
+    description:
+      'POST /records/:id/permissions adding `write` alone for a grantee holding no `read` ' +
+      'returns 422 with code "validation" and changes nothing: `write` never implies `read`, ' +
+      'so the request names both. The set the whole list produces is what is checked. See ' +
+      'docs/spec/access-control.md § Write implies read.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'write',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'permissions[0]',
+            message:
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-amend-associations-repoint',
+    description:
+      'A `repoint` is recorded by the journal, never requested: POST /records/:id/associations ' +
+      'returns 400 with code "bad_request" for it, since it is not an op the endpoint defines. ' +
+      'An `add` naming an attachment the record already holds re-points it in place. See ' +
+      'docs/spec/wire-format.md § Associations.',
+    method: 'POST',
+    path: '/records/1hk153x00001/associations',
+    requestBody: {
+      changes: [
+        {
+          op: 'repoint',
+          association: { kind: 'tag', label: 'starred' },
+          previous: { kind: 'tag', label: 'starred' },
+        },
+      ],
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message:
+          'Invalid association edits body: changes[0].op: "repoint" is recorded by the journal, not requested. Send { op: \'add\', association }: an add naming an attachment the record already holds re-points it in place.',
       },
     },
   },

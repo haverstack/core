@@ -42,8 +42,8 @@ describe('every emitting write appends exactly one entry', () => {
   test('one entry per call, in call order, densely numbered', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
@@ -63,11 +63,11 @@ describe('every emitting write appends exactly one entry', () => {
 
   test('a no-op writes nothing, exactly as it emits nothing', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     const before = await stack.getJournal(note.id);
 
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'absent' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'absent' }]);
     await stack.patchContent(note.id, { text: 'hello' });
 
     expect(await stack.getJournal(note.id)).toEqual(before);
@@ -109,10 +109,10 @@ describe('association history survives without a subscriber', () => {
 
   test('an association set is reconstructible from the log alone', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.associate(note.id, { kind: 'tag', label: 'urgent' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.associate(note.id, { kind: 'tag', label: 'later' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'urgent' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'later' }]);
 
     // Replay forward from an empty set; the result must be what the record
     // actually holds. Nothing was listening while any of this happened.
@@ -133,18 +133,22 @@ describe('association history survives without a subscriber', () => {
     const { first, second, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
 
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-      attachmentRecordId: first.id,
-    });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     const log = await stack.getJournal(note.id);
     const repoint = log.at(-1)!.associations![0]!;
@@ -160,13 +164,15 @@ describe('association history survives without a subscriber', () => {
   test('a removal keeps the annotation the association carried', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-      attachmentRecordId: first.id,
-    });
-    await stack.dissociate(note.id, { kind: 'attachment', label: 'cover', fileId });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
+    await stack.dissociate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
     const removal = (await stack.getJournal(note.id)).at(-1)!.associations![0]!;
     expect(removal).toEqual({
@@ -177,7 +183,7 @@ describe('association history survives without a subscriber', () => {
 
   test('an association change is journaled without moving the record version', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     const log = await stack.getJournal(note.id);
     expect(log).toHaveLength(2);
@@ -219,20 +225,20 @@ describe('an association change is reversible from the log alone', () => {
       // the entry holds. Which verb carries it is its own half of the partition.
       const element = change.op === 'repoint' ? change.previous : change.association;
       if (isAuthority(element)) {
-        if (change.op === 'add') await stack.revokeAccess(recordId, element);
-        else await stack.grantAccess(recordId, element);
+        if (change.op === 'add') await stack.revokeAccess(recordId, [element]);
+        else await stack.grantAccess(recordId, [element]);
       } else if (change.op === 'add') {
-        await stack.dissociate(recordId, element);
+        await stack.dissociate(recordId, [element]);
       } else {
-        await stack.associate(recordId, element);
+        await stack.associate(recordId, [element]);
       }
     }
   };
 
   test('a swap is undone by replaying its entry backwards', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'keep' });
-    await stack.associate(note.id, { kind: 'tag', label: 'draft' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'keep' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'draft' }]);
     const before = (await stack.get(note.id))!.associations!.map((a) => a.label).sort();
 
     await stack.mutate(note.id, {
@@ -252,18 +258,22 @@ describe('an association change is reversible from the log alone', () => {
   test('a re-pointed attachment is put back to the pointer it replaced', async () => {
     const { first, second, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-      attachmentRecordId: first.id,
-    });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     await invert(note.id, (await stack.getJournal(note.id)).at(-1)!);
 
@@ -281,12 +291,14 @@ describe('an association change is reversible from the log alone', () => {
       filename: 'other.png',
     });
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId: first.content.fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId: first.content.fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const before = (await stack.get(note.id))!.associations;
 
     // One write that re-points the cover it holds and adds a second cover
@@ -321,7 +333,7 @@ describe('an association change is reversible from the log alone', () => {
 describe('a purge leaves no journal behind', () => {
   test('the log goes with the record, as the version history does', async () => {
     const note = await stack.create(NOTE, { text: 'secret' });
-    await stack.associate(note.id, { kind: 'tag', label: 'sensitive' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'sensitive' }]);
     await stack.patchContent(note.id, { text: 'still secret' });
     expect(await stack.getJournal(note.id)).toHaveLength(3);
 
@@ -335,7 +347,7 @@ describe('a purge leaves no journal behind', () => {
 
   test('a soft delete keeps it — the tombstone is recoverable', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.delete(note.id);
 
     const log = await stack.getJournal(note.id);
@@ -356,11 +368,9 @@ describe('every entry names who made the change', () => {
     });
     const note = await stack.create(NOTE, { text: 'hello' }, { createdBy: { subjectId: OWNER } });
 
-    await stack.associate(
-      note.id,
-      { kind: 'tag', label: 'starred' },
-      { actor: { subjectId: EDITOR, principalId: OWNER } },
-    );
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }], {
+      actor: { subjectId: EDITOR, principalId: OWNER },
+    });
 
     const entry = (await stack.getJournal(note.id)).at(-1)!;
     expect(entry.actor).toEqual({ subjectId: EDITOR, principalId: OWNER });
@@ -394,16 +404,12 @@ describe('the journal and the feed report the same change', () => {
       { parentId: folder.id, permissions: [{ kind: 'anyone', label: 'read' }] },
       { actor: { subjectId: OWNER } },
     );
-    await stack.associate(
-      note.id,
-      { kind: 'tag', label: 'starred' },
-      { actor: { subjectId: EDITOR } },
-    );
-    await stack.dissociate(
-      note.id,
-      { kind: 'tag', label: 'starred' },
-      { actor: { subjectId: EDITOR } },
-    );
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }], {
+      actor: { subjectId: EDITOR },
+    });
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }], {
+      actor: { subjectId: EDITOR },
+    });
     await stack.delete(note.id, { actor: { subjectId: OWNER } });
     await stack.undelete(note.id, { actor: { subjectId: OWNER } });
     unsubscribe();
@@ -430,8 +436,8 @@ describe('the journal and the feed report the same change', () => {
     const unsubscribe = await stack.subscribe((change) => seen.push(change));
 
     await stack.patchContent(note.id, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'x' });
-    await stack.associate(note.id, { kind: 'tag', label: 'x' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'x' }]);
     await stack.mutate(note.id, { permissions: [] });
     unsubscribe();
 
@@ -474,8 +480,8 @@ describe('the journal and the feed report the same change', () => {
 describe('the read surface', () => {
   test('afterSeq resumes after an entry already seen', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'a' });
-    await stack.associate(note.id, { kind: 'tag', label: 'b' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'a' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'b' }]);
 
     const tail = await stack.getJournal(note.id, { afterSeq: 1 });
     expect(tail.map((e) => e.seq)).toEqual([2, 3]);
@@ -484,8 +490,8 @@ describe('the read surface', () => {
 
   test('limit bounds a page from the oldest end', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'a' });
-    await stack.associate(note.id, { kind: 'tag', label: 'b' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'a' }]);
+    await stack.associate(note.id, [{ kind: 'tag', label: 'b' }]);
 
     expect((await stack.getJournal(note.id, { limit: 2 })).map((e) => e.seq)).toEqual([1, 2]);
   });
@@ -532,7 +538,7 @@ describe('the journal is gated on the mutate surface, like version history', () 
         ],
       },
     );
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     const asReader = stack.asEntity(READER);
     const asEditor = stack.asEntity(EDITOR);

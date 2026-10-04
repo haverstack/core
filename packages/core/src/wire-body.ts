@@ -144,6 +144,11 @@ export function parseAssociationEditsBody(body: unknown): AssociationEdit[] {
       fieldError(path, `${path} must be an object`);
     const edit = raw as Record<string, unknown>;
     assertKnownKeys(edit, ['op', 'association'], path);
+    if (edit.op === 'repoint')
+      throw new StackBadRequestError(
+        `Invalid ${label}: ${path}.op: "repoint" is recorded by the journal, not requested. ` +
+          "Send { op: 'add', association }: an add naming an attachment the record already holds re-points it in place.",
+      );
     if (edit.op !== 'add' && edit.op !== 'remove')
       throw new StackBadRequestError(`Invalid ${label}: ${path}.op must be "add" or "remove"`);
     const association = requiredObject(edit, 'association', `${label} ${path}`);

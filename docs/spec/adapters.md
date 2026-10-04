@@ -37,7 +37,7 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 `StackRecordAdapter.amendAssociations(id, changes, opts?)` is the adapter's one association write: a list of `AssociationEdit` — `add` and `remove`, the [journal's shape](./journal.md#the-entry) without `repoint` — applied as **one write**, so a swap or a paired grant never exposes an intermediate state.
 
 - **All or none.** A SQL adapter runs the list in one transaction; a failure part-way leaves the record as it stood.
-- **Removes, then adds.** An add landing on an identity already stored overwrites it in place, and edits naming one identity [collapse on it](#associations-are-keyed-by-identity), last wins.
+- **Removes, then adds.** An add landing on an identity already stored overwrites it in place, and adds naming one identity [collapse on it](#associations-are-keyed-by-identity), last wins. A list that both adds and removes one identity leaves it present; `Stack` refuses such a list, so only a direct adapter call can name one.
 - **One surface per list.** A list mixing authority and data elements is refused with `StackBadRequestError`: `Stack` never builds one, and `APIAdapter` could not send it as one request. See [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
 - **Never bumps `version` or `updatedAt`, and never snapshots.** One call appends at most one [journal entry](./journal.md#the-entry), carrying the `JournalEntryInput` the caller passed.
 - **A record that is not there is `StackNotFoundError`**, never an orphan row.

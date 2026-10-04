@@ -1770,7 +1770,7 @@ describe('Stack.restoreVersion — containment', () => {
   test('restoring rolls content back and leaves associations exactly as they stand', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.associate(note.id, { kind: 'tag', label: 'pinned' }); // no bump
+    await stack.associate(note.id, [{ kind: 'tag', label: 'pinned' }]); // no bump
     await stack.patchContent(note.id, { text: 'edited' });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
@@ -2621,28 +2621,28 @@ describe('_group — at least one admin', () => {
   describe('dissociate', () => {
     test('refuses removing the last admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.dissociate(group.id, admin('owner-123'))).rejects.toThrow(
+      await expect(stack.dissociate(group.id, [admin('owner-123')])).rejects.toThrow(
         StackConflictError,
       );
     });
 
     test('allows an admin to remove themselves while another remains', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.associate(group.id, admin('co-admin'));
-      const updated = await stack.dissociate(group.id, admin('owner-123'));
+      await stack.associate(group.id, [admin('co-admin')]);
+      const updated = await stack.dissociate(group.id, [admin('owner-123')]);
       expect(updated.associations).toEqual([admin('co-admin')]);
     });
 
     test('allows removing a member when one admin remains', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.associate(group.id, member('member-1'));
-      const updated = await stack.dissociate(group.id, member('member-1'));
+      await stack.associate(group.id, [member('member-1')]);
+      const updated = await stack.dissociate(group.id, [member('member-1')]);
       expect(updated.associations).toEqual([admin('owner-123')]);
     });
 
     test('a no-op dissociate of an absent admin is still a no-op, not a refusal', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      const updated = await stack.dissociate(group.id, admin('never-was-admin'));
+      const updated = await stack.dissociate(group.id, [admin('never-was-admin')]);
       expect(updated.version).toBe(group.version);
     });
   });
@@ -2707,7 +2707,7 @@ describe('_group — at least one admin', () => {
       await stack.mutate(group.id, { associations: [admin('owner-123'), admin('departing')] }); // no bump
       await stack.patchContent(group.id, { name: 'v2' }); // bumps, snapshots v
 
-      await stack.dissociate(group.id, admin('departing')); // no bump
+      await stack.dissociate(group.id, [admin('departing')]); // no bump
       const restored = await stack.restoreVersion(group.id, v);
 
       expect(restored.associations).toEqual([admin('owner-123')]);
@@ -2884,9 +2884,9 @@ describe('versions', () => {
 
   test('restoreVersion never restores associations, even ones held at the target version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v1
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v1
     await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
-    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v2
+    await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v2
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toBeUndefined();
@@ -2895,7 +2895,7 @@ describe('versions', () => {
   test('restoreVersion leaves the record’s current associations exactly as they stand', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     await stack.patchContent(record.id, { text: 'changed' }); // v2
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' }); // no bump, still v2
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v2
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
@@ -2915,7 +2915,7 @@ describe('versions', () => {
 
   test('a version snapshot carries neither associations nor permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v1
+    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v1
     await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
     await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
     const versions = await stack.getVersions(record.id);
@@ -2933,9 +2933,9 @@ describe('versioning rule — mixed mutations', () => {
   test('version increments by exactly one per real mutation, across mixed operation types — associate/dissociate never bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v2
+    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v2
     await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
-    await stack.dissociate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v2
+    await stack.dissociate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v2
     await stack.delete(record.id); // v3
     const undeleted = await stack.undelete(record.id); // v4
 
@@ -2948,9 +2948,9 @@ describe('versioning rule — mixed mutations', () => {
 
   test('no-op mutations never bump version or add a snapshot', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no bump, still v1
-    await stack.associate(record.id, { kind: 'tag', label: 'x' }); // no-op
-    await stack.dissociate(record.id, { kind: 'tag', label: 'gone' }); // no-op
+    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v1
+    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no-op
+    await stack.dissociate(record.id, [{ kind: 'tag', label: 'gone' }]); // no-op
     await stack.mutate(record.id, { permissions: [] }); // no-op (already private)
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
@@ -3010,9 +3010,9 @@ describe('ifVersion', () => {
     expect(reshared.version).toBe(2);
     expect(reshared.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
 
-    const associated = await stack.associate(record.id, { kind: 'tag', label: 'x' });
+    const associated = await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]);
     expect(associated.version).toBe(2);
-    const dissociated = await stack.dissociate(record.id, { kind: 'tag', label: 'x' });
+    const dissociated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'x' }]);
     expect(dissociated.version).toBe(2);
 
     expect((await stack.get(record.id))?.version).toBe(2);
@@ -3248,7 +3248,7 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
       expect(await stack.delete(note.id, { purge: true })).toEqual({
         referencedFileIds: [fileId],
@@ -3266,7 +3266,7 @@ describe('delete', () => {
       } = await stack.putAttachment(new Uint8Array([4, 5, 6]), { mimeType: 'image/png' });
       const photo = await stack.create(PHOTO, { coverFileId: fileId });
       // The same file, reached both ways: one file, one entry.
-      await stack.associate(photo.id, { kind: 'attachment', label: 'cover', fileId });
+      await stack.associate(photo.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
       expect(await stack.delete(photo.id, { purge: true })).toEqual({
         referencedFileIds: [fileId],
@@ -3279,7 +3279,7 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(data, { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
       const { referencedFileIds } = await stack.delete(note.id, { purge: true });
       expect(await stack.getAttachment(fileId)).toEqual(data);
@@ -3294,7 +3294,7 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
       // A tombstone is recoverable and must find its attachments intact,
       // so its references still stand.
@@ -3352,7 +3352,7 @@ describe('deleteAndReturn', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+    await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
 
     const { record, referencedFileIds } = await stack.deleteAndReturn(note.id, { purge: true });
     expect(record?.id).toBe(note.id);
@@ -4162,11 +4162,13 @@ describe('listTypeGrants', () => {
 
   test('an entity target also returns grants naming a group the entity belongs to', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: 'entity-abc' },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: 'entity-abc' },
+      },
+    ]);
     await stack.grantType(fam(NOTE_V1), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
@@ -4187,11 +4189,13 @@ describe('listTypeGrants', () => {
   // than no listing at all.
   test('a grant naming a record outside the _group family is not reported as applying', async () => {
     const notAGroup = await stack.create(NOTE_V1, { text: 'not a group' });
-    await stack.associate(notAGroup.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: 'entity-abc' },
-    });
+    await stack.associate(notAGroup.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: 'entity-abc' },
+      },
+    ]);
     await stack.grantType(fam(NOTE_V1), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
@@ -4263,11 +4267,13 @@ describe('listTypeGrants', () => {
 
   test('an entity target does not return a group grant for a group the entity does not belong to', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: 'entity-xyz' },
-    });
+    await stack.associate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: 'entity-xyz' },
+      },
+    ]);
     await stack.grantType(fam(NOTE_V1), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
@@ -4509,7 +4515,7 @@ describe('revokeType', () => {
 describe('associate / dissociate', () => {
   test('associate adds a tag', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations?.some((a) => a.kind === 'tag' && a.label === 'favourite')).toBe(
       true,
@@ -4518,8 +4524,8 @@ describe('associate / dissociate', () => {
 
   test('dissociate removes a tag', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     const updated = await adapter.getRecord(record.id);
     // Dissociating the only association leaves the key omitted entirely
     // (associations: undefined), mirroring the SQL adapters' rowToRecord
@@ -4529,7 +4535,7 @@ describe('associate / dissociate', () => {
 
   test('associate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(updated.version).toBe(1);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
@@ -4537,23 +4543,23 @@ describe('associate / dissociate', () => {
 
   test('associate is a no-op for a duplicate association', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
   test('associate throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.associate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
+    await expect(stack.associate('nonexistent', [{ kind: 'tag', label: 'x' }])).rejects.toThrow(
       StackNotFoundError,
     );
   });
 
   test('dissociate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    const updated = await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    const updated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(updated.version).toBe(1);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
@@ -4561,14 +4567,14 @@ describe('associate / dissociate', () => {
 
   test('dissociate is a no-op when the association is not present', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.dissociate(record.id, { kind: 'tag', label: 'nonexistent' });
+    await stack.dissociate(record.id, [{ kind: 'tag', label: 'nonexistent' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
   test('dissociate throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.dissociate('nonexistent', { kind: 'tag', label: 'x' })).rejects.toThrow(
+    await expect(stack.dissociate('nonexistent', [{ kind: 'tag', label: 'x' }])).rejects.toThrow(
       StackNotFoundError,
     );
   });
@@ -4628,19 +4634,19 @@ describe('Stack — authority and data never share a call', () => {
 
   test('associate()/dissociate() refuse an authority kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await expect(stack.associate(record.id, asData(readFor('entity-abc')))).rejects.toThrow(
+    await expect(stack.associate(record.id, [asData(readFor('entity-abc'))])).rejects.toThrow(
       StackBadRequestError,
     );
     await expect(
-      stack.dissociate(record.id, asData({ kind: 'anyone', label: 'read' })),
+      stack.dissociate(record.id, [asData({ kind: 'anyone', label: 'read' })]),
     ).rejects.toThrow(StackBadRequestError);
   });
 
   test('grantAccess()/revokeAccess() refuse a data kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const tag = asAuthority({ kind: 'tag', label: 'draft' });
-    await expect(stack.grantAccess(record.id, tag)).rejects.toThrow(StackBadRequestError);
-    await expect(stack.revokeAccess(record.id, tag)).rejects.toThrow(StackBadRequestError);
+    await expect(stack.grantAccess(record.id, [tag])).rejects.toThrow(StackBadRequestError);
+    await expect(stack.revokeAccess(record.id, [tag])).rejects.toThrow(StackBadRequestError);
   });
 });
 
@@ -4662,8 +4668,8 @@ describe('Stack.grantAccess/revokeAccess', () => {
 
   test('amends the set rather than replacing it, and never bumps', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, readFor('entity-a'));
-    const updated = await stack.grantAccess(record.id, readFor('entity-b'));
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    const updated = await stack.grantAccess(record.id, [readFor('entity-b')]);
 
     expect(updated.permissions).toEqual([readFor('entity-a'), readFor('entity-b')]);
     expect(updated.version).toBe(1);
@@ -4673,13 +4679,13 @@ describe('Stack.grantAccess/revokeAccess', () => {
 
   test('refuse a soft-deleted record, so a tombstone keeps the permissions it had', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
     await stack.delete(record.id);
 
-    await expect(stack.grantAccess(record.id, readFor('entity-b'))).rejects.toThrow(
+    await expect(stack.grantAccess(record.id, [readFor('entity-b')])).rejects.toThrow(
       StackConflictError,
     );
-    await expect(stack.revokeAccess(record.id, readFor('entity-a'))).rejects.toThrow(
+    await expect(stack.revokeAccess(record.id, [readFor('entity-a')])).rejects.toThrow(
       StackConflictError,
     );
     const tombstone = await stack.get(record.id, { includeDeleted: true });
@@ -4688,14 +4694,14 @@ describe('Stack.grantAccess/revokeAccess', () => {
 
   test('a grant already held is a no-op — no journal entry', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, readFor('entity-a'));
-    await stack.grantAccess(record.id, readFor('entity-a'));
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
     expect(await stack.getJournal(record.id)).toHaveLength(2);
   });
 
   test('revoking something the record does not carry is a no-op', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.revokeAccess(record.id, readFor('entity-a'));
+    const updated = await stack.revokeAccess(record.id, [readFor('entity-a')]);
     expect(updated.permissions).toBeUndefined();
     expect(await stack.getJournal(record.id)).toHaveLength(1);
   });
@@ -4704,30 +4710,30 @@ describe('Stack.grantAccess/revokeAccess', () => {
   // lands on the removal that would leave a write standing alone.
   test('refuses a grant of write with no read, and a revoke that takes the read away', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await expect(stack.grantAccess(record.id, writeFor('entity-a'))).rejects.toThrow(
+    await expect(stack.grantAccess(record.id, [writeFor('entity-a')])).rejects.toThrow(
       StackValidationError,
     );
 
-    await stack.grantAccess(record.id, readFor('entity-a'));
-    await stack.grantAccess(record.id, writeFor('entity-a'));
-    await expect(stack.revokeAccess(record.id, readFor('entity-a'))).rejects.toThrow(
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    await stack.grantAccess(record.id, [writeFor('entity-a')]);
+    await expect(stack.revokeAccess(record.id, [readFor('entity-a')])).rejects.toThrow(
       StackValidationError,
     );
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.grantAccess('nonexistent', readFor('entity-a'))).rejects.toThrow(
+    await expect(stack.grantAccess('nonexistent', [readFor('entity-a')])).rejects.toThrow(
       StackNotFoundError,
     );
-    await expect(stack.revokeAccess('nonexistent', readFor('entity-a'))).rejects.toThrow(
+    await expect(stack.revokeAccess('nonexistent', [readFor('entity-a')])).rejects.toThrow(
       StackNotFoundError,
     );
   });
 
   test('a grant appends one journal entry carrying the element, a revoke its `previous`', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, readFor('entity-a'));
-    await stack.revokeAccess(record.id, readFor('entity-a'));
+    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    await stack.revokeAccess(record.id, [readFor('entity-a')]);
 
     const [, granted, revoked] = await stack.getJournal(record.id);
     expect(granted.ops).toEqual(['reshare']);
@@ -5124,7 +5130,7 @@ describe('Stack.mutate — the `unlisted` key', () => {
 describe('mutators return the record they produced', () => {
   test('associate returns the record with the association applied, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    const updated = await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(updated.version).toBe(1);
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
     expect(updated).toEqual(await adapter.getRecord(record.id));
@@ -5132,8 +5138,8 @@ describe('mutators return the record they produced', () => {
 
   test('dissociate returns the record with the association gone, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
-    const updated = await stack.dissociate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    const updated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     expect(updated.version).toBe(1);
     expect(updated.associations).toBeUndefined();
   });
@@ -5166,11 +5172,13 @@ describe('mutators return the record they produced', () => {
       { text: 'hello' },
       { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
-    await stack.associate(record.id, { kind: 'tag', label: 'favourite' });
+    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
     const current = await adapter.getRecord(record.id);
 
-    expect(await stack.associate(record.id, { kind: 'tag', label: 'favourite' })).toEqual(current);
-    expect(await stack.dissociate(record.id, { kind: 'tag', label: 'absent' })).toEqual(current);
+    expect(await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }])).toEqual(
+      current,
+    );
+    expect(await stack.dissociate(record.id, [{ kind: 'tag', label: 'absent' }])).toEqual(current);
     expect(
       await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
     ).toEqual(current);
@@ -6121,12 +6129,14 @@ describe('attachment association — attachmentRecordId', () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations).toEqual([
@@ -6137,19 +6147,23 @@ describe('attachment association — attachmentRecordId', () => {
   test('re-pointing an existing association updates it in place, version unchanged', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
 
-    const updated = await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    const updated = await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     expect(updated.associations).toEqual([
       { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
@@ -6166,9 +6180,9 @@ describe('attachment association — attachmentRecordId', () => {
       fileId,
       attachmentRecordId: first.id,
     };
-    await stack.associate(record.id, association);
+    await stack.associate(record.id, [association]);
 
-    await stack.associate(record.id, association);
+    await stack.associate(record.id, [association]);
 
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
@@ -6176,12 +6190,14 @@ describe('attachment association — attachmentRecordId', () => {
   test('a change set that only re-points an association is a change, but never bumps version', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
 
     const updated = await stack.mutate(record.id, {
       associations: [{ kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id }],
@@ -6196,18 +6212,22 @@ describe('attachment association — attachmentRecordId', () => {
   test('associating without a pointer clears the one stored, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
 
-    const updated = await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-    });
+    const updated = await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+      },
+    ]);
 
     expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
     expect(updated.version).toBe(1);
@@ -6216,12 +6236,14 @@ describe('attachment association — attachmentRecordId', () => {
   test('a change set restating an association without its pointer clears it, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
 
     const updated = await stack.mutate(record.id, {
       associations: [{ kind: 'attachment', label: 'embed', fileId }],
@@ -6234,14 +6256,16 @@ describe('attachment association — attachmentRecordId', () => {
   test('dissociate matches on identity, ignoring the pointer', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
 
-    await stack.dissociate(record.id, { kind: 'attachment', label: 'embed', fileId });
+    await stack.dissociate(record.id, [{ kind: 'attachment', label: 'embed', fileId }]);
 
     expect((await adapter.getRecord(record.id))?.associations).toBeUndefined();
   });
@@ -6251,12 +6275,14 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: 'nonexistent1',
-      }),
+      stack.associate(record.id, [
+        {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: 'nonexistent1',
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -6266,12 +6292,14 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: other.id,
-      }),
+      stack.associate(record.id, [
+        {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: other.id,
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -6284,12 +6312,14 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: elsewhere.id,
-      }),
+      stack.associate(record.id, [
+        {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: elsewhere.id,
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -6305,12 +6335,14 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const reject = async (attachmentRecordId: string) => {
       try {
-        await stack.associate(record.id, {
-          kind: 'attachment',
-          label: 'embed',
-          fileId,
-          attachmentRecordId,
-        });
+        await stack.associate(record.id, [
+          {
+            kind: 'attachment',
+            label: 'embed',
+            fileId,
+            attachmentRecordId,
+          },
+        ]);
         throw new Error('expected a rejection');
       } catch (err) {
         return (err as StackValidationError).errors;
@@ -6365,12 +6397,14 @@ describe('attachment association — attachmentRecordId', () => {
   test('an association carrying a pointer still counts as a reference', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
   });
@@ -6386,7 +6420,7 @@ describe('attachment association — attachmentRecordId', () => {
       fileId,
       attachmentRecordId: second.id,
     };
-    await stack.associate(record.id, association);
+    await stack.associate(record.id, [association]);
     await stack.delete(second.id, { purge: true });
 
     const updated = await stack.mutate(record.id, {
@@ -6402,12 +6436,14 @@ describe('attachment association — attachmentRecordId', () => {
   test('a dangling pointer survives on the record it annotates', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(record.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     await stack.delete(second.id, { purge: true });
 
@@ -6651,11 +6687,13 @@ describe('deleteAttachment', () => {
       content: { fileId },
     } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
   });
@@ -6669,11 +6707,13 @@ describe('deleteAttachment', () => {
       content: { fileId },
     } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
     await stack.delete(note.id);
 
     await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
@@ -6867,11 +6907,13 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
     await stack.delete(note.id, { purge: true });
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
@@ -6886,11 +6928,13 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
 
@@ -6904,11 +6948,13 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'cover',
-      fileId,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'cover',
+        fileId,
+      },
+    ]);
     await stack.delete(note.id);
 
     const result = await stack.collectAttachmentGarbage({ graceMs: 0 });
@@ -7439,22 +7485,26 @@ describe('relationship targets', () => {
   test('a record target names this stack by omitting stackUrl, never by emptying it', async () => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, {
-        kind: 'relationship',
-        label: 'series',
-        target: { kind: 'record', recordId: 'somerecordid', stackUrl: '' },
-      }),
+      stack.associate(note.id, [
+        {
+          kind: 'relationship',
+          label: 'series',
+          target: { kind: 'record', recordId: 'somerecordid', stackUrl: '' },
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('a target outside the three kinds is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, {
-        kind: 'relationship',
-        label: 'series',
-        target: { kind: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
-      }),
+      stack.associate(note.id, [
+        {
+          kind: 'relationship',
+          label: 'series',
+          target: { kind: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -7471,7 +7521,7 @@ describe('relationship targets', () => {
     const association = element as unknown as DataAssociation;
     const authority = element as unknown as AuthorityAssociation;
 
-    await expect(stack.associate(note.id, association)).rejects.toThrow(StackValidationError);
+    await expect(stack.associate(note.id, [association])).rejects.toThrow(StackValidationError);
     await expect(stack.mutate(note.id, { associations: [association] })).rejects.toThrow(
       StackValidationError,
     );
@@ -7517,26 +7567,32 @@ describe('relationship targets', () => {
   ])('%s requires a non-empty identifier', async (_name, target) => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, {
-        kind: 'relationship',
-        label: 'series',
-        target: target as RelationshipTarget,
-      }),
+      stack.associate(note.id, [
+        {
+          kind: 'relationship',
+          label: 'series',
+          target: target as RelationshipTarget,
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
   test('two targets differing only by namespace are two associations', async () => {
     const note = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+      },
+    ]);
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+      },
+    ]);
 
     const stored = await stack.get(note.id);
     expect(stored?.associations).toHaveLength(2);
@@ -7544,21 +7600,27 @@ describe('relationship targets', () => {
 
   test('dissociate removes only the target it names', async () => {
     const note = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
-    });
-    await stack.dissociate(note.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+      },
+    ]);
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+      },
+    ]);
+    await stack.dissociate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+      },
+    ]);
 
     const stored = await stack.get(note.id);
     expect(stored?.associations).toEqual([
@@ -7574,16 +7636,20 @@ describe('relationship targets', () => {
   // different references — which is the distinction group rosters rest on.
   test('a record target does not match an entity target with the same value', async () => {
     const note = await stack.create(NOTE_V1, { text: 'ambiguous' });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'about',
-      target: { kind: 'record', recordId: 'did:key:z6MkAlice' },
-    });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'about',
-      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'about',
+        target: { kind: 'record', recordId: 'did:key:z6MkAlice' },
+      },
+    ]);
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'about',
+        target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+      },
+    ]);
 
     const stored = await stack.get(note.id);
     expect(stored?.associations).toHaveLength(2);
@@ -7591,11 +7657,13 @@ describe('relationship targets', () => {
 
   test('a record target in another stack is stored with its stackUrl', async () => {
     const note = await stack.create(NOTE_V1, { text: 'reply' });
-    await stack.associate(note.id, {
-      kind: 'relationship',
-      label: 'reply-to',
-      target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'relationship',
+        label: 'reply-to',
+        target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+      },
+    ]);
 
     const stored = await stack.get(note.id);
     expect(stored?.associations?.[0]).toEqual({
@@ -7616,23 +7684,29 @@ describe('query — relatedTo filter', () => {
   beforeEach(async () => {
     subject = await stack.create(NOTE_V1, { text: 'target' });
     const withSeries = await stack.create(NOTE_V1, { text: 'in a series' });
-    await stack.associate(withSeries.id, {
-      kind: 'relationship',
-      label: 'series',
-      target: { kind: 'record', recordId: subject.id },
-    });
+    await stack.associate(withSeries.id, [
+      {
+        kind: 'relationship',
+        label: 'series',
+        target: { kind: 'record', recordId: subject.id },
+      },
+    ]);
     const syndicated = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(syndicated.id, {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
-    });
+    await stack.associate(syndicated.id, [
+      {
+        kind: 'relationship',
+        label: 'syndicated-to',
+        target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+      },
+    ]);
     const authored = await stack.create(NOTE_V1, { text: 'by someone' });
-    await stack.associate(authored.id, {
-      kind: 'relationship',
-      label: 'author',
-      target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
-    });
+    await stack.associate(authored.id, [
+      {
+        kind: 'relationship',
+        label: 'author',
+        target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+      },
+    ]);
     await stack.create(NOTE_V1, { text: 'unrelated' });
   });
 
@@ -7713,11 +7787,13 @@ describe('query — relatedTo filter', () => {
   // An absent stackUrl is not a wildcard: it names this stack.
   test('a local record target does not match the same id in another stack', async () => {
     const remote = await stack.create(NOTE_V1, { text: 'remote reply' });
-    await stack.associate(remote.id, {
-      kind: 'relationship',
-      label: 'reply-to',
-      target: { kind: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
-    });
+    await stack.associate(remote.id, [
+      {
+        kind: 'relationship',
+        label: 'reply-to',
+        target: { kind: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
+      },
+    ]);
 
     const local = await stack.query({
       filter: {
@@ -7752,10 +7828,10 @@ describe('query — attachment filter', () => {
 
   beforeEach(async () => {
     const both = await stack.create(NOTE_V1, { text: 'cover F1, thumb F2' });
-    await stack.associate(both.id, { kind: 'attachment', label: 'cover', fileId: F1 });
-    await stack.associate(both.id, { kind: 'attachment', label: 'thumb', fileId: F2 });
+    await stack.associate(both.id, [{ kind: 'attachment', label: 'cover', fileId: F1 }]);
+    await stack.associate(both.id, [{ kind: 'attachment', label: 'thumb', fileId: F2 }]);
     const cover = await stack.create(NOTE_V1, { text: 'cover F2' });
-    await stack.associate(cover.id, { kind: 'attachment', label: 'cover', fileId: F2 });
+    await stack.associate(cover.id, [{ kind: 'attachment', label: 'cover', fileId: F2 }]);
     await stack.defineType({
       id: PHOTO,
       name: 'Photo',
@@ -7970,7 +8046,7 @@ describe('Stack.mutate — one call, one version', () => {
   });
 
   test('replaces the association set, and reports the diff as add and remove', async () => {
-    await stack.associate(note.id, { kind: 'tag', label: 'old' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'old' }]);
     const seen: RecordChange[] = [];
     await stack.subscribe((c) => seen.push(c));
 
@@ -8049,8 +8125,8 @@ describe('Stack — a tombstone refuses mutation', () => {
   test.each([
     ['mutate', () => stack.mutate(note.id, { contentPatch: { text: 'x' } })],
     ['patchContent', () => stack.patchContent(note.id, { text: 'x' })],
-    ['associate', () => stack.associate(note.id, tag)],
-    ['dissociate', () => stack.dissociate(note.id, tag)],
+    ['associate', () => stack.associate(note.id, [tag])],
+    ['dissociate', () => stack.dissociate(note.id, [tag])],
     ['restoreVersion', () => stack.restoreVersion(note.id, 1)],
   ])('%s throws StackConflictError', async (_verb, call) => {
     await expect(call()).rejects.toThrow(StackConflictError);

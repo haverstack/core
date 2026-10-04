@@ -248,11 +248,13 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.dissociate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: READER },
-    });
+    await stack.dissociate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: READER },
+      },
+    ]);
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
 
@@ -328,11 +330,13 @@ describe('a revocation takes effect on the next event, not the next subscription
     await settle();
     expect(reader.seen).toHaveLength(1);
 
-    await stack.dissociate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: READER },
-    });
+    await stack.dissociate(group.id, [
+      {
+        kind: 'relationship',
+        label: 'member',
+        target: { kind: 'entity', entityId: READER },
+      },
+    ]);
     await stack.patchContent(note.id, { text: 'after removal' });
     await settle();
 

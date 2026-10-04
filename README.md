@@ -150,7 +150,7 @@ await stack.patchContent(Note, note.id, { title: 'Updated title' });
 const same = await stack.get(Note, note.id);
 
 // Tag it
-await stack.associate(note.id, { kind: 'tag', label: 'favourite' });
+await stack.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
 
 // Or change several things at once — one version, one atomic write
 await stack.mutate(note.id, {

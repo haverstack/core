@@ -201,8 +201,9 @@ export function assertOneSurface(changes: readonly AssociationEdit[]): void {
 
 /**
  * The set a list of edits leaves behind: removes first, then adds, an add
- * landing on an identity already held in place. Edits naming one identity
- * collapse, last wins. See docs/spec/adapters.md § Amending associations.
+ * landing on an identity already held in place. Adds naming one identity
+ * collapse, last wins; an add outlives a remove of the same identity.
+ * See docs/spec/adapters.md § Amending associations.
  */
 export function applyAssociationEdits(
   current: Association[],

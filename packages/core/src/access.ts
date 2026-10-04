@@ -136,7 +136,7 @@ export function validatePermissions(
     errors.push({
       path: `${path}[${i}]`,
       message:
-        'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
+        'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
     });
   });
   return errors;
