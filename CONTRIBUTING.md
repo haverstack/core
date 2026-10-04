@@ -269,8 +269,9 @@ Name tests after the behavior they pin, not the defect that prompted them. `'a g
 ```
 docs/
   spec.md                    # Design spec — overview and index
-  spec/                      # Data model, identity, access control, versioning, journal,
-                             #   attachments, events, adapters, wire format, change feed
+  spec/                      # Data model, identity, access control, unlisted records,
+                             #   refusals & disclosure, versioning, journal, attachments,
+                             #   events, adapters, wire format, change feed
   commons/                   # Schema Commons — shared, app-neutral record types
 packages/
   core/                      # Stack, ScopedStack, types, schema, validation, MemoryAdapter

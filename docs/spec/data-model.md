@@ -22,7 +22,7 @@ type StackRecord = {
   createdBy?: Actor; // The author. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Authorship and attribution)
   updatedBy?: Actor; // Who performed the most recent mutation. Unlike createdBy, it moves with every write
   deletedAt?: Date; // Present if soft-deleted
-  unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Access control)
+  unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Unlisted records)
   permissions?: AuthorityAssociation[]; // Who reaches this Record (see Access control)
   associations?: DataAssociation[]; // Tags, attachments, relationships
 };
@@ -195,7 +195,7 @@ type RelationshipTarget =
 
 **Association identity is `(kind, label)` plus the payload that names a referent** — `fileId` for an attachment, the target for a relationship. An attachment's `attachmentRecordId` is outside it: the pointer [annotates a reference rather than naming one](./attachments.md#naming-the-upload-a-reference-came-from). Identity is what `dissociate()` matches on, what a second `associate()` of the same reference lands on, and the primary key every adapter stores an association under.
 
-**An element carries only the keys its kind defines**, at every depth: the keys in the types above, a relationship target's keys for its own `kind`, and a permission grantee's for its own (see [Access control § Record-level permissions](./access-control.md#record-level-permissions)). Any other key is refused with `StackBadRequestError` (wire: **400**) on every write that takes an element — `create()`, `mutate()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()` — and on a `relatedTo` filter target. A key from another arm counts as unknown: `role` on an entity grantee is refused, not ignored. An adapter stores only the keys it has a place for, so an extra key would otherwise answer 200 and then disappear. The same holds for a [type-level grant](./access-control.md#type-level-grants) target given to `grantType()`, `revokeType()` or `listTypeGrants()`, and for a `_grant` record's `grantee`, which as content is refused with `StackValidationError` (**422**).
+**An element carries only the keys its kind defines**, at every depth: the keys in the types above, a relationship target's keys for its own `kind`, and a permission grantee's for its own (see [Access control § Record-level permissions](./access-control.md#record-level-permissions)). Any other key is refused with `StackBadRequestError` (wire: **400**) on every write that takes an element — `create()`, `mutate()`, `associate()`, `dissociate()`, `amendAssociations()`, `grantAccess()`, `revokeAccess()`, `amendAccess()` — and on a `relatedTo` filter target. A key from another arm counts as unknown: `role` on an entity grantee is refused, not ignored. An adapter stores only the keys it has a place for, so an extra key would otherwise answer 200 and then disappear. The same holds for a [type-level grant](./access-control.md#type-level-grants) target given to `grantType()`, `revokeType()` or `listTypeGrants()`, and for a `_grant` record's `grantee`, which as content is refused with `StackValidationError` (**422**).
 
 **An association list holds distinct identities.** A list naming one identity twice — `create()`'s `associations`, or a change set's — is refused with `StackValidationError` (wire: **400**), not collapsed to the last entry. Two entries under one identity describe a state no store can hold, since a store keys them; accepting the list would leave which of the two the record ends up with to whichever adapter is underneath, and would leave [a journal entry](./journal.md#the-entry) reporting a prior state twice with no way to say which edit displaced it. Every way of producing such a list is a caller bug, which is why it is refused on the same terms as [an empty change set](#mutations).
 
@@ -209,7 +209,7 @@ type RelationshipTarget =
 
 This is a **front-door check, not an invariant.** Deleting a container never touches its children, so a `parentId` resolving to nothing remains an ordinary state at rest, and consumers must handle one. What the check buys is that a caller cannot mint one: a dangling parent now means a container was removed, rather than that somebody asserted a reference to nothing.
 
-**`restoreVersion()` has no `parentId` to check.** [A snapshot carries no containment](./versioning.md#version-history) and a restore settles none, so it is never a caller naming a destination and never a site the front-door check applies to. It can still dangle a [file reference](./attachments.md#garbage-collection), and is the only write that can: a snapshot's content is put back as it stands, whatever has been deleted since, the same shape as validating it against the snapshot's own `typeId` rather than the record's current one. A restore honors history instead of re-litigating it.
+**`restoreVersion()` has no `parentId` to check.** [A snapshot carries no containment](./versioning.md#version-history) and a restore settles none, so it is never a caller naming a destination and never a site the front-door check applies to. The one dangling reference a restore can produce is a file reference — see [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **A record may not become its own ancestor.** Every site that adds a containment edge walks the proposed ancestor chain and refuses with `StackConflictError` (wire: **409**) on arriving back at the record: a `mutate()` naming `parentId`, and a `create()` supplying **both** `id` and `parentId`. Those are the only two: [a restore adds no edge](./versioning.md#restore-semantics), so it has no chain to walk. A generated ID names nothing, so an ordinary create cannot close a loop and skips the walk; a caller-supplied one can, since existing records may already point at it — though with the existence check above, a chain leading to a not-yet-created id can only have come from an adapter write beneath `Stack`.
 
@@ -556,7 +556,7 @@ A path that descends through a scalar, or through a field that isn't there, reac
 
 **A segment is a value, never syntax.** An adapter resolving a path MUST carry each segment as a bound parameter matched against a key, rather than assembling it into a path expression — so no field name a write would accept can be reinterpreted as syntax, and no key can make the statement itself malformed. The 32-segment cap is what keeps that statement inside the engine's own limits: a SQLite adapter walks a segment with two `json_each` joins, and 32 segments is the longest path that fits SQLite's 64-table join limit. The cap and the generated shape move together — a longer path is refused because it could not be executed, not merely because it is unusual.
 
-**Multi-segment keys need the `'path'` rung of `filter.content`**, where a single-segment key needs only `'field'` — see [Capability-gated filters](#capability-gated-filters).
+**Multi-segment keys need the `'path'` rung of `filter.content`**, where a single-segment key needs only `'field'` — see [Capability-gated filters](#capability-gated-filters), and [Adapter capabilities](./adapters.md#adapter-capabilities) for why the reach is one ordered value rather than a flag per rung.
 
 **Nested fields are not indexed, and depth multiplies cost.** A path filter is an unindexed walk of every candidate record's JSON: the grammar is bounded, the execution time is not. It is a harsher bucket than full-text search, which at least runs against an index — here each segment fans out across every element of an array it meets, so a deep path over records holding large arrays costs the product of those widths. On a personal stack the only session it slows is the caller's own; a server serving many requesters owes the bound described in [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost), and should treat path depth as an input worth limiting below the cap.
 
@@ -564,15 +564,17 @@ A path that descends through a scalar, or through a field that isn't there, reac
 
 `baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what keeps `typeId`-filtered queries from silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set, and a server [rejects a request carrying `baseId`](./wire-format.md#records) rather than dropping it. An unknown `baseId` returns an empty result set rather than throwing, but a `baseId` carrying an `@version` suffix is refused with `StackValidationError` — it names one version, which is `typeId`'s job, and resolving it to an empty family would return nothing without saying why. `ChangeFilter.baseId` follows the same rule.
 
-**Soft-deleted Records are excluded by default from `get()` as well as `query()`**: `get(id)` on a tombstone answers `null`, and `includeDeleted` opts back in on either. See [Deletion](./versioning.md#deletion).
+**A query hides exactly three things by default, and nothing else**:
+
+- **Soft-deleted Records**, which `includeDeleted` opts back in. `get()` hides them too — `get(id)` on a tombstone answers `null` — and takes the same option. See [Deletion](./versioning.md#deletion).
+- **Unlisted Records**, which `includeUnlisted` opts back in — under `ScopedStack`, for the owner acting alone only. See [Unlisted records](./unlisted.md).
+- **`_config`**, always (below).
+
+So an unfiltered `query()` returns every Record the caller can read, from every app, system types such as `_entity@1` and `_grant@1` included. An app filters by `typeId`, `baseId` or `appId` to get its own. System Records are not hidden because anything that must see the whole stack — a reference check before deleting a file, a backup or export — would otherwise have to opt back in, and a missed opt-out would lose data silently.
 
 By default, `query()` (like `get()`) returns Records exactly as stored — see [`presentAt: 'latest'`](#type-migrations) to migrate results in memory instead.
 
 **`query()` never returns the `_config` record**, regardless of filter — it's addressable only by ID, via `get('_config')` or the adapter's own typed `ownerEntityId`/`timezone` properties (see [Stack initialization](../spec.md#stack-initialization)). This is the one exception to "adapters are storage engines, `Stack` is the invariant layer": the exclusion must live in the adapter's own query predicate (a `WHERE` clause, or the equivalent for an in-memory adapter) rather than be post-filtered by `Stack`, since post-filtering after the adapter applies `limit` would silently under-fill a page. Every adapter — including test doubles — implements this exclusion directly; it is not optional convention.
-
-**Unlisted Records are excluded by default too**, the same posture as soft-deleted ones: `includeUnlisted` opts a query back in, and — unlike `includeDeleted` — `ScopedStack` restricts that opt-in to the owner acting alone. See [Unlisted records](./unlisted.md).
-
-**A query hides exactly those three things by default, and nothing else**: soft-deleted Records (`includeDeleted`), unlisted Records (`includeUnlisted`) and `_config` (always). So an unfiltered `query()` returns every Record the caller can read, from every app, system types such as `_entity@1` and `_grant@1` included. An app filters by `typeId`, `baseId` or `appId` to get its own. System Records are not hidden because anything that must see the whole stack — a reference check before deleting a file, a backup or export — would otherwise have to opt back in, and a missed opt-out would lose data silently.
 
 ### Sorting and pagination
 
@@ -654,7 +656,7 @@ The lowercasing is **locale-independent**. A locale-sensitive fold orders Turkis
 - No script-aware ordering. CJK orders by code point.
 - No natural-number ordering: `item10` precedes `item9`.
 
-Locale-correct ordering is out of reach for a stored key regardless of effort, because the correct locale is the _reader's_ and a single index can only encode one. It would need a comparator registered with the engine, which neither SQLite build this project targets can accept — and an ICU-backed comparator would make an order depend on the ICU version each runtime happens to bundle, which is exactly the divergence the [conformance fixtures](./adapters.md) exist to catch.
+Locale-correct ordering is out of reach for a stored key regardless of effort, because the correct locale is the _reader's_ and a single index can only encode one. It would need a comparator registered with the engine, which neither SQLite build this project targets can accept — and an ICU-backed comparator would make an order depend on the ICU version each runtime happens to bundle, which is exactly the divergence the [conformance suite](./adapters.md#conformance) exists to catch.
 
 ### Capability-gated filters
 
@@ -666,7 +668,7 @@ Locale-correct ordering is out of reach for a stored key regardless of effort, b
 
 **A sort is gated the same way.** `sort.contentField` needs the adapter's `sort.contentField`, and a native `sort.field` must appear in its `sort.fields`; a sort an adapter hasn't declared throws `StackBadRequestError` rather than being answered in some other order — which a caller reading one bounded page has no way to notice. `sort.contentField` and `filter.content` are independent: a server may order by a content field without offering to filter on one, or the reverse.
 
-**A multi-segment content key needs `filter.content: 'path'`**; a single-segment key needs `'field'`. Why the reach is one ordered value rather than a flag per rung is [Adapter capabilities](./adapters.md#adapter-capabilities). A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
+A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
 
 **Search text is repaired, not rejected.** `filter.search` is the one filter carrying a query language, and it holds what a person typed into a box — where an unbalanced quote (`5" nails`), a trailing operator (`cats AND`) or a leading one is ordinary input on the way to a longer query, not a malformed request. The FTS sanitizers close an odd trailing quote, drop operators left without an operand, and reduce everything outside a phrase to letters, digits, marks, whitespace, parens and quotes — so the search runs against the terms actually present rather than failing. Text inside a phrase is left alone: `"cats AND dogs"` is literal to the engine, and rewriting inside it would change what was asked for.
 

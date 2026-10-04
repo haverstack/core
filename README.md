@@ -259,7 +259,7 @@ See [Identity](./docs/spec/identity.md) in the spec for the full model, includin
 - **Desktop (Electron, Tauri, ...)** — use the platform keychain binding your framework exposes (e.g. Electron's `safeStorage`, or the OS keychain directly) rather than a plain file; these run in a context with real users and real disks that get imaged and backed up by other software.
 - **Browser** — store the `CryptoKey` object itself in IndexedDB instead of exporting to JWK — `generateDidKeypair()` returns an extractable key, but a browser app never has to extract it. Structured-clone support means IndexedDB can hold the `CryptoKey` directly (`idb.put('keys', privateKey, 'owner')`), so the raw key material never touches JS-readable memory as a string.
 
-On every path, reconstruct the key with `importDidPrivateKeyJwk()` (or read the `CryptoKey` straight back out of IndexedDB) and hand it to `signWithDid()` / `buildAuthChallengePayload()` when authenticating to a server — see the "Authentication: challenge–response" section of [Identity](./docs/spec/identity.md) in the spec.
+On every path, reconstruct the key with `importDidPrivateKeyJwk()` (or read the `CryptoKey` straight back out of IndexedDB) and hand it to `signWithDid()` / `buildAuthChallengePayload()` when authenticating to a server — see [Identity § Authentication](./docs/spec/identity.md#authentication-challengeresponse) in the spec.
 
 **The asymmetry that makes this matter:** losing the key doesn't break anything local — nothing in the stack ever asks for it again, `open()` only needs the `did`. But you can never again authenticate as that identity to any server, because there's no recovery path — `did:key` identity _is_ the key (see [Deferred: key rotation](./docs/spec/identity.md#deferred-key-rotation)). An early "didn't bother persisting it" decision is invisible until the day you want to serve or share the stack, and by then it's permanent. Persist it from the first run, even if you don't yet know why you'd need it.
 
@@ -382,7 +382,7 @@ Versions and npm publishes are automated with [Changesets](https://github.com/ch
 
 The design spec lives in [`docs/spec.md`](./docs/spec.md), which indexes focused sub-documents under [`docs/spec/`](./docs/spec). Together they cover the full data model, adapter contract, wire format, and open questions. If you're building an adapter or a server implementation, start there.
 
-Shared, app-neutral record types (note, bookmark, task, contact) live in the [Schema Commons](./docs/commons/README.md) — start there if you want your app's data to interoperate with other Haverstack apps.
+Shared, app-neutral record types (note, task, contact, article, page, …) live in the [Schema Commons](./docs/commons/README.md) — start there if you want your app's data to interoperate with other Haverstack apps.
 
 ---
 
