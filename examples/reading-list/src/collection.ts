@@ -17,9 +17,14 @@
  *  - It reads as stored and migrates per record, rather than through
  *    `presentAt: 'latest'`, which throws for a whole page when one record is
  *    newer than the instance understands.
+ *  - It reads a record before a content write or a delete. Core would check
+ *    the family and version against the read `Stack` already makes.
+ *
+ * A patch to a record stored at an older version migrates it first, as its
+ * own write, when the caller may commit migrations.
  */
 
-import { StackBadRequestError, StackMigrationError } from '@haverstack/core';
+import { StackBadRequestError, StackMigrationError, StackPermissionError } from '@haverstack/core';
 import type {
   AssociationEdit,
   AuthorityAssociation,
@@ -347,7 +352,7 @@ export class Collection<C extends object> {
     changes: CollectionChangeSet<C>,
     opts?: IfVersionOptions,
   ): Promise<CollectionRecord<C>> {
-    if (changes.contentPatch) await this.assertPatchable(id);
+    if (changes.contentPatch) opts = await this.migrateForPatch(id, opts);
     return this.written(await this.client.mutate(id, changes, opts));
   }
 
@@ -456,15 +461,39 @@ export class Collection<C extends object> {
     throw this.notInFamily(record, ' The write was applied.');
   }
 
-  /** A patch is validated against the stored Type, so it must be the handle's. */
-  private async assertPatchable(id: RecordId): Promise<void> {
+  /**
+   * A patch is validated against the record's stored Type, and a patch never
+   * migrates (docs/spec/data-model.md § Type migrations). So a record stored
+   * at an older version is migrated as its own write first, and the patch is
+   * fenced to the version that produced. Returns the options for the patch.
+   */
+  private async migrateForPatch(
+    id: RecordId,
+    opts: IfVersionOptions = {},
+  ): Promise<IfVersionOptions> {
     const current = await this.client.get(id, { includeDeleted: true });
-    if (!current || current.typeId === this.handle.id) return;
-    if (this.classify(current).kind === 'foreign') throw this.notInFamily(current);
-    throw new StackBadRequestError(
-      `Record "${id}" is stored at ${current.typeId}, and a patch is checked against the stored ` +
-        `schema. Migrate it to ${this.handle.id} first (stack.migrateAll(${JSON.stringify(this.handle.baseId)})).`,
-    );
+    // Missing, deleted or already current: mutate() refuses or applies it.
+    if (!current || current.deletedAt || current.typeId === this.handle.id) return opts;
+    const fit = this.classify(current);
+    if (fit.kind === 'foreign') throw this.notInFamily(current);
+    if (fit.kind === 'misfit' && fit.misfit.reason === 'newer-version') {
+      throw new MisfitError(fit.misfit);
+    }
+    try {
+      const migrated = await this.client.commitMigration(
+        id,
+        this.handle.id,
+        this.migrateUp(current),
+        opts,
+      );
+      return { ...opts, ifVersion: migrated.version };
+    } catch (err) {
+      if (!(err instanceof StackPermissionError)) throw err;
+      throw new StackPermissionError(
+        `Record "${id}" is stored at ${current.typeId}, and a patch through ${this.handle.id} ` +
+          `needs it migrated first, which only the stack owner or the app's install may do.`,
+      );
+    }
   }
 
   private notInFamily(record: StackRecord, suffix = ''): StackBadRequestError {

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Stack, StackBadRequestError, typeHandle } from '@haverstack/core';
+import {
+  Stack,
+  StackBadRequestError,
+  StackVersionConflictError,
+  typeHandle,
+} from '@haverstack/core';
 import type { ContentOf } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { MemoryAdapter } from '@haverstack/core/testing';
@@ -8,11 +13,14 @@ import type { CollectionChange } from '../src/collection.ts';
 import { Book, BookV1, Shelf } from '../src/schema.ts';
 import {
   installReadingList,
+  letEdit,
   migrations,
   registerReadingListMigrations,
+  shareLibraryWith,
 } from '../src/reading-list.ts';
 
 const owner = await generateDidKeypair();
+const friend = await generateDidKeypair();
 
 /** What a newer build of the app ships: one more status, then a new version. */
 const BookWithPaused = typeHandle(Book.id, {
@@ -92,10 +100,51 @@ describe('Collection', () => {
     expect((await books.query()).records.map((r) => r.content.status)).toEqual(['finished']);
   });
 
-  it('refuses a patch to an older stored version before writing, naming the remedy', async () => {
+  it('migrates a record stored at an older version as its own write, then patches it', async () => {
     const old = await stack.create(BookV1, { title: 'Dune', author: 'x', status: 'done' });
-    await expect(books.patchContent(old.id, { rating: 5 })).rejects.toThrow(/migrateAll/);
-    expect((await stack.get(old.id))?.version).toBe(1);
+    const patched = await books.patchContent(old.id, { rating: 5 }, { ifVersion: 1 });
+
+    expect(patched).toMatchObject({ typeId: Book.id, version: 3 });
+    expect(patched.content).toMatchObject({ status: 'finished', rating: 5 });
+    expect((await stack.getJournal(old.id)).map((j) => j.ops)).toEqual([
+      ['create'],
+      ['migrate'],
+      ['patch'],
+    ]);
+  });
+
+  it("fences the migration with the caller's ifVersion", async () => {
+    const old = await stack.create(BookV1, { title: 'Dune', author: 'x', status: 'done' });
+    await expect(books.patchContent(old.id, { rating: 5 }, { ifVersion: 7 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    expect((await stack.get(old.id))?.typeId).toBe(BookV1.id);
+  });
+
+  it('can patch after reverting to a pre-migration snapshot', async () => {
+    const old = await stack.create(BookV1, { title: 'Dune', author: 'x', status: 'done' });
+    await stack.migrateAll(Book.baseId);
+    await books.patchContent(old.id, { status: 'reading' });
+    const reverted = await books.restoreVersion(old.id, 1);
+    expect(reverted.content.status).toBe('finished');
+    expect((await stack.get(old.id))?.typeId).toBe(BookV1.id);
+
+    expect((await books.patchContent(old.id, { rating: 4 })).content).toMatchObject({
+      status: 'finished',
+      rating: 4,
+    });
+  });
+
+  it('refuses, without writing, a patch from someone who may not migrate', async () => {
+    const old = await stack.create(BookV1, { title: 'Dune', author: 'x', status: 'done' });
+    await shareLibraryWith(stack, friend.did);
+    await letEdit(stack, old.id, friend.did);
+    const asFriend = collection(stack.asEntity(friend.did), Book, { migrations });
+
+    await expect(asFriend.patchContent(old.id, { rating: 5 })).rejects.toThrow(
+      /stored at com\.example\.reading\/book@1.*only the stack owner or the app's install/,
+    );
+    expect(await stack.get(old.id)).toMatchObject({ typeId: BookV1.id, version: 1 });
   });
 
   it('types association and lifecycle writes without a re-read', async () => {
