@@ -1,5 +1,16 @@
 # @haverstack/wire-types
 
+## 0.40.0
+
+### Minor Changes
+
+- [#400](https://github.com/haverstack/core/pull/400) [`6782ac9`](https://github.com/haverstack/core/commit/6782ac9a5c4e9211d979011f6a5eb46068768760) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `POST /installs` lets an app present its manifest for the owner to approve, as the key its session authenticated with: `202 { status: 'pending' }` until approved, `200 { status: 'installed', install }` once applying it would change nothing. Discovery advertises it with `installs: { requests: true }`. `APIAdapter.requestInstall()` sends it, `parseInstallBody()` and `isPlanEmpty()` serve it, and `installApp()` gives each linked key read on its own `_install` record. A manifest may define only types in its own namespace (the family's namespace is the `appId`) and commons types, which it defines without claiming.
+
+### Patch Changes
+
+- Updated dependencies [[`6782ac9`](https://github.com/haverstack/core/commit/6782ac9a5c4e9211d979011f6a5eb46068768760), [`de4e587`](https://github.com/haverstack/core/commit/de4e587155f36cf077f47311b2677905211ee062), [`8049dd0`](https://github.com/haverstack/core/commit/8049dd0fda562d9e491e375613e2378fc93a63a8), [`ef500b8`](https://github.com/haverstack/core/commit/ef500b8cc0ffde261ae1294ac54f8a64bd9428d3)]:
+  - @haverstack/core@0.41.0
+
 ## 0.39.0
 
 ### Minor Changes

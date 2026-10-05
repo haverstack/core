@@ -1,5 +1,17 @@
 # @haverstack/core
 
+## 0.41.0
+
+### Minor Changes
+
+- [#400](https://github.com/haverstack/core/pull/400) [`6782ac9`](https://github.com/haverstack/core/commit/6782ac9a5c4e9211d979011f6a5eb46068768760) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `POST /installs` lets an app present its manifest for the owner to approve, as the key its session authenticated with: `202 { status: 'pending' }` until approved, `200 { status: 'installed', install }` once applying it would change nothing. Discovery advertises it with `installs: { requests: true }`. `APIAdapter.requestInstall()` sends it, `parseInstallBody()` and `isPlanEmpty()` serve it, and `installApp()` gives each linked key read on its own `_install` record. A manifest may define only types in its own namespace (the family's namespace is the `appId`) and commons types, which it defines without claiming.
+
+- [#400](https://github.com/haverstack/core/pull/400) [`de4e587`](https://github.com/haverstack/core/commit/de4e587155f36cf077f47311b2677905211ee062) Thanks [@cuibonobo](https://github.com/cuibonobo)! - An installed app's `commitMigration()` is held to the file-reference gate. Requests compare as sets of actions, and a plan that changes only `name` or `version` is no longer empty.
+
+- [#400](https://github.com/haverstack/core/pull/400) [`8049dd0`](https://github.com/haverstack/core/commit/8049dd0fda562d9e491e375613e2378fc93a63a8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - App installs: `Stack.planInstall()`, `installApp()` and `uninstallApp()` apply an app's manifest (its types and the grants it requests) as one reviewable act, stored as a new `_install@1` system type that cannot be granted and only the owner acting alone may write. An installed app may commit migrations within the type families its install claims, to versions the owner approved, when it holds `update-any` on them. `migrateAll()` takes `{ sweep: 'listed' }` for a non-owner and returns `{ migrated, skipped }`.
+
+- [#401](https://github.com/haverstack/core/pull/401) [`ef500b8`](https://github.com/haverstack/core/commit/ef500b8cc0ffde261ae1294ac54f8a64bd9428d3) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Cap content nesting at 32 levels inside `open` containers too, the same cap declared fields meet. A deeper value is a `StackValidationError` at its path rather than a stack overflow.
+
 ## 0.40.0
 
 ### Minor Changes
