@@ -14,6 +14,7 @@ A small book tracker built on `@haverstack/core`. It covers most of the app-faci
 | [`CONCLUSIONS.md`](./CONCLUSIONS.md), [`ISSUES.md`](./ISSUES.md) | The decisions taken on each round-one finding, and the issue plan                                                                                                                                                                                                       |
 | [`FINDINGS-2.md`](./FINDINGS-2.md)                               | Round two: the app rebuilt on the fixed core, a scorecard against round one, and new findings                                                                                                                                                                           |
 | [`CONCLUSIONS-2.md`](./CONCLUSIONS-2.md)                         | The round-two decisions, grouped by design theme, and the prototype's results                                                                                                                                                                                           |
+| [`ISSUES-2.md`](./ISSUES-2.md)                                   | The round-two issue plan and its order                                                                                                                                                                                                                                  |
 
 ```sh
 pnpm run build             # at the repo root, once
