@@ -8,10 +8,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Stack, StackError } from '@haverstack/core';
+import { Stack, StackError, typeHandle } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
-import { BookV1 } from './schema.ts';
+import { Book, BookV1 } from './schema.ts';
 import {
   ReadingList,
   installReadingList,
@@ -46,7 +46,8 @@ try {
   await installReadingList(stack);
   const app = new ReadingList(stack);
   show('owner', (await stack.getOwnerEntity())?.content.name);
-  for (const b of await app.listBooks()) show(b.typeId, `${b.content.title} — ${b.content.status}`);
+  for (const b of (await app.listBooks()).books)
+    show(b.typeId, `${b.content.title} — ${b.content.status}`);
 
   step('Shelves, books, tags');
   const fiction = await app.addShelf('Fiction');
@@ -67,11 +68,11 @@ try {
   show('found by ISBN', (await app.findByIsbn('9780547928227'))?.content.title);
   show(
     'tagged fantasy',
-    (await app.listBooks({ tag: 'fantasy' })).map((b) => b.content.title),
+    (await app.listBooks({ tag: 'fantasy' })).books.map((b) => b.content.title),
   );
   show(
     'full-text "slow"',
-    (await app.listBooks({ search: 'slow' })).map((b) => b.content.title),
+    (await app.listBooks({ search: 'slow' })).books.map((b) => b.content.title),
   );
 
   step('Watching for changes');
@@ -93,7 +94,7 @@ try {
   show('parentId is now Non-fiction', moved.parentId === nonfiction.id);
   show(
     'sorted by title',
-    (await app.listBooks({ sortBy: 'title' })).map((b) => b.content.title),
+    (await app.listBooks({ sortBy: 'title' })).books.map((b) => b.content.title),
   );
 
   step('Cover image (attachment)');
@@ -128,9 +129,9 @@ try {
 
   step('Sharing with a friend');
   const friendView = new ReadingList(stack.asEntity(friend.did));
-  show('friend sees before sharing', (await friendView.listBooks()).length);
+  show('friend sees before sharing', (await friendView.listBooks()).books.length);
   await shareLibraryWith(stack, friend.did);
-  show('friend sees after sharing', (await friendView.listBooks()).length);
+  show('friend sees after sharing', (await friendView.listBooks()).books.length);
   try {
     await friendView.startReading(hobbit.id);
   } catch (err) {
@@ -143,6 +144,24 @@ try {
   unsubscribe();
   step('Change events seen while subscribed');
   show('events', seen);
+
+  step('A newer build adds a status this build does not know');
+  const BookWithPaused = typeHandle(Book.id, {
+    ...Book.schema,
+    status: { ...Book.schema.status, enum: [...Book.schema.status.enum, 'paused'] },
+  });
+  await stack.defineType({ ...BookWithPaused, name: 'Book' });
+  await stack.create(BookWithPaused, {
+    title: 'Middlemarch',
+    author: 'George Eliot',
+    status: 'paused',
+  });
+  const { books, misfits } = await app.listBooks();
+  show('books this build can read', books.length);
+  show(
+    'misfits',
+    misfits.map((m) => `${m.record.content.title}: ${m.reason}`),
+  );
 
   await stack.close();
 } finally {

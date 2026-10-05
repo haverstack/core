@@ -215,7 +215,49 @@ status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], op
 
 ## Order of work
 
-1. **Prototype A and C together on the reading list**, the way round one's §5 was prototyped. The collection's narrowing is where misfits are classified, so the two are one piece of code. The prototype should answer: do the 21 errors actually get short, do typed filter paths stay readable in hover output, and does migrating event records in `subscribe()` hold up.
+1. **Prototype A and C together on the reading list.** Done; see [Prototype results](#prototype-results). Next is moving the collection into core, taking the design changes listed there.
 2. **B**, which is independent of the prototype and mostly mechanical once `migration()`'s types are settled.
 3. **Open enums**, which can land any time after C.
 4. **23 and 25** alongside whichever lands first.
+
+## Prototype results
+
+A and C were prototyped in [`src/collection.ts`](./src/collection.ts), using only the public `StackClient` API. The reading list now runs on it, [`tests/collection.test.ts`](./tests/collection.test.ts) pins its behaviour, and `pnpm start` ends with a book written by a newer build showing up as a misfit. Open enums and B were not prototyped. The prototype takes the migrations as an argument, because a `StackClient` doesn't expose the registry.
+
+### What held up
+
+- **The reading list got simpler.** The `typed()` re-read helper is gone. `tag`, `untag`, `linkIsbn`, `setCover`, `restore` and `revert` return `BookRecord` straight from the write. `revert` was untyped before, and a restored `@1` snapshot now reads back migrated.
+- **Filters and sorts check against the schema (19).** A typo'd field, a value outside the enum, a wrong value type at a nested path, a path through a scalar, a nested sort field and a typo'd sort field all fail to compile. Paths through declared objects and arrays of objects compile, and so does any suffix below an `open` object.
+- **Compile errors got short (21).** The same typo, measured with `tsc --pretty false`:
+
+  | Mistake                     | Overload today               | Collection                                     |
+  | --------------------------- | ---------------------------- | ---------------------------------------------- |
+  | `stauts` in a create        | TS2769, 5 lines, 1,424 chars | TS2561, 1 line, 335 chars                      |
+  | `stauts` in a patch         | TS2769, 5 lines, 1,467 chars | TS2561, 1 line, 406 chars                      |
+  | `stauts` in a filter        | not caught                   | TS2561, 1 line, 437 chars                      |
+  | `'wnat'` as a status filter | not caught                   | TS2322, 1 line, 143 chars                      |
+  | `titel` as a sort field     | not caught                   | TS2820, 1 line, ends "Did you mean '"title"'?" |
+
+  Each collection error ends with TypeScript's "Did you mean" suggestion. One wrinkle: when `contentField` was typed with the named alias `SortableFieldOf<S>`, the error printed the whole schema. Spelling the type out inline makes it print the field names. Core should do the same for any type that appears in an error.
+
+- **Misfits keep a list working (17).** A page holding an unknown-enum record and a newer-version record returns the rest plus two misfits. Paging with `limit: 2` still reaches every record, because a short page keeps its cursor.
+- **Family-wide subscriptions work (24).** A change to a `@1` record arrives with its record migrated to `@2`, while the change's own `typeId` stays `book@1`, as stored. Changes to an unknown-enum record and a `@3` record arrive with `misfit` set.
+- **`get()` of another Type's ID is `null` (22),** and `delete()` refuses an ID outside the family before deleting anything.
+
+### What changes in the design
+
+- **Migrate to the handle's version, not the instance's latest.** `presentAt: 'latest'` migrates to the newest version this `Stack` has defined, and it throws for the whole page when one record is newer. The prototype reads records as stored and migrates each one up to the handle's version, which classifies records one at a time and doesn't depend on which versions the instance happens to know about. Core's collection should do the same rather than reuse `presentAtLatest()` as it stands.
+- **Recursive path types need a depth limit.** The first version of `ContentPathOf` failed with TS2589 ("Type instantiation is excessively deep"), because the schema type is recursive. Typing paths to a depth of 6 fixes it, and deeper than that any suffix is accepted. The array branch has to count towards the depth too, not just objects. The spec caps paths at 32 segments, so 6 typed levels is a typing limit, not a query limit.
+- **Hovers print the whole schema.** Hovering an inferred `const books = collection(stack, Book)` shows `Collection<{ readonly status: { readonly kind: "string"; … } … }>`, about 25 lines, and the same goes for its pages and records. The type parameter is the schema, so that's what TypeScript prints. App code that annotates with an alias (`Promise<BookRecord>`) hovers as the alias. An interface, `interface BookSchema extends BookSchemaT {}` with `collection<BookSchema>(…)`, hovers as `Collection<BookSchema>` and `TypedRecord<BookSchema>`, with no change to errors. Core could recommend that pattern, or parameterise the collection by something that prints better. That's an open question.
+- **Content-free writes to a record outside the family can't be stopped without a round trip.** Content writes already read first (the stored-version check), and so does `delete()`. But `associate()` and the other content-free verbs only learn the Type from the record the write returns. The prototype throws "…not in the book collection. The write was applied." Checking first would bring back the extra read that 18 is about. A better fix is in core: a write precondition, `ifBaseId`, checked by `Stack` the way `ifVersion` is, which refuses before writing and costs nothing.
+
+### Found along the way
+
+- **A typed `subscribe()` types a tombstone as content today.** Under `ScopedStack`, a `removed` change carries the tombstone projection, `content: {}` (`versioning.md § The tombstone is literal`). Today's typed `subscribe()` narrows it, so a handler receives a `BookRecord` with no `title`, `author` or `status`. Unscoped `Stack` sends the full content instead. The collection never types a record with `deletedAt` set, so it behaves the same through both surfaces. This bug is independent of the redesign and goes away with the overloads.
+- **A patch to a record still stored at `@1` reads oddly.** The collection's reads show it as a `@2` book, and then a patch is refused. The message now names `migrateAll()`, but only the owner can run that. An installed app may call `commitMigration()` within its own families, so a collection could commit the migration and then patch. That would make the write two journal entries. Left open.
+
+### Open questions for core
+
+1. Should collection types print by name, through an interface pattern or a different type parameter?
+2. Should writes get an `ifBaseId` precondition, so content-free collection writes need no prior read?
+3. Should a collection migrate-then-patch a record stored at an older version when the caller may commit migrations?

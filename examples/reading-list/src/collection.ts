@@ -1,0 +1,468 @@
+/**
+ * Collection — prototype of CONCLUSIONS-2.md § A and § C
+ * -------------------------------------------------------
+ * A typed view of one Type family, built only on the public `StackClient`
+ * API so it can be tried here before anything moves into core. The handle
+ * is the receiver: every method takes and returns the handle's types, with
+ * one signature each, and query filters and sorts are checked against the
+ * schema.
+ *
+ * Records in the family that the handle cannot type are misfits. A query
+ * reports them beside the records it can type, a subscription delivers the
+ * change with the misfit, and `get()` and writes throw `MisfitError`.
+ *
+ * Where it differs from what core would do, it says so:
+ *  - Core would migrate through the Stack's own registry. A `StackClient`
+ *    doesn't expose it, so the collection takes the migrations itself.
+ *  - It reads as stored and migrates per record, rather than through
+ *    `presentAt: 'latest'`, which throws for a whole page when one record is
+ *    newer than the instance understands.
+ */
+
+import { StackBadRequestError, StackMigrationError } from '@haverstack/core';
+import type {
+  AssociationEdit,
+  AuthorityAssociation,
+  ContentOf,
+  CreateRecordOptions,
+  DataAssociation,
+  DeleteRecordOptions,
+  DeleteResult,
+  IfVersionOptions,
+  Migration,
+  NativeSortField,
+  ReadonlyFieldDef,
+  ReadonlyTypeSchema,
+  RecordChange,
+  RecordFilter,
+  RecordId,
+  StackClient,
+  StackQuery,
+  StackRecord,
+  SubscribeOptions,
+  TypeHandle,
+  TypedChangeSet,
+  TypedRecord,
+  Unsubscribe,
+} from '@haverstack/core';
+
+// -------------------------------------------------------
+// Paths a filter may name
+// -------------------------------------------------------
+
+/** Below an `open` node any suffix is a path; a scalar has none. */
+type SubPathsOf<D, Depth extends unknown[]> = Depth['length'] extends 6
+  ? string
+  : D extends {
+        readonly kind: 'object' | 'array';
+        readonly open: true;
+      }
+    ? string
+    : D extends { readonly kind: 'object'; readonly properties: infer P extends ReadonlyTypeSchema }
+      ? PathsOf<P, Depth>
+      : D extends { readonly kind: 'array'; readonly items: infer I }
+        ? SubPathsOf<I, [...Depth, unknown]>
+        : never;
+
+/** Typed to a depth of 6; deeper than that any suffix is accepted. */
+type PathsOf<S extends ReadonlyTypeSchema, Depth extends unknown[]> = Depth['length'] extends 6
+  ? string
+  : {
+      [K in keyof S & string]: K | Join<K, SubPathsOf<S[K], [...Depth, unknown]>>;
+    }[keyof S & string];
+
+type Join<K extends string, P> = P extends string ? `${K}.${P}` : never;
+
+/**
+ * Every path a content filter may name: top-level fields, and dotted paths
+ * through declared objects and arrays. See docs/spec/data-model.md § Nested
+ * content paths.
+ */
+export type ContentPathOf<S extends ReadonlyTypeSchema> = PathsOf<S, []>;
+
+type FieldValue<D> = D extends { readonly kind: 'string'; readonly enum: readonly (infer E)[] }
+  ? E
+  : D extends { readonly kind: 'number' }
+    ? number
+    : D extends { readonly kind: 'boolean' }
+      ? boolean
+      : string;
+
+/** An array is matched element-wise, so a filter value is one element. */
+type LeafValue<D> = D extends { readonly kind: 'array' | 'object'; readonly open: true }
+  ? unknown
+  : D extends { readonly kind: 'array'; readonly items: infer I }
+    ? LeafValue<I>
+    : D extends { readonly kind: 'object' }
+      ? never
+      : FieldValue<D>;
+
+type ValueAtDef<D, Rest extends string, Depth extends unknown[]> = D extends {
+  readonly kind: 'object' | 'array';
+  readonly open: true;
+}
+  ? unknown
+  : D extends { readonly kind: 'object'; readonly properties: infer P extends ReadonlyTypeSchema }
+    ? ValueAt<P, Rest, Depth>
+    : D extends { readonly kind: 'array'; readonly items: infer I }
+      ? ValueAtDef<I, Rest, [...Depth, unknown]>
+      : never;
+
+/** Mirrors PathsOf's depth limit. */
+type ValueAt<
+  S extends ReadonlyTypeSchema,
+  P extends string,
+  Depth extends unknown[] = [],
+> = Depth['length'] extends 6
+  ? unknown
+  : P extends keyof S
+    ? LeafValue<S[P]>
+    : P extends `${infer Head}.${infer Rest}`
+      ? Head extends keyof S
+        ? ValueAtDef<S[Head], Rest, [...Depth, unknown]>
+        : never
+      : never;
+
+/** `null` matches a path holding no value, as on the untyped filter. */
+export type ContentFilterOf<S extends ReadonlyTypeSchema> = S extends unknown
+  ? { [P in ContentPathOf<S>]?: ValueAt<S, P> | null }
+  : never;
+
+/** Only top-level scalars are sortable. See docs/spec/data-model.md § Sorting by a content field. */
+export type SortableFieldOf<S extends ReadonlyTypeSchema> =
+  CollectionSort<S> extends infer C ? (C extends { contentField: infer F } ? F : never) : never;
+
+// -------------------------------------------------------
+// Query, result and change shapes
+// -------------------------------------------------------
+
+export type CollectionFilter<S extends ReadonlyTypeSchema> = Omit<
+  RecordFilter,
+  'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
+> & {
+  content?: ContentFilterOf<S>;
+  contentPresent?: ContentPathOf<S>[];
+};
+
+/**
+ * `contentField` spells out SortableFieldOf<S> rather than naming it, so a
+ * compile error lists the field names instead of printing the schema.
+ */
+export type CollectionSort<S extends ReadonlyTypeSchema> =
+  | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
+  | {
+      field?: never;
+      contentField: keyof {
+        [K in keyof S as S[K] extends { readonly kind: 'array' | 'object' } ? never : K]: 0;
+      } &
+        string;
+      direction?: 'asc' | 'desc';
+    };
+
+export type CollectionQuery<S extends ReadonlyTypeSchema> = Omit<
+  StackQuery,
+  'filter' | 'sort' | 'presentAt'
+> & {
+  filter?: CollectionFilter<S>;
+  sort?: CollectionSort<S>;
+};
+
+export type MisfitReason = 'unknown-enum' | 'newer-version';
+
+/** A record in the handle's family that the handle cannot type. */
+export type Misfit = {
+  id: RecordId;
+  reason: MisfitReason;
+  /** As stored. */
+  record: StackRecord;
+  /** The fields at fault, for `unknown-enum`. */
+  errors?: { path: string; message: string }[];
+};
+
+export type CollectionPage<S extends ReadonlyTypeSchema> = {
+  records: TypedRecord<S>[];
+  /** A page can hold fewer than `limit` records; only a null cursor ends it. */
+  misfits: Misfit[];
+  cursor: string | null;
+};
+
+/** `record` when the handle can type it, `misfit` when it cannot. */
+export type CollectionChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
+  record?: TypedRecord<S>;
+  misfit?: Misfit;
+};
+
+export type CollectionSubscribeOptions = Omit<SubscribeOptions, 'filter'> & {
+  filter?: Omit<NonNullable<SubscribeOptions['filter']>, 'typeId' | 'baseId'>;
+};
+
+export class MisfitError extends Error {
+  readonly misfit: Misfit;
+
+  constructor(misfit: Misfit) {
+    super(describeMisfit(misfit));
+    this.name = 'MisfitError';
+    this.misfit = misfit;
+  }
+}
+
+const describeMisfit = (m: Misfit): string =>
+  m.reason === 'newer-version'
+    ? `Record "${m.id}" is stored at ${m.record.typeId}, newer than this app understands. Update the app to read it.`
+    : `Record "${m.id}" holds values this app's schema does not list:\n` +
+      (m.errors ?? []).map((e) => `  ${e.path}: ${e.message}`).join('\n');
+
+// -------------------------------------------------------
+// Classification
+// -------------------------------------------------------
+
+const parseTypeId = (typeId: string): { baseId: string; version: number } | null => {
+  const match = typeId.match(/^(.+)@(\d+)$/);
+  return match ? { baseId: match[1], version: Number(match[2]) } : null;
+};
+
+const unknownEnumValues = (
+  value: unknown,
+  def: ReadonlyFieldDef,
+  path: string,
+  out: { path: string; message: string }[],
+): void => {
+  if (value === undefined || value === null) return;
+  if (def.kind === 'string') {
+    if (def.enum && typeof value === 'string' && !def.enum.includes(value)) {
+      out.push({
+        path,
+        message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
+      });
+    }
+  } else if (def.kind === 'array' && !def.open && Array.isArray(value)) {
+    value.forEach((item, i) => unknownEnumValues(item, def.items, `${path}[${i}]`, out));
+  } else if (def.kind === 'object' && !def.open && typeof value === 'object') {
+    walkEnums(value as Record<string, unknown>, def.properties, `${path}.`, out);
+  }
+};
+
+const walkEnums = (
+  content: Record<string, unknown>,
+  schema: ReadonlyTypeSchema,
+  prefix: string,
+  out: { path: string; message: string }[],
+): void => {
+  for (const key of Object.keys(schema)) {
+    unknownEnumValues(content[key], schema[key], `${prefix}${key}`, out);
+  }
+};
+
+type Fit<S extends ReadonlyTypeSchema> =
+  | { kind: 'fit'; record: TypedRecord<S> }
+  | { kind: 'misfit'; misfit: Misfit }
+  | { kind: 'foreign' };
+
+// -------------------------------------------------------
+// The collection
+// -------------------------------------------------------
+
+export class Collection<S extends ReadonlyTypeSchema> {
+  readonly handle: TypeHandle<S>;
+  private readonly client: StackClient;
+  private readonly version: number;
+  private readonly migrations: ReadonlyMap<string, Migration>;
+
+  constructor(
+    client: StackClient,
+    handle: TypeHandle<S>,
+    opts: { migrations?: readonly Migration[] } = {},
+  ) {
+    this.client = client;
+    this.handle = handle;
+    this.version = parseTypeId(handle.id)!.version;
+    this.migrations = new Map((opts.migrations ?? []).map((m) => [m.from, m]));
+  }
+
+  // ----- reads -----
+
+  /** `null` for a missing or deleted record, or one outside the family. */
+  async get(id: RecordId): Promise<TypedRecord<S> | null> {
+    const record = await this.client.get(id);
+    if (!record) return null;
+    const fit = this.classify(record);
+    if (fit.kind === 'foreign') return null;
+    if (fit.kind === 'misfit') throw new MisfitError(fit.misfit);
+    return fit.record;
+  }
+
+  async query(query: CollectionQuery<S> = {}): Promise<CollectionPage<S>> {
+    if ((query.filter as RecordFilter | undefined)?.includeDeleted) {
+      throw new StackBadRequestError(
+        'A collection sees live records only; use the untyped query to include soft-deleted records.',
+      );
+    }
+    const result = await this.client.query({
+      ...query,
+      filter: { ...(query.filter as RecordFilter), baseId: this.handle.baseId },
+    } as StackQuery);
+    const page: CollectionPage<S> = { records: [], misfits: [], cursor: result.cursor };
+    for (const record of result.records) {
+      const fit = this.classify(record);
+      if (fit.kind === 'fit') page.records.push(fit.record);
+      else if (fit.kind === 'misfit') page.misfits.push(fit.misfit);
+    }
+    return page;
+  }
+
+  /** The whole family, each record migrated in memory to the handle's version. */
+  subscribe(
+    handler: (change: CollectionChange<S>) => void,
+    opts: CollectionSubscribeOptions = {},
+  ): Promise<Unsubscribe> {
+    return this.client.subscribe(
+      (change) => {
+        const { record, ...rest } = change;
+        // Under ScopedStack a tombstone's content is `{}`, which fits no schema.
+        if (!record || record.deletedAt) return handler(rest);
+        const fit = this.classify(record);
+        if (fit.kind === 'fit') handler({ ...rest, record: fit.record });
+        else if (fit.kind === 'misfit') handler({ ...rest, misfit: fit.misfit });
+        else handler(rest);
+      },
+      { ...opts, filter: { ...opts.filter, baseId: this.handle.baseId } },
+    );
+  }
+
+  // ----- content writes -----
+
+  async create(content: ContentOf<S>, opts?: CreateRecordOptions): Promise<TypedRecord<S>> {
+    return this.written(await this.client.create(this.handle.id, content, opts));
+  }
+
+  async mutate(
+    id: RecordId,
+    changes: TypedChangeSet<S>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>> {
+    if (changes.contentPatch) await this.assertPatchable(id);
+    return this.written(await this.client.mutate(id, changes, opts));
+  }
+
+  async patchContent(
+    id: RecordId,
+    patch: NonNullable<TypedChangeSet<S>['contentPatch']>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>> {
+    return this.mutate(id, { contentPatch: patch }, opts);
+  }
+
+  // ----- association, access and lifecycle writes -----
+
+  async associate(id: RecordId, associations: DataAssociation[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.associate(id, associations));
+  }
+
+  async dissociate(id: RecordId, associations: DataAssociation[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.dissociate(id, associations));
+  }
+
+  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.amendAssociations(id, changes));
+  }
+
+  async grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.grantAccess(id, permissions));
+  }
+
+  async revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.revokeAccess(id, permissions));
+  }
+
+  async amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<TypedRecord<S>> {
+    return this.written(await this.client.amendAccess(id, changes));
+  }
+
+  /** Destructive and returns no record, so the family is checked first. */
+  async delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult> {
+    const current = await this.client.get(id, { includeDeleted: true });
+    if (current && this.classify(current).kind === 'foreign') throw this.notInFamily(current);
+    return this.client.delete(id, opts);
+  }
+
+  async undelete(id: RecordId, opts?: IfVersionOptions): Promise<TypedRecord<S>> {
+    return this.written(await this.client.undelete(id, opts));
+  }
+
+  /** A snapshot from an older version reads back migrated, like any record. */
+  async restoreVersion(
+    id: RecordId,
+    version: number,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>> {
+    return this.written(await this.client.restoreVersion(id, version, opts));
+  }
+
+  // ----- internals -----
+
+  private classify(record: StackRecord): Fit<S> {
+    const parsed = parseTypeId(record.typeId);
+    if (!parsed || parsed.baseId !== this.handle.baseId) return { kind: 'foreign' };
+    if (parsed.version > this.version) {
+      return { kind: 'misfit', misfit: { id: record.id, reason: 'newer-version', record } };
+    }
+    const content = this.migrateUp(record);
+    const errors: { path: string; message: string }[] = [];
+    walkEnums(content, this.handle.schema, '', errors);
+    if (errors.length > 0) {
+      return { kind: 'misfit', misfit: { id: record.id, reason: 'unknown-enum', record, errors } };
+    }
+    return {
+      kind: 'fit',
+      record: { ...record, typeId: this.handle.id, content } as TypedRecord<S>,
+    };
+  }
+
+  /** A gap in the chain is the app's setup, not the data, so it throws. */
+  private migrateUp(record: StackRecord): Record<string, unknown> {
+    let content = record.content;
+    let at = record.typeId;
+    while (at !== this.handle.id) {
+      const step = this.migrations.get(at);
+      if (!step) {
+        throw new StackMigrationError(
+          `No migration from "${at}" toward "${this.handle.id}" was given to this collection.`,
+        );
+      }
+      content = step.migrate(content);
+      at = step.to;
+    }
+    return content;
+  }
+
+  /** The record a write returned, or why the handle cannot type it. */
+  private written(record: StackRecord): TypedRecord<S> {
+    const fit = this.classify(record);
+    if (fit.kind === 'fit') return fit.record;
+    if (fit.kind === 'misfit') throw new MisfitError(fit.misfit);
+    throw this.notInFamily(record, ' The write was applied.');
+  }
+
+  /** A patch is validated against the stored Type, so it must be the handle's. */
+  private async assertPatchable(id: RecordId): Promise<void> {
+    const current = await this.client.get(id, { includeDeleted: true });
+    if (!current || current.typeId === this.handle.id) return;
+    if (this.classify(current).kind === 'foreign') throw this.notInFamily(current);
+    throw new StackBadRequestError(
+      `Record "${id}" is stored at ${current.typeId}, and a patch is checked against the stored ` +
+        `schema. Migrate it to ${this.handle.id} first (stack.migrateAll(${JSON.stringify(this.handle.baseId)})).`,
+    );
+  }
+
+  private notInFamily(record: StackRecord, suffix = ''): StackBadRequestError {
+    return new StackBadRequestError(
+      `Record "${record.id}" is ${record.typeId}, not in the ${this.handle.baseId} collection.${suffix}`,
+    );
+  }
+}
+
+export const collection = <S extends ReadonlyTypeSchema>(
+  client: StackClient,
+  handle: TypeHandle<S>,
+  opts?: { migrations?: readonly Migration[] },
+): Collection<S> => new Collection(client, handle, opts);

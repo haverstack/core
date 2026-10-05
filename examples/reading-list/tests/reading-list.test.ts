@@ -79,7 +79,7 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
     await app.addBook({ title: 'Emma', author: 'Austen', status: 'reading' });
 
     const titles = async (f: Parameters<ReadingList['listBooks']>[0]) =>
-      (await app.listBooks(f)).map((b) => b.content.title);
+      (await app.listBooks(f)).books.map((b) => b.content.title);
 
     expect(await titles({ status: 'reading' })).toEqual(['Emma']);
     expect(await titles({ tag: 'fantasy' })).toEqual(['The Hobbit']);
@@ -91,7 +91,7 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
 
   it('pages through every book in title order', async () => {
     for (const title of ['C', 'A', 'E', 'B', 'D']) await app.addBook({ title, author: 'x' });
-    const books = await app.listBooks({ sortBy: 'title', pageSize: 2 });
+    const { books } = await app.listBooks({ sortBy: 'title', pageSize: 2 });
     expect(books.map((b) => b.content.title)).toEqual(['A', 'B', 'C', 'D', 'E']);
   });
 
@@ -149,7 +149,7 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
     const book = await app.addBook({ title: 'Emma', author: 'Austen' });
     await app.remove(book.id);
     expect(await app.getBook(book.id)).toBeNull();
-    expect(await app.listBooks()).toEqual([]);
+    expect((await app.listBooks()).books).toEqual([]);
     await app.restore(book.id);
     expect((await app.getBook(book.id))?.content.title).toBe('Emma');
   });
@@ -173,9 +173,9 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
     const other = await app.addBook({ title: 'Dune', author: 'Herbert' });
     const asFriend = new ReadingList(stack.asEntity(friend.did));
 
-    expect(await asFriend.listBooks()).toEqual([]);
+    expect((await asFriend.listBooks()).books).toEqual([]);
     await shareLibraryWith(stack, friend.did);
-    expect(await asFriend.listBooks()).toHaveLength(2);
+    expect((await asFriend.listBooks()).books).toHaveLength(2);
 
     await expect(asFriend.startReading(book.id)).rejects.toThrow(StackPermissionError);
     await letEdit(stack, book.id, friend.did);

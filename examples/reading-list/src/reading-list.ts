@@ -15,18 +15,18 @@
 
 import type {
   EntityId,
+  Migration,
   RecordId,
   RecordJournalEntry,
   RecordVersion,
   Stack,
   StackClient,
-  StackRecord,
-  TypedChange,
-  TypedQuery,
   TypedRecord,
   Unsubscribe,
 } from '@haverstack/core';
 import { StackVersionConflictError } from '@haverstack/core';
+import { collection } from './collection.ts';
+import type { Collection, CollectionChange, CollectionQuery, Misfit } from './collection.ts';
 import { Book, BookV1, Review, Shelf } from './schema.ts';
 import type { BookContent, BookStatus } from './schema.ts';
 
@@ -45,13 +45,17 @@ export type BookFilter = {
   pageSize?: number;
 };
 
-/** Every startup, right after Stack.open(): the registry lives in memory. */
-export function registerReadingListMigrations(stack: Stack): void {
-  stack.registerMigration({
+export const migrations: Migration[] = [
+  {
     from: BookV1.id,
     to: Book.id,
     migrate: (c) => ({ ...c, status: c.status === 'done' ? 'finished' : c.status }),
-  });
+  },
+];
+
+/** Every startup, right after Stack.open(): the registry lives in memory. */
+export function registerReadingListMigrations(stack: Stack): void {
+  for (const m of migrations) stack.registerMigration(m);
 }
 
 /** Owner-only, once per stack and again after a schema change. */
@@ -65,9 +69,15 @@ export async function installReadingList(stack: Stack): Promise<void> {
 
 export class ReadingList {
   private readonly client: StackClient;
+  readonly #books: Collection<typeof Book.schema>;
+  readonly #shelves: Collection<typeof Shelf.schema>;
+  readonly #reviews: Collection<typeof Review.schema>;
 
   constructor(client: StackClient) {
     this.client = client;
+    this.#books = collection(client, Book, { migrations });
+    this.#shelves = collection(client, Shelf);
+    this.#reviews = collection(client, Review);
   }
 
   // -------------------------------------------------------
@@ -75,11 +85,11 @@ export class ReadingList {
   // -------------------------------------------------------
 
   async addShelf(name: string): Promise<ShelfRecord> {
-    return this.client.create(Shelf, { name }, { appId: APP_ID });
+    return this.#shelves.create({ name }, { appId: APP_ID });
   }
 
   async shelves(): Promise<ShelfRecord[]> {
-    const { records } = await this.client.query(Shelf, { sort: { contentField: 'name' } });
+    const { records } = await this.#shelves.query({ sort: { contentField: 'name' } });
     return records;
   }
 
@@ -87,8 +97,7 @@ export class ReadingList {
     content: Omit<BookContent, 'status'> & { status?: BookStatus },
     opts: { shelf?: RecordId; tags?: string[] } = {},
   ): Promise<BookRecord> {
-    return this.client.create(
-      Book,
+    return this.#books.create(
       { status: 'want', ...content },
       {
         appId: APP_ID,
@@ -99,11 +108,11 @@ export class ReadingList {
   }
 
   async getBook(id: RecordId): Promise<BookRecord | null> {
-    return this.client.get(Book, id);
+    return this.#books.get(id);
   }
 
   async startReading(id: RecordId): Promise<BookRecord> {
-    return this.client.patchContent(Book, id, { status: 'reading' });
+    return this.#books.patchContent(id, { status: 'reading' });
   }
 
   /**
@@ -117,8 +126,7 @@ export class ReadingList {
   ): Promise<BookRecord | null> {
     const on = (opts.on ?? new Date()).toISOString().slice(0, 10);
     try {
-      return await this.client.patchContent(
-        Book,
+      return await this.#books.patchContent(
         seen.id,
         { status: 'finished', finishedOn: on, rating: opts.rating ?? null },
         { ifVersion: seen.version },
@@ -130,31 +138,29 @@ export class ReadingList {
   }
 
   async moveToShelf(id: RecordId, shelf: RecordId | null): Promise<BookRecord> {
-    return this.client.mutate(Book, id, { parentId: shelf });
+    return this.#books.mutate(id, { parentId: shelf });
   }
 
   async tag(id: RecordId, label: string): Promise<BookRecord> {
-    return this.typed(await this.client.associate(id, [{ kind: 'tag', label }]));
+    return this.#books.associate(id, [{ kind: 'tag', label }]);
   }
 
   async untag(id: RecordId, label: string): Promise<BookRecord> {
-    return this.typed(await this.client.dissociate(id, [{ kind: 'tag', label }]));
+    return this.#books.dissociate(id, [{ kind: 'tag', label }]);
   }
 
   async linkIsbn(id: RecordId, isbn: string): Promise<BookRecord> {
-    return this.typed(
-      await this.client.associate(id, [
-        {
-          kind: 'relationship',
-          label: 'same-as',
-          target: { kind: 'external', ns: 'isbn', id: isbn },
-        },
-      ]),
-    );
+    return this.#books.associate(id, [
+      {
+        kind: 'relationship',
+        label: 'same-as',
+        target: { kind: 'external', ns: 'isbn', id: isbn },
+      },
+    ]);
   }
 
   async findByIsbn(isbn: string): Promise<BookRecord | null> {
-    const { records } = await this.client.query(Book, {
+    const { records } = await this.#books.query({
       filter: {
         relatedTo: { label: 'same-as', target: { kind: 'external', ns: 'isbn', id: isbn } },
       },
@@ -163,9 +169,13 @@ export class ReadingList {
     return records[0] ?? null;
   }
 
-  /** Every matching book, following cursors until the last page. */
-  async *books(filter: BookFilter = {}): AsyncGenerator<BookRecord> {
-    const query: TypedQuery = {
+  /**
+   * Every matching book, following cursors until the last page. Books this
+   * build can't read (a status or schema version from a newer build) come
+   * back as misfits rather than failing the list.
+   */
+  async listBooks(filter: BookFilter = {}): Promise<{ books: BookRecord[]; misfits: Misfit[] }> {
+    const query: CollectionQuery<typeof Book.schema> = {
       filter: {
         ...(filter.status && { content: { status: filter.status } }),
         ...(filter.tag && { tags: [filter.tag] }),
@@ -175,17 +185,14 @@ export class ReadingList {
       sort: filter.sortBy === 'title' ? { contentField: 'title' } : { field: 'createdAt' },
       limit: filter.pageSize ?? 50,
     };
+    const out = { books: [] as BookRecord[], misfits: [] as Misfit[] };
     let cursor: string | undefined;
     do {
-      const page = await this.client.query(Book, { ...query, cursor });
-      yield* page.records;
+      const page = await this.#books.query({ ...query, cursor });
+      out.books.push(...page.records);
+      out.misfits.push(...page.misfits);
       cursor = page.cursor ?? undefined;
     } while (cursor);
-  }
-
-  async listBooks(filter: BookFilter = {}): Promise<BookRecord[]> {
-    const out: BookRecord[] = [];
-    for await (const book of this.books(filter)) out.push(book);
     return out;
   }
 
@@ -194,8 +201,7 @@ export class ReadingList {
   // -------------------------------------------------------
 
   async review(bookId: RecordId, text: string): Promise<ReviewRecord> {
-    return this.client.create(
-      Review,
+    return this.#reviews.create(
       { text },
       {
         appId: APP_ID,
@@ -207,7 +213,7 @@ export class ReadingList {
   }
 
   async reviewsOf(bookId: RecordId): Promise<ReviewRecord[]> {
-    const { records } = await this.client.query(Review, {
+    const { records } = await this.#reviews.query({
       filter: { relatedTo: { label: 'reviews', target: { kind: 'record', recordId: bookId } } },
     });
     return records;
@@ -223,20 +229,18 @@ export class ReadingList {
     const previous = book?.associations?.find(
       (a) => a.kind === 'attachment' && a.label === 'cover',
     );
-    return this.typed(
-      await this.client.amendAssociations(bookId, [
-        ...(previous ? [{ op: 'remove' as const, association: previous }] : []),
-        {
-          op: 'add',
-          association: {
-            kind: 'attachment',
-            label: 'cover',
-            fileId: upload.content.fileId,
-            attachmentRecordId: upload.id,
-          },
+    return this.#books.amendAssociations(bookId, [
+      ...(previous ? [{ op: 'remove' as const, association: previous }] : []),
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: upload.content.fileId,
+          attachmentRecordId: upload.id,
         },
-      ]),
-    );
+      },
+    ]);
   }
 
   async getCover(bookId: RecordId): Promise<Uint8Array | null> {
@@ -260,34 +264,23 @@ export class ReadingList {
     return { versions, journal };
   }
 
-  async revert(id: RecordId, version: number): Promise<StackRecord> {
-    // A pre-migration snapshot restores as book@1, so the result is not
-    // necessarily a Book@2 and cannot be returned typed.
-    return this.client.restoreVersion(id, version);
+  /** A pre-migration snapshot restores as book@1 and reads back migrated. */
+  async revert(id: RecordId, version: number): Promise<BookRecord> {
+    return this.#books.restoreVersion(id, version);
   }
 
   async remove(id: RecordId): Promise<void> {
-    await this.client.delete(id);
+    await this.#books.delete(id);
   }
 
   async restore(id: RecordId): Promise<BookRecord> {
-    return this.typed(await this.client.undelete(id));
+    return this.#books.undelete(id);
   }
 
   async onBookChange(
-    handler: (change: TypedChange<typeof Book.schema>) => void,
+    handler: (change: CollectionChange<typeof Book.schema>) => void,
   ): Promise<Unsubscribe> {
-    return this.client.subscribe(Book, handler);
-  }
-
-  /**
-   * The association and lifecycle verbs have no typed overload, so their
-   * result is re-read through the handle. See FINDINGS-2.md.
-   */
-  private async typed(record: StackRecord): Promise<BookRecord> {
-    const book = await this.client.get(Book, record.id);
-    if (!book) throw new Error(`Book "${record.id}" vanished between write and read`);
-    return book;
+    return this.#books.subscribe(handler, { includeRecords: true });
   }
 }
 
