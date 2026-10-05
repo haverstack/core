@@ -14,6 +14,7 @@
  */
 
 import type {
+  ContentOf,
   EntityId,
   Migration,
   RecordId,
@@ -69,9 +70,9 @@ export async function installReadingList(stack: Stack): Promise<void> {
 
 export class ReadingList {
   private readonly client: StackClient;
-  readonly #books: Collection<typeof Book.schema>;
-  readonly #shelves: Collection<typeof Shelf.schema>;
-  readonly #reviews: Collection<typeof Review.schema>;
+  readonly #books: Collection<BookContent>;
+  readonly #shelves: Collection<ContentOf<typeof Shelf.schema>>;
+  readonly #reviews: Collection<ContentOf<typeof Review.schema>>;
 
   constructor(client: StackClient) {
     this.client = client;
@@ -175,7 +176,7 @@ export class ReadingList {
    * back as misfits rather than failing the list.
    */
   async listBooks(filter: BookFilter = {}): Promise<{ books: BookRecord[]; misfits: Misfit[] }> {
-    const query: CollectionQuery<typeof Book.schema> = {
+    const query: CollectionQuery<BookContent> = {
       filter: {
         ...(filter.status && { content: { status: filter.status } }),
         ...(filter.tag && { tags: [filter.tag] }),
@@ -278,7 +279,7 @@ export class ReadingList {
   }
 
   async onBookChange(
-    handler: (change: CollectionChange<typeof Book.schema>) => void,
+    handler: (change: CollectionChange<BookContent>) => void,
   ): Promise<Unsubscribe> {
     return this.#books.subscribe(handler, { includeRecords: true });
   }

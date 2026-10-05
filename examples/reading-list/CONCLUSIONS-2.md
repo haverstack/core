@@ -13,7 +13,7 @@ Round one took each finding on its own. This round started from the whole list, 
 
 ## A. Typed access goes through a collection
 
-**Decision:** The handle becomes the receiver instead of an argument. `client.collection(Book)` returns a `Collection<S>` whose methods all take and return the handle's types, each with one signature. The handle-first overloads on `StackClient` are deleted. The untyped `StackClient` is otherwise unchanged and stays the API for Types known only at runtime.
+**Decision:** The handle becomes the receiver instead of an argument. `client.collection(Book)` returns a `Collection<C>`, typed by the handle's content `C = ContentOf<S>` (see [Prototype results](#what-changes-in-the-design)), whose methods all take and return the handle's types, each with one signature. The handle-first overloads on `StackClient` are deleted. The untyped `StackClient` is otherwise unchanged and stays the API for Types known only at runtime.
 
 ```ts
 const books = client.collection(Book);
@@ -52,10 +52,10 @@ await books.subscribe((change) => …);
 
 **Actions:**
 
-- [ ] Core: add `collection(handle)` to `StackClient`, implemented once over `StackClient` (as `type-handle.ts` implements the overloads today), so `Stack` and `ScopedStack` share it. Export `Collection<S>`.
+- [ ] Core: add `collection(handle)` to `StackClient`, implemented once over `StackClient` (as `type-handle.ts` implements the overloads today), so `Stack` and `ScopedStack` share it. Export `Collection<C>`, parameterised by content, with filter and sort types derived from `C`. None of the outer types flattens its parameter.
 - [ ] Core: delete the handle-first overloads of `get`, `query`, `create`, `mutate`, `patchContent` and `subscribe`, along with `TypedQuery`, `TypedSubscribeOptions` and `TypedChangeSet`, or reshape them as the collection's option types.
-- [ ] Core: derive `ContentPathOf<S>` and `SortableFieldOf<S>`, and type the collection's `filter.content`, `filter.contentPresent` and `sort.contentField` with them.
-- [ ] Type tests: every collection verb returns `TypedRecord<S>`; a typo'd filter key, a wrong filter value type, a nested sort field and a typo'd sort field fail to compile; paths below an `open` node compile.
+- [ ] Core: derive `ContentPathOf<C>` and `SortableFieldOf<C>` from the content type, and type the collection's `filter.content`, `filter.contentPresent` and `sort.contentField` with them.
+- [ ] Type tests: every collection verb returns `CollectionRecord<C>`; a typo'd filter key, a wrong filter value type, a nested sort field and a typo'd sort field fail to compile; paths below an `open` node compile.
 - [ ] Check the compile errors for 21 in the prototype: a typo'd create key, patch key and filter key should each give one short error. If the expanded schema still swamps them, look at keeping `ContentOf<S>` named in the output instead of `Simplify`-expanded.
 - [ ] Spec, `data-model.md § Type handles`: rewrite around the collection, covering its scope, its verbs, and the filter-matches-stored-shape note.
 - [ ] Reading list: `ReadingList` holds `books`, `shelves` and `reviews` collections; the `typed()` helper goes.
@@ -210,7 +210,7 @@ status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], op
 
 **Actions:**
 
-- [ ] Root `README.md` and `packages/core/README.md`: "Writing an app" around `collection()`, `Stack.open(adapter, { migrations })` and `defineType(handle)`, plus app installs.
+- [ ] Root `README.md` and `packages/core/README.md`: "Writing an app" around `collection()`, `Stack.open(adapter, { migrations })` and `defineType(handle)`, plus app installs. Show naming content with an `interface` (`interface BookContent extends ContentOf<typeof Book.schema> {}`), since a `type` alias doesn't survive into hovers.
 - [ ] Changeset: covered by `core`'s `minor` above (its README is published).
 
 ## Order of work
@@ -238,7 +238,7 @@ A and C were prototyped in [`src/collection.ts`](./src/collection.ts), using onl
   | `'wnat'` as a status filter | not caught                   | TS2322, 1 line, 143 chars                      |
   | `titel` as a sort field     | not caught                   | TS2820, 1 line, ends "Did you mean '"title"'?" |
 
-  Each collection error ends with TypeScript's "Did you mean" suggestion. One wrinkle: when `contentField` was typed with the named alias `SortableFieldOf<S>`, the error printed the whole schema. Spelling the type out inline makes it print the field names. Core should do the same for any type that appears in an error.
+  Each collection error ends with TypeScript's "Did you mean" suggestion.
 
 - **Misfits keep a list working (17).** A page holding an unknown-enum record and a newer-version record returns the rest plus two misfits. Paging with `limit: 2` still reaches every record, because a short page keeps its cursor.
 - **Family-wide subscriptions work (24).** A change to a `@1` record arrives with its record migrated to `@2`, while the change's own `typeId` stays `book@1`, as stored. Changes to an unknown-enum record and a `@3` record arrive with `misfit` set.
@@ -248,7 +248,9 @@ A and C were prototyped in [`src/collection.ts`](./src/collection.ts), using onl
 
 - **Migrate to the handle's version, not the instance's latest.** `presentAt: 'latest'` migrates to the newest version this `Stack` has defined, and it throws for the whole page when one record is newer. The prototype reads records as stored and migrates each one up to the handle's version, which classifies records one at a time and doesn't depend on which versions the instance happens to know about. Core's collection should do the same rather than reuse `presentAtLatest()` as it stands.
 - **Recursive path types need a depth limit.** The first version of `ContentPathOf` failed with TS2589 ("Type instantiation is excessively deep"), because the schema type is recursive. Typing paths to a depth of 6 fixes it, and deeper than that any suffix is accepted. The array branch has to count towards the depth too, not just objects. The spec caps paths at 32 segments, so 6 typed levels is a typing limit, not a query limit.
-- **Hovers print the whole schema.** Hovering an inferred `const books = collection(stack, Book)` shows `Collection<{ readonly status: { readonly kind: "string"; … } … }>`, about 25 lines, and the same goes for its pages and records. The type parameter is the schema, so that's what TypeScript prints. App code that annotates with an alias (`Promise<BookRecord>`) hovers as the alias. An interface, `interface BookSchema extends BookSchemaT {}` with `collection<BookSchema>(…)`, hovers as `Collection<BookSchema>` and `TypedRecord<BookSchema>`, with no change to errors. Core could recommend that pattern, or parameterise the collection by something that prints better. That's an open question.
+- **Type the collection by its content, not its schema.** With the schema as its type parameter, hovering an inferred `const books = collection(stack, Book)` printed `Collection<{ readonly status: { readonly kind: "string"; … } … }>`: about 25 lines of field definitions, and the same for its pages and records. Every filter and sort type can be derived from the content type alone: paths, enum unions, `open` nodes (`Record<string, unknown>` and `unknown[]`) and top-level scalars. So the prototype now has `collection(client, handle)` return `Collection<ContentOf<S>>`. The same hover is now the 8-line content shape (`status: "want" | …; title: string; …`), and `CollectionPage`, `CollectionRecord` and `CollectionQuery` print the same way. All the compile-time checks and tests pass unchanged, and the errors stay one line. The filter-typo error grew from 437 to 459 characters, because it now prints the content shape. The cost is that types can no longer tell `date` or `record-ref` from `string`. Nothing uses that distinction today; a typed date-range filter would need it, and could take the schema as a second parameter then.
+- **Naming is the app's job, and an `interface` is how it sticks.** With the content as the parameter, an app that wants a name gets one: `interface BookContent extends ContentOf<typeof Book.schema> {}` makes `Collection<BookContent>` and `CollectionRecord<BookContent>` hover by name. A `type` alias doesn't stick, because `ContentOf` flattens its result. Core's part is not to defeat this: the outer types (`Collection`, `CollectionRecord`, `CollectionPage`) must never flatten their parameter. "Writing an app" should show the `interface` form. One snag: typescript-eslint's recommended `no-empty-object-type` rule rejects an empty interface, so the docs should also mention its `allowInterfaces: 'with-single-extends'` option. The reading list uses an inline disable instead.
+- **Keep internal aliases out of what gets printed.** Typing `contentField` with the named alias `SortableFieldOf<S>` made its error print the alias and its argument. Spelling the type out inline prints the field names. Likewise, `NonNullable<C[K]>` leaked into filter errors as `NonNullable<"want" | …>`, and `Required<C>[K]` doesn't.
 - **Content-free writes to a record outside the family can't be stopped without a round trip.** Content writes already read first (the stored-version check), and so does `delete()`. But `associate()` and the other content-free verbs only learn the Type from the record the write returns. The prototype throws "…not in the book collection. The write was applied." Checking first would bring back the extra read that 18 is about. A better fix is in core: a write precondition, `ifBaseId`, checked by `Stack` the way `ifVersion` is, which refuses before writing and costs nothing.
 
 ### Found along the way
@@ -258,6 +260,5 @@ A and C were prototyped in [`src/collection.ts`](./src/collection.ts), using onl
 
 ### Open questions for core
 
-1. Should collection types print by name, through an interface pattern or a different type parameter?
-2. Should writes get an `ifBaseId` precondition, so content-free collection writes need no prior read?
-3. Should a collection migrate-then-patch a record stored at an older version when the caller may commit migrations?
+1. Should writes get an `ifBaseId` precondition, so content-free collection writes need no prior read?
+2. Should a collection migrate-then-patch a record stored at an older version when the caller may commit migrations?

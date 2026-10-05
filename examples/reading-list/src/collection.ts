@@ -34,6 +34,7 @@ import type {
   ReadonlyFieldDef,
   ReadonlyTypeSchema,
   RecordChange,
+  RecordChangeSet,
   RecordFilter,
   RecordId,
   StackClient,
@@ -41,8 +42,6 @@ import type {
   StackRecord,
   SubscribeOptions,
   TypeHandle,
-  TypedChangeSet,
-  TypedRecord,
   Unsubscribe,
 } from '@haverstack/core';
 
@@ -50,26 +49,37 @@ import type {
 // Paths a filter may name
 // -------------------------------------------------------
 
+// Everything here is derived from the content type rather than the schema,
+// so an unnamed collection type prints as the shape the app works with.
+
+/** `Record<string, unknown>` and `unknown[]`: what an `open` node derives to. */
+type IsOpen<V> = V extends readonly unknown[]
+  ? unknown extends V[number]
+    ? true
+    : false
+  : V extends object
+    ? string extends keyof V
+      ? true
+      : false
+    : false;
+
 /** Below an `open` node any suffix is a path; a scalar has none. */
-type SubPathsOf<D, Depth extends unknown[]> = Depth['length'] extends 6
+type SubPathsOf<V, Depth extends unknown[]> = Depth['length'] extends 6
   ? string
-  : D extends {
-        readonly kind: 'object' | 'array';
-        readonly open: true;
-      }
+  : IsOpen<V> extends true
     ? string
-    : D extends { readonly kind: 'object'; readonly properties: infer P extends ReadonlyTypeSchema }
-      ? PathsOf<P, Depth>
-      : D extends { readonly kind: 'array'; readonly items: infer I }
-        ? SubPathsOf<I, [...Depth, unknown]>
+    : V extends readonly (infer E)[]
+      ? SubPathsOf<E, [...Depth, unknown]>
+      : V extends object
+        ? PathsOf<V, Depth>
         : never;
 
 /** Typed to a depth of 6; deeper than that any suffix is accepted. */
-type PathsOf<S extends ReadonlyTypeSchema, Depth extends unknown[]> = Depth['length'] extends 6
+type PathsOf<C, Depth extends unknown[]> = Depth['length'] extends 6
   ? string
   : {
-      [K in keyof S & string]: K | Join<K, SubPathsOf<S[K], [...Depth, unknown]>>;
-    }[keyof S & string];
+      [K in keyof C & string]-?: K | Join<K, SubPathsOf<Required<C>[K], [...Depth, unknown]>>;
+    }[keyof C & string];
 
 type Join<K extends string, P> = P extends string ? `${K}.${P}` : never;
 
@@ -78,93 +88,88 @@ type Join<K extends string, P> = P extends string ? `${K}.${P}` : never;
  * through declared objects and arrays. See docs/spec/data-model.md § Nested
  * content paths.
  */
-export type ContentPathOf<S extends ReadonlyTypeSchema> = PathsOf<S, []>;
-
-type FieldValue<D> = D extends { readonly kind: 'string'; readonly enum: readonly (infer E)[] }
-  ? E
-  : D extends { readonly kind: 'number' }
-    ? number
-    : D extends { readonly kind: 'boolean' }
-      ? boolean
-      : string;
+export type ContentPathOf<C> = PathsOf<C, []>;
 
 /** An array is matched element-wise, so a filter value is one element. */
-type LeafValue<D> = D extends { readonly kind: 'array' | 'object'; readonly open: true }
-  ? unknown
-  : D extends { readonly kind: 'array'; readonly items: infer I }
-    ? LeafValue<I>
-    : D extends { readonly kind: 'object' }
-      ? never
-      : FieldValue<D>;
+type LeafValue<V> =
+  IsOpen<V> extends true
+    ? unknown
+    : V extends readonly (infer E)[]
+      ? LeafValue<E>
+      : V extends object
+        ? never
+        : V;
 
-type ValueAtDef<D, Rest extends string, Depth extends unknown[]> = D extends {
-  readonly kind: 'object' | 'array';
-  readonly open: true;
-}
-  ? unknown
-  : D extends { readonly kind: 'object'; readonly properties: infer P extends ReadonlyTypeSchema }
-    ? ValueAt<P, Rest, Depth>
-    : D extends { readonly kind: 'array'; readonly items: infer I }
-      ? ValueAtDef<I, Rest, [...Depth, unknown]>
-      : never;
+type ValueBelow<V, Rest extends string, Depth extends unknown[]> =
+  IsOpen<V> extends true
+    ? unknown
+    : V extends readonly (infer E)[]
+      ? ValueBelow<E, Rest, [...Depth, unknown]>
+      : V extends object
+        ? ValueAt<V, Rest, Depth>
+        : never;
 
 /** Mirrors PathsOf's depth limit. */
-type ValueAt<
-  S extends ReadonlyTypeSchema,
-  P extends string,
-  Depth extends unknown[] = [],
-> = Depth['length'] extends 6
+type ValueAt<C, P extends string, Depth extends unknown[] = []> = Depth['length'] extends 6
   ? unknown
-  : P extends keyof S
-    ? LeafValue<S[P]>
+  : P extends keyof C
+    ? LeafValue<Required<C>[P]>
     : P extends `${infer Head}.${infer Rest}`
-      ? Head extends keyof S
-        ? ValueAtDef<S[Head], Rest, [...Depth, unknown]>
+      ? Head extends keyof C
+        ? ValueBelow<Required<C>[Head], Rest, [...Depth, unknown]>
         : never
       : never;
 
 /** `null` matches a path holding no value, as on the untyped filter. */
-export type ContentFilterOf<S extends ReadonlyTypeSchema> = S extends unknown
-  ? { [P in ContentPathOf<S>]?: ValueAt<S, P> | null }
+export type ContentFilterOf<C> = C extends unknown
+  ? { [P in ContentPathOf<C>]?: ValueAt<C, P> | null }
   : never;
 
 /** Only top-level scalars are sortable. See docs/spec/data-model.md § Sorting by a content field. */
-export type SortableFieldOf<S extends ReadonlyTypeSchema> =
-  CollectionSort<S> extends infer C ? (C extends { contentField: infer F } ? F : never) : never;
+export type SortableFieldOf<C> =
+  CollectionSort<C> extends infer Q ? (Q extends { contentField: infer F } ? F : never) : never;
 
 // -------------------------------------------------------
-// Query, result and change shapes
+// Records, writes, queries
 // -------------------------------------------------------
 
-export type CollectionFilter<S extends ReadonlyTypeSchema> = Omit<
+export type CollectionRecord<C> = Omit<StackRecord, 'content'> & { content: C };
+
+/** `null` removes a field, so only a field the content may lack accepts it. */
+export type ContentPatch<C> = {
+  [K in keyof C]?: Partial<Pick<C, K>> extends Pick<C, K> ? C[K] | null : C[K];
+};
+
+export type CollectionChangeSet<C> = Omit<RecordChangeSet, 'contentPatch'> & {
+  contentPatch?: ContentPatch<C>;
+};
+
+export type CollectionFilter<C> = Omit<
   RecordFilter,
   'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
 > & {
-  content?: ContentFilterOf<S>;
-  contentPresent?: ContentPathOf<S>[];
+  content?: ContentFilterOf<C>;
+  contentPresent?: ContentPathOf<C>[];
 };
 
 /**
- * `contentField` spells out SortableFieldOf<S> rather than naming it, so a
- * compile error lists the field names instead of printing the schema.
+ * `contentField` spells out SortableFieldOf<C> rather than naming it, so a
+ * compile error lists the field names instead of the alias.
  */
-export type CollectionSort<S extends ReadonlyTypeSchema> =
+export type CollectionSort<C> =
   | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
   | {
       field?: never;
       contentField: keyof {
-        [K in keyof S as S[K] extends { readonly kind: 'array' | 'object' } ? never : K]: 0;
+        [K in keyof C as Required<C>[K] extends object ? never : K]: 0;
       } &
         string;
       direction?: 'asc' | 'desc';
     };
 
-export type CollectionQuery<S extends ReadonlyTypeSchema> = Omit<
-  StackQuery,
-  'filter' | 'sort' | 'presentAt'
-> & {
-  filter?: CollectionFilter<S>;
-  sort?: CollectionSort<S>;
+export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'sort' | 'presentAt'> & {
+  filter?: CollectionFilter<C>;
+  sort?: CollectionSort<C>;
 };
 
 export type MisfitReason = 'unknown-enum' | 'newer-version';
@@ -179,16 +184,16 @@ export type Misfit = {
   errors?: { path: string; message: string }[];
 };
 
-export type CollectionPage<S extends ReadonlyTypeSchema> = {
-  records: TypedRecord<S>[];
+export type CollectionPage<C> = {
+  records: CollectionRecord<C>[];
   /** A page can hold fewer than `limit` records; only a null cursor ends it. */
   misfits: Misfit[];
   cursor: string | null;
 };
 
 /** `record` when the handle can type it, `misfit` when it cannot. */
-export type CollectionChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
-  record?: TypedRecord<S>;
+export type CollectionChange<C> = Omit<RecordChange, 'record'> & {
+  record?: CollectionRecord<C>;
   misfit?: Misfit;
 };
 
@@ -253,8 +258,8 @@ const walkEnums = (
   }
 };
 
-type Fit<S extends ReadonlyTypeSchema> =
-  | { kind: 'fit'; record: TypedRecord<S> }
+type Fit<C> =
+  | { kind: 'fit'; record: CollectionRecord<C> }
   | { kind: 'misfit'; misfit: Misfit }
   | { kind: 'foreign' };
 
@@ -262,15 +267,15 @@ type Fit<S extends ReadonlyTypeSchema> =
 // The collection
 // -------------------------------------------------------
 
-export class Collection<S extends ReadonlyTypeSchema> {
-  readonly handle: TypeHandle<S>;
+export class Collection<C extends object> {
+  readonly handle: TypeHandle;
   private readonly client: StackClient;
   private readonly version: number;
   private readonly migrations: ReadonlyMap<string, Migration>;
 
   constructor(
     client: StackClient,
-    handle: TypeHandle<S>,
+    handle: TypeHandle,
     opts: { migrations?: readonly Migration[] } = {},
   ) {
     this.client = client;
@@ -282,7 +287,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
   // ----- reads -----
 
   /** `null` for a missing or deleted record, or one outside the family. */
-  async get(id: RecordId): Promise<TypedRecord<S> | null> {
+  async get(id: RecordId): Promise<CollectionRecord<C> | null> {
     const record = await this.client.get(id);
     if (!record) return null;
     const fit = this.classify(record);
@@ -291,7 +296,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
     return fit.record;
   }
 
-  async query(query: CollectionQuery<S> = {}): Promise<CollectionPage<S>> {
+  async query(query: CollectionQuery<C> = {}): Promise<CollectionPage<C>> {
     if ((query.filter as RecordFilter | undefined)?.includeDeleted) {
       throw new StackBadRequestError(
         'A collection sees live records only; use the untyped query to include soft-deleted records.',
@@ -301,7 +306,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
       ...query,
       filter: { ...(query.filter as RecordFilter), baseId: this.handle.baseId },
     } as StackQuery);
-    const page: CollectionPage<S> = { records: [], misfits: [], cursor: result.cursor };
+    const page: CollectionPage<C> = { records: [], misfits: [], cursor: result.cursor };
     for (const record of result.records) {
       const fit = this.classify(record);
       if (fit.kind === 'fit') page.records.push(fit.record);
@@ -312,7 +317,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
 
   /** The whole family, each record migrated in memory to the handle's version. */
   subscribe(
-    handler: (change: CollectionChange<S>) => void,
+    handler: (change: CollectionChange<C>) => void,
     opts: CollectionSubscribeOptions = {},
   ): Promise<Unsubscribe> {
     return this.client.subscribe(
@@ -331,50 +336,58 @@ export class Collection<S extends ReadonlyTypeSchema> {
 
   // ----- content writes -----
 
-  async create(content: ContentOf<S>, opts?: CreateRecordOptions): Promise<TypedRecord<S>> {
-    return this.written(await this.client.create(this.handle.id, content, opts));
+  async create(content: C, opts?: CreateRecordOptions): Promise<CollectionRecord<C>> {
+    return this.written(
+      await this.client.create(this.handle.id, content as Record<string, unknown>, opts),
+    );
   }
 
   async mutate(
     id: RecordId,
-    changes: TypedChangeSet<S>,
+    changes: CollectionChangeSet<C>,
     opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>> {
+  ): Promise<CollectionRecord<C>> {
     if (changes.contentPatch) await this.assertPatchable(id);
     return this.written(await this.client.mutate(id, changes, opts));
   }
 
   async patchContent(
     id: RecordId,
-    patch: NonNullable<TypedChangeSet<S>['contentPatch']>,
+    patch: NonNullable<CollectionChangeSet<C>['contentPatch']>,
     opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>> {
+  ): Promise<CollectionRecord<C>> {
     return this.mutate(id, { contentPatch: patch }, opts);
   }
 
   // ----- association, access and lifecycle writes -----
 
-  async associate(id: RecordId, associations: DataAssociation[]): Promise<TypedRecord<S>> {
+  async associate(id: RecordId, associations: DataAssociation[]): Promise<CollectionRecord<C>> {
     return this.written(await this.client.associate(id, associations));
   }
 
-  async dissociate(id: RecordId, associations: DataAssociation[]): Promise<TypedRecord<S>> {
+  async dissociate(id: RecordId, associations: DataAssociation[]): Promise<CollectionRecord<C>> {
     return this.written(await this.client.dissociate(id, associations));
   }
 
-  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<TypedRecord<S>> {
+  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<CollectionRecord<C>> {
     return this.written(await this.client.amendAssociations(id, changes));
   }
 
-  async grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<TypedRecord<S>> {
+  async grantAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+  ): Promise<CollectionRecord<C>> {
     return this.written(await this.client.grantAccess(id, permissions));
   }
 
-  async revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<TypedRecord<S>> {
+  async revokeAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+  ): Promise<CollectionRecord<C>> {
     return this.written(await this.client.revokeAccess(id, permissions));
   }
 
-  async amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<TypedRecord<S>> {
+  async amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<CollectionRecord<C>> {
     return this.written(await this.client.amendAccess(id, changes));
   }
 
@@ -385,7 +398,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
     return this.client.delete(id, opts);
   }
 
-  async undelete(id: RecordId, opts?: IfVersionOptions): Promise<TypedRecord<S>> {
+  async undelete(id: RecordId, opts?: IfVersionOptions): Promise<CollectionRecord<C>> {
     return this.written(await this.client.undelete(id, opts));
   }
 
@@ -394,13 +407,13 @@ export class Collection<S extends ReadonlyTypeSchema> {
     id: RecordId,
     version: number,
     opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>> {
+  ): Promise<CollectionRecord<C>> {
     return this.written(await this.client.restoreVersion(id, version, opts));
   }
 
   // ----- internals -----
 
-  private classify(record: StackRecord): Fit<S> {
+  private classify(record: StackRecord): Fit<C> {
     const parsed = parseTypeId(record.typeId);
     if (!parsed || parsed.baseId !== this.handle.baseId) return { kind: 'foreign' };
     if (parsed.version > this.version) {
@@ -414,7 +427,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
     }
     return {
       kind: 'fit',
-      record: { ...record, typeId: this.handle.id, content } as TypedRecord<S>,
+      record: { ...record, typeId: this.handle.id, content } as CollectionRecord<C>,
     };
   }
 
@@ -436,7 +449,7 @@ export class Collection<S extends ReadonlyTypeSchema> {
   }
 
   /** The record a write returned, or why the handle cannot type it. */
-  private written(record: StackRecord): TypedRecord<S> {
+  private written(record: StackRecord): CollectionRecord<C> {
     const fit = this.classify(record);
     if (fit.kind === 'fit') return fit.record;
     if (fit.kind === 'misfit') throw new MisfitError(fit.misfit);
@@ -461,8 +474,9 @@ export class Collection<S extends ReadonlyTypeSchema> {
   }
 }
 
+/** Typed by the handle's content, not its schema. */
 export const collection = <S extends ReadonlyTypeSchema>(
   client: StackClient,
   handle: TypeHandle<S>,
   opts?: { migrations?: readonly Migration[] },
-): Collection<S> => new Collection(client, handle, opts);
+): Collection<ContentOf<S>> => new Collection(client, handle, opts);

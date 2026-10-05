@@ -34,5 +34,7 @@ export const Review = typeHandle('com.example.reading/review@1', {
   text: { kind: 'text', required: true },
 });
 
-export type BookContent = ContentOf<typeof Book.schema>;
+/** An interface rather than a type alias, so editors show it by name. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the name is the point
+export interface BookContent extends ContentOf<typeof Book.schema> {}
 export type BookStatus = BookContent['status'];

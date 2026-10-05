@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Stack, StackBadRequestError, typeHandle } from '@haverstack/core';
+import type { ContentOf } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import { Collection, MisfitError, collection } from '../src/collection.ts';
@@ -25,7 +26,7 @@ const BookV3 = typeHandle('com.example.reading/book@3', {
 
 describe('Collection', () => {
   let stack: Stack;
-  let books: Collection<typeof Book.schema>;
+  let books: Collection<ContentOf<typeof Book.schema>>;
 
   beforeEach(async () => {
     stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
@@ -126,7 +127,7 @@ describe('Collection', () => {
   });
 
   it('subscribes to the whole family, migrating older records and reporting misfits', async () => {
-    const seen: CollectionChange<typeof Book.schema>[] = [];
+    const seen: CollectionChange<ContentOf<typeof Book.schema>>[] = [];
     const unsubscribe = await books.subscribe((c) => seen.push(c), { includeRecords: true });
     const old = await stack.create(BookV1, { title: 'Dune', author: 'x', status: 'done' });
     await stack.delete(old.id);
@@ -165,7 +166,7 @@ describe('Collection', () => {
       tags: { kind: 'array', items: { kind: 'string' } },
       extra: { kind: 'object', open: true },
     });
-    const typeChecks = (things: Collection<typeof Thing.schema>) => {
+    const typeChecks = (things: Collection<ContentOf<typeof Thing.schema>>) => {
       void things.query({
         filter: {
           content: {
@@ -189,6 +190,9 @@ describe('Collection', () => {
       void things.query({ filter: { content: { 'address.zip': '75001' } } });
       // @ts-expect-error a path through a scalar
       void things.query({ filter: { content: { 'name.first': 'x' } } });
+      // @ts-expect-error a required field can't be removed
+      void things.patchContent('x', { name: null });
+      void things.patchContent('x', { size: null });
       // @ts-expect-error only top-level scalars sort
       void things.query({ sort: { contentField: 'address' } });
       // @ts-expect-error a typo'd sort field
