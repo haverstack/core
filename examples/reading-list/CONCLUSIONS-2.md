@@ -29,9 +29,9 @@ await books.subscribe((change) => …);
 **Why:**
 
 - **Overloads make typing a per-verb job.** Every verb needs its own handle-first overload, so typing reaches only the verbs someone got to. That's 18: the association, access and lifecycle verbs return `StackRecord`, and the reading list re-reads through the handle to get a `BookRecord` back. A collection types every verb it has.
-- **Overloads can't parameterise shared option types.** `TypedQuery` is the untyped `StackQuery` with keys `Omit`ted, so `filter.content` stays `Record<string, unknown>`. That's 19. A collection's query type is built from `S`.
+- **Overloads can't parameterise shared option types.** `TypedQuery` is the untyped `StackQuery` with keys `Omit`ted, so `filter.content` stays `Record<string, unknown>`. That's 19. A collection's query type is built from the handle's content type.
 - **Overloads cause the long compile errors.** With two signatures per call, every mistake is TS2769 "No overload matches this call", followed by the expanded schema once per overload. That's 21. A single signature reports the mistake directly.
-- **Scope gets decided once.** Today each typed operation sets its own scope, which is how query and subscribe came to differ (24). A collection has one documented scope: the handle's whole family, read at `presentAt: 'latest'`.
+- **Scope gets decided once.** Today each typed operation sets its own scope, which is how query and subscribe came to differ (24). A collection has one documented scope: the handle's whole family, each record migrated in memory to the handle's version.
 - **"Not a book" becomes "not found".** In a collection, an ID that belongs to another Type is simply not in it, so `books.get(shelfId)` answers `null` (22). See [C](#c-records-that-dont-fit-are-reported-not-thrown) for records that are in the family but can't be typed.
 - The shape is familiar: a Drizzle table or a Mongo collection. There's no install base, so the overloads go rather than living on beside the collection.
 
@@ -39,7 +39,7 @@ await books.subscribe((change) => …);
 
 - **Reads:** `get`, `query`, `subscribe`.
 - **Writes:** `create`, `mutate`, `patchContent`, `associate`, `dissociate`, `amendAssociations`, `grantAccess`, `revokeAccess`, `amendAccess`, `delete`, `undelete`, `restoreVersion`.
-- **Every method that returns a record returns it the way `get` would:** migrated in memory to the latest version, then narrowed to the handle. The write already returned the record, so narrowing it locally costs no round trip. `restoreVersion` belongs here too: a restored `@1` snapshot reads back as `@2` through the registered migration, the same as any `@1` record.
+- **Every method that returns a record returns it the way `get` would:** migrated in memory to the handle's version, then narrowed to it. The write already returned the record, so narrowing it locally costs no round trip. `restoreVersion` belongs here too: a restored `@1` snapshot reads back as `@2` through the registered migration, the same as any `@1` record.
 - **History stays untyped:** `getVersions`, `getVersion` and `getJournal` span versions by nature, so they stay on `StackClient`.
 - **A write only reaches records in the collection.** A write to an ID outside the family is refused before anything is written, with `StackNotFoundError` ("Book not found"). That's the write-side counterpart of `get()` answering `null` for the same ID.
 - **A patch to a record stored at an older version migrates it first, as its own write.** A patch is validated against the record's stored Type, and `data-model.md § Type migrations` rules out folding a migration into a patch: "an unrelated content edit can never fold an invisible schema rewrite into the same version-history entry." So when the caller may commit migrations (the owner, or an installed app within its own families), the collection calls `commitMigration()` with the migrated content and then applies the patch. That's two versions and two journal entries (`migrate`, then `patch`), the same history `migrateAll()` followed by the patch would leave.
@@ -63,16 +63,17 @@ await books.subscribe((change) => …);
 
 **Actions:**
 
-- [ ] Core: add `collection(handle)` to `StackClient`, implemented once over `StackClient` (as `type-handle.ts` implements the overloads today), so `Stack` and `ScopedStack` share it. Export `Collection<C>`, parameterised by content, with filter and sort types derived from `C`. None of the outer types flattens its parameter.
+- [ ] Core: add `collection(handle)` to `StackClient`, implemented once (as `type-handle.ts` implements the overloads today) so `Stack` and `ScopedStack` share it. It uses the public verbs plus the internal write expectation below, and the `Stack`'s migration registry. Export `Collection<C>`, parameterised by content, with filter and sort types derived from `C`. None of the outer types flattens its parameter.
 - [ ] Core: delete the handle-first overloads of `get`, `query`, `create`, `mutate`, `patchContent` and `subscribe`, along with `TypedQuery`, `TypedSubscribeOptions` and `TypedChangeSet`, or reshape them as the collection's option types.
 - [ ] Core: the internal write expectation. A module-private symbol key on the write verbs' options, carrying a family and optionally an exact `typeId`. `Stack` checks it against the record it already reads, refusing a family mismatch with `StackNotFoundError`. A version mismatch on a content write is refused with an internal error carrying the stored record, which the collection catches to migrate and then patch. `ScopedStack` passes it through. The collection passes it on every write; `delete()` and the patch path stop reading first.
 - [ ] Core: migrate-then-patch in the collection's content writes, as described above.
 - [ ] Tests: a patch to a stored-`@1` record leaves journal entries `migrate` then `patch`; the caller's `ifVersion` fences the migration; a caller who may not migrate is refused with nothing written; revert to a pre-migration snapshot, then patch, succeeds.
 - [ ] Tests: a collection write to another family's ID is refused before writing (journal and version unchanged) for every write verb, on `Stack` and `ScopedStack`; no collection write issues more adapter reads than its untyped equivalent.
-- [ ] Core: derive `ContentPathOf<C>` and `SortableFieldOf<C>` from the content type, and type the collection's `filter.content`, `filter.contentPresent` and `sort.contentField` with them.
+- [ ] Core: read as stored and migrate each record in memory to the handle's version through the registry, classifying records one at a time. Don't reuse `presentAtLatest()`, which migrates to the instance's newest version and throws for a whole page.
+- [ ] Core: derive `ContentPathOf<C>` and `SortableFieldOf<C>` from the content type, typed to a depth of 6 with any suffix accepted below that, and type the collection's `filter.content`, `filter.contentPresent` and `sort.contentField` with them. Spell types that appear in errors out inline rather than through internal aliases.
 - [ ] Type tests: every collection verb returns `CollectionRecord<C>`; a typo'd filter key, a wrong filter value type, a nested sort field and a typo'd sort field fail to compile; paths below an `open` node compile.
-- [ ] Spec, `data-model.md § Type handles`: rewrite around the collection, covering its scope, its verbs, the filter-matches-stored-shape note, and that a write outside the family is refused as not found.
-- [ ] Reading list: `ReadingList` holds `books`, `shelves` and `reviews` collections; the `typed()` helper goes.
+- [ ] Spec, `data-model.md § Type handles`: rewrite around the collection, covering its scope (the family, migrated to the handle's version), its verbs, the filter-matches-stored-shape note, that a write outside the family is refused as not found, and migrate-then-patch. `§ Type migrations` gains a sentence that a collection's patch to an older record commits the migration as its own write first.
+- [ ] Reading list: replace `src/collection.ts` with core's collection. `ReadingList` keeps its `books`, `shelves` and `reviews` collections; `tests/collection.test.ts` moves into core's tests where it pins core behaviour.
 - [ ] Changeset: `minor` for `@haverstack/core`.
 
 ## B. A handle carries its lineage, and migrations are typed values
@@ -125,7 +126,7 @@ const manifest = { …, types: [Shelf, BookV1, Book, Review] };
 
 ## C. Records that don't fit are reported, not thrown
 
-**Decision:** A collection never throws on a stored record just because the handle can't type it. A query reports such records beside the ones it can type, a subscription delivers the change with the reason, and a single `get()` throws a dedicated error the app can branch on. String enums also gain an `open` flag, so a schema author can say which enums may grow within a version.
+**Decision:** A collection never throws on a stored record just because the handle can't type it. A query reports such records beside the ones it can type, a subscription delivers the change with the reason, and a single `get()` throws a dedicated `MisfitError` the app can branch on. String enums also gain an `open` flag, so a schema author can say which enums may grow within a version.
 
 ### What "doesn't fit" means
 
@@ -159,14 +160,14 @@ type Misfit = {
 };
 
 books.query(…);     // { records: BookRecord[]; misfits: Misfit[]; cursor: string | null }
-books.get(id);      // BookRecord | null; throws StackMisfitError for a misfit
+books.get(id);      // BookRecord | null; throws MisfitError for a misfit
 books.subscribe(h); // change.record: BookRecord, or change.misfit: Misfit
 ```
 
 - **`query()`:** misfits go in `misfits`, so a page can return fewer than `limit` records with a cursor still set. The spec should say plainly that `records.length < limit` is not the end of the results. `cursor === null` is.
-- **`get()`:** a single read the app asked for by ID should be loud. `StackMisfitError` carries the same `reason` and `record`. A wrong-Type ID answers `null` (22).
+- **`get()`:** a single read the app asked for by ID should be loud. `MisfitError` carries the same `reason` and `record`. A wrong-Type ID answers `null` (22).
 - **`subscribe()`:** the collection's scope is the family, like `query()`. A change to a record stored at an older version has its `record` migrated in memory through the same registry, which works because migrations run in the app's own process. The change's own `typeId` stays the stored one, as `RecordChange.typeId` already documents. A change whose record doesn't fit carries `misfit` instead of `record`, rather than silently arriving without one. This makes typed subscriptions match typed queries (24).
-- **Writes:** the result is narrowed like a `get()`. A write that produces a misfit, such as an older app patching a record that holds a newer enum value elsewhere, succeeds and then throws `StackMisfitError` carrying the stored record, so the app knows the write landed.
+- **Writes:** a content write to a newer-version record is refused with `MisfitError` before anything is written, since its patch would be validated against a schema the handle doesn't know. Otherwise the result is narrowed like a `get()`: a write that produces a misfit, such as an older app patching a record that holds a newer enum value elsewhere, succeeds and then throws `MisfitError` carrying the stored record, so the app knows the write landed.
 
 ### Open enums (`open: true`)
 
@@ -195,12 +196,12 @@ status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], op
 
 **Actions:**
 
-- [ ] Core: `Misfit`, `StackMisfitError` (code `misfit`), and the classification in the collection's narrowing: `typeId` mismatch outside the family means not in the collection; `newer-version` from a family record past the handle, including what `presentAtLatest()` currently throws for; `unknown-enum` from the existing enum walk.
-- [ ] Core: `StackMisfitError` is raised in the app's process, but every `StackError` has a wire mapping. Give it one that is consistent with the others, and note in the spec that a server never produces it.
-- [ ] Core: the collection's `query()` returns `misfits`; `subscribe()` covers the family, migrates event records in memory and carries `misfit`; `get()` and writes throw `StackMisfitError`.
+- [ ] Core: `Misfit`, `MisfitError`, and the classification in the collection's narrowing: `typeId` mismatch outside the family means not in the collection; `newer-version` from a family record past the handle, including what `presentAtLatest()` currently throws for; `unknown-enum` from the existing enum walk.
+- [ ] Core: `MisfitError` is raised only in the app's process and has no wire representation, so it sits outside the `StackError` hierarchy and carries no `Stack` prefix (`wire-format.md § The taxonomy root`). Add it to that section's list of errors outside the hierarchy.
+- [ ] Core: the collection's `query()` returns `misfits`; `subscribe()` covers the family, migrates event records in memory and carries `misfit`; `get()` and writes throw `MisfitError`.
 - [ ] Core, schema: `open` on string `enum` in `FieldDef` and `ReadonlyFieldDef`, in schema-shape validation, in canonical hashing, and in drift detection with the table above. `ContentOf` widens open enums; `PatchOf` doesn't.
 - [ ] Check `wire-types`, `adapter-api` and `conformance-fixtures` for anywhere a schema's shape is pinned. As of this writing `enum` appears only in core, so `open` likely does too.
-- [ ] Tests: a query over a page with one unknown-enum record and one newer-version record returns the rest plus two misfits, and its cursor still pages; `get()` throws `StackMisfitError` with the right reason; `get()` of another Type's ID is `null`; a subscription to the family delivers a migrated `@1` change and a misfit change; open-enum values never misfit; every row of the drift table.
+- [ ] Tests: a query over a page with one unknown-enum record and one newer-version record returns the rest plus two misfits, and its cursor still pages; `get()` throws `MisfitError` with the right reason; `get()` of another Type's ID is `null`; a subscription to the family delivers a migrated `@1` change and a misfit change; open-enum values never misfit; every row of the drift table.
 - [ ] Spec, `data-model.md`: `§ Type handles` (misfits, the `get`/`query`/`subscribe` behaviour, and short pages), `§ Additive evolution within a version` and `§ Schema drift detection` (the enum table), and `§ Types` (`open` on enums).
 - [ ] Reading list: `listBooks()` returns misfits alongside books, and the demo shows a book written with a status the app doesn't know.
 - [ ] Changeset: `minor` for `@haverstack/core`.
@@ -229,10 +230,7 @@ status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], op
 
 ## Order of work
 
-1. **Prototype A and C together on the reading list.** Done; see [Prototype results](#prototype-results). Next is moving the collection into core, taking the design changes listed there.
-2. **B**, which is independent of the prototype and mostly mechanical once `migration()`'s types are settled.
-3. **Open enums**, which can land any time after C.
-4. **23 and 25** alongside whichever lands first.
+A and C were prototyped together on the reading list first; see [Prototype results](#prototype-results). The issue plan that turns these decisions into work, and the order to do it in, is [ISSUES-2.md](./ISSUES-2.md).
 
 ## Prototype results
 
