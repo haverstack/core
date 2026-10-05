@@ -13,6 +13,7 @@ The spec is split into focused documents:
 | [Data model](./spec/data-model.md)            | Records, IDs, associations, types, schemas, migrations, queries              |
 | [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                   |
 | [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement       |
+| [App installs](./spec/apps.md)                | Manifests, the `_install` record, and migration by an installed app          |
 | [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it         |
 | [Refusals & disclosure](./spec/disclosure.md) | Which refusal a Record answers with, and what a refusal is allowed to reveal |
 | [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft delete/purge          |

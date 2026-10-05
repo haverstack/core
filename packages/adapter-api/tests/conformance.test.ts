@@ -7,7 +7,12 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterAuthError,
+  APIAdapterCapabilityError,
+  APIAdapterHandshakeError,
+} from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -33,6 +38,7 @@ import {
   restoreVersionFixtures,
   getJournalFixtures,
   commitMigrationFixtures,
+  installRequestFixtures,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
@@ -713,6 +719,53 @@ describe('commitMigration fixtures', () => {
       expect(result.typeId).toBe(fixture.responseBody!.typeId);
     });
   }
+});
+
+// -------------------------------------------------------
+// Install requests — the manifest travels as given, and the key never
+// travels at all: it is the session's.
+// -------------------------------------------------------
+
+describe('install request fixtures', () => {
+  const openWithInstalls = (): Promise<APIAdapter> =>
+    openDiscovered({ ...DISCOVERY, installs: { requests: true } }, { token: undefined });
+
+  for (const fixture of installRequestFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithInstalls();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(
+          ERROR_CLASS_FOR_CODE[body.error.code as never],
+        );
+      } else if (body.status === 'installed') {
+        const result = await attempt;
+        expect(result.status).toBe('installed');
+        expect(result.status === 'installed' && result.install.content).toEqual(
+          body.install.content,
+        );
+      } else {
+        expect(await attempt).toEqual({ status: 'pending' });
+      }
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+    });
+  }
+
+  test('a server advertising no install requests is refused locally', async () => {
+    const adapter = await openAdapter();
+    const calls = mockFetch.mock.calls.length;
+    await expect(
+      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
+    ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
+    expect(mockFetch.mock.calls.length).toBe(calls);
+  });
 });
 
 // -------------------------------------------------------

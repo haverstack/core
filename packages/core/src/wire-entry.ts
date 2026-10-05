@@ -102,6 +102,7 @@ export {
   parseEntityPatchBody,
   parseTypeBody,
   parseMigrationBody,
+  parseInstallBody,
 } from './wire-body.js';
 export type {
   WireAuthChallengeRequest,

@@ -19,6 +19,7 @@ import { SYSTEM_TYPES } from './types.js';
 const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
+  [SYSTEM_TYPES.INSTALL, ['appId'] as const],
 ]);
 
 /**
@@ -39,6 +40,8 @@ const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Ma
 const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
+  // One install answers for each app; see docs/spec/apps.md § The `_install` record.
+  [SYSTEM_TYPES.INSTALL, ['appId'] as const],
 ]);
 
 export const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>

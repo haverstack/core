@@ -68,7 +68,10 @@ import type {
   ConfigContent,
   EntityId,
   EntityContent,
+  AppContent,
   AppId,
+  InstallContent,
+  InstallRequest,
   RecordId,
   Actor,
   ActorOptions,
@@ -122,6 +125,24 @@ import {
 } from './grants.js';
 import type { GrantQuery } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+import {
+  claimedFamilies,
+  familyStanding,
+  grantIsRequest,
+  installAppLink,
+  installGrantLink,
+  installReader,
+  linkedIds,
+  namespaceOf,
+  ownTypeIds,
+  planFingerprint,
+  sameRequest,
+  snapshotManifest,
+  validateInstall,
+  INSTALL_APP_LABEL,
+  INSTALL_GRANT_LABEL,
+} from './install.js';
+import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateParentId,
@@ -363,6 +384,17 @@ export type DeleteAndReturnResult = DeleteResult & {
    * returning null (see Stack.delete()'s own no-op cases).
    */
   record: StackRecord | null;
+};
+
+/** Options for Stack.migrateAll(). */
+export type MigrateAllOptions = {
+  /**
+   * `'all'` (the default) sweeps every record of the family, deleted and
+   * unlisted included. `'listed'` sweeps only what a non-owner can
+   * enumerate and read whole. See docs/spec/apps.md § Migrating an
+   * installed app's types.
+   */
+  sweep?: 'all' | 'listed';
 };
 
 /** The argument to Stack.defineType(). */
@@ -878,8 +910,16 @@ export class Stack implements StackClient {
    * the only way disk state changes version. Sweeps soft-deleted records
    * too, validates each result before writing, and aborts on the first
    * validation failure. See docs/spec/data-model.md § Type migrations.
+   *
+   * `sweep: 'listed'` is for a contained app over `APIAdapter`, which can
+   * neither enumerate unlisted records nor read a deleted one's content:
+   * it migrates live, listed records and counts the deleted ones it passed
+   * over in `skipped`. See docs/spec/apps.md § Migrating an installed app's types.
    */
-  async migrateAll(baseId: BaseId): Promise<{ migrated: number }> {
+  async migrateAll(
+    baseId: BaseId,
+    opts: MigrateAllOptions = {},
+  ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
     const problem = familyIdProblem(baseId, 'migrateAll');
     if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
@@ -890,7 +930,9 @@ export class Stack implements StackClient {
       throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
     }
 
+    const listedOnly = opts.sweep === 'listed';
     let migrated = 0;
+    let skipped = 0;
 
     for (const typeId of familyTypeIds) {
       const latestId = this.latestTypeId(typeId);
@@ -907,12 +949,16 @@ export class Stack implements StackClient {
       let cursor: string | undefined;
       do {
         const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId, includeDeleted: true, includeUnlisted: true },
+          filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
           limit: 100,
           cursor,
         });
 
         for (const record of result.records) {
+          if (listedOnly && record.deletedAt) {
+            skipped++;
+            continue;
+          }
           // Same checked path commitMigration() takes — a migration
           // function is no more entitled to move a DID binding or repoint
           // an attachment than a request body is. No ifVersion: a batch
@@ -925,7 +971,7 @@ export class Stack implements StackClient {
       } while (cursor);
     }
 
-    return { migrated };
+    return { migrated, skipped };
   }
 
   // -------------------------------------------------------
@@ -993,6 +1039,7 @@ export class Stack implements StackClient {
       ...validateContent(content, type.schema),
       ...validateGrantee(typeId, content),
       ...validateGrantBaseId(typeId, content),
+      ...validateInstall(typeId, content),
       ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -1340,6 +1387,7 @@ export class Stack implements StackClient {
         ...validateContent(merged, type.schema),
         ...validateGrantee(existing.typeId, merged),
         ...validateGrantBaseId(existing.typeId, merged),
+        ...validateInstall(existing.typeId, merged),
       ];
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
@@ -1886,6 +1934,7 @@ export class Stack implements StackClient {
       ...validateContent(target.content, type.schema),
       ...validateGrantee(target.typeId, target.content),
       ...validateGrantBaseId(target.typeId, target.content),
+      ...validateInstall(target.typeId, target.content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -1989,6 +2038,7 @@ export class Stack implements StackClient {
       ...validateContent(content, type.schema),
       ...validateGrantee(toTypeId, content),
       ...validateGrantBaseId(toTypeId, content),
+      ...validateInstall(toTypeId, content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -2794,6 +2844,326 @@ export class Stack implements StackClient {
   }
 
   // -------------------------------------------------------
+  // App installs
+  // -------------------------------------------------------
+
+  /**
+   * What applying `manifest` for the key `did` would change, for the owner
+   * to review before installApp(). Writes nothing. Refuses outright what no
+   * approval could make valid: a type outside the app's own namespace and
+   * the commons, a request the grant rules refuse, or a `did` already
+   * registered to a different app. See docs/spec/apps.md § Plan, then apply.
+   */
+  async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
+    this.assertOpen();
+    const { did } = opts;
+    const manifest = snapshotManifest(submitted);
+    this.checkManifest(manifest, did);
+
+    const installs = await this.loadInstalls();
+    const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
+    const ownVersions = ownTypeIds(manifest);
+    const ownFamilies = new Set(ownVersions.map(baseIdOf));
+
+    const card = await this.findAppCard(did);
+    if (card && (card.content as AppContent).appId !== manifest.appId) {
+      throw new StackConflictError(
+        `${did} is registered to "${(card.content as AppContent).appId}", not "${manifest.appId}"`,
+      );
+    }
+
+    const claimed = existing ? claimedFamilies(existing.content) : new Set<BaseId>();
+    const defined = new Set(existing?.content.defines ?? []);
+    const prior = existing?.content.requests ?? [];
+    const foreignRequests: ForeignRequest[] = [];
+    for (const r of manifest.requests) {
+      const standing = familyStanding(r.baseId, manifest.appId);
+      if (standing === 'own') continue;
+      const owner =
+        standing === 'foreign'
+          ? namespaceOf(r.baseId)
+          : standing === 'commons'
+            ? 'commons'
+            : 'system';
+      foreignRequests.push({ ...r, owner });
+    }
+
+    const typeChanges: TypeChange[] = [];
+    for (const t of manifest.types) {
+      const current = await this.getTypeCached(t.id);
+      if (!current) typeChanges.push({ id: t.id, change: 'new' });
+      else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
+        // Refused here, not left to defineType(): installApp() defines types one
+        // by one, so a drift found there leaves the earlier ones written.
+        const violations = diffSchemas(current.schema, t.schema as TypeSchema);
+        if (violations.length > 0) throw new StackSchemaDriftError(t.id, violations);
+        typeChanges.push({ id: t.id, change: 'schema' });
+      } else if (current.name !== t.name) typeChanges.push({ id: t.id, change: 'name' });
+    }
+
+    const linkedKeys: EntityId[] = [];
+    for (const id of existing ? linkedIds(existing, INSTALL_APP_LABEL) : []) {
+      const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
+      if (typeof key === 'string') linkedKeys.push(key);
+    }
+
+    return {
+      manifest,
+      did,
+      existing,
+      newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
+      newVersions: ownVersions.filter((id) => !defined.has(id)),
+      requestsAdded: manifest.requests.filter((r) => !prior.some((p) => sameRequest(p, r))),
+      requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
+      foreignRequests,
+      typeChanges,
+      newKey:
+        !existing ||
+        !card ||
+        card.deletedAt !== undefined ||
+        !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
+      linkedKeys,
+    };
+  }
+
+  /**
+   * Apply an approved plan: define the manifest's types, register the
+   * key's `_app` card if it has none, write the `_install` Record, and
+   * bring every linked key's grants to exactly what the manifest requests.
+   * Refuses a plan the stack has moved on from with StackConflictError, so
+   * what is applied is what was approved. Reinstalls a soft-deleted
+   * install. See docs/spec/apps.md § Plan, then apply.
+   */
+  async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
+    this.assertOpen();
+    const fresh = await this.planInstall(plan.manifest, { did: plan.did });
+    if (planFingerprint(fresh) !== planFingerprint(plan)) {
+      throw new StackConflictError(
+        `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
+      );
+    }
+    const { manifest, did, existing } = fresh;
+
+    for (const type of manifest.types) await this.defineType(type);
+    const card = await this.ensureAppCard(manifest, did);
+
+    const defines = [...new Set([...(existing?.content.defines ?? []), ...ownTypeIds(manifest)])];
+    const requests: InstallRequest[] = manifest.requests.map((r) => ({
+      baseId: r.baseId,
+      actions: [...r.actions],
+    }));
+
+    let install: StackRecord;
+    if (!existing) {
+      install = await this.create<InstallContent>(
+        `${SYSTEM_TYPES.INSTALL}@1`,
+        {
+          appId: manifest.appId,
+          name: manifest.name,
+          ...(manifest.version !== undefined && { version: manifest.version }),
+          defines,
+          requests,
+        },
+        { associations: [installAppLink(card.id)] },
+      );
+    } else {
+      const current = existing.deletedAt ? await this.undelete(existing.id) : existing;
+      install = await this.patchContent(
+        existing.id,
+        { name: manifest.name, version: manifest.version ?? null, defines, requests },
+        { ifVersion: current.version },
+      );
+      if (!linkedIds(install, INSTALL_APP_LABEL).includes(card.id)) {
+        install = await this.associate(install.id, [installAppLink(card.id)]);
+      }
+    }
+    return (await this.reconcileInstallGrants(install)) as StackRecord & {
+      content: InstallContent;
+    };
+  }
+
+  /**
+   * Withdraw every grant an install produced and soft-delete it. The app's
+   * records and `_app` cards stay: the data is the owner's, and the cards
+   * are what its records' attribution resolves through. Returns the
+   * install's tombstone. See docs/spec/apps.md § Uninstalling.
+   */
+  async uninstallApp(appId: AppId): Promise<StackRecord & { content: InstallContent }> {
+    this.assertOpen();
+    const install = (await this.loadInstalls()).find(
+      (r) => r.content.appId === appId && !r.deletedAt,
+    );
+    if (!install) throw new StackNotFoundError(`No install for "${appId}"`);
+    const edits: AssociationEdit[] = [];
+    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
+      if (await this.get(id)) await this.delete(id);
+      edits.push({ op: 'remove', association: installGrantLink(id) });
+    }
+    if (edits.length > 0) await this.amendAssociations(install.id, edits);
+    const { record } = await this.deleteAndReturn(install.id);
+    return record as StackRecord & { content: InstallContent };
+  }
+
+  /** A manifest's own shape, and every request held to grantType()'s rules. */
+  private checkManifest(manifest: AppManifest, did: EntityId): void {
+    const errors: ValidationError[] = [];
+    if (typeof did !== 'string' || !did.startsWith('did:')) {
+      errors.push({ path: 'did', message: 'Expected a DID' });
+    }
+    if (typeof manifest.appId !== 'string' || manifest.appId === '') {
+      errors.push({ path: 'appId', message: 'Expected a non-empty appId' });
+    }
+    if (typeof manifest.name !== 'string' || manifest.name === '') {
+      errors.push({ path: 'name', message: 'Expected a non-empty name' });
+    }
+    const seen = new Set<string>();
+    manifest.types.forEach((t, i) => {
+      if (seen.has(t.id)) {
+        errors.push({ path: `types[${i}].id`, message: `"${t.id}" is listed more than once` });
+      }
+      seen.add(t.id);
+      const schemaPath = `types[${i}].schema`;
+      const shapeErrors = validateSchemaShape(t.schema, schemaPath);
+      errors.push(...shapeErrors);
+      if (shapeErrors.length === 0) {
+        const schema = t.schema as TypeSchema;
+        for (const e of validateSchemaReservedNames(schema)) {
+          errors.push({ ...e, path: `${schemaPath}.${e.path}` });
+        }
+        validateSchemaFieldNames(schema, schemaPath, errors);
+      }
+      const parsed = parseTypeId(t.id);
+      if (!parsed) {
+        errors.push({ path: `types[${i}].id`, message: 'Expected a versioned TypeId' });
+      } else {
+        const standing = familyStanding(parsed.baseId, manifest.appId);
+        if (standing === 'system' || standing === 'foreign') {
+          errors.push({
+            path: `types[${i}].id`,
+            message:
+              standing === 'system'
+                ? `"${parsed.baseId}" is a system type; no app can define it`
+                : `"${parsed.baseId}" is outside the namespace "${manifest.appId}"; request access to it instead of defining it`,
+          });
+        }
+      }
+    });
+    if (errors.length > 0) throw new StackValidationError(errors);
+    for (const r of manifest.requests) this.checkGrantValid(r.baseId, r.actions);
+  }
+
+  /** Every `_install` Record, deleted and unlisted included — a deleted install keeps its claims. */
+  private async loadInstalls(): Promise<(StackRecord & { content: InstallContent })[]> {
+    const records = await queryAllPages((q) => this.query(q), {
+      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+    });
+    return records as (StackRecord & { content: InstallContent })[];
+  }
+
+  /** The `_app` card claiming `did`, deleted and unlisted included. */
+  private findAppCard(did: EntityId): Promise<StackRecord | undefined> {
+    return findFirstMatch(
+      (q) => this.query(q),
+      {
+        filter: {
+          baseId: SYSTEM_TYPES.APP,
+          includeDeleted: true,
+          includeUnlisted: true,
+          ...(filtersContent(this.capabilities) && { content: { did } }),
+        },
+      },
+      (r) => (r.content as AppContent).did === did,
+    );
+  }
+
+  /** The key's `_app` card, created or undeleted as needed. */
+  private async ensureAppCard(manifest: AppManifest, did: EntityId): Promise<StackRecord> {
+    const card = await this.findAppCard(did);
+    if (!card) {
+      return this.create<AppContent>(`${SYSTEM_TYPES.APP}@1`, {
+        appId: manifest.appId,
+        name: manifest.name,
+        ...(manifest.version !== undefined && { version: manifest.version }),
+        did,
+      });
+    }
+    return card.deletedAt ? this.undelete(card.id) : card;
+  }
+
+  /**
+   * Make the grants linked to `install` exactly its `requests`, once per
+   * live linked key: withdraw any that no longer match, write any missing,
+   * and drop links to grants that are gone.
+   */
+  private async reconcileInstallGrants(install: StackRecord): Promise<StackRecord> {
+    const { requests } = install.content as InstallContent;
+    const dids: EntityId[] = [];
+    for (const id of linkedIds(install, INSTALL_APP_LABEL)) {
+      const did = ((await this.get(id))?.content as AppContent | undefined)?.did;
+      if (typeof did === 'string') dids.push(did);
+    }
+
+    const edits: AssociationEdit[] = [];
+    const held: GrantContent[] = [];
+    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
+      const grant = await this.get(id);
+      const content = grant?.content as GrantContent | undefined;
+      const wanted =
+        content !== undefined &&
+        baseIdOf(grant!.typeId) === SYSTEM_TYPES.GRANT &&
+        dids.some((did) => requests.some((r) => grantIsRequest(content, r, did)));
+      if (wanted) {
+        held.push(content);
+        continue;
+      }
+      if (grant) await this.delete(id);
+      edits.push({ op: 'remove', association: installGrantLink(id) });
+    }
+
+    for (const did of dids) {
+      for (const r of requests) {
+        if (held.some((g) => grantIsRequest(g, r, did))) continue;
+        const grant = await this.grantType(r.baseId, {
+          actions: r.actions,
+          grantee: { kind: 'entity', entityId: did },
+        });
+        held.push(grant.content);
+        edits.push({ op: 'add', association: installGrantLink(grant.id) });
+      }
+    }
+    let result = edits.length > 0 ? await this.amendAssociations(install.id, edits) : install;
+
+    // Each linked key may read its own install, which is how an app learns
+    // what was approved; a key of this app no longer linked may not.
+    // See docs/spec/apps.md § Over the wire.
+    const appKeys = new Set(
+      (
+        await queryAllPages((q) => this.query(q), {
+          filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
+        })
+      )
+        .map((r) => r.content as AppContent)
+        .filter((c) => c.appId === (install.content as InstallContent).appId)
+        .map((c) => c.did),
+    );
+    const readerOf = (p: AuthorityAssociation): EntityId | null =>
+      p.kind === 'permission' && p.label === 'read' && p.grantee.kind === 'entity'
+        ? p.grantee.entityId
+        : null;
+    const current = (result.permissions ?? []).map(readerOf);
+    const access: AssociationEdit[] = [
+      ...dids
+        .filter((did) => !current.includes(did))
+        .map((entityId) => ({ op: 'add' as const, association: installReader(entityId) })),
+      ...current
+        .filter((did): did is EntityId => did !== null && appKeys.has(did) && !dids.includes(did))
+        .map((entityId) => ({ op: 'remove' as const, association: installReader(entityId) })),
+    ];
+    if (access.length > 0) result = await this.amendAccess(install.id, access);
+    return result;
+  }
+
+  // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
 
@@ -2906,6 +3276,27 @@ export class Stack implements StackClient {
         mimeType: { kind: 'string', required: true },
         size: { kind: 'number', required: true },
         filename: { kind: 'string' },
+      },
+    });
+    await this.defineType({
+      id: `${SYSTEM_TYPES.INSTALL}@1`,
+      name: 'Install',
+      schema: {
+        appId: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        version: { kind: 'string' },
+        defines: { kind: 'array', items: { kind: 'string' }, required: true },
+        requests: {
+          kind: 'array',
+          required: true,
+          items: {
+            kind: 'object',
+            properties: {
+              baseId: { kind: 'string', required: true },
+              actions: { kind: 'array', items: { kind: 'string' }, required: true },
+            },
+          },
+        },
       },
     });
   }

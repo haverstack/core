@@ -50,6 +50,8 @@ import type {
   RecordChangeSet,
   StackCapabilities,
   MissingCapability,
+  AppManifest,
+  InstallContent,
 } from '@haverstack/core';
 import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import {
@@ -82,6 +84,7 @@ import type {
   AuthChallengeResponse,
   AuthTokenResponse,
   WireAuthErrorCode,
+  WireInstallResponse,
 } from '@haverstack/wire-types';
 import {
   isWireError,
@@ -92,6 +95,7 @@ import {
   isRetryableAuthError,
   isValidCursor,
   supportsChangeFeed,
+  supportsInstallRequests,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
@@ -112,6 +116,11 @@ import {
  * names.
  */
 export type { MissingCapability } from '@haverstack/core';
+
+/** What `APIAdapter.requestInstall()` resolves to. */
+export type InstallRequestResult =
+  | { status: 'pending' }
+  | { status: 'installed'; install: StackRecord & { content: InstallContent } };
 
 export type APIAdapterOpenOptions = {
   /** Base URL of the stack server e.g. "https://example.com". Trailing slash is stripped. */
@@ -179,10 +188,10 @@ export class APIAdapterConnectionError extends APIAdapterError {
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
     /**
-     * `'changes'` names the feed, which discovery advertises beside
-     * `capabilities` rather than in it.
+     * `'changes'` names the feed and `'installs'` the install endpoint,
+     * which discovery advertises beside `capabilities` rather than in it.
      */
-    public readonly capability: MissingCapability | 'changes',
+    public readonly capability: MissingCapability | 'changes' | 'installs',
     message: string,
   ) {
     super(message);
@@ -822,6 +831,8 @@ export class APIAdapter implements StackAdapter {
     capabilities: StackCapabilities,
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
+    /** Whether discovery advertised `POST /installs`. */
+    private readonly installRequests: boolean,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
@@ -914,6 +925,7 @@ export class APIAdapter implements StackAdapter {
       // are what subscribeChanges() promises its caller, and a client that
       // forgot them would assume both.
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
+      supportsInstallRequests(discovery),
     );
   }
 
@@ -1080,6 +1092,36 @@ export class APIAdapter implements StackAdapter {
       },
     );
     return requireRecordBody(raw, `PATCH /records/${pathSegment(id)}`);
+  }
+
+  /**
+   * Present this app's manifest for the owner to approve, as the key this
+   * adapter authenticated with. `pending` until the owner approves this
+   * manifest for this key; `installed`, with the `_install` record, once
+   * applying it would change nothing. Refused locally when the server does
+   * not advertise install requests. See docs/spec/wire-format.md § Installs.
+   */
+  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
+    if (!this.installRequests) {
+      throw new APIAdapterCapabilityError(
+        'installs',
+        `Server at "${this.baseUrl}" does not take install requests; ask its owner to install ` +
+          'the app another way.',
+      );
+    }
+    const raw = await this.request<WireInstallResponse | undefined>('POST', '/installs', {
+      manifest,
+    });
+    if (raw?.status === 'pending') return { status: 'pending' };
+    if (raw?.status === 'installed' && raw.install) {
+      return {
+        status: 'installed',
+        install: parseRecord(raw.install) as StackRecord & { content: InstallContent },
+      };
+    }
+    throw new APIAdapterError(
+      'POST /installs answered with neither a pending nor an installed body',
+    );
   }
 
   async commitMigration(

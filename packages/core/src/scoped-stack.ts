@@ -35,6 +35,7 @@ import type {
   ActorOptions,
   AppContent,
   AppId,
+  InstallContent,
   PutAttachmentOptions,
   Association,
   AssociationEdit,
@@ -65,6 +66,7 @@ import type {
 } from './types.js';
 import {
   StackError,
+  StackConflictError,
   StackNotFoundError,
   StackPermissionError,
   RelayScopeError,
@@ -88,6 +90,7 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
+import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
 import { assertAttachmentSize } from './limits.js';
 import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
 import {
@@ -1327,15 +1330,17 @@ export class ScopedStack implements StackClient {
   /**
    * A `_grant` Record *is* authority, so rewriting one is the escalation
    * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
-   * existing grant rather than minting a fresh one. `grantType()` and `revokeType()`
-   * live on `Stack`, never `StackClient`, so no scoped write is lost. Writes
-   * only: reading a grant Record and its history stays on the ordinary gate.
-   * See docs/spec/access-control.md § Type-level grants.
+   * existing grant rather than minting a fresh one. An `_install` decides
+   * grants and migration authority, so it is fenced the same way. The verbs
+   * that write either live on `Stack`, never `StackClient`, so no scoped
+   * write is lost. Writes only: reading one and its history stays on the
+   * ordinary gate. See docs/spec/access-control.md § Type-level grants.
    */
   private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
-    if (baseIdOf(record.typeId) !== SYSTEM_TYPES.GRANT) return;
+    const family = baseIdOf(record.typeId);
+    if (family !== SYSTEM_TYPES.GRANT && family !== SYSTEM_TYPES.INSTALL) return;
     if (this.ownerActingAlone) return;
-    throw await this.denialFor(record, 'Only the stack owner may write a _grant record');
+    throw await this.denialFor(record, `Only the stack owner may write a ${family} record`);
   }
 
   /**
@@ -1523,8 +1528,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration — **the owner acting alone, only**, the
-   * same restriction the bulk `migrateAll()` carries by living on `Stack`.
+   * Commit a per-record migration — **the owner acting alone**, the same
+   * restriction the bulk `migrateAll()` carries by living on `Stack`, with
+   * one exception: an installed app migrating within its own families (see
+   * installMayMigrate()).
    *
    * Migrate replaces `content` and `typeId` wholesale, so a grant-based
    * version would have to re-derive every gate `create()` applies at the
@@ -1542,8 +1549,83 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    this.requireOwnerActingAlone('Only the stack owner may commit a migration');
+    if (!this.ownerActingAlone && !(await this.installMayMigrate(id, toTypeId))) {
+      throw new StackPermissionError(
+        'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
+      );
+    }
+    // The new content is a fresh set of file references, so an app is held
+    // to the gate create() applies; otherwise a migration could point one of
+    // its records at any attachment and read the bytes through it.
+    if (!this.ownerActingAlone) await this.requireFileRefAccess(toTypeId, content);
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
+  }
+
+  /**
+   * Whether this request is an installed app migrating a record within its
+   * own families: the app acting as itself, its key linked to the one live
+   * install claiming both families in its own namespace, `toTypeId` a version the owner
+   * approved, and an `update-any` grant on each family made out to the key
+   * directly. Read as data, so a family two installs claim — however that
+   * came to be — confers nothing.
+   *
+   * The reasons migration is otherwise owner-only do not reach this case:
+   * no install can claim a system family, so neither an `_attachment` nor
+   * a DID binding is in reach, and the owner's approval of the version is
+   * the consent. See docs/spec/apps.md § Migrating an installed app's types.
+   */
+  private async installMayMigrate(id: RecordId, toTypeId: TypeId): Promise<boolean> {
+    const principal = this.#principalId;
+    if (!principal || this.delegated) return false;
+    const record = await this.stack.get(id, { includeDeleted: true });
+    if (!record) return false;
+    const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
+
+    const installs = (await queryAllPages((q) => this.stack.query(q), {
+      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+    })) as (StackRecord & { content: InstallContent })[];
+    let install: (StackRecord & { content: InstallContent }) | undefined;
+    for (const family of families) {
+      const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));
+      if (claimants.length !== 1) return false;
+      if (familyStanding(family, claimants[0]!.content.appId) !== 'own') return false;
+      if (install && install.id !== claimants[0]!.id) return false;
+      install = claimants[0];
+    }
+    if (!install || install.deletedAt) return false;
+    if (!Array.isArray(install.content.defines) || !install.content.defines.includes(toTypeId)) {
+      return false;
+    }
+
+    let linked = false;
+    for (const cardId of linkedIds(install, INSTALL_APP_LABEL)) {
+      const card = await this.stack.get(cardId);
+      if (card && baseIdOf(card.typeId) === SYSTEM_TYPES.APP) {
+        if ((card.content as AppContent).did === principal) linked = true;
+      }
+    }
+    if (!linked) return false;
+
+    const grants = await this.loadGrants();
+    for (const family of families) {
+      const held = await this.hasGrant(`${family}@1`, ['update-any'], {
+        grantee: principal,
+        prefetchedGrants: grants,
+        matchOwn: false,
+        allowDefault: false,
+        allowGroup: false,
+      });
+      if (!held) return false;
+    }
+    // Asked only once authority is settled, as every mutating verb asks it.
+    // The owner may migrate a tombstone; an app sees it without content.
+    // See docs/spec/apps.md § Migrating an installed app's types.
+    if (record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${id}" is soft-deleted; undelete it before migrating it.`,
+      );
+    }
+    return true;
   }
 
   /**

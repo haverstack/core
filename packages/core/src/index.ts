@@ -33,7 +33,10 @@ export type {
   DeleteAndReturnResult,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
+  MigrateAllOptions,
 } from './stack.js';
+export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
+export { isPlanEmpty } from './install.js';
 
 // Type handles
 export { typeHandle } from './type-handle.js';
@@ -137,6 +140,8 @@ export type {
   GrantAction,
   GrantContent,
   GrantGrantee,
+  InstallContent,
+  InstallRequest,
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,

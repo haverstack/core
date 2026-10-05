@@ -494,6 +494,34 @@ export type GrantContent = {
   grantee: GrantGrantee;
 };
 
+/** One type-level grant an app's manifest asks for. */
+export type InstallRequest = {
+  /** The type family, as `grantType()` takes it. */
+  baseId: BaseId;
+  actions: GrantAction[];
+};
+
+/**
+ * Content for _install records: what the owner approved of an app's
+ * manifest, one live record per `appId`. See docs/spec/apps.md.
+ */
+export type InstallContent = {
+  /**
+   * The software this install is for. A binding: immutable, and unique
+   * among installs, so one install answers for each app.
+   */
+  appId: AppId;
+  name: string;
+  version?: string;
+  /**
+   * Every type version the owner has approved for this app. The families
+   * they name are claimed by this install and by no other.
+   */
+  defines: TypeId[];
+  /** The grants each of the app's keys holds. */
+  requests: InstallRequest[];
+};
+
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
   mimeType: string;
@@ -540,6 +568,8 @@ export const SYSTEM_TYPES = {
   ATTACHMENT: '_attachment',
   /** Stack-level configuration singleton. See ConfigContent. */
   CONFIG: '_config',
+  /** An owner's approval of an app's manifest. See InstallContent. */
+  INSTALL: '_install',
 } as const;
 
 // -------------------------------------------------------

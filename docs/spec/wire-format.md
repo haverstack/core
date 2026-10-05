@@ -25,7 +25,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it.
 
 ### Version negotiation
 
@@ -388,7 +388,7 @@ For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of gr
 
 ### Migration commit
 
-`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner** and answers `403` otherwise: migration is owner-driven, and no grant confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner**, and to an installed app migrating within the families its install claims (see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types)), and answers `403` otherwise: migration is owner-driven, and no grant alone confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
 
 ### Response envelope
 
@@ -607,7 +607,7 @@ GET  /types/:id    — get one type definition (id is URL-encoded)
 POST /types        — register a type, or evolve an existing one in place
 ```
 
-**`POST /types` is served to the stack owner acting alone** and answers `403` otherwise, delegation included — the same rule as [`POST /records/:id/migrate`](#migration-commit). A Type is stack-wide: every app reading the family validates against it, and no grant confers defining one (see [Access control § Type-level grants](./access-control.md#type-level-grants)). `ScopedStack` has no `defineType()`, so a server serves this endpoint through an unscoped `Stack` after checking `isOwnerActingAlone()`. `GET /types` and `GET /types/:id` stay open to any authenticated requester, since a client needs a schema to validate and render the records it can reach.
+**`POST /types` is served to the stack owner acting alone** and answers `403` otherwise, delegation included — the rule [`POST /records/:id/migrate`](#migration-commit) applies to everyone but an installed app. An app that needs its types defined ships them in its [manifest](./apps.md) for the owner to install. A Type is stack-wide: every app reading the family validates against it, and no grant confers defining one (see [Access control § Type-level grants](./access-control.md#type-level-grants)). `ScopedStack` has no `defineType()`, so a server serves this endpoint through an unscoped `Stack` after checking `isOwnerActingAlone()`. `GET /types` and `GET /types/:id` stay open to any authenticated requester, since a client needs a schema to validate and render the records it can reach.
 
 **The body is a whole Type**, as `GET /types/:id` returns one. `id`, `name` and `schema` are read, as is `migratesFrom` when present; `baseId`, `version`, `schemaHash` and `createdAt` are accepted and ignored, since `defineType()` derives or stamps each of them. Any other key is refused (see [Unrecognized input](#unrecognized-input)).
 
@@ -698,6 +698,29 @@ Owner only. Returns `409 Conflict` if any record in the stack still references t
 ### Access
 
 Attachment permissions are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
+
+## Installs
+
+```
+POST /installs  — present an app's manifest for the owner to approve
+```
+
+How an app holding its own key asks to be installed (see [App installs § Over the wire](./apps.md#over-the-wire)). Only the asking is specified here; the owner approves through whatever the server offers, with `Stack.planInstall()` and `installApp()`.
+
+**The body is `{ "manifest": { … } }`**, an `AppManifest`: `appId`, `name`, optional `version`, `types` (each read as a [`POST /types`](#types) body is) and `requests` (each `{ baseId, actions }`). `parseInstallBody()` from `@haverstack/core/wire` reads it, refusing an unknown key at either level with **400** like any other [unrecognized input](#unrecognized-input). **The key being installed is never in the body**: it is the session's principal.
+
+**The request must come from the key acting as itself.** A delegated session names someone else as the subject, and an install is for the key that authenticated, so it answers **403** (code `permission`).
+
+The server plans the manifest for the session's key and answers with the result:
+
+| Status | Body                                      | When                                                                                                                                             |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `202`  | `{ "status": "pending" }`                 | Applying the manifest would change something. The server queues it for the owner and writes nothing to the stack.                                |
+| `200`  | `{ "status": "installed", "install": … }` | The plan is empty — `isPlanEmpty()` from `@haverstack/core` decides — and `install` is the `_install` record, which the key can read.            |
+| `422`  | `validation`                              | The manifest defines a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons, or a request breaks the grant rules. |
+| `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                 |
+
+Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. A client refuses `requestInstall()` locally when discovery does not advertise `installs`, rather than learning it as a `404`.
 
 ## Entity
 
