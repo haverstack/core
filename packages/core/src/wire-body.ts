@@ -17,7 +17,7 @@
  * See docs/spec/wire-format.md § Unrecognized input.
  */
 
-import { StackBadRequestError, StackValidationError } from './errors.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import type { DefineTypeOptions } from './stack.js';
 import { assertKnownKeys, validateAssociation } from './query-validation.js';
 import type { AppManifest } from './install.js';
@@ -35,7 +35,7 @@ export function requireBody(body: unknown, label: string): Record<string, unknow
  * class carries the path.
  */
 export function fieldError(path: string, message: string): never {
-  throw new StackValidationError([{ path, message }]);
+  throw new StackValidationError([{ path, message }], ARGUMENTS_INVALID);
 }
 
 /** A body carrying only `keys`; anything else is refused rather than ignored. */
@@ -154,7 +154,7 @@ export function parseAssociationEditsBody(body: unknown): AssociationEdit[] {
       throw new StackBadRequestError(`Invalid ${label}: ${path}.op must be "add" or "remove"`);
     const association = requiredObject(edit, 'association', `${label} ${path}`);
     const errors = validateAssociation(association as never, `${path}.association`);
-    if (errors.length > 0) throw new StackValidationError(errors);
+    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
     return { op: edit.op, association } as AssociationEdit;
   });
 }

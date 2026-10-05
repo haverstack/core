@@ -59,13 +59,23 @@ export abstract class StackError extends Error {
   abstract readonly code: StackErrorCode;
 }
 
+export const CONTENT_INVALID = 'Content validation failed';
+export const ARGUMENTS_INVALID = 'Invalid arguments';
+export const SCHEMA_INVALID = 'Schema validation failed';
+
+/**
+ * `header` names what was validated — record content, or the arguments a
+ * call was given — so a refusal of `associate([])` doesn't read as a
+ * content failure. Only the message varies: `code` is the contract.
+ */
 export class StackValidationError extends StackError {
   static readonly code = 'validation' as const;
   override readonly code = StackValidationError.code;
-  constructor(public readonly errors: ValidationError[]) {
-    super(
-      `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
-    );
+  constructor(
+    public readonly errors: ValidationError[],
+    header: string = CONTENT_INVALID,
+  ) {
+    super(`${header}:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'));
     this.name = 'StackValidationError';
   }
 }

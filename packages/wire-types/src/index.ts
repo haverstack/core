@@ -389,7 +389,9 @@ export function deserializeError(body: WireError): Error {
   const { code, message, details, versionConflict, schemaDrift } = body.error;
   switch (code) {
     case 'validation':
-      return new StackValidationError(details ?? []);
+      // The header is the message's first line, kept so a reconstructed
+      // error still says what the server validated.
+      return new StackValidationError(details ?? [], message.split('\n')[0].replace(/:$/, ''));
     case 'permission':
       return new StackPermissionError(message);
     case 'not_found':

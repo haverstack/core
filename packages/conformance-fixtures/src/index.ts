@@ -2243,7 +2243,7 @@ export const installRequestFixtures: ConformanceFixture<
     responseBody: {
       error: {
         code: 'validation',
-        message: 'Content validation failed',
+        message: 'Invalid arguments',
         details: [
           {
             path: 'types[0].id',
@@ -2719,7 +2719,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'validation',
-        message: 'Content validation failed',
+        message: 'Invalid arguments',
         details: [
           {
             path: 'permissions[0]',
@@ -2755,7 +2755,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'validation',
-        message: 'Content validation failed',
+        message: 'Invalid arguments',
         details: [
           {
             path: 'permissions[0]',
@@ -3156,7 +3156,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'validation',
-        message: 'Content validation failed',
+        message: 'Invalid arguments',
         details: [
           {
             path: 'changes[0].association.label',

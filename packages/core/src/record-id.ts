@@ -10,7 +10,7 @@
  */
 
 import { isValidIdFormat, idTimestamp, MAX_ID_TIMESTAMP } from './id.js';
-import { StackBadRequestError, StackValidationError } from './errors.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import type { ValidationError } from './validate.js';
 
 // -------------------------------------------------------
@@ -134,11 +134,14 @@ export function validateIdTimestampSkew(
   if (toleranceMs === null) return;
   const skew = Math.abs(referenceMs - idTimestamp(id));
   if (skew > toleranceMs) {
-    throw new StackValidationError([
-      {
-        path: 'id',
-        message: `ID "${id}" timestamp disagrees with ${referenceLabel} by more than the allowed clock-skew tolerance (${toleranceMs}ms).`,
-      },
-    ]);
+    throw new StackValidationError(
+      [
+        {
+          path: 'id',
+          message: `ID "${id}" timestamp disagrees with ${referenceLabel} by more than the allowed clock-skew tolerance (${toleranceMs}ms).`,
+        },
+      ],
+      ARGUMENTS_INVALID,
+    );
   }
 }
