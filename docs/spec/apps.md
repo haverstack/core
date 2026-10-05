@@ -128,13 +128,13 @@ type InstallPlan = {
 
 `foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
-It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign or a key certificate that does not verify (`StackValidationError`), and a manifest under an `appId` live from another publisher, one older than the installed release, a new key with no certificate on an install whose `keysCertified` is set, or a `did` whose `_app` card names a different `appId` (`StackConflictError`).
+It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a type whose schema [`defineType()` would refuse](./data-model.md#types) or that is listed twice (`StackValidationError`), a type already defined whose new schema is not [additive](./data-model.md#schema-drift-detection) (`StackSchemaDriftError`), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign or a key certificate that does not verify (`StackValidationError`), and a manifest under an `appId` live from another publisher, one older than the installed release, a new key with no certificate on an install whose `keysCertified` is set, or a `did` whose `_app` card names a different `appId` (`StackConflictError`).
 
 A request is compared to the one the install holds by family and the _set_ of its actions, so repeating an action changes nothing.
 
 `installApp(plan, { verifyPublisher? })` applies the plan:
 
-1. Defines each of the manifest's types, with [schema drift](./data-model.md#schema-drift-detection) applying as it does to any `defineType()`.
+1. Defines each of the manifest's types. The plan has already refused a schema `defineType()` would, so a manifest's types are written all or none.
 2. Registers the key on an `_app` card when it has none, undeleting a soft-deleted one. An existing card's `name` is left alone: it is the owner's label.
 3. Creates the install, or patches it — undeleting it first if it was uninstalled, and unlinking the old keys if its publisher changed. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests`, `name`, `version` and `release` become the manifest's, and `keysCertified` is set when the key came with a certificate.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.

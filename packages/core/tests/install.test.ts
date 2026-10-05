@@ -4,6 +4,7 @@ import {
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
+  StackSchemaDriftError,
   StackValidationError,
 } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -279,6 +280,57 @@ describe('installApp()', () => {
     );
     expect(await stack.getType(COMMONS_NOTE)).not.toBeNull();
     expect(record.content.defines).toEqual([NOTE_1]);
+  });
+});
+
+describe("a manifest's schemas", () => {
+  const NEW_1 = 'com.example.notes/new@1';
+  const withNew = (schema: unknown): AppManifest =>
+    manifest({
+      types: [
+        { id: NEW_1, name: 'New', schema: { body: { kind: 'text' } } },
+        { id: NOTE_1, name: 'Note', schema: schema as AppManifest['types'][number]['schema'] },
+      ],
+    });
+
+  test('a non-additive change to a defined type is refused at plan time', async () => {
+    await install(manifest());
+    await expect(
+      planSigned(withNew({ text: { kind: 'number' } }), { did: APP_DID }),
+    ).rejects.toThrow(StackSchemaDriftError);
+  });
+
+  test('a malformed schema is refused at plan time, defined type or not', async () => {
+    for (const schema of [null, { text: { kind: 'object' } }]) {
+      await expect(planSigned(withNew(schema), { did: APP_DID })).rejects.toThrow(
+        StackValidationError,
+      );
+    }
+    await install(manifest());
+    for (const schema of [null, { text: { kind: 'object' } }]) {
+      await expect(planSigned(withNew(schema), { did: APP_DID })).rejects.toThrow(
+        StackValidationError,
+      );
+    }
+  });
+
+  test('a schema declaring a reserved or unaddressable field name is refused', async () => {
+    await expect(
+      planSigned(withNew({ 'a.b': { kind: 'text' } }), { did: APP_DID }),
+    ).rejects.toThrow(StackValidationError);
+  });
+
+  test('a type listed twice is refused', async () => {
+    const m = manifest({ types: [...manifest().types, ...manifest().types] });
+    await expect(planSigned(m, { did: APP_DID })).rejects.toThrow(StackValidationError);
+  });
+
+  test('a refused manifest writes none of its types', async () => {
+    await install(manifest());
+    await expect(install(withNew({ text: { kind: 'number' } }))).rejects.toThrow(
+      StackSchemaDriftError,
+    );
+    expect(await stack.getType(NEW_1)).toBeNull();
   });
 });
 

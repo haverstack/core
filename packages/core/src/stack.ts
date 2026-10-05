@@ -2920,6 +2920,10 @@ export class Stack implements StackClient {
       const current = await this.getTypeCached(t.id);
       if (!current) typeChanges.push({ id: t.id, change: 'new' });
       else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
+        // Refused here, not left to defineType(): installApp() defines types one
+        // by one, so a drift found there leaves the earlier ones written.
+        const violations = diffSchemas(current.schema, t.schema as TypeSchema);
+        if (violations.length > 0) throw new StackSchemaDriftError(t.id, violations);
         typeChanges.push({ id: t.id, change: 'schema' });
       } else if (current.name !== t.name) typeChanges.push({ id: t.id, change: 'name' });
     }
@@ -3086,7 +3090,22 @@ export class Stack implements StackClient {
     if (!Number.isSafeInteger(manifest.release) || manifest.release < 1) {
       errors.push({ path: 'release', message: 'Expected a positive integer release' });
     }
+    const seen = new Set<string>();
     manifest.types.forEach((t, i) => {
+      if (seen.has(t.id)) {
+        errors.push({ path: `types[${i}].id`, message: `"${t.id}" is listed more than once` });
+      }
+      seen.add(t.id);
+      const schemaPath = `types[${i}].schema`;
+      const shapeErrors = validateSchemaShape(t.schema, schemaPath);
+      errors.push(...shapeErrors);
+      if (shapeErrors.length === 0) {
+        const schema = t.schema as TypeSchema;
+        for (const e of validateSchemaReservedNames(schema)) {
+          errors.push({ ...e, path: `${schemaPath}.${e.path}` });
+        }
+        validateSchemaFieldNames(schema, schemaPath, errors);
+      }
       const parsed = parseTypeId(t.id);
       if (!parsed) {
         errors.push({ path: `types[${i}].id`, message: 'Expected a versioned TypeId' });
