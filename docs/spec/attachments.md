@@ -91,6 +91,8 @@ A `GET /attachments/:fileId` download resolves only steps 2 and 3 — it names a
 
 Keeping it outside identity is what leaves the rest of the model alone. [Garbage collection](#garbage-collection), `deleteAttachment()`'s reference check, the `referencesFileId` filter and attachment access conveyance all ask a `fileId`-level question — "does any record reference this content" — and continue to ask exactly that. For the same reason a [`file-ref` content field](./data-model.md#types) carries no pointer: a field holding a fileId names content, and an app that needs a per-reference name uses an Association.
 
+**Returned bytes are a plain, independent `Uint8Array`.** `getAttachment()` returns the same type on every adapter — a `Uint8Array` whose prototype is exactly `Uint8Array.prototype`, never a subclass such as `Buffer`. The array is the caller's own: changing it never changes the stored bytes, and changing the array passed to `putAttachment()` afterwards never changes the stored copy.
+
 ## `Stack` vs `ScopedStack` methods
 
 - `Stack.putAttachment(data, { mimeType, filename?, appId? })` — owner-level upload. Creates an `_attachment@1` record with no `createdBy`. No grant check.

@@ -43,7 +43,7 @@ export const RECORD_SCHEMA_SQL = `
   --
   -- attachment_record_id stays out of the primary key: it annotates a
   -- reference rather than naming one, so re-pointing it updates the row an
-  -- associate() lands on instead of writing a second reference to the same
+  -- an amendAssociations() add lands on instead of writing a second reference to the same
   -- file. See docs/spec/attachments.md § Naming the upload a reference came from.
   --
   -- The primary key leads with record_id, so its implicit index already
@@ -92,7 +92,7 @@ export const RECORD_SCHEMA_SQL = `
     -- No 'purged': a purge destroys the log rather than appending to it,
     -- so the constraint names exactly the kinds an entry can carry.
     -- See docs/spec/journal.md § A purge destroys the journal.
-    kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'deleted')),
+    kind        TEXT NOT NULL CHECK (kind IN ('created', 'changed', 'removed')),
     ops         TEXT NOT NULL CHECK (json_valid(ops)),
     version     INTEGER NOT NULL,
     type_id     TEXT NOT NULL,
@@ -234,8 +234,8 @@ export type RecordSchemaOptions = {
 /**
  * Brings a records database up to the schema every SQLite record adapter
  * expects: foreign keys on, then the tables and the FTS5 index. Every
- * statement is idempotent, so an engine that has no
- * initialize()/open() split can run this on each attach.
+ * statement is idempotent, so an engine that cannot tell
+ * whether a store exists can run this on each attach.
  */
 export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
   exec.exec(PRAGMA_FOREIGN_KEYS_ON);

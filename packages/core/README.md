@@ -19,7 +19,7 @@ You'll also need a storage adapter:
 ## Quick start
 
 ```ts
-import { Stack } from '@haverstack/core';
+import { Stack, typeHandle } from '@haverstack/core';
 import { generateDidKeypair, exportDidPrivateKeyJwk } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
 import { writeFile } from 'node:fs/promises';
@@ -28,11 +28,12 @@ const dbPath = './my-stack.db';
 const keyPath = './my-stack.key.json'; // see "Key custody" under Identity for where this really belongs
 
 // First run: neither file exists yet, so this generates an identity
-// keypair and persists the private key before initializing. Every run
+// keypair and persists the private key before creating the store. Every run
 // after that: the db exists, so this just opens it — the ownerEntityId
 // function below is never called, so no throwaway keypair is minted.
-const adapter = await LocalAdapter.openOrInitialize({
+const adapter = await LocalAdapter.open({
   path: dbPath,
+  create: 'ifMissing',
   timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
@@ -45,27 +46,28 @@ const adapter = await LocalAdapter.openOrInitialize({
 // safe to keep passing on every open, it's a no-op once the record exists.
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
-// Define a type
-await stack.defineType({
-  id: 'com.example.myapp/note@1',
-  name: 'Note',
-  schema: {
-    text: { kind: 'text', required: true },
-    title: { kind: 'string' },
-  },
+// Define a type. The handle carries the id and schema, and the compiler
+// derives the content type from it — no separate interface to keep in step.
+const Note = typeHandle('com.example.myapp/note@1', {
+  text: { kind: 'text', required: true },
+  title: { kind: 'string' },
 });
+await stack.defineType({ ...Note, name: 'Note' });
 
 // Create a record
-const note = await stack.create('com.example.myapp/note@1', {
+const note = await stack.create(Note, {
   text: 'Hello, Haverstack!',
   title: 'My first note',
 });
 
 // Update its content (partial merge — only changed fields needed)
-await stack.patchContent(note.id, { title: 'Updated title' });
+await stack.patchContent(Note, note.id, { title: 'Updated title' });
+
+// Read it back, typed: `content.text` is a string
+const same = await stack.get(Note, note.id);
 
 // Tag it
-await stack.associate(note.id, { kind: 'tag', label: 'favourite' });
+await stack.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
 
 // Or change several things at once — one version, one atomic write
 await stack.mutate(note.id, {
@@ -74,7 +76,8 @@ await stack.mutate(note.id, {
   unlisted: false,
 });
 
-// Query
+// Query. With no filter, query() returns every record you can read, from every
+// app and system types included, so filter by typeId, baseId or appId to get your own.
 const notes = await stack.query({
   filter: { typeId: 'com.example.myapp/note@1', tags: ['favourite'] },
   sort: { field: 'createdAt', direction: 'desc' },
@@ -83,6 +86,66 @@ const notes = await stack.query({
 // Tear down when done
 await stack.close();
 ```
+
+## Writing an app
+
+An app has two layers, because the stack draws a line between them:
+
+- **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
+- **An install function that takes a `Stack`**, run by the owner. Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`. Over the wire, `POST /types` and `POST /records/:id/migrate` are served to the owner acting alone.
+
+`registerMigration()` belongs to neither. Its registry lives in memory on each `Stack` instance, so it runs at **every startup**, right after `Stack.open()` — an install function that registers migrations and runs once leaves every later start without them.
+
+```ts
+import { Stack, typeHandle, type StackClient } from '@haverstack/core';
+
+const NoteV1 = typeHandle('com.example.myapp/note@1', {
+  text: { kind: 'text', required: true },
+});
+export const Note = typeHandle('com.example.myapp/note@2', {
+  text: { kind: 'text', required: true },
+  pinned: { kind: 'boolean', required: true },
+});
+
+// Data layer: whoever the stack lets in.
+export class Notes {
+  constructor(private readonly client: StackClient) {}
+  add(text: string) {
+    return this.client.create(Note, { text, pinned: false });
+  }
+  pin(id: string) {
+    return this.client.patchContent(Note, id, { pinned: true });
+  }
+  list() {
+    return this.client.query(Note);
+  }
+}
+
+// Startup: every open, every Stack instance.
+export function registerNoteMigrations(stack: Stack) {
+  stack.registerMigration({
+    from: NoteV1.id,
+    to: Note.id,
+    migrate: (content) => ({ ...content, pinned: false }),
+  });
+}
+
+// Install: the owner, once per stack and again after a schema change.
+// defineType() is a no-op for a schema already stored, so re-running is safe.
+export async function installNotes(stack: Stack, appDid?: string) {
+  await stack.defineType({ ...NoteV1, name: 'Note' });
+  await stack.defineType({ ...Note, name: 'Note', migratesFrom: NoteV1.id });
+  await stack.migrateAll(Note.baseId);
+  if (appDid) {
+    await stack.grantType(Note.baseId, {
+      actions: ['create', 'read-own', 'update-own', 'delete-own'],
+      grantee: { kind: 'entity', entityId: appDid },
+    });
+  }
+}
+```
+
+The owner's own app calls `registerNoteMigrations(stack)` and `installNotes(stack)`, then `new Notes(stack)`. A server hands each requester `new Notes(stack.asActor(session))`. An app that isn't the owner has no way to install its own types yet; the owner runs its install function for it.
 
 ## Core concepts
 
@@ -140,7 +203,7 @@ stack.registerMigration({
 });
 ```
 
-Migration is **lazy** — records are migrated in memory on read and committed to disk on the next update. Use `stack.migrateAll()` to commit eagerly.
+Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Register migrations at every startup — see [Writing an app](#writing-an-app).
 
 ## License
 

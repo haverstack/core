@@ -21,9 +21,10 @@ import {
   parseTypeId,
   baseIdOf,
   diffSchemas,
-  isWellFormedTypeId,
+  familyIdProblem,
 } from './schema.js';
 import {
+  dropAbsentFields,
   validateContent,
   validateContentKeys,
   validatePatchValues,
@@ -33,7 +34,7 @@ import {
   validateSchemaShape,
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
-import { hasGroupAdmin, isGroupAdminAssociation, validatePermissions } from './access.js';
+import { hasGroupAdmin, validatePermissions } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from './types.js';
@@ -49,6 +50,7 @@ import type {
   RecordFilter,
   QueryResult,
   Association,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   Migration,
@@ -66,7 +68,10 @@ import type {
   ConfigContent,
   EntityId,
   EntityContent,
+  AppContent,
   AppId,
+  InstallContent,
+  InstallRequest,
   RecordId,
   Actor,
   ActorOptions,
@@ -76,6 +81,7 @@ import type {
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
 } from './types.js';
 
@@ -94,12 +100,15 @@ import {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidAssociationFilters,
+  assertValidBaseIdFilter,
   assertValidJournalQuery,
+  assertValidVersionsQuery,
   assertValidSort,
+  normalizeSort,
+  assertAssociationEdits,
   assertAuthorityAssociations,
   assertDataAssociations,
   filtersContent,
-  validateAssociation,
   validateAssociations,
 } from './query-validation.js';
 import {
@@ -110,12 +119,30 @@ import {
   matchesGrantTarget,
   validateGrantTarget,
   validateGrantee,
+  validateGrantBaseId,
   grantCoversGrantee,
-  UNGRANTABLE_SYSTEM_TYPES,
   loadGrantRecords,
 } from './grants.js';
 import type { GrantQuery } from './grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+import {
+  claimedFamilies,
+  familyStanding,
+  grantIsRequest,
+  installAppLink,
+  installGrantLink,
+  installReader,
+  linkedIds,
+  namespaceOf,
+  ownTypeIds,
+  planFingerprint,
+  sameRequest,
+  snapshotManifest,
+  validateInstall,
+  INSTALL_APP_LABEL,
+  INSTALL_GRANT_LABEL,
+} from './install.js';
+import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateParentId,
@@ -131,8 +158,8 @@ import {
   MAX_QUERY_LIMIT,
 } from './stack-reads.js';
 import {
+  applyAssociationEdits,
   associationDelta,
-  associationEqual,
   associationIdentical,
   assertNonEmptyChangeSet,
   changeSetOps,
@@ -143,6 +170,25 @@ import {
   isGroupRecord,
 } from './record-changes.js';
 import { ScopedStack, scopeToken } from './scoped-stack.js';
+import {
+  isTypeHandle,
+  typedCreate,
+  typedGet,
+  typedMutate,
+  typedQuery,
+  typedSubscribe,
+} from './type-handle.js';
+import type {
+  ContentOf,
+  PatchOf,
+  ReadonlyTypeSchema,
+  TypedChange,
+  TypedChangeSet,
+  TypedQuery,
+  TypedSubscribeOptions,
+  TypedRecord,
+  TypeHandle,
+} from './type-handle.js';
 
 // -------------------------------------------------------
 // Supporting types
@@ -294,6 +340,12 @@ export type GetRecordOptions = {
    * See docs/spec/data-model.md § Type migrations.
    */
   presentAt?: 'stored' | 'latest';
+  /**
+   * Soft-deleted records are hidden by default, as query() hides them: a
+   * tombstone reads as `null`. Pass true to read it back.
+   * See docs/spec/versioning.md § Deletion.
+   */
+  includeDeleted?: boolean;
 };
 
 export type DeleteRecordOptions = IfVersionOptions & {
@@ -334,11 +386,23 @@ export type DeleteAndReturnResult = DeleteResult & {
   record: StackRecord | null;
 };
 
+/** Options for Stack.migrateAll(). */
+export type MigrateAllOptions = {
+  /**
+   * `'all'` (the default) sweeps every record of the family, deleted and
+   * unlisted included. `'listed'` sweeps only what a non-owner can
+   * enumerate and read whole. See docs/spec/apps.md § Migrating an
+   * installed app's types.
+   */
+  sweep?: 'all' | 'listed';
+};
+
 /** The argument to Stack.defineType(). */
 export type DefineTypeOptions = {
   id: TypeId;
   name: string;
-  schema: TypeSchema;
+  /** A handle's `schema` is accepted as written, readonly members and all. */
+  schema: ReadonlyTypeSchema;
   migratesFrom?: TypeId;
 };
 
@@ -353,12 +417,33 @@ export type DefineTypeOptions = {
  */
 export interface StackClient {
   readonly capabilities: StackCapabilities;
+  create<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    content: ContentOf<S>,
+    opts?: CreateRecordOptions,
+  ): Promise<TypedRecord<S>>;
   create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
     opts?: CreateRecordOptions,
   ): Promise<StackRecord & { content: T }>;
+  /**
+   * Typed read: the record at `presentAt: 'latest'`, checked to be exactly
+   * the handle's Type with every enum field holding a value the handle
+   * lists, else it throws. Live records only — a tombstone reads as `null`,
+   * and there is no `includeDeleted`.
+   * See docs/spec/data-model.md § Type handles.
+   */
+  get<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+  ): Promise<TypedRecord<S> | null>;
   get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  /** Typed read of the handle's whole family — see the typed `get()`. */
+  query<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    query?: TypedQuery,
+  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
   query(query?: StackQuery): Promise<QueryResult>;
   /**
    * Resolve a DID to its `_entity` card — family-wide and soft-deleted
@@ -380,30 +465,58 @@ export interface StackClient {
    * one refused key refuses the call.
    * See docs/spec/data-model.md § Mutations.
    */
+  mutate<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    changes: TypedChangeSet<S>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>>;
   mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
   /** mutate() with `contentPatch` alone — the common case, named for it. */
+  patchContent<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    patch: PatchOf<S>,
+    opts?: IfVersionOptions,
+  ): Promise<TypedRecord<S>>;
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   /**
-   * Add an association. Never bumps `version`/`updatedAt` and takes no
-   * `ifVersion` — a set-add composes regardless of write order.
-   * See docs/spec/versioning.md § Version history.
+   * Add associations in one atomic write and one journal entry. Never bumps
+   * `version`/`updatedAt` and takes no `ifVersion` — a set-add composes
+   * regardless of write order. See docs/spec/data-model.md § Mutations and
+   * docs/spec/versioning.md § Version history.
    */
-  associate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
-  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: RecordId, association: DataAssociation): Promise<StackRecord>;
+  associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
+  /** Remove associations, matched by identity — see associate(). */
+  dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
   /**
-   * Extend who reaches a record by one element — the record-level mirror of
-   * the type-level `grantType()`, and the amending spelling of the
-   * `permissions` key, which replaces the whole set. No-bump, like
-   * associate(). See docs/spec/access-control.md § Record-level permissions.
+   * Apply a list of adds and removes to a record's data associations as one
+   * atomic write — the cover swap. associate() and dissociate() are this with
+   * one half each; `mutate({ associations })` is the only whole-set write.
+   * `repoint` is not a request: an add naming an attachment the record
+   * already holds re-points it. See docs/spec/data-model.md § Mutations.
    */
-  grantAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
-  /** Withdraw one element of who reaches a record — see grantAccess(). */
-  revokeAccess(id: RecordId, permission: AuthorityAssociation): Promise<StackRecord>;
+  amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
+  /**
+   * Extend who reaches a record — the record-level mirror of the type-level
+   * `grantType()`, and the amending spelling of the `permissions` key, which
+   * replaces the whole set. `write` never implies `read`: grant both,
+   * `grantAccess(id, [read, write])`. No-bump, like associate().
+   * See docs/spec/access-control.md § Write implies read.
+   */
+  grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
+  /** Withdraw elements of who reaches a record — see grantAccess(). */
+  revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
+  /**
+   * amendAssociations() for permissions: adds and removes in one atomic
+   * write, so a downgrade (remove `write`, keep `read`) is one change.
+   * See docs/spec/access-control.md § Record-level permissions.
+   */
+  amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
   delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   /**
    * delete(), plus the record it acted on — read and destroyed as one
@@ -413,7 +526,7 @@ export interface StackClient {
    */
   deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
   undelete(id: RecordId, opts?: IfVersionOptions): Promise<StackRecord>;
-  getVersions(id: RecordId): Promise<RecordVersion[]>;
+  getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: RecordId, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
@@ -449,6 +562,16 @@ export interface StackClient {
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
+  /**
+   * Typed subscription: delivers only changes to records of exactly the
+   * handle's Type, each `record` typed as its content. See
+   * docs/spec/data-model.md § Type handles.
+   */
+  subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
@@ -629,8 +752,15 @@ export class Stack implements StackClient {
    * anything beyond additive evolution throws StackSchemaDriftError. See
    * docs/spec/data-model.md § Schema drift detection.
    */
-  async defineType({ id, name, schema, migratesFrom }: DefineTypeOptions): Promise<StackType> {
+  async defineType({
+    id,
+    name,
+    schema: declared,
+    migratesFrom,
+  }: DefineTypeOptions): Promise<StackType> {
     this.assertOpen();
+    // Only read below; the readonly view exists so a handle's literal fits.
+    const schema = declared as TypeSchema;
     const parsed = parseTypeId(id);
     if (!parsed) {
       throw new StackBadRequestError(
@@ -780,9 +910,19 @@ export class Stack implements StackClient {
    * the only way disk state changes version. Sweeps soft-deleted records
    * too, validates each result before writing, and aborts on the first
    * validation failure. See docs/spec/data-model.md § Type migrations.
+   *
+   * `sweep: 'listed'` is for a contained app over `APIAdapter`, which can
+   * neither enumerate unlisted records nor read a deleted one's content:
+   * it migrates live, listed records and counts the deleted ones it passed
+   * over in `skipped`. See docs/spec/apps.md § Migrating an installed app's types.
    */
-  async migrateAll(baseId: BaseId): Promise<{ migrated: number }> {
+  async migrateAll(
+    baseId: BaseId,
+    opts: MigrateAllOptions = {},
+  ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
+    const problem = familyIdProblem(baseId, 'migrateAll');
+    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
     const types = await this.adapter.listTypes();
     const familyTypeIds = types.filter((t) => t.baseId === baseId).map((t) => t.id);
 
@@ -790,7 +930,9 @@ export class Stack implements StackClient {
       throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
     }
 
+    const listedOnly = opts.sweep === 'listed';
     let migrated = 0;
+    let skipped = 0;
 
     for (const typeId of familyTypeIds) {
       const latestId = this.latestTypeId(typeId);
@@ -807,12 +949,16 @@ export class Stack implements StackClient {
       let cursor: string | undefined;
       do {
         const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId, includeDeleted: true, includeUnlisted: true },
+          filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
           limit: 100,
           cursor,
         });
 
         for (const record of result.records) {
+          if (listedOnly && record.deletedAt) {
+            skipped++;
+            continue;
+          }
           // Same checked path commitMigration() takes — a migration
           // function is no more entitled to move a DID binding or repoint
           // an attachment than a request body is. No ifVersion: a batch
@@ -825,7 +971,7 @@ export class Stack implements StackClient {
       } while (cursor);
     }
 
-    return { migrated };
+    return { migrated, skipped };
   }
 
   // -------------------------------------------------------
@@ -843,16 +989,30 @@ export class Stack implements StackClient {
    * — see BackdatableCreateRecordOptions and docs/spec/data-model.md §
    * Record IDs.
    */
+  async create<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    content: ContentOf<S>,
+    opts?: BackdatableCreateRecordOptions,
+  ): Promise<TypedRecord<S>>;
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
+    opts?: BackdatableCreateRecordOptions,
+  ): Promise<StackRecord & { content: T }>;
+  async create(
+    typeIdOrHandle: TypeId | TypeHandle,
+    input: Record<string, unknown>,
     opts: BackdatableCreateRecordOptions = {},
-  ): Promise<StackRecord & { content: T }> {
+  ): Promise<StackRecord> {
+    if (isTypeHandle(typeIdOrHandle))
+      return typedCreate(this, typeIdOrHandle, input as never, opts);
+    const typeId = typeIdOrHandle;
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
       throw new StackBadRequestError(`Unknown type: "${typeId}". Call defineType() first.`);
     }
+    const content = dropAbsentFields(input, type.schema);
 
     // Copied, never aliased: an import loop that reuses one Date across rows
     // (`d.setTime(...)` per record) would otherwise retro-edit every record
@@ -878,6 +1038,8 @@ export class Stack implements StackClient {
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
       ...validateGrantee(typeId, content),
+      ...validateGrantBaseId(typeId, content),
+      ...validateInstall(typeId, content),
       ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -975,7 +1137,7 @@ export class Stack implements StackClient {
     const change = new PendingChange('create', { actor: Stack.createActor(record) });
     const created = await this.adapter.createRecord(record, { journal: change.journal });
     this.announce(change, created);
-    return created as StackRecord & { content: T };
+    return created;
   }
 
   /**
@@ -1016,12 +1178,25 @@ export class Stack implements StackClient {
   /**
    * Get a record by ID, exactly as stored — no implicit migration. Pass
    * { presentAt: 'latest' } to migrate in memory; only migrateAll()
-   * commits migrations to disk.
+   * commits migrations to disk. A soft-deleted record answers `null` unless
+   * { includeDeleted: true } is passed.
    */
-  async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
+  async get<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+  ): Promise<TypedRecord<S> | null>;
+  async get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
+  async get(
+    idOrHandle: RecordId | TypeHandle,
+    idOrOpts: RecordId | GetRecordOptions = {},
+  ): Promise<StackRecord | null> {
+    if (isTypeHandle(idOrHandle)) return typedGet(this, idOrHandle, idOrOpts as RecordId);
+    const id = idOrHandle;
+    const opts = idOrOpts as GetRecordOptions;
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
+    if (record.deletedAt && !opts.includeDeleted) return null;
     return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
   }
 
@@ -1035,11 +1210,35 @@ export class Stack implements StackClient {
    * against the record's *current* stored type; `typeId` never changes here.
    * See docs/spec/data-model.md § Mutations.
    */
+  async mutate<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    changes: TypedChangeSet<S>,
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<TypedRecord<S>>;
   async mutate(
     id: RecordId,
     changes: RecordChangeSet,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<StackRecord>;
+  async mutate(
+    first: RecordId | TypeHandle,
+    second: RecordId | RecordChangeSet | TypedChangeSet<ReadonlyTypeSchema>,
+    third?: (IfVersionOptions & ActorOptions) | RecordChangeSet,
+    fourth: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
+    if (isTypeHandle(first)) {
+      return typedMutate(
+        this,
+        first,
+        second as RecordId,
+        third as TypedChangeSet<ReadonlyTypeSchema>,
+        fourth,
+      );
+    }
+    const id = first;
+    const changes = second as RecordChangeSet;
+    const opts = (third ?? {}) as IfVersionOptions & ActorOptions;
     this.assertOpen();
     assertNonEmptyChangeSet(changes);
 
@@ -1047,6 +1246,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
 
     // Checked before validation, so a caller that lost the race learns its
     // version is stale rather than that its patch is bad, and before the
@@ -1105,12 +1305,27 @@ export class Stack implements StackClient {
    * and named for what it does rather than for a symmetry with create()
    * that a patch does not have.
    */
+  async patchContent<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    id: RecordId,
+    patch: PatchOf<S>,
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<TypedRecord<S>>;
   async patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts?: IfVersionOptions & ActorOptions,
+  ): Promise<StackRecord>;
+  async patchContent(
+    first: RecordId | TypeHandle,
+    second: RecordId | Record<string, unknown | null>,
+    third?: Record<string, unknown | null> | (IfVersionOptions & ActorOptions),
+    fourth?: IfVersionOptions & ActorOptions,
   ): Promise<StackRecord> {
-    return this.mutate(id, { contentPatch: patch }, opts);
+    if (isTypeHandle(first)) {
+      return this.mutate(first, second as RecordId, { contentPatch: third as never }, fourth);
+    }
+    return this.mutate(first, { contentPatch: second as Record<string, unknown | null> }, third);
   }
 
   /**
@@ -1171,6 +1386,8 @@ export class Stack implements StackClient {
       const contentErrors = [
         ...validateContent(merged, type.schema),
         ...validateGrantee(existing.typeId, merged),
+        ...validateGrantBaseId(existing.typeId, merged),
+        ...validateInstall(existing.typeId, merged),
       ];
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
@@ -1230,7 +1447,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add an association to a record — no-bump and no snapshot, per the
+   * Add associations to a record — no-bump and no snapshot, per the
    * StackClient declaration above.
    *
    * An association the record already holds, saying the same thing, is a
@@ -1242,138 +1459,141 @@ export class Stack implements StackClient {
    */
   async associate(
     id: RecordId,
-    association: DataAssociation,
+    associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertDataAssociations([association], 'associate()');
-    const errors = validateAssociation(association);
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    if ((existing.associations ?? []).some((a) => associationIdentical(a, association))) {
-      return existing;
-    }
-    const replaced = (existing.associations ?? []).find((a) => associationEqual(a, association));
-    await this.checkAttachmentAssociationPointers([association]);
-
-    const change = new PendingChange('associate', {
-      actor: normalizeActor(opts.actor),
-      // A re-point carries what it overwrote: nothing else retains the
-      // attachmentRecordId that association held.
-      associations: [
-        replaced ? { op: 'repoint', association, previous: replaced } : { op: 'add', association },
-      ],
-    });
-    const updated = await this.adapter.associate(id, association, { journal: change.journal });
-    this.announce(change, updated);
-    return updated;
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'add', association })),
+      opts,
+      'associate()',
+    );
   }
 
   /**
-   * Remove an association from a record — see associate(). Matched by kind,
-   * label and payload; a no-op if not found. The emitted event names the
-   * association by identity only, since an attachment's
+   * Remove associations from a record — see associate(). Matched by kind,
+   * label and payload; an element not found is a no-op. The emitted event
+   * names each association by identity only, since an attachment's
    * `attachmentRecordId` describes nothing current once it is gone; the
    * journal is where it survives.
    */
   async dissociate(
     id: RecordId,
-    association: DataAssociation,
+    associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertDataAssociations([association], 'dissociate()');
-    const errors = validateAssociation(association);
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
-    const matched = (existing.associations ?? []).find((a) => associationEqual(a, association));
-    if (!matched) {
-      return existing;
-    }
-    // Removing anything else cannot take the roster to zero, so only an
-    // admin entry is worth deriving the post-state for. Derived rather than
-    // counted so this path and the change set's reach the invariant through
-    // the same helper, asking the same question of the same shape of list.
-    if (isGroupAdminAssociation(association)) {
-      this.assertGroupAdminRemains(
-        existing,
-        (existing.associations ?? []).filter((a) => !associationEqual(a, association)),
-      );
-    }
+    return this.amendAssociations(
+      id,
+      associations.map((association) => ({ op: 'remove', association })),
+      opts,
+      'dissociate()',
+    );
+  }
 
-    const change = new PendingChange('dissociate', {
-      actor: normalizeActor(opts.actor),
-      // In full, annotation included — what makes a removal as undoable
-      // from the log as a re-point is. The frame this becomes still names
-      // identity only. See docs/spec/journal.md § The entry.
-      associations: [{ op: 'remove', previous: matched }],
-    });
-    const updated = await this.adapter.dissociate(id, association, { journal: change.journal });
+  /**
+   * The atomic form of associate() and dissociate(): one list of adds and
+   * removes, one adapter write, one journal entry. The journal records each
+   * element in full — a remove with its annotation, a re-point with what it
+   * overwrote — so the entry is as undoable as a single-element one.
+   * See docs/spec/data-model.md § Mutations.
+   */
+  async amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts: ActorOptions = {},
+    surface = 'amendAssociations()',
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertAssociationEdits(changes, surface, 'data');
+    const existing = await this.requireRecord(id);
+    this.refuseIfDeleted(existing);
+    const current = existing.associations ?? [];
+    const next = applyAssociationEdits(current, changes) as DataAssociation[];
+    const delta = associationDelta(current, next);
+    if (delta.length === 0) return existing;
+    // Only a roster can lose its last admin, and only the post-state says so.
+    this.assertGroupAdminRemains(existing, next);
+    await this.checkAttachmentAssociationPointers(
+      changes.flatMap((c) => (c.op === 'add' ? [c.association] : [])),
+      current,
+    );
+
+    const change = new PendingChange(
+      [
+        ...(delta.some((c) => c.op !== 'remove') ? (['associate'] as const) : []),
+        ...(delta.some((c) => c.op === 'remove') ? (['dissociate'] as const) : []),
+      ],
+      { actor: normalizeActor(opts.actor), associations: delta },
+    );
+    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
     this.announce(change, updated);
     return updated;
   }
 
   /**
-   * Extend who reaches a record by one element. The spelling that survives
-   * two admins sharing a record at once: a `permissions` key write replaces
-   * the whole set, so the later of two concurrent ones drops what the
-   * earlier granted. No-bump, like associate(); an element the record
-   * already carries is a no-op.
+   * Extend who reaches a record. The spelling that survives two admins
+   * sharing a record at once: a `permissions` key write replaces the whole
+   * set, so the later of two concurrent ones drops what the earlier
+   * granted. No-bump, like associate(); an element the record already
+   * carries is a no-op. `write` never implies `read` — name both.
    */
   async grantAccess(
     id: RecordId,
-    permission: AuthorityAssociation,
+    permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    this.assertOpen();
-    assertAuthorityAssociations([permission], 'grantAccess()');
-    const errors = validateAssociation(permission, 'permission');
-    if (errors.length > 0) throw new StackValidationError(errors);
-    const existing = await this.requireRecord(id);
-    const current = existing.permissions ?? [];
-    if (current.some((p) => associationEqual(p, permission))) return existing;
-    this.assertPermissionSet([...current, permission]);
-
-    const change = new PendingChange('reshare', {
-      actor: normalizeActor(opts.actor),
-      associations: [{ op: 'add', association: permission }],
-    });
-    const updated = await this.adapter.associate(id, permission, { journal: change.journal });
-    this.announce(change, updated);
-    return updated;
+    return this.amendAccess(
+      id,
+      permissions.map((association) => ({ op: 'add', association })),
+      opts,
+      'grantAccess()',
+    );
   }
 
   /**
-   * Withdraw one element of who reaches a record — see grantAccess() for
-   * why this is a verb rather than a key write. An element the record does
-   * not carry is a no-op. Returns the record as it now stands.
+   * Withdraw elements of who reaches a record — see grantAccess() for why
+   * this is a verb rather than a key write. An element the record does not
+   * carry is a no-op. Returns the record as it now stands.
    */
   async revokeAccess(
     id: RecordId,
-    permission: AuthorityAssociation,
+    permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    return this.amendAccess(
+      id,
+      permissions.map((association) => ({ op: 'remove', association })),
+      opts,
+      'revokeAccess()',
+    );
+  }
+
+  /**
+   * The atomic form of grantAccess() and revokeAccess(). The
+   * write-implies-read invariant is asked once, of the set the whole list
+   * produces. See docs/spec/access-control.md § Write implies read.
+   */
+  async amendAccess(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts: ActorOptions = {},
+    surface = 'amendAccess()',
+  ): Promise<StackRecord> {
     this.assertOpen();
-    assertAuthorityAssociations([permission], 'revokeAccess()');
-    const errors = validateAssociation(permission, 'permission');
-    if (errors.length > 0) throw new StackValidationError(errors);
+    assertAssociationEdits(changes, surface, 'authority');
     const existing = await this.requireRecord(id);
+    this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
-    const matched = current.find((p) => associationEqual(p, permission));
-    if (!matched) return existing;
-    this.assertPermissionSet(current.filter((p) => !associationEqual(p, permission)));
+    const next = applyAssociationEdits(current, changes) as AuthorityAssociation[];
+    const delta = associationDelta(current, next);
+    if (delta.length === 0) return existing;
+    this.assertPermissionSet(next);
 
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
-      associations: [{ op: 'remove', previous: matched }],
+      associations: delta,
     });
-    const updated = await this.adapter.dissociate(id, permission, { journal: change.journal });
+    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
     this.announce(change, updated);
     return updated;
   }
@@ -1385,6 +1605,21 @@ export class Stack implements StackClient {
   private assertPermissionSet(next: AuthorityAssociation[]): void {
     const errors = validatePermissions(next);
     if (errors.length > 0) throw new StackValidationError(errors);
+  }
+
+  /**
+   * A soft-deleted record has no current state to edit, so the verbs that
+   * edit one refuse it; undelete() and commitMigration() do not call this.
+   * Asked after the record is found and, under ScopedStack, after the
+   * authority decision. See docs/spec/versioning.md § Mutations are refused,
+   * not applied to a tombstone.
+   */
+  private refuseIfDeleted(record: StackRecord): void {
+    if (record.deletedAt) {
+      throw new StackConflictError(
+        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
+      );
+    }
   }
 
   /** The record, or the not-found refusal every mutating verb owes. */
@@ -1573,13 +1808,24 @@ export class Stack implements StackClient {
    * stored; pass presentAt: 'latest' to migrate in memory. See
    * docs/spec/data-model.md § Queries.
    */
-  async query(query: StackQuery = {}): Promise<QueryResult> {
+  async query<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    query?: TypedQuery,
+  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
+  async query(query?: StackQuery): Promise<QueryResult>;
+  async query(
+    first: TypeHandle | StackQuery = {},
+    typedQueryArg?: TypedQuery,
+  ): Promise<QueryResult> {
+    if (isTypeHandle(first)) return typedQuery(this, first, typedQueryArg);
+    const query = first;
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.adapter.capabilities);
     assertValidAssociationFilters(filter);
+    assertValidBaseIdFilter(filter);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
     const resolvedFilter = await this.resolveBaseIdFilter(filter);
@@ -1589,6 +1835,7 @@ export class Stack implements StackClient {
 
     const result = await this.adapter.queryRecords({
       ...rest,
+      ...(query.sort && { sort: normalizeSort(query.sort) }),
       ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
       ...(limit !== undefined && { limit }),
     });
@@ -1628,9 +1875,10 @@ export class Stack implements StackClient {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
     this.assertOpen();
-    return this.adapter.getVersions(id);
+    assertValidVersionsQuery(query);
+    return this.adapter.getVersions(id, query);
   }
 
   /**
@@ -1669,6 +1917,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
 
     const target = await this.adapter.getVersion(id, version);
@@ -1684,6 +1933,8 @@ export class Stack implements StackClient {
     const errors = [
       ...validateContent(target.content, type.schema),
       ...validateGrantee(target.typeId, target.content),
+      ...validateGrantBaseId(target.typeId, target.content),
+      ...validateInstall(target.typeId, target.content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -1770,7 +2021,7 @@ export class Stack implements StackClient {
   private async commitMigrationChecked(
     existing: StackRecord,
     toTypeId: TypeId,
-    content: Record<string, unknown>,
+    input: Record<string, unknown>,
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     const id = existing.id;
@@ -1779,12 +2030,15 @@ export class Stack implements StackClient {
     if (!type) {
       throw new StackBadRequestError(`Unknown type: "${toTypeId}". Call defineType() first.`);
     }
+    const content = dropAbsentFields(input, type.schema);
 
     const errors = [
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
       ...validateGrantee(toTypeId, content),
+      ...validateGrantBaseId(toTypeId, content),
+      ...validateInstall(toTypeId, content),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -2355,12 +2609,33 @@ export class Stack implements StackClient {
    * makes subscribe-then-query the gap-free startup order everywhere. A
    * local stack is live immediately.
    */
+  async subscribe<S extends ReadonlyTypeSchema>(
+    handle: TypeHandle<S>,
+    handler: (change: TypedChange<S>) => void,
+    opts?: TypedSubscribeOptions,
+  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts: SubscribeOptions = {},
+    opts?: SubscribeOptions,
+  ): Promise<Unsubscribe>;
+  async subscribe(
+    first: TypeHandle | ((change: RecordChange) => void),
+    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
+    third?: TypedSubscribeOptions,
   ): Promise<Unsubscribe> {
+    if (isTypeHandle(first)) {
+      return typedSubscribe(
+        this,
+        first,
+        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
+        third,
+      );
+    }
+    const handler = first;
+    const opts = (second ?? {}) as SubscribeOptions;
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
+    assertValidBaseIdFilter(opts.filter);
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {
@@ -2471,19 +2746,18 @@ export class Stack implements StackClient {
    * needs, not the suffix that looks narrowest. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    *
-   * `typeOrBaseId` is a versioned TypeId (`"baseId@version"`) or a bare
-   * baseId; either names the whole family. See
-   * docs/spec/access-control.md § Type-level grants.
+   * `baseId` names the whole family and is refused when it carries an
+   * `@version` suffix. See docs/spec/access-control.md § Type-level grants.
    */
   async grantType(
-    typeOrBaseId: TypeId | BaseId,
+    baseId: BaseId,
     grant: TypeGrant,
   ): Promise<StackRecord & { content: GrantContent }> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    this.checkGrantValid(typeOrBaseId, grant.actions);
+    this.checkGrantValid(baseId, grant.actions);
     return this.create<GrantContent>(`${SYSTEM_TYPES.GRANT}@1`, {
-      typeId: typeOrBaseId,
+      baseId,
       actions: grant.actions,
       grantee: grant.grantee,
     });
@@ -2523,7 +2797,7 @@ export class Stack implements StackClient {
         allowDefault: true,
         allowGroup: true,
         groupRoles,
-        resolveRecord: (id) => this.get(id),
+        resolveRecord: (id) => this.get(id, { includeDeleted: true }),
       });
       if (covers) result.push(r);
     }
@@ -2532,7 +2806,7 @@ export class Stack implements StackClient {
 
   /**
    * The inverse of grantType(): soft-deletes the _grant records on
-   * `typeOrBaseId`'s family matching `grant`, at the same granularity
+   * `baseId`'s family matching `grant`, at the same granularity
    * grantType() writes — the grantee is matched whole, role included, and
    * the actions exactly. A soft delete like any other — the owner can
    * undelete a revocation.
@@ -2544,12 +2818,14 @@ export class Stack implements StackClient {
    * docs/spec/access-control.md § Listing and revoking.
    */
   async revokeType(
-    typeOrBaseId: TypeId | BaseId,
+    baseId: BaseId,
     grant: TypeGrant,
   ): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
-    const familyId = baseIdOf(typeOrBaseId);
+    const problem = familyIdProblem(baseId, 'revokeType');
+    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
+    const familyId = baseId;
     const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
     const matches = all.filter((r) => {
@@ -2568,15 +2844,334 @@ export class Stack implements StackClient {
   }
 
   // -------------------------------------------------------
+  // App installs
+  // -------------------------------------------------------
+
+  /**
+   * What applying `manifest` for the key `did` would change, for the owner
+   * to review before installApp(). Writes nothing. Refuses outright what no
+   * approval could make valid: a type outside the app's own namespace and
+   * the commons, a request the grant rules refuse, or a `did` already
+   * registered to a different app. See docs/spec/apps.md § Plan, then apply.
+   */
+  async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
+    this.assertOpen();
+    const { did } = opts;
+    const manifest = snapshotManifest(submitted);
+    this.checkManifest(manifest, did);
+
+    const installs = await this.loadInstalls();
+    const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
+    const ownVersions = ownTypeIds(manifest);
+    const ownFamilies = new Set(ownVersions.map(baseIdOf));
+
+    const card = await this.findAppCard(did);
+    if (card && (card.content as AppContent).appId !== manifest.appId) {
+      throw new StackConflictError(
+        `${did} is registered to "${(card.content as AppContent).appId}", not "${manifest.appId}"`,
+      );
+    }
+
+    const claimed = existing ? claimedFamilies(existing.content) : new Set<BaseId>();
+    const defined = new Set(existing?.content.defines ?? []);
+    const prior = existing?.content.requests ?? [];
+    const foreignRequests: ForeignRequest[] = [];
+    for (const r of manifest.requests) {
+      const standing = familyStanding(r.baseId, manifest.appId);
+      if (standing === 'own') continue;
+      const owner =
+        standing === 'foreign'
+          ? namespaceOf(r.baseId)
+          : standing === 'commons'
+            ? 'commons'
+            : 'system';
+      foreignRequests.push({ ...r, owner });
+    }
+
+    const typeChanges: TypeChange[] = [];
+    for (const t of manifest.types) {
+      const current = await this.getTypeCached(t.id);
+      if (!current) typeChanges.push({ id: t.id, change: 'new' });
+      else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
+        // Refused here, not left to defineType(): installApp() defines types one
+        // by one, so a drift found there leaves the earlier ones written.
+        const violations = diffSchemas(current.schema, t.schema as TypeSchema);
+        if (violations.length > 0) throw new StackSchemaDriftError(t.id, violations);
+        typeChanges.push({ id: t.id, change: 'schema' });
+      } else if (current.name !== t.name) typeChanges.push({ id: t.id, change: 'name' });
+    }
+
+    const linkedKeys: EntityId[] = [];
+    for (const id of existing ? linkedIds(existing, INSTALL_APP_LABEL) : []) {
+      const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
+      if (typeof key === 'string') linkedKeys.push(key);
+    }
+
+    return {
+      manifest,
+      did,
+      existing,
+      newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
+      newVersions: ownVersions.filter((id) => !defined.has(id)),
+      requestsAdded: manifest.requests.filter((r) => !prior.some((p) => sameRequest(p, r))),
+      requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
+      foreignRequests,
+      typeChanges,
+      newKey:
+        !existing ||
+        !card ||
+        card.deletedAt !== undefined ||
+        !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
+      linkedKeys,
+    };
+  }
+
+  /**
+   * Apply an approved plan: define the manifest's types, register the
+   * key's `_app` card if it has none, write the `_install` Record, and
+   * bring every linked key's grants to exactly what the manifest requests.
+   * Refuses a plan the stack has moved on from with StackConflictError, so
+   * what is applied is what was approved. Reinstalls a soft-deleted
+   * install. See docs/spec/apps.md § Plan, then apply.
+   */
+  async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
+    this.assertOpen();
+    const fresh = await this.planInstall(plan.manifest, { did: plan.did });
+    if (planFingerprint(fresh) !== planFingerprint(plan)) {
+      throw new StackConflictError(
+        `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
+      );
+    }
+    const { manifest, did, existing } = fresh;
+
+    for (const type of manifest.types) await this.defineType(type);
+    const card = await this.ensureAppCard(manifest, did);
+
+    const defines = [...new Set([...(existing?.content.defines ?? []), ...ownTypeIds(manifest)])];
+    const requests: InstallRequest[] = manifest.requests.map((r) => ({
+      baseId: r.baseId,
+      actions: [...r.actions],
+    }));
+
+    let install: StackRecord;
+    if (!existing) {
+      install = await this.create<InstallContent>(
+        `${SYSTEM_TYPES.INSTALL}@1`,
+        {
+          appId: manifest.appId,
+          name: manifest.name,
+          ...(manifest.version !== undefined && { version: manifest.version }),
+          defines,
+          requests,
+        },
+        { associations: [installAppLink(card.id)] },
+      );
+    } else {
+      const current = existing.deletedAt ? await this.undelete(existing.id) : existing;
+      install = await this.patchContent(
+        existing.id,
+        { name: manifest.name, version: manifest.version ?? null, defines, requests },
+        { ifVersion: current.version },
+      );
+      if (!linkedIds(install, INSTALL_APP_LABEL).includes(card.id)) {
+        install = await this.associate(install.id, [installAppLink(card.id)]);
+      }
+    }
+    return (await this.reconcileInstallGrants(install)) as StackRecord & {
+      content: InstallContent;
+    };
+  }
+
+  /**
+   * Withdraw every grant an install produced and soft-delete it. The app's
+   * records and `_app` cards stay: the data is the owner's, and the cards
+   * are what its records' attribution resolves through. Returns the
+   * install's tombstone. See docs/spec/apps.md § Uninstalling.
+   */
+  async uninstallApp(appId: AppId): Promise<StackRecord & { content: InstallContent }> {
+    this.assertOpen();
+    const install = (await this.loadInstalls()).find(
+      (r) => r.content.appId === appId && !r.deletedAt,
+    );
+    if (!install) throw new StackNotFoundError(`No install for "${appId}"`);
+    const edits: AssociationEdit[] = [];
+    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
+      if (await this.get(id)) await this.delete(id);
+      edits.push({ op: 'remove', association: installGrantLink(id) });
+    }
+    if (edits.length > 0) await this.amendAssociations(install.id, edits);
+    const { record } = await this.deleteAndReturn(install.id);
+    return record as StackRecord & { content: InstallContent };
+  }
+
+  /** A manifest's own shape, and every request held to grantType()'s rules. */
+  private checkManifest(manifest: AppManifest, did: EntityId): void {
+    const errors: ValidationError[] = [];
+    if (typeof did !== 'string' || !did.startsWith('did:')) {
+      errors.push({ path: 'did', message: 'Expected a DID' });
+    }
+    if (typeof manifest.appId !== 'string' || manifest.appId === '') {
+      errors.push({ path: 'appId', message: 'Expected a non-empty appId' });
+    }
+    if (typeof manifest.name !== 'string' || manifest.name === '') {
+      errors.push({ path: 'name', message: 'Expected a non-empty name' });
+    }
+    const seen = new Set<string>();
+    manifest.types.forEach((t, i) => {
+      if (seen.has(t.id)) {
+        errors.push({ path: `types[${i}].id`, message: `"${t.id}" is listed more than once` });
+      }
+      seen.add(t.id);
+      const schemaPath = `types[${i}].schema`;
+      const shapeErrors = validateSchemaShape(t.schema, schemaPath);
+      errors.push(...shapeErrors);
+      if (shapeErrors.length === 0) {
+        const schema = t.schema as TypeSchema;
+        for (const e of validateSchemaReservedNames(schema)) {
+          errors.push({ ...e, path: `${schemaPath}.${e.path}` });
+        }
+        validateSchemaFieldNames(schema, schemaPath, errors);
+      }
+      const parsed = parseTypeId(t.id);
+      if (!parsed) {
+        errors.push({ path: `types[${i}].id`, message: 'Expected a versioned TypeId' });
+      } else {
+        const standing = familyStanding(parsed.baseId, manifest.appId);
+        if (standing === 'system' || standing === 'foreign') {
+          errors.push({
+            path: `types[${i}].id`,
+            message:
+              standing === 'system'
+                ? `"${parsed.baseId}" is a system type; no app can define it`
+                : `"${parsed.baseId}" is outside the namespace "${manifest.appId}"; request access to it instead of defining it`,
+          });
+        }
+      }
+    });
+    if (errors.length > 0) throw new StackValidationError(errors);
+    for (const r of manifest.requests) this.checkGrantValid(r.baseId, r.actions);
+  }
+
+  /** Every `_install` Record, deleted and unlisted included — a deleted install keeps its claims. */
+  private async loadInstalls(): Promise<(StackRecord & { content: InstallContent })[]> {
+    const records = await queryAllPages((q) => this.query(q), {
+      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+    });
+    return records as (StackRecord & { content: InstallContent })[];
+  }
+
+  /** The `_app` card claiming `did`, deleted and unlisted included. */
+  private findAppCard(did: EntityId): Promise<StackRecord | undefined> {
+    return findFirstMatch(
+      (q) => this.query(q),
+      {
+        filter: {
+          baseId: SYSTEM_TYPES.APP,
+          includeDeleted: true,
+          includeUnlisted: true,
+          ...(filtersContent(this.capabilities) && { content: { did } }),
+        },
+      },
+      (r) => (r.content as AppContent).did === did,
+    );
+  }
+
+  /** The key's `_app` card, created or undeleted as needed. */
+  private async ensureAppCard(manifest: AppManifest, did: EntityId): Promise<StackRecord> {
+    const card = await this.findAppCard(did);
+    if (!card) {
+      return this.create<AppContent>(`${SYSTEM_TYPES.APP}@1`, {
+        appId: manifest.appId,
+        name: manifest.name,
+        ...(manifest.version !== undefined && { version: manifest.version }),
+        did,
+      });
+    }
+    return card.deletedAt ? this.undelete(card.id) : card;
+  }
+
+  /**
+   * Make the grants linked to `install` exactly its `requests`, once per
+   * live linked key: withdraw any that no longer match, write any missing,
+   * and drop links to grants that are gone.
+   */
+  private async reconcileInstallGrants(install: StackRecord): Promise<StackRecord> {
+    const { requests } = install.content as InstallContent;
+    const dids: EntityId[] = [];
+    for (const id of linkedIds(install, INSTALL_APP_LABEL)) {
+      const did = ((await this.get(id))?.content as AppContent | undefined)?.did;
+      if (typeof did === 'string') dids.push(did);
+    }
+
+    const edits: AssociationEdit[] = [];
+    const held: GrantContent[] = [];
+    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
+      const grant = await this.get(id);
+      const content = grant?.content as GrantContent | undefined;
+      const wanted =
+        content !== undefined &&
+        baseIdOf(grant!.typeId) === SYSTEM_TYPES.GRANT &&
+        dids.some((did) => requests.some((r) => grantIsRequest(content, r, did)));
+      if (wanted) {
+        held.push(content);
+        continue;
+      }
+      if (grant) await this.delete(id);
+      edits.push({ op: 'remove', association: installGrantLink(id) });
+    }
+
+    for (const did of dids) {
+      for (const r of requests) {
+        if (held.some((g) => grantIsRequest(g, r, did))) continue;
+        const grant = await this.grantType(r.baseId, {
+          actions: r.actions,
+          grantee: { kind: 'entity', entityId: did },
+        });
+        held.push(grant.content);
+        edits.push({ op: 'add', association: installGrantLink(grant.id) });
+      }
+    }
+    let result = edits.length > 0 ? await this.amendAssociations(install.id, edits) : install;
+
+    // Each linked key may read its own install, which is how an app learns
+    // what was approved; a key of this app no longer linked may not.
+    // See docs/spec/apps.md § Over the wire.
+    const appKeys = new Set(
+      (
+        await queryAllPages((q) => this.query(q), {
+          filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
+        })
+      )
+        .map((r) => r.content as AppContent)
+        .filter((c) => c.appId === (install.content as InstallContent).appId)
+        .map((c) => c.did),
+    );
+    const readerOf = (p: AuthorityAssociation): EntityId | null =>
+      p.kind === 'permission' && p.label === 'read' && p.grantee.kind === 'entity'
+        ? p.grantee.entityId
+        : null;
+    const current = (result.permissions ?? []).map(readerOf);
+    const access: AssociationEdit[] = [
+      ...dids
+        .filter((did) => !current.includes(did))
+        .map((entityId) => ({ op: 'add' as const, association: installReader(entityId) })),
+      ...current
+        .filter((did): did is EntityId => did !== null && appKeys.has(did) && !dids.includes(did))
+        .map((entityId) => ({ op: 'remove' as const, association: installReader(entityId) })),
+    ];
+    if (access.length > 0) result = await this.amendAccess(install.id, access);
+    return result;
+  }
+
+  // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
 
   /**
-   * Actions must be known GrantAction values, typeIds must be well-formed,
-   * and the _grant/_config families are refused — see
-   * docs/spec/access-control.md § Type-level grants.
+   * Actions must be known GrantAction values; the target is held to the
+   * same rule every `_grant` write meets — see validateGrantBaseId().
    */
-  private checkGrantValid(typeId: TypeId, actions: GrantAction[]): void {
+  private checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
     const errors: ValidationError[] = [];
     actions.forEach((action, j) => {
       if (!GRANT_ACTION_SET.has(action)) {
@@ -2584,17 +3179,11 @@ export class Stack implements StackClient {
       }
     });
 
-    if (!isWellFormedTypeId(typeId)) {
-      errors.push({
-        path: 'typeId',
-        message: `"${typeId}" is not a well-formed baseId or versioned TypeId (expected "baseId" or "baseId@version")`,
-      });
-    } else if (UNGRANTABLE_SYSTEM_TYPES.has(baseIdOf(typeId))) {
-      const refused = [...UNGRANTABLE_SYSTEM_TYPES].join(', ');
-      errors.push({
-        path: 'typeId',
-        message: `Cannot grant on "${baseIdOf(typeId)}": grants on ${refused} are refused to prevent privilege escalation`,
-      });
+    const problem = familyIdProblem(baseId, 'grantType');
+    if (problem) {
+      errors.push({ path: 'baseId', message: problem });
+    } else {
+      errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
     }
 
     actions.forEach((action, j) => {
@@ -2603,7 +3192,7 @@ export class Stack implements StackClient {
       if (!companions) return;
       errors.push({
         path: `actions[${j}]`,
-        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read`,
+        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
       });
     });
     if (errors.length > 0) {
@@ -2653,7 +3242,7 @@ export class Stack implements StackClient {
       id: `${SYSTEM_TYPES.GRANT}@1`,
       name: 'Grant',
       schema: {
-        typeId: { kind: 'string', required: true },
+        baseId: { kind: 'string', required: true },
         actions: { kind: 'array', items: { kind: 'string' }, required: true },
         // Required, and closed: a Grant's reach is spelled by its `grantee`,
         // so a record arriving without one is refused here rather than read
@@ -2687,6 +3276,27 @@ export class Stack implements StackClient {
         mimeType: { kind: 'string', required: true },
         size: { kind: 'number', required: true },
         filename: { kind: 'string' },
+      },
+    });
+    await this.defineType({
+      id: `${SYSTEM_TYPES.INSTALL}@1`,
+      name: 'Install',
+      schema: {
+        appId: { kind: 'string', required: true },
+        name: { kind: 'string', required: true },
+        version: { kind: 'string' },
+        defines: { kind: 'array', items: { kind: 'string' }, required: true },
+        requests: {
+          kind: 'array',
+          required: true,
+          items: {
+            kind: 'object',
+            properties: {
+              baseId: { kind: 'string', required: true },
+              actions: { kind: 'array', items: { kind: 'string' }, required: true },
+            },
+          },
+        },
       },
     });
   }

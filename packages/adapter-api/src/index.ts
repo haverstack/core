@@ -24,9 +24,10 @@
  * adapter.
  */
 
-import { StackError, StackBadRequestError } from '@haverstack/core';
+import { StackError, StackBadRequestError, assertOneSurface } from '@haverstack/core';
 import type {
   JournalQuery,
+  VersionsQuery,
   RecordJournalEntry,
   Actor,
   ChangeActor,
@@ -39,6 +40,7 @@ import type {
   StackQuery,
   QueryResult,
   Association,
+  AssociationEdit,
   RecordId,
   FileId,
   EntityId,
@@ -48,9 +50,12 @@ import type {
   RecordChangeSet,
   StackCapabilities,
   MissingCapability,
+  AppManifest,
+  InstallContent,
 } from '@haverstack/core';
 import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
 import {
+  OwnerMismatchError,
   assertQueryCapabilities,
   assertSortCapability,
   assertValidAssociationFilters,
@@ -72,12 +77,14 @@ import type {
   WireRecordChange,
   WireJournalEntry,
   WireJournalResponse,
+  WireVersionsResponse,
   WireReadyFrame,
   DiscoveryChanges,
   DiscoveryResponse,
   AuthChallengeResponse,
   AuthTokenResponse,
   WireAuthErrorCode,
+  WireInstallResponse,
 } from '@haverstack/wire-types';
 import {
   isWireError,
@@ -88,6 +95,7 @@ import {
   isRetryableAuthError,
   isValidCursor,
   supportsChangeFeed,
+  supportsInstallRequests,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
@@ -109,17 +117,22 @@ import {
  */
 export type { MissingCapability } from '@haverstack/core';
 
+/** What `APIAdapter.requestInstall()` resolves to. */
+export type InstallRequestResult =
+  | { status: 'pending' }
+  | { status: 'installed'; install: StackRecord & { content: InstallContent } };
+
 export type APIAdapterOpenOptions = {
   /** Base URL of the stack server e.g. "https://example.com". Trailing slash is stripped. */
   url: string;
   /** Bearer token issued by the stack server. Omit for unauthenticated access. */
   token?: string;
   /**
-   * The DID this client expects to own the stack at `url`. When set, open()
-   * refuses a server whose discovery reports anything else. Omit when the URL
-   * is the only expectation you have.
+   * The DID this client expects to own the stack at `url`. Asserted, never
+   * used to create: open() throws OwnerMismatchError when discovery reports
+   * anything else. Omit when the URL is the only expectation you have.
    */
-  expectedOwnerEntityId?: EntityId;
+  ownerEntityId?: EntityId;
   /**
    * A DID and a signing callback — never a private key. open() performs the
    * challenge–response handshake with it and re-runs that handshake when a
@@ -175,10 +188,10 @@ export class APIAdapterConnectionError extends APIAdapterError {
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
     /**
-     * `'changes'` names the feed, which discovery advertises beside
-     * `capabilities` rather than in it.
+     * `'changes'` names the feed and `'installs'` the install endpoint,
+     * which discovery advertises beside `capabilities` rather than in it.
      */
-    public readonly capability: MissingCapability | 'changes',
+    public readonly capability: MissingCapability | 'changes' | 'installs',
     message: string,
   ) {
     super(message);
@@ -200,24 +213,6 @@ export class APIAdapterVersionError extends APIAdapterError {
   ) {
     super(message);
     this.name = 'APIAdapterVersionError';
-  }
-}
-
-/**
- * Thrown by open() when `expectedOwnerEntityId` was supplied and discovery reports a
- * different owner — or none at all. Discovery identity is unsigned and the
- * server cannot prove it, so stating the DID you expect is the only check
- * available to a client. See docs/spec/wire-format.md § Identity is trusted
- * on transport.
- */
-export class APIAdapterOwnerMismatchError extends APIAdapterError {
-  constructor(
-    public readonly expectedOwnerEntityId: EntityId,
-    public readonly actualOwnerEntityId: EntityId | undefined,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'APIAdapterOwnerMismatchError';
   }
 }
 
@@ -298,6 +293,19 @@ const isLoopbackUrl = (url: string): boolean => {
   }
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+};
+
+/**
+ * One caller-supplied value as one URL path segment, so an ID can never
+ * reach a different endpoint than the one the method names. `.` and `..`
+ * are refused outright: URL parsing collapses them even percent-encoded.
+ */
+const pathSegment = (value: string | number): string => {
+  const s = String(value);
+  if (s === '' || s === '.' || s === '..') {
+    throw new StackBadRequestError(`Invalid path segment ${JSON.stringify(s)}`);
+  }
+  return encodeURIComponent(s);
 };
 
 /**
@@ -823,6 +831,8 @@ export class APIAdapter implements StackAdapter {
     capabilities: StackCapabilities,
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
+    /** Whether discovery advertised `POST /installs`. */
+    private readonly installRequests: boolean,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
@@ -835,7 +845,7 @@ export class APIAdapter implements StackAdapter {
    *
    * Throws APIAdapterAuthError on 401.
    * Throws APIAdapterConnectionError if the server is unreachable.
-   * Throws APIAdapterOwnerMismatchError when `expectedOwnerEntityId` disagrees with
+   * Throws OwnerMismatchError when `ownerEntityId` disagrees with
    * the owner discovery reports.
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
@@ -878,18 +888,11 @@ export class APIAdapter implements StackAdapter {
 
     // After version negotiation: a differing major means fields may not mean
     // what this client reads them as, so `entityId` isn't worth comparing yet.
-    if (
-      opts.expectedOwnerEntityId !== undefined &&
-      discovery.entityId !== opts.expectedOwnerEntityId
-    ) {
-      throw new APIAdapterOwnerMismatchError(
-        opts.expectedOwnerEntityId,
+    if (opts.ownerEntityId !== undefined && discovery.entityId !== opts.ownerEntityId) {
+      throw new OwnerMismatchError(
+        opts.ownerEntityId,
         discovery.entityId,
-        discovery.entityId
-          ? `Server at "${baseUrl}" reports owner "${discovery.entityId}"; expected ` +
-              `"${opts.expectedOwnerEntityId}".`
-          : `Server at "${baseUrl}" reported no owner in discovery; expected ` +
-              `"${opts.expectedOwnerEntityId}".`,
+        `the server at "${baseUrl}"`,
       );
     }
 
@@ -922,6 +925,7 @@ export class APIAdapter implements StackAdapter {
       // are what subscribeChanges() promises its caller, and a client that
       // forgot them would assume both.
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
+      supportsInstallRequests(discovery),
     );
   }
 
@@ -1057,14 +1061,16 @@ export class APIAdapter implements StackAdapter {
     return requireRecordBody(raw, 'POST /records');
   }
 
+  // Always opts into tombstones: hiding them is Stack.get()'s policy, and
+  // the verbs that refuse or undelete one have to be able to find it.
   async getRecord(id: RecordId): Promise<StackRecord | null> {
     const raw = await this.request<WireRecord | null | undefined>(
       'GET',
-      `/records/${id}`,
+      `/records/${pathSegment(id)}?includeDeleted=true`,
       undefined,
       { nullOn404: true },
     );
-    const body = requireNullableBody(raw, `GET /records/${id}`);
+    const body = requireNullableBody(raw, `GET /records/${pathSegment(id)}`);
     return body ? parseRecord(body) : null;
   }
 
@@ -1077,10 +1083,45 @@ export class APIAdapter implements StackAdapter {
     // updatedAt) ride along. The server applies it against its own current
     // state and assigns the new version/updatedAt; the response is
     // authoritative. One If-Match fences the whole set.
-    const raw = await this.request<WireRecord | undefined>('PATCH', `/records/${id}`, changes, {
-      ifMatch: opts.ifVersion,
+    const raw = await this.request<WireRecord | undefined>(
+      'PATCH',
+      `/records/${pathSegment(id)}`,
+      changes,
+      {
+        ifMatch: opts.ifVersion,
+      },
+    );
+    return requireRecordBody(raw, `PATCH /records/${pathSegment(id)}`);
+  }
+
+  /**
+   * Present this app's manifest for the owner to approve, as the key this
+   * adapter authenticated with. `pending` until the owner approves this
+   * manifest for this key; `installed`, with the `_install` record, once
+   * applying it would change nothing. Refused locally when the server does
+   * not advertise install requests. See docs/spec/wire-format.md § Installs.
+   */
+  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
+    if (!this.installRequests) {
+      throw new APIAdapterCapabilityError(
+        'installs',
+        `Server at "${this.baseUrl}" does not take install requests; ask its owner to install ` +
+          'the app another way.',
+      );
+    }
+    const raw = await this.request<WireInstallResponse | undefined>('POST', '/installs', {
+      manifest,
     });
-    return requireRecordBody(raw, `PATCH /records/${id}`);
+    if (raw?.status === 'pending') return { status: 'pending' };
+    if (raw?.status === 'installed' && raw.install) {
+      return {
+        status: 'installed',
+        install: parseRecord(raw.install) as StackRecord & { content: InstallContent },
+      };
+    }
+    throw new APIAdapterError(
+      'POST /installs answered with neither a pending nor an installed body',
+    );
   }
 
   async commitMigration(
@@ -1091,11 +1132,11 @@ export class APIAdapter implements StackAdapter {
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/migrate`,
+      `/records/${pathSegment(id)}/migrate`,
       { toTypeId, content },
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/migrate`);
+    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/migrate`);
   }
 
   /**
@@ -1108,7 +1149,9 @@ export class APIAdapter implements StackAdapter {
     id: RecordId,
     opts: { purge?: boolean; ifVersion?: number } = {},
   ): Promise<StackRecord | null> {
-    const path = opts.purge ? `/records/${id}?purge=true` : `/records/${id}`;
+    const path = opts.purge
+      ? `/records/${pathSegment(id)}?purge=true`
+      : `/records/${pathSegment(id)}`;
     const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
       ifMatch: opts.ifVersion,
       // An unconditional purge of a record that isn't there purged
@@ -1121,17 +1164,17 @@ export class APIAdapter implements StackAdapter {
     // report of what it referenced, and every other row naming those files
     // is gone. See docs/spec/wire-format.md § Records.
     if (opts.purge) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
-    return requireRecordBody(raw ?? undefined, `DELETE /records/${id}`);
+    return requireRecordBody(raw ?? undefined, `DELETE /records/${pathSegment(id)}`);
   }
 
   async undeleteRecord(id: RecordId, opts: { ifVersion?: number } = {}): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/undelete`,
+      `/records/${pathSegment(id)}/undelete`,
       undefined,
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/undelete`);
+    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/undelete`);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -1199,29 +1242,21 @@ export class APIAdapter implements StackAdapter {
    * `ScopedStack`, which is the partition doing its job.
    * See docs/spec/access-control.md § Storage unifies; the API does not.
    */
-  private static associationPath(association: Association): string {
-    return association.kind === 'permission' || association.kind === 'anyone'
+  private static associationPath(association: Association | undefined): string {
+    return association?.kind === 'permission' || association?.kind === 'anyone'
       ? 'permissions'
       : 'associations';
   }
 
   /**
-   * No `If-Match` — associate()/dissociate() never bump `version`, so
+   * No `If-Match` — amendAssociations() never bumps `version`, so
    * there's nothing an `ifVersion` precondition could guard here. See
    * docs/spec/versioning.md § Version history.
    */
-  async associate(id: RecordId, association: Association): Promise<StackRecord> {
-    const path = `/records/${id}/${APIAdapter.associationPath(association)}`;
-    const raw = await this.request<WireRecord | undefined>('POST', path, association);
-    return requireRecordBody(raw, `POST ${path}`);
-  }
-
-  /** No `If-Match` — see associate(). */
-  async dissociate(id: RecordId, association: Association): Promise<StackRecord> {
-    // POST, not DELETE — a DELETE body has no defined semantics (RFC 9110
-    // §9.3.5) and proxies/gateways are free to drop or reject it.
-    const path = `/records/${id}/${APIAdapter.associationPath(association)}/delete`;
-    const raw = await this.request<WireRecord | undefined>('POST', path, association);
+  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord> {
+    assertOneSurface(changes);
+    const path = `/records/${pathSegment(id)}/${APIAdapter.associationPath(changes[0]?.association)}`;
+    const raw = await this.request<WireRecord | undefined>('POST', path, { changes });
     return requireRecordBody(raw, `POST ${path}`);
   }
 
@@ -1229,9 +1264,37 @@ export class APIAdapter implements StackAdapter {
   // Versions
   // -------------------------------------------------------
 
-  async getVersions(id: RecordId): Promise<RecordVersion[]> {
-    const raw = await this.request<WireVersion[] | undefined>('GET', `/records/${id}/versions`);
-    return requireBody(raw, `GET /records/${id}/versions`).map(parseVersion);
+  /**
+   * Reads the window the caller asked for, across as many requests as the
+   * server's own page cap takes — `getJournal()`'s loop, walking `cursor`
+   * as the next `beforeVersion` rather than `afterSeq`.
+   * See docs/spec/wire-format.md § Versions.
+   */
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
+    const versions: RecordVersion[] = [];
+    let beforeVersion = query.beforeVersion;
+    for (;;) {
+      const remaining = query.limit === undefined ? undefined : query.limit - versions.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      const params = new URLSearchParams();
+      if (beforeVersion !== undefined) params.set('beforeVersion', String(beforeVersion));
+      if (remaining !== undefined) params.set('limit', String(remaining));
+      const qs = params.toString();
+      const path = `/records/${pathSegment(id)}/versions${qs ? `?${qs}` : ''}`;
+      const raw = await this.request<WireVersionsResponse | undefined>('GET', path);
+      const body = requireBody(raw, `GET ${path}`);
+      for (const v of body.versions) versions.push(parseVersion(v));
+      if (body.versions.length === 0) break;
+      // A cursor that does not move strictly older would repeat a page.
+      if (
+        typeof body.cursor !== 'number' ||
+        (beforeVersion !== undefined && body.cursor >= beforeVersion)
+      ) {
+        break;
+      }
+      beforeVersion = body.cursor;
+    }
+    return query.limit === undefined ? versions : versions.slice(0, query.limit);
   }
 
   /**
@@ -1257,7 +1320,7 @@ export class APIAdapter implements StackAdapter {
       if (afterSeq !== undefined) params.set('afterSeq', String(afterSeq));
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
-      const path = `/records/${id}/journal${qs ? `?${qs}` : ''}`;
+      const path = `/records/${pathSegment(id)}/journal${qs ? `?${qs}` : ''}`;
       const raw = await this.request<WireJournalResponse | undefined>('GET', path);
       const body = requireBody(raw, `GET ${path}`);
       // Appended one at a time rather than spread: a spread is an argument
@@ -1282,11 +1345,14 @@ export class APIAdapter implements StackAdapter {
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
     const raw = await this.request<WireVersion | null | undefined>(
       'GET',
-      `/records/${id}/versions/${version}`,
+      `/records/${pathSegment(id)}/versions/${pathSegment(version)}`,
       undefined,
       { nullOn404: true },
     );
-    const body = requireNullableBody(raw, `GET /records/${id}/versions/${version}`);
+    const body = requireNullableBody(
+      raw,
+      `GET /records/${pathSegment(id)}/versions/${pathSegment(version)}`,
+    );
     return body ? parseVersion(body) : null;
   }
 
@@ -1308,11 +1374,14 @@ export class APIAdapter implements StackAdapter {
   ): Promise<StackRecord> {
     const raw = await this.request<WireRecord | undefined>(
       'POST',
-      `/records/${id}/restore/${version}`,
+      `/records/${pathSegment(id)}/restore/${pathSegment(version)}`,
       undefined,
       { ifMatch: opts.ifVersion },
     );
-    return requireRecordBody(raw, `POST /records/${id}/restore/${version}`);
+    return requireRecordBody(
+      raw,
+      `POST /records/${pathSegment(id)}/restore/${pathSegment(version)}`,
+    );
   }
 
   // -------------------------------------------------------
@@ -1326,7 +1395,7 @@ export class APIAdapter implements StackAdapter {
   async getType(id: TypeId): Promise<StackType | null> {
     const raw = await this.request<WireType | null | undefined>(
       'GET',
-      `/types/${encodeURIComponent(id)}`,
+      `/types/${pathSegment(id)}`,
       undefined,
       { nullOn404: true },
     );
@@ -1374,11 +1443,11 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getBlob(fileId: FileId): Promise<Uint8Array> {
-    return this.requestBinary(`/attachments/${fileId}`);
+    return this.requestBinary(`/attachments/${pathSegment(fileId)}`);
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
-    await this.request<void>('DELETE', `/attachments/${fileId}`);
+    await this.request<void>('DELETE', `/attachments/${pathSegment(fileId)}`);
   }
 
   // -------------------------------------------------------

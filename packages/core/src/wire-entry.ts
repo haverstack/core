@@ -52,8 +52,8 @@ export type { StackTokenStore, TokenInfo, TokenSession } from './types.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,
-// GET /changes, GET /records/:id/journal, DELETE /records/:id,
-// GET /attachments/:fileId and GET /records/:id/associations with these
+// GET /changes, GET /records/:id/journal, GET /records/:id/versions, GET /records/:id,
+// DELETE /records/:id, GET /attachments/:fileId and GET /records/:id/associations with these
 // rather than transcribing the parameter table.
 // Contract, not internal — and the round trip against the builders is
 // pinned by a test, which is what having both halves here buys.
@@ -62,6 +62,8 @@ export {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseVersionsParams,
+  parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
   parseAssociationParams,
@@ -94,11 +96,13 @@ export type { WireCreateRequest } from './wire-record.js';
 // so a server refuses a key they do not define without keeping its own
 // list of the ones they do. See docs/spec/wire-format.md § Unrecognized input.
 export {
+  parseAssociationEditsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
   parseEntityPatchBody,
   parseTypeBody,
   parseMigrationBody,
+  parseInstallBody,
 } from './wire-body.js';
 export type {
   WireAuthChallengeRequest,

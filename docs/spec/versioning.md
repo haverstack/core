@@ -8,19 +8,17 @@ Version history is managed by the library as a side channel — apps do not mana
 
 Everything else a Record carries — containment, listing, `associations` and `permissions` alike — bumps nothing and snapshots nothing. Those are the no-bump writes, spelled out below.
 
-**A change set is atomic, not a version batch.** `mutate()` is the only multi-aspect atomic write a Record has, and that is what it is for: a publish — content, container, `anyone` read, listing — is one act that must not half-land. Where it names `contentPatch` it produces one version, however many other aspects ride along; where it doesn't, it produces none.
-
 **`version` is the ordinal of the record's snapshot history, not a count of its changes.** It advances exactly when a write destroys state that only a snapshot preserves. Every other change is counted by [the journal's `seq`](./journal.md#ordering), which is dense over all of them. A record's `version` tells you how many recoverable states it has; `seq` tells you how many times it has been touched.
 
 The field is **not** a content hash under another name: a restore creates a new version holding old content, so two versions can be byte-identical, and `ifVersion`/`If-Match` guard the whole Record rather than its content.
 
-**The no-bump writes: four aspects that never bump.** `associate()`/`dissociate()`, `grantAccess()`/`revokeAccess()` — and a change set naming only `associations`, `permissions`, `parentId` and/or `unlisted` — never bump `version`, touch `updatedAt`, or snapshot. Each of those four aspects is a write whose prior state [the change journal](./journal.md) keeps in full, so a snapshot would preserve nothing a reader cannot already reach: a move's origin is the entry's `previousParentId`, a listing transition's inverse is the `unlist`/`list` op's own opposite, and an association delta — the authority half included — is the entry's `associations`. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and none of the four needs it.
+**The no-bump writes: four aspects that never bump.** `associate()`/`dissociate()`/`amendAssociations()`, `grantAccess()`/`revokeAccess()`/`amendAccess()` — and a change set naming only `associations`, `permissions`, `parentId` and/or `unlisted` — never bump `version`, touch `updatedAt`, or snapshot. Each of those four aspects is a write whose prior state [the change journal](./journal.md) keeps in full, so a snapshot would preserve nothing a reader cannot already reach: a move's origin is the entry's `previousParentId`, a listing transition's inverse is the `unlist`/`list` op's own opposite, and an association delta — the authority half included — is the entry's `associations`. That is the whole reason version history exists — recoverability for a write that can't otherwise be undone — and none of the four needs it.
 
 Filing them here anyway would cost a full duplicate copy of `content` apiece for state the entry already holds, and in `unlisted`'s case would bump `version` while storing nothing about the aspect that caused the bump.
 
-A change set that names any of the four alongside a version-bumping aspect still produces exactly one version covering everything it moved; they just aren't among the aspects that decide whether the call bumps at all. The same completeness is why a restore leaves all four where they stand and why the no-bump verbs take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
+A change set is atomic, not a version batch (see [Data model § Mutations](./data-model.md#mutations)): one that names any of the four alongside `contentPatch` still produces exactly one version covering everything it moved; they just aren't among the aspects that decide whether the call bumps at all. The same completeness is why a restore leaves all four where they stand and why the no-bump verbs take no `ifVersion` — see [Restore semantics](#restore-semantics) and [Optimistic concurrency](#optimistic-concurrency-ifversion).
 
-**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` is the one that returns nothing, because it is the one verb with a variant that has nothing to return — a purge leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`).
+**Every mutating method answers with the Record it produced.** `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `amendAssociations()`, `grantAccess()`, `revokeAccess()`, `amendAccess()`, `undelete()`, `restoreVersion()` and `commitMigration()` all return the Record as it now stands, so a caller can report what it just wrote without a second read — the same body [their wire endpoints answer with](./wire-format.md#records), rather than a client that discards it. A no-op returns the Record unchanged: what distinguishes it is the version that didn't move, not an answer that never came. `delete()` returns a `DeleteResult` rather than a Record, because it is the one verb with a variant that has no Record to return — a purge leaves no Record and no version behind (a soft delete's tombstone is read back with `get(id, { includeDeleted: true })`). `deleteAndReturn()` is the call for a caller that needs the tombstone or the purged body; see [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
 
 ```ts
 type RecordVersion = {
@@ -41,7 +39,10 @@ type RecordVersion = {
 
 **API surface:**
 
-- `stack.getVersions(recordId)` — retrieve version history
+- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), so the restore point just before the current version comes first and a page of history starts at the useful end. [`getJournal()`](./journal.md) runs the other way: an append-only log tailed forward from a cursor reads oldest first.
+
+  `query` is a `VersionsQuery` — `beforeVersion` (exclusive: versions strictly older than it) and `limit` — in the shape of the journal's `afterSeq` and `limit`. Omitting both reads every version, as omitting them on `getJournal()` reads the whole log. Paging walks every version exactly once: send the last version of a page as the next `beforeVersion`.
+
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content` and `typeId`, and **restores nothing else** — see [Restore semantics](#restore-semantics). The snapshot deliberately does not capture `appId` either, so restore never reverts an app reattribution.
 
 ## Snapshot atomicity
@@ -77,7 +78,7 @@ Restoring a pre-migration snapshot therefore also restores its old `typeId`, lea
 
 **A restore never moves the Record.** Containment is [the journal's to keep](#version-history), not the snapshot's, so a restore settles nothing about it: the Record comes back in whatever container it is in now, whichever one it sat in when the snapshot was taken. Undoing a move is a change set's `parentId`, reading the entry's `previousParentId` for where it came from. That is what keeps a restore off every containment rule: it adds no edge, so there is no ancestor chain to walk and no destination to gate, and a container purged since the snapshot was taken costs the Record nothing. **Listing state is settled the same way — which is to say not at all.** A restore never lists or unlists a Record; `unlist`/`list` is a change set's `unlisted`.
 
-**A restore can put back a reference to bytes that are gone.** A `file-ref` content field in a snapshot is not a reference for [`deleteAttachment()`](./attachments.md#deleting-attachments) or [the sweep](./attachments.md#garbage-collection) — counting version history would make a file undeletable for the lifetime of any snapshot mentioning it — so a file deleted while a snapshot names it, and then restored, leaves a dangling file reference. That is the stance restore takes everywhere: history is put back, not re-litigated, the same way it honors the snapshot's own `typeId` rather than validating against the current one. Content's file refs are the only reference a restore can create at all, which is why they are the only thing the gate below asks about.
+**A restore can put back a reference to bytes that are gone.** [Version history is not a reference](./attachments.md#garbage-collection), so a file deleted while a snapshot names it, and then restored, leaves a dangling file reference — the only dangling reference a restore can produce. That is the stance restore takes everywhere: history is put back, not re-litigated, the same way it honors the snapshot's own `typeId` rather than validating against the current one. Content's file refs are the only reference a restore can create at all, which is why they are the only thing the gate below asks about.
 
 **A restore never rolls back any Record's associations, `_group` or otherwise.** `content` rolls back; a Record's `associations` are left exactly as they stand — there is no snapshot's list to put back, since [snapshots don't capture associations](#version-history) in the first place, and the current ones are not taken away either. Associations are invertible, so they never needed the recovery a rollback offers content (see [Version history](#version-history)). On a `_group` a rollback would be positively harmful: a Group's `member` and `admin` entries are what [group ACLs](./access-control.md#record-level-permissions) and [group-targeted grants](./access-control.md#type-level-grants) resolve against, so putting an old roster back would silently re-grant access — management to an `admin` who had been deliberately removed, reach to a `member` who had been dropped — as a side effect of a verb the caller asked for its content. A roster is authority, not data. Recovering a former roster — or any other association set — is a deliberate `associate()`, which is the point.
 
@@ -103,7 +104,7 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 - `StackRecordAdapter` takes the same `ifVersion` option (`IfVersionOptions`) on the same methods — one name from app code through the adapter to the wire.
 - Over the wire, this is the `If-Match` header (see [Wire format § Records](./wire-format.md#records)) — local and remote behave identically.
 
-**`associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` take no `ifVersion`.** They never bump `version`, so there is nothing for a precondition on it to guard, and they can't offer one that would silently do nothing. This isn't a gap: each is a set add/remove that composes correctly regardless of order, unlike arbitrary content patches — the strong OCC guarantee content needs isn't needed here. `mutate()` follows the same line, read off the keys a change set names rather than what it turns out to move. A set naming only [the no-bump keys](#version-history) — `associations`, `permissions`, `parentId` and/or `unlisted` — carries no precondition either, for the same reason: none of them moves the number a precondition would name, so an `ifVersion` passed alongside one is not checked. Name any other aspect and `ifVersion` guards the whole call, the same as any other change set — including where that aspect restates what the record already holds and the call writes nothing: a precondition is a claim about the record's version, not about what the write moved, so a caller holding a stale one is told so rather than handed a silent success.
+**`associate()`/`dissociate()`/`amendAssociations()` and `grantAccess()`/`revokeAccess()`/`amendAccess()` take no `ifVersion`.** They never bump `version`, so there is nothing for a precondition on it to guard, and they can't offer one that would silently do nothing. This isn't a gap: each is a set add/remove that composes correctly regardless of order, unlike arbitrary content patches — the strong OCC guarantee content needs isn't needed here. `mutate()` follows the same line, read off the keys a change set names rather than what it turns out to move. A set naming only [the no-bump keys](#version-history) — `associations`, `permissions`, `parentId` and/or `unlisted` — carries no precondition either, for the same reason: none of them moves the number a precondition would name, so an `ifVersion` passed alongside one is not checked. Name any other aspect and `ifVersion` guards the whole call, the same as any other change set — including where that aspect restates what the record already holds and the call writes nothing: a precondition is a claim about the record's version, not about what the write moved, so a caller holding a stale one is told so rather than handed a silent success.
 
 **Collisions are never silently dropped.** Two writers racing past the same version — without `ifVersion`, or through a server race that outpaces it — can still collide on the same snapshot version number. Adapters reject the loser with `StackConflictError` rather than discarding its snapshot; see [Snapshot atomicity](#snapshot-atomicity).
 
@@ -121,11 +122,14 @@ Records are never purged by default. Two levels of deletion are supported:
 
 ```ts
 stack.query({ filter: { includeDeleted: true } });
+stack.get(id, { includeDeleted: true });
 ```
+
+`get()` follows the same rule as `query()`: a soft-deleted Record is hidden by default, and `get(id)` on one answers `null` — "not here", as far as a normal read is concerned. Any reader may pass `includeDeleted`; the Record's own `permissions` still decide whether they see it, so the flag discloses nothing. Writes stay explicit: [mutating a tombstone throws](#mutations-are-refused-not-applied-to-a-tombstone), because a refusal that explains itself beats a `null` that does not.
 
 ### The tombstone is literal
 
-Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get()` and `query({ filter: { includeDeleted: true } })` return:
+Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rather than merely described as one. `get(id, { includeDeleted: true })` and `query({ filter: { includeDeleted: true } })` return:
 
 ```ts
 {
@@ -146,11 +150,11 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 
 ### Mutations are refused, not applied to a tombstone
 
-A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent()`, `associate()`, `dissociate()` and `restoreVersion()` throw `StackConflictError` (`409`) under `ScopedStack` — a change set is refused whole, whichever of its keys would otherwise have applied. `undelete()` is the way back, and it is deliberately not gated this way.
+A soft-deleted Record has no current state to edit, so `mutate()`, `patchContent()`, `associate()`, `dissociate()`, `amendAssociations()`, `grantAccess()`, `revokeAccess()`, `amendAccess()` and `restoreVersion()` throw `StackConflictError` (`409`) on `Stack` and `ScopedStack` alike. The rule is about the Record's state, not the surface the call came through, so it is enforced in `Stack` and every surface inherits it. A change set is refused whole, whichever of its keys would otherwise have applied. `undelete()` is the way back, and it is deliberately not gated this way.
 
-The refusal is asked **after** the authority decision, never before. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
+The refusal is asked **after** the authority decision, never before: `ScopedStack` authorizes first and only then calls into `Stack`. It names a state, so a requester who may not read the Record must still hear what a missing ID sounds like — otherwise "exists but deleted" becomes a probe a stranger can run against guessed IDs, the same [information-exposure rule](./disclosure.md) that governs every other refusal.
 
-`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see [Undelete](#undelete)), and it is owner-acting-alone only.
+`commitMigration()` is exempt: migration deliberately sweeps soft-deleted Records so one can come back current on undelete (see [Undelete](#undelete)), and it is owner-acting-alone, save for an [installed app within its own families](./apps.md#migrating-an-installed-apps-types).
 
 ### Purge
 
@@ -161,14 +165,7 @@ stack.delete(recordId); // soft delete — reversible
 stack.delete(recordId, { purge: true }); // purge — permanent
 ```
 
-**It does not reach attachment bytes, and erasing those is a second step.** The purge destroys the only rows naming those files, so `delete()` reports them and the caller finishes the job:
-
-```ts
-const { referencedFileIds } = await stack.delete(recordId, { purge: true });
-for (const fileId of referencedFileIds) await stack.deleteAttachment(fileId);
-```
-
-`referencedFileIds` is empty on a soft delete, which strands nothing. A purge for harmful content that skips the second step leaves the bytes reachable to whoever can already name the hash — what the field names, and why naming it deletes nothing, is [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
+**It does not reach attachment bytes, and erasing those is a second step.** `delete()` reports the files the purged Record referenced as `referencedFileIds`, and the caller passes each to `deleteAttachment()`; a purge for harmful content that skips that step leaves the bytes reachable to whoever can already name the hash. See [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).
 
 **Purge is owner-only under `ScopedStack`.** Neither the record-level `write` bit nor `delete-own`/`delete-any` grants reach it — a non-owner requesting `{ purge: true }` gets `StackPermissionError`, regardless of what would otherwise authorize a delete. It's irreversible and destroys version history, so it stays outside every delegated-access vocabulary. Non-owners are always limited to soft delete. (Plain `Stack` is unscoped and trusted-by-definition, so this restriction applies only to `ScopedStack`.)
 
@@ -182,6 +179,6 @@ const record = await stack.undelete(recordId); // clears deletedAt, returns the 
 
 Under `ScopedStack`, `undelete()` is gated the same way as `delete()` — the `write` bit or a `delete-own`/`delete-any` grant. Undelete is the inverse of soft delete, so the same capability governs both directions; granting one without the other would be backwards. (Purge's owner-only carve-out is unaffected — it has no inverse.)
 
-Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing the next time it's written or `migrateAll()` sweeps it. `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
+Undelete does not re-run migrations. If a soft-deleted Record's schema fell behind while it was deleted, it comes back stale — a legal state, self-healing on the owning app's next `migrateAll()` sweep (a content patch never migrates; see [Type migrations](./data-model.md#type-migrations)). `migrateAll()` includes soft-deleted Records in its sweep, so a Record can be migrated while deleted and come back current on undelete.
 
 **`unlistedAt` is a sibling mechanism, not a variant of this one.** It withholds a Record from enumeration rather than from access — the Record stays fully readable and mutable throughout — and its own opt-in flag, ownership rule, and feed behavior differ from soft delete's in ways worth reading directly rather than assuming symmetric. See [Unlisted records](./unlisted.md).

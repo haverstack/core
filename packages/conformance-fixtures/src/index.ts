@@ -28,6 +28,7 @@ import type {
   WireQueryResponse,
   WireError,
   WireVersion,
+  WireVersionsResponse,
   WireJournalResponse,
   WireRecordChange,
   WireReadyFrame,
@@ -38,6 +39,8 @@ import type {
   AuthTokenRequest,
   AuthTokenResponse,
   WireAuthError,
+  WireInstallRequest,
+  WireInstallResponse,
 } from '@haverstack/wire-types';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 
@@ -119,6 +122,26 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
           contentBytes: 1048576,
         },
       },
+    },
+  },
+  {
+    name: 'discovery-advertises-install-requests',
+    description:
+      'A server that takes install requests says so with installs.requests: true. Absent ' +
+      'means it does not, and a client refuses requestInstall() locally rather than learning ' +
+      'it as a 404 — see docs/spec/wire-format.md § Installs.',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      capabilities: {
+        filter: { content: 'none', contentPresent: false, search: false },
+        sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: false },
+        limits: { attachmentBytes: null, contentBytes: null },
+      },
+      installs: { requests: true },
     },
   },
   {
@@ -326,7 +349,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['create', 'read-any'],
         grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
       },
@@ -339,7 +362,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['create', 'read-any'],
         grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'member' },
       },
@@ -687,6 +710,71 @@ export const queryRecordsFixtures: ConformanceFixture<
     },
   },
   {
+    name: 'query-content-sort-defaults-to-ascending',
+    description:
+      'A sort that names a field with no direction runs ascending, as ORDER BY does — native ' +
+      'column or content field alike. A content date reads newest first only when the caller ' +
+      'asks for `desc`. A server built on Stack.query() inherits this. ' +
+      'See docs/spec/data-model.md § Sorting and pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { sort: { contentField: 'title' }, limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00061',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'apple' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00062',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'Zebra' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'query-without-sort-returns-newest-first',
+    description:
+      'A query naming no sort answers by createdAt, newest first — the order a feed-style ' +
+      "listing reads in. That is the opposite of `sort: { field: 'createdAt' }`, which names a " +
+      'sort and so runs ascending. See docs/spec/data-model.md § Sorting and pagination.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { limit: 2 },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00071',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-02-01T00:00:00.000Z',
+          updatedAt: '2024-02-01T00:00:00.000Z',
+          content: { title: 'Second' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00072',
+          typeId: 'com.example/article@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { title: 'First' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
     name: 'query-content-sort-folds-case-and-accents',
     description:
       'Text orders by a folded key rather than by code point: compatibility-decompose, drop ' +
@@ -971,9 +1059,16 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'POST',
         path: '/records/1hk153x0000c/associations',
         requestBody: {
-          kind: 'attachment',
-          label: 'late-arrival',
-          fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+          changes: [
+            {
+              op: 'add',
+              association: {
+                kind: 'attachment',
+                label: 'late-arrival',
+                fileId: 'a1c9c3f2b6d84e0f9a7c5b3d1e8f6042a1c9c3f2b6d84e0f9a7c5b3d1e8f6042',
+              },
+            },
+          ],
         },
         responseStatus: 200,
         responseBody: {
@@ -1055,157 +1150,206 @@ export const undeleteRecordFixtures: ConformanceFixture<undefined, WireRecord>[]
 // Associations
 // -------------------------------------------------------
 
-export const associateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
-  {
-    name: 'associate-tag',
-    description:
-      'POST /records/:id/associations adds an association without bumping version or touching ' +
-      'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
-      'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
-      'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
-      'its value. See docs/spec/wire-format.md § Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [{ kind: 'tag', label: 'starred' }],
+export const amendAssociationsFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] =
+  [
+    {
+      name: 'amend-associations-add-tag',
+      description:
+        'POST /records/:id/associations takes a list of changes and applies it as one write, ' +
+        'here a single add, without bumping version or touching ' +
+        'updatedAt, answering with the record it produced — carrying whatever version/updatedAt ' +
+        'it already had. The endpoint never reads If-Match: there is nothing for a precondition ' +
+        'on version to guard, so a header sent here is ignored rather than refused, whatever ' +
+        'its value. See docs/spec/wire-format.md § Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [{ kind: 'tag', label: 'starred' }],
+      },
     },
-  },
-  {
-    name: 'associate-attachment-record-id',
-    description:
-      'An attachment association may name the `_attachment` record whose upload established it, ' +
-      'so a reference to shared bytes can resolve its own filename. The field travels verbatim ' +
-      'in both directions and is outside association identity. See docs/spec/attachments.md ' +
-      '§ Naming the upload a reference came from.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: {
-      kind: 'attachment',
-      label: 'embed',
-      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-      attachmentRecordId: '1hk153x00009',
-    },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [
-        {
-          kind: 'attachment',
-          label: 'embed',
-          fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-          attachmentRecordId: '1hk153x00009',
-        },
-      ],
-    },
-  },
-  {
-    name: 'associate-relationship-external-target',
-    description:
-      'A relationship association carries its target as a discriminated union — the kind names ' +
-      'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
-      'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
-      '§ Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations',
-    requestBody: {
-      kind: 'relationship',
-      label: 'syndicated-to',
-      target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
-    },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
-      associations: [
-        {
-          kind: 'relationship',
-          label: 'syndicated-to',
-          target: {
-            kind: 'external',
-            ns: 'atproto',
-            id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+    {
+      name: 'amend-associations-add-attachment-record-id',
+      description:
+        'An attachment association may name the `_attachment` record whose upload established it, ' +
+        'so a reference to shared bytes can resolve its own filename. The field travels verbatim ' +
+        'in both directions and is outside association identity. See docs/spec/attachments.md ' +
+        '§ Naming the upload a reference came from.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'add',
+            association: {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+              attachmentRecordId: '1hk153x00009',
+            },
           },
-        },
-      ],
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [
+          {
+            kind: 'attachment',
+            label: 'embed',
+            fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            attachmentRecordId: '1hk153x00009',
+          },
+        ],
+      },
     },
-  },
-];
-
-export const dissociateFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
-  {
-    name: 'dissociate-attachment-by-identity',
-    description:
-      'Dissociating an attachment names (kind, label, fileId) — the association it removes may ' +
-      'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
-      'Like associate(), this never bumps version or touches updatedAt, and never reads ' +
-      'If-Match — a header sent here is ignored rather than refused. See ' +
-      'docs/spec/data-model.md § Associations.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations/delete',
-    requestBody: {
-      kind: 'attachment',
-      label: 'embed',
-      fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    {
+      name: 'amend-associations-add-relationship-external-target',
+      description:
+        'A relationship association carries its target as a discriminated union — the kind names ' +
+        'which identifier space the value belongs to, so a server stores and returns it verbatim ' +
+        'rather than flattening the arms into one id column. See docs/spec/data-model.md ' +
+        '§ Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'add',
+            association: {
+              kind: 'relationship',
+              label: 'syndicated-to',
+              target: {
+                kind: 'external',
+                ns: 'atproto',
+                id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+              },
+            },
+          },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [
+          {
+            kind: 'relationship',
+            label: 'syndicated-to',
+            target: {
+              kind: 'external',
+              ns: 'atproto',
+              id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+            },
+          },
+        ],
+      },
     },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
+    {
+      name: 'amend-associations-swap-in-one-request',
+      description:
+        'One list mixes a remove and an add, so replacing an association lands as a single ' +
+        'write with no intermediate state and a single journal entry. Removes apply before ' +
+        'adds. See docs/spec/adapters.md § Amending associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          { op: 'remove', association: { kind: 'tag', label: 'draft' } },
+          { op: 'add', association: { kind: 'tag', label: 'published' } },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+        associations: [{ kind: 'tag', label: 'published' }],
+      },
     },
-  },
-  {
-    name: 'dissociate-tag',
-    description:
-      'POST /records/:id/associations/delete removes an association without bumping version or ' +
-      'touching updatedAt, answering with the record it produced — here with associations gone ' +
-      'entirely and version/updatedAt exactly as they already stood. POST, not DELETE — a ' +
-      'DELETE request body has no defined semantics (RFC 9110 §9.3.5) and is a portability ' +
-      'landmine for proxies/gateways that drop or reject it.',
-    method: 'POST',
-    path: '/records/1hk153x00001/associations/delete',
-    requestBody: { kind: 'tag', label: 'starred' },
-    responseStatus: 200,
-    responseBody: {
-      id: '1hk153x00001',
-      typeId: 'com.example/note@1',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
-      version: 1,
+    {
+      name: 'amend-associations-remove-attachment-by-identity',
+      description:
+        'A remove names (kind, label, fileId) — the association it takes away may ' +
+        'carry an `attachmentRecordId`, which annotates the reference rather than identifying it. ' +
+        'Like an add, this never bumps version or touches updatedAt, and never reads ' +
+        'If-Match — a header sent here is ignored rather than refused. See ' +
+        'docs/spec/data-model.md § Associations.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: {
+        changes: [
+          {
+            op: 'remove',
+            association: {
+              kind: 'attachment',
+              label: 'embed',
+              fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+            },
+          },
+        ],
+      },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+      },
     },
-  },
-];
+    {
+      name: 'amend-associations-remove-tag',
+      description:
+        'A remove in the same list body takes an association away without bumping version or ' +
+        'touching updatedAt, answering with the record it produced — here with associations ' +
+        'gone entirely and version/updatedAt exactly as they already stood. There is no ' +
+        'separate delete path: a DELETE request body has no defined semantics (RFC 9110 ' +
+        '§9.3.5), and one POST carries adds and removes alike.',
+      method: 'POST',
+      path: '/records/1hk153x00001/associations',
+      requestBody: { changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }] },
+      responseStatus: 200,
+      responseBody: {
+        id: '1hk153x00001',
+        typeId: 'com.example/note@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: { title: 'Hello', body: 'World' },
+        version: 1,
+      },
+    },
+  ];
 
 // -------------------------------------------------------
 // Permissions
 // -------------------------------------------------------
 
-export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
+export const amendPermissionsFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
-    name: 'grant-access-entity',
+    name: 'amend-permissions-add-entity',
     description:
-      'POST /records/:id/permissions adds one permission element, amending the set rather than ' +
+      'POST /records/:id/permissions takes a list of changes, here adding one element and amending the set rather than ' +
       'replacing it, and answering with the record it produced. Permission elements are ' +
       'associations, so this bumps no version and does not touch updatedAt, and the endpoint ' +
       'never reads If-Match. It carries the reshare gate, not the write bit: a write-holder who ' +
@@ -1213,9 +1357,16 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
     },
     responseStatus: 200,
     responseBody: {
@@ -1235,7 +1386,7 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     },
   },
   {
-    name: 'grant-access-group-role',
+    name: 'amend-permissions-add-group-role',
     description:
       'A group grantee always names a role: `member` is the wider set and `admin` the narrower, ' +
       'matching the roster labels where admin implies member. There is no absent-role spelling ' +
@@ -1243,9 +1394,16 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'group', groupId: '1hk153x0000g', role: 'admin' },
+          },
+        },
+      ],
     },
     responseStatus: 200,
     responseBody: {
@@ -1264,20 +1422,69 @@ export const grantAccessFixtures: ConformanceFixture<Record<string, unknown>, Wi
       ],
     },
   },
-];
-
-export const revokeAccessFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
   {
-    name: 'revoke-access-anyone',
+    name: 'amend-permissions-grant-read-and-write-together',
     description:
-      'POST /records/:id/permissions/delete removes one permission element, answering with the ' +
-      'record it produced — here with permissions gone entirely and version/updatedAt exactly ' +
-      'as they already stood. POST, not DELETE, for the reason the association endpoint gives. ' +
+      'Granting edit access takes a `read` and a `write` for one grantee, and a `write` is ' +
+      'refused without the `read` beside it. One list carries both, so the set is judged as it ' +
+      'will stand and no write lands holding the invalid intermediate. ' +
+      'See docs/spec/access-control.md § Write implies read.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'write',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
+    },
+    responseStatus: 200,
+    responseBody: {
+      id: '1hk153x00001',
+      typeId: 'com.example/note@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { title: 'Hello', body: 'World' },
+      version: 1,
+      permissions: [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+        },
+      ],
+    },
+  },
+  {
+    name: 'amend-permissions-remove-anyone',
+    description:
+      'A remove on POST /records/:id/permissions takes one permission element away, answering ' +
+      'with the record it produced — here with permissions gone entirely and version/updatedAt ' +
+      'exactly as they already stood. One POST carries adds and removes, as on the association ' +
+      'endpoint. ' +
       'Reach to the world is its own kind, so withdrawing it names that kind rather than ' +
       'clearing a field. See docs/spec/wire-format.md § Permissions.',
     method: 'POST',
-    path: '/records/1hk153x00001/permissions/delete',
-    requestBody: { kind: 'anyone', label: 'read' },
+    path: '/records/1hk153x00001/permissions',
+    requestBody: { changes: [{ op: 'remove', association: { kind: 'anyone', label: 'read' } }] },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -1449,7 +1656,7 @@ export const parentChangeFixtures: ConformanceFixture<{ parentId: string | null 
 // § History access). These pin the success shape; the 403 case is
 // error-permission-denied-versions-read-only.
 
-export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
+export const getVersionsFixtures: ConformanceFixture<undefined, WireVersionsResponse>[] = [
   {
     name: 'get-versions-owner',
     description:
@@ -1457,14 +1664,17 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
-    responseBody: [
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
+    responseBody: {
+      versions: [
+        {
+          version: 1,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+      cursor: null,
+    },
   },
   {
     name: 'get-versions-non-owner-write-holder-sees-the-same-rows',
@@ -1477,16 +1687,62 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersion[]>[]
     method: 'GET',
     path: '/records/1hk153x00001/versions',
     responseStatus: 200,
-    responseBody: [
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-        createdBy: { subjectId: 'entity-contributor-789' },
-        updatedBy: { subjectId: 'entity-contributor-789' },
-      },
-    ],
+    responseBody: {
+      versions: [
+        {
+          version: 1,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          createdBy: { subjectId: 'entity-contributor-789' },
+          updatedBy: { subjectId: 'entity-contributor-789' },
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'get-versions-page-reports-a-cursor-to-resume-from',
+    description:
+      'Newest first, a page of history starts at the restore points. A server may answer a ' +
+      'page shorter than the limit asked for, so cursor is the only end-of-history signal: ' +
+      'its value is the version to send back as beforeVersion, which is exclusive. A client ' +
+      'reading the whole history follows it rather than taking the first page for the answer. ' +
+      'See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions?limit=1',
+    responseStatus: 200,
+    responseBody: {
+      versions: [
+        {
+          version: 3,
+          typeId: 'com.example/note@1',
+          content: { title: 'title before restore' },
+          updatedAt: '2024-01-03T00:00:00.000Z',
+        },
+      ],
+      cursor: 3,
+    },
+  },
+  {
+    name: 'get-versions-before-version-ends-with-a-null-cursor',
+    description:
+      'The follow-up page from cursor 3 holds the versions strictly older than 3, and its ' +
+      'cursor is null because nothing follows. See docs/spec/wire-format.md § Versions.',
+    method: 'GET',
+    path: '/records/1hk153x00001/versions?beforeVersion=3&limit=1',
+    responseStatus: 200,
+    responseBody: {
+      versions: [
+        {
+          version: 2,
+          typeId: 'com.example/note@1',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-02T00:00:00.000Z',
+        },
+      ],
+      cursor: null,
+    },
   },
 ];
 
@@ -1538,98 +1794,108 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
 // dispatches the mutating fixture first and asserts the version count
 // grew; a mocked-transport run can only assert the response shape parses.
 
-export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersion[]>[] = [
-  {
-    name: 'get-versions-after-restore-includes-pre-restore-snapshot',
-    description:
-      'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
-      'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
-      "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
-      'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
-      'a container, whichever one the record sat in when it was taken.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
+export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersionsResponse>[] =
+  [
+    {
+      name: 'get-versions-after-restore-includes-pre-restore-snapshot',
+      description:
+        'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
+        'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
+        "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
+        'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
+        'a container, whichever one the record sat in when it was taken.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
+    },
+    {
+      name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
+      description:
+        'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
+        'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
+        "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
+        'typeId — on top of everything restore-version already produced.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 4,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-    ],
-  },
-  {
-    name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
-    description:
-      'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
-      'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
-      "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
-      'typeId — on top of everything restore-version already produced.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 4,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
+    },
+    {
+      name: 'get-versions-after-associate-is-unchanged',
+      description:
+        'The association endpoints are the one pair of mutations that write no version. After ' +
+        'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
+        'answers with exactly the list it answered with before — no new entry, and no entry ' +
+        'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
+        'snapshots here hands every later restore a stale association set to put back. ' +
+        'See docs/spec/wire-format.md § Versions.',
+      method: 'GET',
+      path: '/records/1hk153x00001/versions',
+      responseStatus: 200,
+      responseBody: {
+        versions: [
+          {
+            version: 4,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 3,
+            typeId: 'com.example/note@1',
+            content: { title: 'title before restore' },
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          {
+            version: 1,
+            typeId: 'com.example/note@1',
+            content: { title: 'original title' },
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        cursor: null,
       },
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
-  },
-  {
-    name: 'get-versions-after-associate-is-unchanged',
-    description:
-      'The association endpoints are the one pair of mutations that write no version. After ' +
-      'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
-      'answers with exactly the list it answered with before — no new entry, and no entry ' +
-      'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
-      'snapshots here hands every later restore a stale association set to put back. ' +
-      'See docs/spec/wire-format.md § Versions.',
-    method: 'GET',
-    path: '/records/1hk153x00001/versions',
-    responseStatus: 200,
-    responseBody: [
-      {
-        version: 4,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 3,
-        typeId: 'com.example/note@1',
-        content: { title: 'title before restore' },
-        updatedAt: '2024-01-04T00:00:00.000Z',
-      },
-      {
-        version: 1,
-        typeId: 'com.example/note@1',
-        content: { title: 'original title' },
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      },
-    ],
-  },
-];
+    },
+  ];
 
 // -------------------------------------------------------
 // Versions: restore
@@ -1796,7 +2062,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
   {
     name: 'get-journal-entry-keeps-what-a-dissociate-removed',
     description:
-      'A removal is as undoable from the log as a re-point: `previous` is the association in ' +
+      'A removal is as undoable from the log as a re-point: `association` is the element in ' +
       'full, attachmentRecordId included. The change frame for the same write names identity ' +
       'only — kind, label and fileId — because a notification reports what is true now, and ' +
       'the annotation no longer describes anything current. That asymmetry is the tier: the ' +
@@ -1818,7 +2084,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
           associations: [
             {
               op: 'remove',
-              previous: {
+              association: {
                 kind: 'attachment',
                 label: 'embed',
                 fileId: '933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
@@ -1889,6 +2155,137 @@ export const commitMigrationFixtures: ConformanceFixture<
       updatedAt: '2024-01-05T00:00:00.000Z',
       content: { title: 'Hello', pinned: false },
       version: 5,
+    },
+  },
+];
+
+// -------------------------------------------------------
+// Install requests
+// -------------------------------------------------------
+//
+// POST /installs is how an app presents its manifest to a stack it holds
+// its own key for (docs/spec/wire-format.md § Installs). The owner
+// approves out of band; these pin only what the app sees. The key being
+// installed is always the session's — the body never names one.
+
+const INSTALL_MANIFEST: WireInstallRequest['manifest'] = {
+  appId: 'com.example.notes',
+  name: 'Notes',
+  version: '1.0.0',
+  types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
+  requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
+};
+
+export const installRequestFixtures: ConformanceFixture<
+  WireInstallRequest,
+  WireInstallResponse | WireError
+>[] = [
+  {
+    name: 'install-request-pending',
+    description:
+      'POST /installs with a manifest the owner has not approved for this key answers 202 with ' +
+      '{ status: "pending" }. The server queues it for the owner and writes nothing to the ' +
+      'stack: a request is not an approval. Sending the same manifest again answers the same ' +
+      'way until the owner acts, so re-sending is how an app checks. An upgrade — a manifest ' +
+      'adding a version or changing a request — is pending again in the same way.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: { manifest: INSTALL_MANIFEST },
+    responseStatus: 202,
+    responseBody: { status: 'pending' },
+  },
+  {
+    name: 'install-request-already-installed',
+    description:
+      'POST /installs with a manifest whose plan for this key is empty — the install is live, ' +
+      'the key is linked, and nothing would be added or removed — answers 200 with the ' +
+      '_install record. Each linked key holds read on its own install, so the app can fetch ' +
+      'it again by id, or find it with a query on the _install family. Assumes the owner ' +
+      "approved exactly this manifest for the session's key.",
+    method: 'POST',
+    path: '/installs',
+    requestBody: { manifest: INSTALL_MANIFEST },
+    responseStatus: 200,
+    responseBody: {
+      status: 'installed',
+      install: {
+        id: '1hk153x00009',
+        typeId: '_install@1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        content: {
+          appId: 'com.example.notes',
+          name: 'Notes',
+          version: '1.0.0',
+          defines: ['com.example.notes/note@1'],
+          requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
+        },
+        version: 1,
+      },
+    },
+  },
+  {
+    name: 'install-request-type-outside-namespace',
+    description:
+      "POST /installs whose manifest defines a type outside the app's own namespace answers " +
+      '422 with code "validation", naming the type. A family belongs to the app whose appId ' +
+      "is its namespace; an app that wants to use another app's family lists it in requests " +
+      'instead. See docs/spec/apps.md § Who owns a family.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: {
+      manifest: {
+        ...INSTALL_MANIFEST,
+        types: [{ id: 'com.example.tags/tag@1', name: 'Tag', schema: {} }],
+      },
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'types[0].id',
+            message:
+              '"com.example.tags/tag" is outside the namespace "com.example.notes"; request ' +
+              'access to it instead of defining it',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'install-request-key-registered-to-another-app',
+    description:
+      'POST /installs from a key whose _app card names a different appId answers 409 with ' +
+      'code "conflict". One key speaks for one app; a card\'s appId is immutable once set. ' +
+      'Assumes the session\'s DID is registered to "com.example.other".',
+    method: 'POST',
+    path: '/installs',
+    requestBody: { manifest: INSTALL_MANIFEST },
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message:
+          'did:key:z6Mkfsz9oK6i2355mvEwtDYdAmqCN6kmQETThJtARfj9iGum is registered to ' +
+          '"com.example.other", not "com.example.notes"',
+      },
+    },
+  },
+  {
+    name: 'install-request-delegated-session',
+    description:
+      'POST /installs from a delegated session — a principal acting for a subject — answers ' +
+      '403 with code "permission". An install is for the key that authenticated, acting as ' +
+      'itself; a delegated token names someone else as the subject.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: { manifest: INSTALL_MANIFEST },
+    responseStatus: 403,
+    responseBody: {
+      error: { code: 'permission', message: 'An install request must come from the key itself' },
     },
   },
 ];
@@ -2206,13 +2603,23 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
     requestBody: {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember', scope: 'comments' },
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember', scope: 'comments' },
+          },
+        },
+      ],
     },
     responseStatus: 400,
     responseBody: {
-      error: { code: 'bad_request', message: 'Unknown key in permission.grantee: scope' },
+      error: {
+        code: 'bad_request',
+        message: 'Unknown key in changes[0].association.grantee: scope',
+      },
     },
   },
   {
@@ -2317,9 +2724,72 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
           {
             path: 'permissions[0]',
             message:
-              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing',
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
           },
         ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-amend-permissions-write-without-read',
+    description:
+      'POST /records/:id/permissions adding `write` alone for a grantee holding no `read` ' +
+      'returns 422 with code "validation" and changes nothing: `write` never implies `read`, ' +
+      'so the request names both. The set the whole list produces is what is checked. See ' +
+      'docs/spec/access-control.md § Write implies read.',
+    method: 'POST',
+    path: '/records/1hk153x00001/permissions',
+    requestBody: {
+      changes: [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'write',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
+          },
+        },
+      ],
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'permissions[0]',
+            message:
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-amend-associations-repoint',
+    description:
+      'A `repoint` is recorded by the journal, never requested: POST /records/:id/associations ' +
+      'returns 400 with code "bad_request" for it, since it is not an op the endpoint defines. ' +
+      'An `add` naming an attachment the record already holds re-points it in place. See ' +
+      'docs/spec/wire-format.md § Associations.',
+    method: 'POST',
+    path: '/records/1hk153x00001/associations',
+    requestBody: {
+      changes: [
+        {
+          op: 'repoint',
+          association: { kind: 'tag', label: 'starred' },
+          previous: { kind: 'tag', label: 'starred' },
+        },
+      ],
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message:
+          'Invalid association edits body: changes[0].op: "repoint" is recorded by the journal, not requested. Send { op: \'add\', association }: an add naming an attachment the record already holds re-points it in place.',
       },
     },
   },
@@ -2341,7 +2811,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       typeId: '_grant@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      content: { typeId: 'com.example/comment@1', actions: ['read-any'] },
+      content: { baseId: 'com.example/comment', actions: ['read-any'] },
       version: 1,
     },
     responseStatus: 422,
@@ -2350,6 +2820,75 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [{ path: 'grantee', message: 'Required field is missing' }],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-versioned-base-id',
+    description:
+      'POST /records creating a _grant@1 record whose `baseId` carries an `@version` suffix ' +
+      'returns 422 with code "validation", the refusal naming the family to use. A grant ' +
+      'reaches a whole type family, so a versioned target would read as pinned to one version ' +
+      'while covering them all; wherever one is already stored it confers nothing. ' +
+      'See docs/spec/access-control.md § Refused at the write, and again at evaluation.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0601a',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: {
+        baseId: 'com.example/comment@1',
+        actions: ['read-any'],
+        grantee: { kind: 'authenticated' },
+      },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'baseId',
+            message:
+              'baseId: "com.example/comment@1" names one version; pass the family "com.example/comment"',
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'error-validation-grant-protected-system-type',
+    description:
+      'POST /records creating a _grant@1 record whose `baseId` names `_grant`, `_config` or ' +
+      '`_app` returns 422 with code "validation", however the record is written: the target ' +
+      'rule holds on every `_grant` write, not only through grantType(). ' +
+      'See docs/spec/access-control.md § Refused at the write, and again at evaluation.',
+    method: 'POST',
+    path: '/records',
+    requestBody: {
+      id: '1hk153x0601b',
+      typeId: '_grant@1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      content: { baseId: '_app', actions: ['create'], grantee: { kind: 'authenticated' } },
+      version: 1,
+    },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'baseId',
+            message:
+              'Cannot grant on "_app": grants on _grant, _config, _app are refused to prevent privilege escalation',
+          },
+        ],
       },
     },
   },
@@ -2371,7 +2910,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '1hk153x05001' },
       },
@@ -2406,7 +2945,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'entity' },
       },
@@ -2443,7 +2982,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'entity', entityId: '' },
       },
@@ -2478,7 +3017,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', role: 'member' },
       },
@@ -2514,7 +3053,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'group', groupId: '1hk153x05001', role: 'any' },
       },
@@ -2547,7 +3086,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: { kind: 'everyone' },
       },
@@ -2583,7 +3122,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       content: {
-        typeId: 'com.example/comment@1',
+        baseId: 'com.example/comment',
         actions: ['read-any'],
         grantee: null,
       },
@@ -2612,14 +3151,17 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'See docs/spec/access-control.md § Record-level permissions.',
     method: 'POST',
     path: '/records/1hk153x00001/permissions',
-    requestBody: { kind: 'anyone', label: 'write' },
+    requestBody: { changes: [{ op: 'add', association: { kind: 'anyone', label: 'write' } }] },
     responseStatus: 422,
     responseBody: {
       error: {
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'permission.label', message: 'An `anyone` association carries only `read`.' },
+          {
+            path: 'changes[0].association.label',
+            message: 'An `anyone` association carries only `read`.',
+          },
         ],
       },
     },
@@ -3808,7 +4350,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           description: 'A contributor tags the note.',
           method: 'POST',
           path: '/records/1hk153x00001/associations',
-          requestBody: { kind: 'tag', label: 'starred' },
+          requestBody: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -3857,8 +4399,10 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-dissociate-frame-mutation',
           description: 'A contributor untags the note.',
           method: 'POST',
-          path: '/records/1hk153x00001/associations/delete',
-          requestBody: { kind: 'tag', label: 'starred' },
+          path: '/records/1hk153x00001/associations',
+          requestBody: {
+            changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }],
+          },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -3892,7 +4436,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-deleted-frame-is-not-terminal',
     description:
-      'A soft delete is kind "deleted" and bumps a version like any other mutation, so the ' +
+      'A soft delete is kind "removed" and bumps a version like any other mutation, so the ' +
       'record can still be undeleted, restored or read as history. That is what separates it ' +
       'from "purged" below, and why the two are distinct kinds rather than one delete signal: a ' +
       'consumer that drops its history on a soft delete has thrown away recoverable state.',
@@ -3923,7 +4467,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: 'AA3f1T',
             event: 'record',
             data: {
-              kind: 'deleted',
+              kind: 'removed',
               ops: ['delete'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
@@ -3937,9 +4481,9 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
     ],
   },
   {
-    name: 'change-feed-unlist-frame-is-a-deleted-kind',
+    name: 'change-feed-unlist-frame-is-a-removed-kind',
     description:
-      'Marking a record unlisted arrives as kind "deleted" / op "unlist" — not "changed" — even ' +
+      'Marking a record unlisted arrives as kind "removed" / op "unlist" — not "changed" — even ' +
       'though the record still exists and get() still resolves it. A subscriber without ' +
       'includeUnlisted already knows this record from before, and the record’s new state ' +
       '(unlistedAt now set) would otherwise be excluded by the very filter this event announces, ' +
@@ -3976,7 +4520,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             id: 'AA3f1U',
             event: 'record',
             data: {
-              kind: 'deleted',
+              kind: 'removed',
               ops: ['unlist'],
               recordId: '1hk153x00001',
               typeId: 'com.example/note@1',
@@ -3997,7 +4541,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'carries the record’s state at the moment of the change, so a subscriber compares it to ' +
       'its own filter to tell a departure from an arrival. The record’s post-change state ' +
       'alone would answer only for the destination, which is why this transition is matched ' +
-      'against both containers. Kind is "changed", not "deleted": the record is still there ' +
+      'against both containers. Kind is "changed", not "removed": the record is still there ' +
       'and still readable — only its container moved. A move bumps no version, so the frame ' +
       'carries the version and updatedAt the record already had. See ' +
       'docs/spec/events.md § The reparent transition.',
@@ -4050,7 +4594,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'publish moment, mechanically identical to an ordinary upsert. A subscriber applies it the ' +
       'same way it applies "undelete": it may never have seen this record before (its earlier ' +
       'create and any edits while unlisted were withheld), and this is the first event that ' +
-      'names it. Assumes prior state from change-feed-unlist-frame-is-a-deleted-kind. See ' +
+      'names it. Assumes prior state from change-feed-unlist-frame-is-a-removed-kind. See ' +
       'docs/spec/events.md § The unlisted transition.',
     path: '/changes',
     responseStatus: 200,
@@ -4099,7 +4643,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       'without includeUnlisted — not an empty or redacted one. This is what makes the feed match ' +
       'an equivalent query(): a record excluded from listings is excluded from the announcement ' +
       'stream too, on every op except the unlist transition itself (see ' +
-      'change-feed-unlist-frame-is-a-deleted-kind). Assumes the note was already made unlisted. ' +
+      'change-feed-unlist-frame-is-a-removed-kind). Assumes the note was already made unlisted. ' +
       'See docs/spec/events.md § The unlisted transition.',
     path: '/changes',
     responseStatus: 200,
@@ -4669,6 +5213,101 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
   },
 ];
 
+/**
+ * A soft delete changes what `GET /records/:id` answers, and a single pair
+ * cannot pin the change: it is the same path before and after. Hidden by
+ * default and returned on request, for a requester who may read the record.
+ * See docs/spec/wire-format.md § Records.
+ */
+export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'get-record-after-soft-delete',
+    description:
+      'GET /records/:id hides a soft-deleted record unless ?includeDeleted=true, as ' +
+      'GET /records does. Assumes a record readable by this requester at "1hk153x00001".',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-delete',
+        description: 'The soft delete that turns the record into a tombstone.',
+        method: 'DELETE',
+        path: '/records/1hk153x00001',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-hidden',
+        description:
+          'Without includeDeleted the tombstone is "not here": 404, the same answer a missing ' +
+          'or unreadable record gives.',
+        method: 'GET',
+        path: '/records/1hk153x00001',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-include-deleted',
+        description:
+          'With ?includeDeleted=true a requester who may read the record gets the tombstone ' +
+          'projection back: 200, empty content, deletedAt set.',
+        method: 'GET',
+        path: '/records/1hk153x00001?includeDeleted=true',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+    ],
+  },
+  {
+    name: 'get-record-after-soft-delete-unreadable',
+    description:
+      'A requester with no read access to the soft-deleted record "1hk153x00002" gets 404 ' +
+      "whether or not it passes ?includeDeleted=true: the flag discloses nothing the record's " +
+      'own permissions would withhold. Assumes that record is soft-deleted and private to its ' +
+      'owner, and that this requester holds no grant on it.',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-unreadable-default',
+        description: 'The default read of a tombstone this requester may not read: 404.',
+        method: 'GET',
+        path: '/records/1hk153x00002',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-unreadable-include-deleted',
+        description:
+          'Opting in changes nothing for an unreadable record: the same 404, so the flag is no ' +
+          'probe for guessed IDs.',
+        method: 'GET',
+        path: '/records/1hk153x00002?includeDeleted=true',
+        responseStatus: 404,
+        responseBody: {
+          error: { code: 'not_found', message: 'Record "1hk153x00002" not found.' },
+        },
+      },
+    ],
+  },
+];
+
 // -------------------------------------------------------
 // All fixtures
 // -------------------------------------------------------
@@ -4676,8 +5315,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
 /**
  * Every fixture across every endpoint, for consumers that want to iterate
  * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
- * authSequenceFixtures, deleteRecordSequenceFixtures, changeFeedFixtures and
- * changeFeedSequenceFixtures — each a different shape (binary body,
+ * authSequenceFixtures, deleteRecordSequenceFixtures, getRecordSequenceFixtures,
+ * changeFeedFixtures and changeFeedSequenceFixtures — each a different shape (binary body,
  * header-focused, or an ordered series rather than a plain JSON
  * request/response pair), imported separately.
  *
@@ -4693,10 +5332,8 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,
-  ...associateFixtures,
-  ...dissociateFixtures,
-  ...grantAccessFixtures,
-  ...revokeAccessFixtures,
+  ...amendAssociationsFixtures,
+  ...amendPermissionsFixtures,
   ...permissionsChangeFixtures,
   ...unlistedChangeFixtures,
   ...parentChangeFixtures,
@@ -4706,5 +5343,6 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...restoreVersionFixtures,
   ...getJournalFixtures,
   ...commitMigrationFixtures,
+  ...installRequestFixtures,
   ...errorResponseFixtures,
 ];

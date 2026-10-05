@@ -248,7 +248,7 @@ const withPhrasesMasked = (query: string, rewrite: (masked: string) => string): 
  * Put back the operator FTS5 requires around a group. Two terms side by
  * side are an implicit AND (`cats dogs`), but a group is not: `cats (dogs)`
  * is a syntax error where `cats AND (dogs)` is fine. Grouping survives a
- * rewrite that strips the operator which used to sit beside it, so this
+ * rewrite that strips the operator beside it, so this
  * names the AND that was always meant rather than dropping the parens.
  *
  * Both rules test a *whole* word against the operator list. Matching a

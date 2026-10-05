@@ -34,7 +34,7 @@ describe('DiskBlobAdapter', () => {
     const data = Buffer.from('hello attachment');
     const fileId = await adapter.putBlob(data);
     const retrieved = await adapter.getBlob(fileId);
-    expect((retrieved as Buffer).toString()).toBe('hello attachment');
+    expect(new TextDecoder().decode(retrieved)).toBe('hello attachment');
   });
 
   test('attachment file exists on disk', async () => {
@@ -54,10 +54,10 @@ describe('DiskBlobAdapter', () => {
   });
 
   test('putBlob stores binary data correctly', async () => {
-    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
+    const binary = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
     const fileId = await adapter.putBlob(binary);
     const retrieved = await adapter.getBlob(fileId);
-    expect(retrieved as Buffer).toEqual(binary);
+    expect(retrieved).toEqual(binary);
   });
 
   test('putBlob deduplicates identical content', async () => {
@@ -85,7 +85,7 @@ describe('DiskBlobAdapter', () => {
     expect(files).toEqual([fileId]);
 
     const stored = await adapter.getBlob(fileId);
-    expect((stored as Buffer).equals(data)).toBe(true);
+    expect(stored).toEqual(new Uint8Array(data));
   });
 
   test('getBlob throws StackNotFoundError after deleteBlob', async () => {

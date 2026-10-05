@@ -13,11 +13,13 @@ import {
   StackTimeoutError,
 } from '@haverstack/core';
 import type {
+  AppManifest,
   NativeSortField,
   StackRecord,
   StackType,
   RecordVersion,
   AssociationChange,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   ValidationError,
@@ -96,7 +98,7 @@ export type WireType = {
  * (a change set's `parentId`, a `parentId=null` filter) and never appears
  * on a response. See docs/spec/wire-format.md § Versions.
  *
- * No `associations` field: associate()/dissociate() don't bump `version`,
+ * No `associations` field: association changes don't bump `version`,
  * so no version ever snapshots the association set. See
  * docs/spec/versioning.md § Version history.
  */
@@ -204,6 +206,18 @@ export type WireJournalEntry = {
  */
 export type WireJournalResponse = {
   entries: WireJournalEntry[];
+  cursor: number | null;
+};
+
+/**
+ * The response envelope of `GET /records/:id/versions`.
+ *
+ * `cursor` is the only end-of-history signal, as on the journal: a server
+ * may cap a page below the `limit` asked for. It carries the `version` to
+ * send as the next `beforeVersion`, and is null once nothing follows.
+ */
+export type WireVersionsResponse = {
+  versions: WireVersion[];
   cursor: number | null;
 };
 
@@ -432,6 +446,7 @@ export type DiscoveryResponse = {
   capabilities?: DiscoveryCapabilities;
   auth?: DiscoveryAuth;
   changes?: DiscoveryChanges;
+  installs?: DiscoveryInstalls;
 };
 
 /**
@@ -765,3 +780,40 @@ export function isProtocolCompatible(version: string, against = WIRE_PROTOCOL_VE
   const client = parseProtocolVersion(against);
   return server !== null && client !== null && server.major === client.major;
 }
+
+/**
+ * The body of `POST /records/:id/associations` and `/permissions`: one
+ * list, applied as one write. See docs/spec/wire-format.md § Associations.
+ */
+export type WireAssociationEditsRequest = { changes: AssociationEdit[] };
+
+// -------------------------------------------------------
+// Installs
+// -------------------------------------------------------
+
+/**
+ * Whether a server takes install requests at `POST /installs`. Absent means
+ * it does not, and a client says so locally rather than learning it as a
+ * 404. An object for the same reason `changes` is one.
+ * See docs/spec/wire-format.md § Installs.
+ */
+export type DiscoveryInstalls = {
+  requests: boolean;
+};
+
+/** Whether a server advertises `POST /installs`. */
+export function supportsInstallRequests(discovery: DiscoveryResponse): boolean {
+  return discovery.installs?.requests === true;
+}
+
+/** POST /installs. The key being installed is the session's, never named here. */
+export type WireInstallRequest = { manifest: AppManifest };
+
+/**
+ * POST /installs answers `pending` (202) while the owner has not approved
+ * this manifest for this key, and `installed` (200) once applying it would
+ * change nothing.
+ */
+export type WireInstallResponse =
+  | { status: 'pending' }
+  | { status: 'installed'; install: WireRecord };

@@ -33,7 +33,25 @@ export type {
   DeleteAndReturnResult,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
+  MigrateAllOptions,
 } from './stack.js';
+export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
+export { isPlanEmpty } from './install.js';
+
+// Type handles
+export { typeHandle } from './type-handle.js';
+export type {
+  TypeHandle,
+  ContentOf,
+  PatchOf,
+  TypedRecord,
+  TypedQuery,
+  TypedChange,
+  TypedChangeSet,
+  TypedSubscribeOptions,
+  ReadonlyFieldDef,
+  ReadonlyTypeSchema,
+} from './type-handle.js';
 
 // The error taxonomy
 export {
@@ -68,6 +86,7 @@ export type {
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,
+  VersionsQuery,
   Actor,
   ActorOptions,
   ChangeKind,
@@ -95,6 +114,7 @@ export type {
   AuthorityAssociation,
   DataAssociation,
   AssociationChange,
+  AssociationEdit,
   RelationshipTarget,
   RecordTarget,
   EntityTarget,
@@ -120,6 +140,8 @@ export type {
   GrantAction,
   GrantContent,
   GrantGrantee,
+  InstallContent,
+  InstallRequest,
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,
@@ -138,3 +160,4 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
+export { assertOneSurface } from './record-changes.js';

@@ -1,9 +1,8 @@
 /**
  * Record adapter conformance suite
  * -------------------------------------------------------
- * The middle ground docs/spec/adapters.md describes in prose and, until
- * now, nothing runnable checked a third-party StackRecordAdapter against:
- * an adapter author calls runRecordAdapterConformance() with a way to open
+ * A runnable check of what docs/spec/adapters.md describes in prose for a
+ * third-party StackRecordAdapter: an adapter author calls runRecordAdapterConformance() with a way to open
  * their adapter and the capabilities it declares, and gets back the
  * invariants every first-party adapter is held to — FTS5-style search
  * consistency, content-path semantics, version snapshots, `_config`
@@ -126,6 +125,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(stored?.content).toEqual({ title: 'Hello' });
       });
 
+      test('a content field set to undefined reads back absent', async () => {
+        const record = makeRecord({ content: { title: 'Hello', priority: undefined } });
+        await adapter.createRecord(record);
+        const stored = await adapter.getRecord(record.id);
+        expect(Object.keys(stored?.content ?? {})).toEqual(['title']);
+        expect(stored?.content).not.toHaveProperty('priority');
+      });
+
       test('getRecord returns null for an unknown id', async () => {
         expect(await adapter.getRecord(uniqueId('missing'))).toBeNull();
       });
@@ -203,6 +210,63 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(undeleted.deletedAt).toBeUndefined();
       });
 
+      test('getVersions returns snapshots newest first', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([3, 2, 1]);
+      });
+
+      test('getVersions pages walk every version exactly once, newest first', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3, 4, 5]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        const seen: number[] = [];
+        let beforeVersion: number | undefined;
+        for (;;) {
+          const page = await adapter.getVersions(record.id, { beforeVersion, limit: 2 });
+          if (page.length === 0) break;
+          expect(page.length).toBeLessThanOrEqual(2);
+          seen.push(...page.map((v) => v.version));
+          beforeVersion = page[page.length - 1].version;
+        }
+        expect(seen).toEqual([5, 4, 3, 2, 1]);
+      });
+
+      test('getVersions beforeVersion is exclusive and limit bounds the result', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        for (const version of [1, 2, 3]) {
+          await adapter.saveVersion(record.id, {
+            version,
+            typeId: record.typeId,
+            content: record.content,
+            updatedAt: record.updatedAt,
+          });
+        }
+        const versionsOf = async (query: { beforeVersion?: number; limit?: number }) =>
+          (await adapter.getVersions(record.id, query)).map((v) => v.version);
+        expect(await versionsOf({ beforeVersion: 3 })).toEqual([2, 1]);
+        expect(await versionsOf({ beforeVersion: 1 })).toEqual([]);
+        expect(await versionsOf({ limit: 1 })).toEqual([3]);
+        expect(await versionsOf({ beforeVersion: 3, limit: 1 })).toEqual([2]);
+        expect(await versionsOf({})).toEqual([3, 2, 1]);
+      });
+
       test('purging deleteRecord removes the record and its version history', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
@@ -237,18 +301,27 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // Associations
     // -----------------------------------------------------------------
     describe('associations', () => {
-      test('associate adds a tag; dissociate removes it; neither bumps version', async () => {
+      const tag = (label: string) => ({ kind: 'tag' as const, label });
+
+      test('an add puts a tag on the record and a remove takes it off; neither bumps version', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
 
-        const tagged = await adapter.associate(record.id, { kind: 'tag', label: 'important' });
+        const tagged = await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'important' } },
+        ]);
         expect(tagged.associations).toContainEqual({ kind: 'tag', label: 'important' });
         expect(tagged.version).toBe(record.version);
 
-        const untagged = await adapter.dissociate(record.id, {
-          kind: 'tag',
-          label: 'important',
-        });
+        const untagged = await adapter.amendAssociations(record.id, [
+          {
+            op: 'remove',
+            association: {
+              kind: 'tag',
+              label: 'important',
+            },
+          },
+        ]);
         expect(untagged.associations ?? []).not.toContainEqual({
           kind: 'tag',
           label: 'important',
@@ -256,19 +329,25 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(untagged.version).toBe(record.version);
       });
 
-      test('associate is idempotent — a duplicate does not create a second entry', async () => {
+      test('an add is idempotent — a duplicate does not create a second entry', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        await adapter.associate(record.id, { kind: 'tag', label: 'dup' });
-        const twice = await adapter.associate(record.id, { kind: 'tag', label: 'dup' });
+        await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'dup' } },
+        ]);
+        const twice = await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'dup' } },
+        ]);
         expect(
           twice.associations?.filter((a) => a.kind === 'tag' && a.label === 'dup'),
         ).toHaveLength(1);
       });
 
-      test('associate on a nonexistent record reports not_found rather than creating an orphan', async () => {
+      test('an amend on a nonexistent record reports not_found rather than creating an orphan', async () => {
         await expectStackErrorCode(
-          adapter.associate(uniqueId('missing'), { kind: 'tag', label: 'x' }),
+          adapter.amendAssociations(uniqueId('missing'), [
+            { op: 'add', association: { kind: 'tag', label: 'x' } },
+          ]),
           'not_found',
         );
       });
@@ -277,7 +356,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       // fields by kind. Every adapter partitions it for itself, so the
       // agreement is worth pinning here rather than once per adapter.
       // See docs/spec/access-control.md § Record-level permissions.
-      test('authority kinds travel the same verbs and project onto permissions', async () => {
+      test('authority kinds travel the same call and project onto permissions', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         const grant: AuthorityAssociation = {
@@ -286,13 +365,19 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           grantee: { kind: 'entity', entityId: 'did:key:z6MkConformance' },
         };
 
-        await adapter.associate(record.id, { kind: 'tag', label: 'draft' });
-        const granted = await adapter.associate(record.id, grant);
+        await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'draft' } },
+        ]);
+        const granted = await adapter.amendAssociations(record.id, [
+          { op: 'add', association: grant },
+        ]);
         expect(granted.permissions).toEqual([grant]);
         expect(granted.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
         expect(granted.version).toBe(record.version);
 
-        const revoked = await adapter.dissociate(record.id, grant);
+        const revoked = await adapter.amendAssociations(record.id, [
+          { op: 'remove', association: grant },
+        ]);
         expect(revoked.permissions ?? []).toEqual([]);
         expect(revoked.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
       });
@@ -309,18 +394,80 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const member = forRole('member');
         const admin = forRole('admin');
 
-        await adapter.associate(record.id, member);
-        const both = await adapter.associate(record.id, admin);
+        await adapter.amendAssociations(record.id, [{ op: 'add', association: member }]);
+        const both = await adapter.amendAssociations(record.id, [
+          { op: 'add', association: admin },
+        ]);
         expect(both.permissions).toEqual(expect.arrayContaining([member, admin]));
         expect(both.permissions).toHaveLength(2);
+      });
+
+      test('a list of adds and removes lands as one write that bumps no version', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
+        await adapter.amendAssociations(record.id, [{ op: 'add', association: tag('old') }]);
+
+        const amended = await adapter.amendAssociations(
+          record.id,
+          [
+            { op: 'remove', association: tag('old') },
+            { op: 'add', association: tag('new') },
+            { op: 'add', association: tag('extra') },
+          ],
+          { journal: { ops: ['associate', 'dissociate'], kind: 'changed' } },
+        );
+
+        expect(amended.associations).toEqual(expect.arrayContaining([tag('new'), tag('extra')]));
+        expect(amended.associations).toHaveLength(2);
+        expect(amended.version).toBe(record.version);
+        expect(amended.updatedAt).toEqual(record.updatedAt);
+        expect(await adapter.getJournal(record.id)).toHaveLength(2);
+      });
+
+      test('edits naming one identity collapse, last wins', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const fileId = 'c'.repeat(64);
+        const first = {
+          kind: 'attachment' as const,
+          label: 'cover',
+          fileId,
+          attachmentRecordId: 'one',
+        };
+        const second = { ...first, attachmentRecordId: 'two' };
+
+        const amended = await adapter.amendAssociations(record.id, [
+          { op: 'add', association: first },
+          { op: 'add', association: second },
+        ]);
+        expect(amended.associations).toEqual([second]);
+      });
+
+      test('a list mixing authority and data elements is refused and applies nothing', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const grant: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+
+        await expectStackErrorCode(
+          adapter.amendAssociations(record.id, [
+            { op: 'add', association: tag('mixed') },
+            { op: 'add', association: grant },
+          ]),
+          'bad_request',
+        );
+        const after = await adapter.getRecord(record.id);
+        expect(after!.associations ?? []).toEqual([]);
+        expect(after!.permissions ?? []).toEqual([]);
       });
 
       test('each change-set key replaces only its own half of the set', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
-        await adapter.associate(record.id, { kind: 'tag', label: 'draft' });
-        await adapter.associate(record.id, anyone);
+        await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'draft' } },
+        ]);
+        await adapter.amendAssociations(record.id, [{ op: 'add', association: anyone }]);
 
         const retagged = await adapter.mutateRecord(
           record.id,
@@ -370,7 +517,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         });
         await adapter.mutateRecord(record.id, { contentPatch: { title: 'v2' } });
         await adapter.mutateRecord(record.id, { parentId: parent.id }, { bumpsVersion: false });
-        await adapter.associate(record.id, { kind: 'tag', label: 'keep-me' });
+        await adapter.amendAssociations(record.id, [
+          { op: 'add', association: { kind: 'tag', label: 'keep-me' } },
+        ]);
 
         const restored = await adapter.restoreVersion(record.id, record.version);
         expect(restored.content).toEqual({ title: 'v1' });
@@ -432,14 +581,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const second = makeRecord();
         await adapter.createRecord(first, { journal: { ops: ['create'], kind: 'created' } });
         await adapter.createRecord(second, { journal: { ops: ['create'], kind: 'created' } });
-        await adapter.associate(
+        await adapter.amendAssociations(
           first.id,
-          { kind: 'tag', label: 'a' },
+          [{ op: 'add', association: { kind: 'tag', label: 'a' } }],
           { journal: { ops: ['associate'], kind: 'changed' } },
         );
-        await adapter.associate(
+        await adapter.amendAssociations(
           first.id,
-          { kind: 'tag', label: 'b' },
+          [{ op: 'add', association: { kind: 'tag', label: 'b' } }],
           { journal: { ops: ['associate'], kind: 'changed' } },
         );
 
@@ -451,9 +600,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test('an association change journals a version that stands still', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        await adapter.associate(
+        await adapter.amendAssociations(
           record.id,
-          { kind: 'tag', label: 'starred' },
+          [{ op: 'add', association: { kind: 'tag', label: 'starred' } }],
           {
             journal: {
               ops: ['associate'],
@@ -462,14 +611,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             },
           },
         );
-        await adapter.dissociate(
+        await adapter.amendAssociations(
           record.id,
-          { kind: 'tag', label: 'starred' },
+          [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }],
           {
             journal: {
               ops: ['dissociate'],
               kind: 'changed',
-              associations: [{ op: 'remove', previous: { kind: 'tag', label: 'starred' } }],
+              associations: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }],
             },
           },
         );
@@ -480,7 +629,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           { op: 'add', association: { kind: 'tag', label: 'starred' } },
         ]);
         expect(log[1]!.associations).toEqual([
-          { op: 'remove', previous: { kind: 'tag', label: 'starred' } },
+          { op: 'remove', association: { kind: 'tag', label: 'starred' } },
         ]);
       });
 
@@ -502,7 +651,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           fileId: 'a'.repeat(64),
           attachmentRecordId: uniqueId('new'),
         };
-        await adapter.associate(record.id, association, {
+        await adapter.amendAssociations(record.id, [{ op: 'add', association: association }], {
           journal: {
             ops: ['associate'],
             kind: 'changed',
@@ -525,20 +674,25 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           fileId: 'b'.repeat(64),
           attachmentRecordId: uniqueId('upload'),
         };
-        await adapter.associate(record.id, previous);
-        await adapter.dissociate(
+        await adapter.amendAssociations(record.id, [{ op: 'add', association: previous }]);
+        await adapter.amendAssociations(
           record.id,
-          { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
+          [
+            {
+              op: 'remove',
+              association: { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
+            },
+          ],
           {
             journal: {
               ops: ['dissociate'],
               kind: 'changed',
-              associations: [{ op: 'remove', previous }],
+              associations: [{ op: 'remove', association: previous }],
             },
           },
         );
         const [entry] = await adapter.getJournal(record.id);
-        expect(entry!.associations).toEqual([{ op: 'remove', previous }]);
+        expect(entry!.associations).toEqual([{ op: 'remove', association: previous }]);
       });
 
       test('an association list is keyed by identity, last wins', async () => {
@@ -593,9 +747,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         for (const label of ['a', 'b', 'c']) {
-          await adapter.associate(
+          await adapter.amendAssociations(
             record.id,
-            { kind: 'tag', label },
+            [{ op: 'add', association: { kind: 'tag', label } }],
             { journal: { ops: ['associate'], kind: 'changed' } },
           );
         }
@@ -632,7 +786,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record, { journal: { ops: ['create'], kind: 'created' } });
         await adapter.deleteRecord(record.id, {
-          journal: { ops: ['delete'], kind: 'deleted' },
+          journal: { ops: ['delete'], kind: 'removed' },
         });
         // A tombstone is recoverable, and its journal is part of what
         // recovers it.
@@ -706,14 +860,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(makeRecord());
         const minted = await adapter.queryRecords({
           limit: 1,
-          sort: { field: 'createdAt' },
+          sort: { field: 'createdAt', direction: 'asc' },
         });
         expect(minted.cursor).not.toBeNull();
         await expectStackErrorCode(
           adapter.queryRecords({
             limit: 1,
             cursor: minted.cursor!,
-            sort: { field: 'updatedAt' },
+            sort: { field: 'updatedAt', direction: 'asc' },
           }),
           'bad_request',
         );
@@ -825,8 +979,39 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Sort by content field — capability-gated on sort.contentField
     // -----------------------------------------------------------------
+    describe('sort direction', () => {
+      test.each(['asc', 'desc'] as const)(
+        'honors an explicit %s on a native field',
+        async (direction) => {
+          const a = await adapter.createRecord(makeRecord());
+          await new Promise((r) => setTimeout(r, 5));
+          const b = await adapter.createRecord(makeRecord());
+          const result = await adapter.queryRecords({ sort: { field: 'createdAt', direction } });
+          const ids = result.records.map((r) => r.id);
+          expect(ids).toEqual(direction === 'asc' ? [a.id, b.id] : [b.id, a.id]);
+        },
+      );
+    });
+
     if (capabilities.sort.contentField) {
       describe('sort by content field', () => {
+        test.each(['asc', 'desc'] as const)(
+          'honors an explicit %s on a content field',
+          async (direction) => {
+            await adapter.saveType(conformanceType());
+            await adapter.createRecord(makeRecord({ content: { title: 'x', priority: 1 } }));
+            await adapter.createRecord(makeRecord({ content: { title: 'y', priority: 2 } }));
+
+            const result = await adapter.queryRecords({
+              sort: { contentField: 'priority', direction },
+            });
+            const priorities = result.records.map(
+              (r) => (r.content as { priority: number }).priority,
+            );
+            expect(priorities).toEqual(direction === 'asc' ? [1, 2] : [2, 1]);
+          },
+        );
+
         test('orders records by a declared content field', async () => {
           // Registered so an adapter that resolves the field's sort kind
           // through the type schema (rather than off the raw JSON value)

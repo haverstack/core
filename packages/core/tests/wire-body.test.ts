@@ -1,10 +1,12 @@
 import { describe, test, expect } from 'vitest';
 import {
+  parseAssociationEditsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
   parseEntityPatchBody,
   parseTypeBody,
   parseMigrationBody,
+  parseInstallBody,
 } from '../src/wire-entry.js';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
@@ -110,7 +112,7 @@ describe('parseTypeBody', () => {
 
   test('a whole Type as a client serializes one parses to defineType() options', async () => {
     const stack = await Stack.open(
-      new MemoryAdapter({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     );
     const type = await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema });
     const wire = JSON.parse(JSON.stringify(type)) as unknown;
@@ -142,7 +144,7 @@ describe('parseTypeBody', () => {
   test('a malformed schema passes through for defineType() to answer with 422', async () => {
     const options = parseTypeBody({ id: 'a@1', name: 'A', schema: 'not a schema' });
     const stack = await Stack.open(
-      new MemoryAdapter({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     );
     await expect(stack.defineType(options)).rejects.toThrow(StackValidationError);
   });
@@ -167,5 +169,78 @@ describe('parseMigrationBody', () => {
     expect(() => parseMigrationBody({ toTypeId: 'a@2' })).toThrow(StackBadRequestError);
     expect(pathOf(() => parseMigrationBody({ toTypeId: 2, content: {} }))).toBe('toTypeId');
     expect(pathOf(() => parseMigrationBody({ toTypeId: 'a@2', content: 'x' }))).toBe('content');
+  });
+});
+
+describe('parseAssociationEditsBody', () => {
+  const tag = { kind: 'tag', label: 'starred' };
+
+  test('returns the edits in the order they were sent', () => {
+    const changes = [
+      { op: 'remove', association: tag },
+      { op: 'add', association: { kind: 'tag', label: 'new' } },
+    ];
+    expect(parseAssociationEditsBody({ changes })).toEqual(changes);
+  });
+
+  test.each([
+    ['a body that is not an object', []],
+    ['a missing changes list', {}],
+    ['an empty changes list', { changes: [] }],
+    ['an unknown body key', { changes: [{ op: 'add', association: tag }], extra: 1 }],
+    ['an unknown edit key', { changes: [{ op: 'add', association: tag, extra: 1 }] }],
+    [
+      'a repoint, which only the journal records',
+      { changes: [{ op: 'repoint', association: tag }] },
+    ],
+    ['an unknown op', { changes: [{ op: 'replace', association: tag }] }],
+  ])('refuses %s with 400', (_name, body) => {
+    expect(() => parseAssociationEditsBody(body)).toThrow(StackBadRequestError);
+  });
+
+  test('a malformed element is a 422 naming its path', () => {
+    expect(
+      pathOf(() =>
+        parseAssociationEditsBody({
+          changes: [{ op: 'add', association: { kind: 'anyone', label: 'write' } }],
+        }),
+      ),
+    ).toBe('changes[0].association.label');
+  });
+});
+
+describe('parseInstallBody', () => {
+  const manifest = {
+    appId: 'com.example.notes',
+    name: 'Notes',
+    version: '1.0.0',
+    types: [{ id: 'com.example.notes/note@1', name: 'Note', schema: { text: { kind: 'text' } } }],
+    requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
+  };
+
+  test('reads a manifest into what planInstall() takes', () => {
+    expect(parseInstallBody({ manifest })).toEqual(manifest);
+  });
+
+  test('an unknown key at either level, or a missing field, is not this request', () => {
+    expect(() => parseInstallBody({ manifest, did: DID })).toThrow(StackBadRequestError);
+    expect(() => parseInstallBody({ manifest: { ...manifest, did: DID } })).toThrow(
+      StackBadRequestError,
+    );
+    const { requests: _, ...noRequests } = manifest;
+    expect(() => parseInstallBody({ manifest: noRequests })).toThrow(StackBadRequestError);
+  });
+
+  test('a wrongly typed field names its path', () => {
+    expect(pathOf(() => parseInstallBody({ manifest: { ...manifest, types: {} } }))).toBe(
+      'manifest.types',
+    );
+    expect(
+      pathOf(() =>
+        parseInstallBody({
+          manifest: { ...manifest, requests: [{ baseId: 'com.example.notes/note', actions: [1] }] },
+        }),
+      ),
+    ).toBe('manifest.requests[0].actions[0]');
   });
 });

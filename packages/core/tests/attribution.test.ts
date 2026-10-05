@@ -6,6 +6,7 @@ import { MemoryAdapter } from '../src/testing.js';
 // Test setup
 // -------------------------------------------------------
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
 const AUTHOR = 'did:key:zAuthor';
@@ -16,18 +17,18 @@ let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
     name: 'Note',
     schema: { text: { kind: 'text', required: true } },
   });
-  await stack.grantType(NOTE, {
+  await stack.grantType(fam(NOTE), {
     actions: ['create', 'read-any', 'update-any', 'delete-any'],
     grantee: { kind: 'authenticated' },
   });
-  await stack.grantType(NOTE, {
+  await stack.grantType(fam(NOTE), {
     actions: ['create', 'read-any', 'update-any', 'delete-any'],
     grantee: { kind: 'entity', entityId: APP },
   });
@@ -72,7 +73,9 @@ describe('attribution — updatedBy tracks the actor', () => {
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
     await view.delete(created.id);
-    expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
+    expect((await stack.get(created.id, { includeDeleted: true }))?.updatedBy?.subjectId).toBe(
+      EDITOR,
+    );
 
     await view.undelete(created.id);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
@@ -86,10 +89,10 @@ describe('attribution — updatedBy tracks the actor', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     const view = stack.asEntity(EDITOR);
 
-    await view.associate(created.id, { kind: 'tag', label: 'x' });
+    await view.associate(created.id, [{ kind: 'tag', label: 'x' }]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
 
-    await view.dissociate(created.id, { kind: 'tag', label: 'x' });
+    await view.dissociate(created.id, [{ kind: 'tag', label: 'x' }]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
   });
 
@@ -245,14 +248,14 @@ describe('attribution — separate from authorship checks', () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
 
-    const ownOnly = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const ownOnly = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     const s2 = await Stack.open(ownOnly);
     await s2.defineType({
       id: NOTE,
       name: 'Note',
       schema: { text: { kind: 'text', required: true } },
     });
-    await s2.grantType(NOTE, {
+    await s2.grantType(fam(NOTE), {
       actions: ['create', 'read-own'],
       grantee: { kind: 'authenticated' },
     });

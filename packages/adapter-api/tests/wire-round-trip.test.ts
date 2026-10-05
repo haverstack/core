@@ -276,7 +276,7 @@ describe('GET /changes round trip', () => {
     ['parentId', { filter: { parentId: 'rec-parent1' } }],
     ['root records', { filter: { parentId: null } }],
     ['entityId', { filter: { createdBy: { subjectId: 'did:key:zAlice' } } }],
-    ['kinds', { filter: { kinds: ['created', 'deleted'] } }],
+    ['kinds', { filter: { kinds: ['created', 'removed'] } }],
     ['includeRecords', { includeRecords: true }],
     ['includeUnlisted', { includeUnlisted: true }],
     [
@@ -286,7 +286,7 @@ describe('GET /changes round trip', () => {
           typeId: 'com.example/note@1',
           parentId: null,
           createdBy: { subjectId: 'did:key:zAlice' },
-          kinds: ['created', 'changed', 'deleted', 'purged'],
+          kinds: ['created', 'changed', 'removed', 'purged'],
         },
         includeRecords: true,
         includeUnlisted: true,

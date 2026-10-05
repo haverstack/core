@@ -9,8 +9,8 @@
  * Full-text search uses FTS5.
  *
  * A stack file is owned by exactly one process at a time (see
- * docs/spec/adapters.md § Concurrency & storage ownership). open()/initialize()
- * acquire a PID-stamped lock file beside the database and reject if
+ * docs/spec/adapters.md § Concurrency & storage ownership). open()
+ * acquires a PID-stamped lock file beside the database and rejects if
  * another live process already holds it; close() releases it.
  *
  * Token storage is a separate concern — see NativeTokenStore in this
@@ -36,26 +36,24 @@ import {
   SharedSqlRecordAdapter,
   type StackConfig,
 } from '@haverstack/sqlite-shared';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
 import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-export type NativeSQLiteRecordAdapterInitializeOptions = {
-  /** Absolute path to the .db file. Must not already exist. */
-  path: string;
-  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-  timezone?: string;
-  /** Entity ID of the stack owner. */
-  ownerEntityId: string;
-  /** Bypass the storage-ownership lock check. See NativeSQLiteRecordAdapterOpenOptions.force. */
-  force?: boolean;
-};
+/** What open() does when the store is missing or present, like O_CREAT / O_EXCL. */
+export type StoreCreateMode = 'never' | 'ifMissing' | 'exclusive';
+
+/** A plain DID, or a lazy provider called only when a store is actually created. */
+export type OwnerEntityIdInput = string | (() => string | Promise<string>);
 
 export type NativeSQLiteRecordAdapterOpenOptions = {
-  /** Absolute path to an existing .db file. */
+  /** Absolute path to the .db file. */
   path: string;
+  /** IANA timezone string e.g. "America/New_York". Consulted only when a store is created. No default. */
+  timezone?: string;
   /**
    * Open even if a lock file from another live process is present.
    * Only needed if that process is gone but its PID was reused by
@@ -63,7 +61,23 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
    * locks whose owning process is no longer running).
    */
   force?: boolean;
-};
+} & (
+  | {
+      /** Open an existing store; fail if the file is missing. */
+      create?: 'never';
+      /** Checked against the existing store's owner; a mismatch throws OwnerMismatchError. */
+      ownerEntityId?: string;
+    }
+  | {
+      /** `'ifMissing'` opens the store if present and creates it if not; `'exclusive'` creates it and fails if present. */
+      create: 'ifMissing' | 'exclusive';
+      /**
+       * Owner of a newly created store. A plain string is also checked against an
+       * existing store's owner; a lazy provider is never called just to compare.
+       */
+      ownerEntityId: OwnerEntityIdInput;
+    }
+);
 
 // -------------------------------------------------------
 // NativeSQLiteRecordAdapter
@@ -80,55 +94,69 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   }
 
   /**
-   * Takes the storage-ownership lock, opens the file, and brings the
-   * schema up. Shared by initialize() and open(), which differ only in
-   * whether the file may already exist and in where the config record
-   * comes from.
-   */
-  private static attach(
-    path: string,
-    force: boolean | undefined,
-  ): [DatabaseSync, NativeSqliteExecutor] {
-    acquireLock(path, force);
-    const db = new DatabaseSync(path);
-    const exec = new NativeSqliteExecutor(db);
-    applyRecordSchema(exec, { wal: true });
-    return [db, exec];
-  }
-
-  /**
-   * Initialize a new stack database. Fails if the file already exists —
-   * use open() for existing databases.
-   */
-  static async initialize(
-    opts: NativeSQLiteRecordAdapterInitializeOptions,
-  ): Promise<NativeSQLiteRecordAdapter> {
-    if (existsSync(opts.path)) {
-      throw new Error(
-        `Cannot initialize: database already exists at "${opts.path}". ` +
-          `Use NativeSQLiteRecordAdapter.open() instead.`,
-      );
-    }
-    const [db, exec] = NativeSQLiteRecordAdapter.attach(opts.path, opts.force);
-    const config = insertConfigRecord(exec, opts.ownerEntityId, opts.timezone);
-    return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
-  }
-
-  /**
-   * Open an existing stack database. Fails if the file does not exist —
-   * use initialize() for new databases.
+   * Opens or creates the stack database at `path` according to `create`.
+   * Takes the storage-ownership lock first and releases it again if the
+   * open fails, since the caller never receives an adapter to close.
+   * See docs/spec/adapters.md § Construction.
    */
   static async open(
     opts: NativeSQLiteRecordAdapterOpenOptions,
   ): Promise<NativeSQLiteRecordAdapter> {
-    if (!existsSync(opts.path)) {
-      throw new Error(
-        `Cannot open: no database found at "${opts.path}". ` +
-          `Use NativeSQLiteRecordAdapter.initialize() to create one.`,
-      );
+    const mode: StoreCreateMode = opts.create ?? 'never';
+    const checkMode = (exists: boolean): void => {
+      if (!exists && mode === 'never') {
+        throw new Error(
+          `Cannot open: no database found at "${opts.path}". ` +
+            `Pass create: 'ifMissing' or 'exclusive' to create one.`,
+        );
+      }
+      if (exists && mode === 'exclusive') {
+        throw new Error(
+          `Cannot create: database already exists at "${opts.path}". ` +
+            `Pass create: 'never' or 'ifMissing' to open it.`,
+        );
+      }
+    };
+    const existedBeforeLock = existsSync(opts.path);
+    checkMode(existedBeforeLock);
+
+    // Resolved before the lock is taken so a failing provider leaves nothing held.
+    let newOwner: string | undefined;
+    if (!existedBeforeLock) {
+      newOwner =
+        typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
+      if (!newOwner) {
+        throw new Error(
+          `Cannot create: no ownerEntityId given for the new database at "${opts.path}".`,
+        );
+      }
     }
-    const [db, exec] = NativeSQLiteRecordAdapter.attach(opts.path, opts.force);
-    return new NativeSQLiteRecordAdapter(opts.path, db, exec, readStackConfig(exec));
+
+    acquireLock(opts.path, opts.force);
+    let db: DatabaseSync | undefined;
+    try {
+      // Re-checked under the lock: another process may have created the file meanwhile.
+      const exists = existsSync(opts.path);
+      checkMode(exists);
+      db = new DatabaseSync(opts.path);
+      const exec = new NativeSqliteExecutor(db);
+      applyRecordSchema(exec, { wal: true });
+      let config: StackConfig;
+      if (exists) {
+        config = readStackConfig(exec);
+        if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
+          throw new OwnerMismatchError(opts.ownerEntityId, config.entityId, `"${opts.path}"`);
+        }
+      } else {
+        if (!newOwner) throw new Error(`Cannot create: "${opts.path}" vanished while opening.`);
+        config = insertConfigRecord(exec, newOwner, opts.timezone);
+      }
+      return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
+    } catch (err) {
+      db?.close();
+      releaseLock(opts.path);
+      throw err;
+    }
   }
 
   // -------------------------------------------------------

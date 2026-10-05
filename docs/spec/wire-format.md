@@ -25,7 +25,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it.
 
 ### Version negotiation
 
@@ -51,9 +51,9 @@ Every entry in `capabilities` may be absent, and a foreign server may name a `fi
 
 This is inherent to the hosted topology rather than an omission, and it is stated here because the rest of the spec is otherwise scrupulous about naming exactly this kind of asymmetry. Proving a server↔owner binding is deferred alongside [key rotation](./identity.md#deferred-key-rotation): both need an identity that outlives a single key, and neither is foreclosed by anything above.
 
-**A client that already knows which DID it expects can say so.** One following a Group's `stackUrl`, or reconnecting to a stack it has used before, holds that expectation and today has no way to state it. `APIAdapter`'s `expectedOwnerEntityId` option compares it against discovery's `entityId` and fails `open()` with `APIAdapterOwnerMismatchError` on any difference — including a discovery response carrying no `entityId` at all, which is not a match. The comparison is exact string equality; no DID method is normalized, since core resolves none of them.
+**A client that already knows which DID it expects can say so.** One following a Group's `stackUrl`, or reconnecting to a stack it has used before, holds that expectation. `APIAdapter`'s `ownerEntityId` option states it, comparing it against discovery's `entityId` and failing `open()` with `OwnerMismatchError` on any difference — including a discovery response carrying no `entityId` at all, which is not a match. The comparison is exact string equality; no DID method is normalized, since core resolves none of them.
 
-Two limits, so the option is not read as more than it is. It narrows misdirection to a server that already knows which DID it should be claiming — it does not make discovery identity a proof, and no client-side check can. And it runs on a response that has already been fetched, so a static `token`, if one was configured, reached that server before the check could refuse it: `expectedOwnerEntityId` guards what a client goes on to _write_, not what it already sent to a URL it chose to contact.
+Two limits, so the option is not read as more than it is. It narrows misdirection to a server that already knows which DID it should be claiming — it does not make discovery identity a proof, and no client-side check can. And it runs on a response that has already been fetched, so a static `token`, if one was configured, reached that server before the check could refuse it: `ownerEntityId` guards what a client goes on to _write_, not what it already sent to a URL it chose to contact.
 
 That second limit is specific to a static token. A client authenticating with a [DID credential](#authentication) sends nothing secret during discovery — it holds no token yet — and the handshake runs only after this check passes, so a server that fails it never sees a signature either.
 
@@ -195,28 +195,31 @@ Three things sit outside it:
 
 A server built on core reaches this through the wire parsers in `@haverstack/core/wire`, one per endpoint that takes input, each of which refuses what its endpoint does not define:
 
-| Endpoint                        | Parser                          |
-| ------------------------------- | ------------------------------- |
-| `GET /records`                  | `parseQueryParams()`            |
-| `POST /records/query`           | `parseQueryBody()`              |
-| `POST /records`                 | `createOptionsFromWireRecord()` |
-| `PATCH /records/:id`            | `changesFromWireBody()`         |
-| `DELETE /records/:id`           | `parseDeleteParams()`           |
-| `POST /records/:id/migrate`     | `parseMigrationBody()`          |
-| `GET /records/:id/journal`      | `parseJournalParams()`          |
-| `GET /records/:id/associations` | `parseAssociationParams()`      |
-| `GET /changes`                  | `parseChangeParams()`           |
-| `GET /attachments/:fileId`      | `parseDownloadParams()`         |
-| `POST /types`                   | `parseTypeBody()`               |
-| `PATCH /entity`                 | `parseEntityPatchBody()`        |
-| `POST /auth/challenge`          | `parseAuthChallengeBody()`      |
-| `POST /auth/token`              | `parseAuthTokenBody()`          |
+| Endpoint                                            | Parser                          |
+| --------------------------------------------------- | ------------------------------- |
+| `GET /records`                                      | `parseQueryParams()`            |
+| `POST /records/query`                               | `parseQueryBody()`              |
+| `POST /records`                                     | `createOptionsFromWireRecord()` |
+| `GET /records/:id`                                  | `parseGetRecordParams()`        |
+| `PATCH /records/:id`                                | `changesFromWireBody()`         |
+| `DELETE /records/:id`                               | `parseDeleteParams()`           |
+| `POST /records/:id/migrate`                         | `parseMigrationBody()`          |
+| `POST /records/:id/associations` and `/permissions` | `parseAssociationEditsBody()`   |
+| `GET /records/:id/journal`                          | `parseJournalParams()`          |
+| `GET /records/:id/versions`                         | `parseVersionsParams()`         |
+| `GET /records/:id/associations`                     | `parseAssociationParams()`      |
+| `GET /changes`                                      | `parseChangeParams()`           |
+| `GET /attachments/:fileId`                          | `parseDownloadParams()`         |
+| `POST /types`                                       | `parseTypeBody()`               |
+| `PATCH /entity`                                     | `parseEntityPatchBody()`        |
+| `POST /auth/challenge`                              | `parseAuthChallengeBody()`      |
+| `POST /auth/token`                                  | `parseAuthTokenBody()`          |
 
 The body parsers split errors the way [Records](#records) does for a create: a body that is not an object, carries a key its endpoint does not define, or lacks a field the endpoint requires is not that request at all, so it is **400**; a known field whose value is the wrong type is **422**, carrying the field's path. Endpoints a server defines beyond this spec owe the same refusal, parsed by the server itself.
 
 ### The taxonomy root
 
-Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `UseAfterCloseError`, `InvalidAdapterError`, `RelayScopeError`) stay outside the hierarchy for that reason.
+Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `RelayScopeError`) stay outside the hierarchy for that reason.
 
 **The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 
@@ -229,7 +232,7 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 ```json
 {
   "error": {
-    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request" | "schema_drift" | "payload_too_large",
+    "code": "permission" | "not_found" | "conflict" | "version_conflict" | "validation" | "migration" | "bad_request" | "schema_drift" | "payload_too_large" | "timeout",
     "message": "human-readable description",
     "details": [ { "path": "title", "message": "expected string, got number" } ],
     "versionConflict": { "recordId": "rec-abc123", "expectedVersion": 5, "actualVersion": 7 },
@@ -240,7 +243,7 @@ Every non-2xx response whose failure maps to the core error taxonomy carries a J
 
 Each error code that carries extra structured data gets its own uniquely-named, uniquely-typed field, present only for that code — `details` for `code: "validation"` (`StackValidationError.errors`), `versionConflict` for `code: "version_conflict"` (the data an `ifVersion` retry loop needs: which record, what it expected, what actually won the race), `schemaDrift` for `code: "schema_drift"` (which Type, and which specific fields made the change non-additive). This keeps each field's shape fixed rather than making any one field polymorphic across codes.
 
-`code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping both as a static (`StackPermissionError.code === 'permission'`) and on every instance (`err.code`), so serializing a caught error is a status lookup on the instance rather than a hand-maintained chain of class tests, and `APIAdapter` reconstructs the same class from the response. The vocabulary itself is `StackErrorCode` in `@haverstack/core` — it lives with the classes that carry it, and `@haverstack/wire-types` re-exports it as `WireErrorCode`.
+`message` is for humans and not part of the contract: clients branch on `code`, and a server is free to word it as it likes. `code` is the authoritative discriminator — HTTP status is a transport hint (proxies and intermediaries rewrite statuses more often than bodies). Each core error class exposes the mapping both as a static (`StackPermissionError.code === 'permission'`) and on every instance (`err.code`), so serializing a caught error is a status lookup on the instance rather than a hand-maintained chain of class tests, and `APIAdapter` reconstructs the same class from the response. The vocabulary itself is `StackErrorCode` in `@haverstack/core` — it lives with the classes that carry it, and `@haverstack/wire-types` re-exports it as `WireErrorCode`.
 
 Note that an instance `code` discriminates but doesn't narrow: TypeScript won't refine a `StackError` to a subclass from a literal `code` check, so reaching the payload fields (`errors`, `versionConflict` state, `violations`) still means an `instanceof` on the three classes that define them. Those three are leaves with no subtype relation, so unlike a full class ladder the checks are order-independent.
 
@@ -262,6 +265,8 @@ POST   /records/:id/undelete — undelete (reverse a soft delete; idempotent)
 POST   /records/:id/migrate  — commit a migration (change typeId + content together)
 ```
 
+**A path parameter is one percent-encoded segment.** `:id`, `:version` and `:fileId` are sent through `encodeURIComponent`, so a value holding `/`, `?` or `#` addresses the endpoint the client named and no other. `.` and `..` cannot be encoded safely — URL parsing collapses them even as `%2e` — so `APIAdapter` refuses them with `StackBadRequestError` before sending anything.
+
 **Every mutation answers with a record** — `POST /records`, `PATCH /records/:id`, both association endpoints, `DELETE` (soft), `POST .../undelete`, `POST .../migrate` and `POST .../restore/:version` all return `200` with the Record they produced. This holds for the association endpoints too, even though they never bump `version` — the record they answer with simply carries whatever `version`/`updatedAt` it already had, as does a `PATCH` naming only no-bump keys (see [Versioning § Version history](./versioning.md#version-history)).
 
 **A purge answers `200` with the record it destroyed**, as it last stood — the one response that is not the record a write produced, because this write produces none. A `404` for a record that was not there. It is what makes the purge's own report derivable client-side: the attachment associations and `file-ref` fields in that body are [the files the purge stranded](./attachments.md#a-purge-strands-the-bytes-it-referenced), and the purge has just destroyed every other row naming them, so a client answered `204` could not name the bytes it may now need to erase. This is not in tension with [a `purged` frame carrying nothing](./events.md#purged-records-carry-nothing): a frame fans out to every subscriber and outlives the request, while this body goes only to the requester who authorized the purge — purge is owner-only — over the same channel that would have served `GET /records/:id` a moment earlier.
@@ -270,7 +275,9 @@ POST   /records/:id/migrate  — commit a migration (change typeId + content tog
 
 This is what lets a client report a mutation's outcome without a second read, and it is load-bearing for [change events](./events.md): the emitter reads the version, timestamp and acting identity of a change off what was persisted rather than inferring them (or, for the association endpoints, off the request's own acting identity, since nothing was persisted to read it back from — see [Events § Attribution](./events.md#attribution)), so a frame cannot disagree with storage. A server answering an empty body to any of the above leaves a client unable to say what it just wrote.
 
-**A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. It answers `200`, not `404`: the requester passed the read check, and the tombstone confirms nothing a live read would have withheld. A requester who fails that check gets the usual `404`.
+**A soft-deleted Record is served as a tombstone** — the projection [Versioning § The tombstone is literal](./versioning.md#the-tombstone-is-literal) defines, applied to `GET /records/:id?includeDeleted=true`, to every Record in a `?includeDeleted=true` listing, to the body a soft `DELETE` answers with, and to change-feed frames. A requester who fails the read check gets the usual `404`.
+
+**`GET /records/:id` hides a tombstone unless called with `?includeDeleted=true`**, as `GET /records` does: without the parameter a soft-deleted Record answers `404`, the status that already means "missing or unreadable". With it, a requester who passed the read check gets `200` and the tombstone, which confirms nothing a live read would have withheld. A non-boolean value is `400`. `APIAdapter.getRecord()` always sends it, because `Stack` decides whether to hide a tombstone and has to be able to find one.
 
 **Mutating a soft-deleted Record is `409`.** `PATCH`, the association endpoints and `POST .../restore/:version` answer `409 conflict` — undelete it first. `POST .../undelete` and `POST .../migrate` are the exemptions. A server MUST apply this **after** its authorization check, so a requester who cannot read the Record still receives `404`: a `409` reachable by a stranger would confirm that a guessed ID names something, which is exactly what the [404-over-403 rule](./disclosure.md) exists to prevent.
 
@@ -313,6 +320,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 **`filter.contentPresent` travels in the `POST /records/query` body only**, like `filter.content` itself — there is no `GET /records` spelling, since a server exposing that endpoint alone declares `filter.content: "none"` and offers neither. A server declaring `filter.contentPresent: false` MUST refuse the filter with `400` rather than answer without it.
 
 **A sort names a native column or a content field, and the parameter it arrives in says which** — the same shape the relationship filter uses above, and the only way to keep a content field named `version` distinct from the native column on a raw query string. A request carrying both `sort` and `sortContent` MUST be rejected with `400` rather than resolved in one direction; in a `POST /records/query` body the same two spellings are `sort.field` and `sort.contentField`. A server declaring `sort.contentField: false` refuses `sortContent` with `400`. What the ordering itself must be — absent values last, numbers before text, and the [folded text key](./data-model.md#text-ordering) a server MUST reproduce — is in [Data model § Sorting by a content field](./data-model.md#sorting-by-a-content-field).
+
+**`?sort=` or `?sortContent=` without `?direction=` is ascending, and a request with no sort is `createdAt`, newest first.** In a `POST /records/query` body, `sort.direction` absent means the same. A server built on `Stack.query()` inherits both; see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
 
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `StackQuery` object as a JSON body and additionally supports `content` field filtering. A server that declares `filter.content: "none"` in discovery does not support the POST query endpoint.
 
@@ -379,7 +388,7 @@ For `typeId: "_attachment@1"`, a non-owner requester gets `403` regardless of gr
 
 ### Migration commit
 
-`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending lazy migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner** and answers `403` otherwise: migration is owner-driven, and no grant confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation. Body: `{ "toTypeId": "...", "content": {...} }` — the full post-migration content, computed client-side by the type's owning app (migration functions are app code, not server code) and validated by the server against `toTypeId`'s schema before writing. This is what an app uses to commit a pending migration alongside new content (a change set carries no `typeId`, so `PATCH` cannot), and what `stack.migrateAll()` uses for each record in a batch pass. `Stack.commitMigration()`/`ScopedStack.commitMigration()` is the client-side entry point that backs this endpoint for a single record — see [Type migrations](./data-model.md#type-migrations). A server built on `ScopedStack` serves this endpoint to the **stack owner**, and to an installed app migrating within the families its install claims (see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types)), and answers `403` otherwise: migration is owner-driven, and no grant alone confers it (see [Access control](./access-control.md#type-level-grants)). Like every other endpoint that bumps a record's version, it accepts `If-Match` — a migration commit replaces content wholesale, so it is precisely the write a caller most needs to be able to fence. `stack.migrateAll()` sends none, since a batch pass doesn't know each record's version going in; a single `commitMigration()` passes whatever `ifVersion` its caller supplied.
 
 ### Response envelope
 
@@ -422,11 +431,10 @@ Three content-key rules are `Stack` invariants that a server built on core inher
 
 ```
 GET  /records/:id/permissions         — get current permissions
-POST /records/:id/permissions         — grant one element
-POST /records/:id/permissions/delete  — revoke one element (by body)
+POST /records/:id/permissions         — apply a list of permission changes
 ```
 
-`GET` uses the envelope `{ "permissions": [...] }` as its response body. The two `POST`s are `grantAccess()`/`revokeAccess()`: each takes one permission element as its body, amends the set, and answers `200` with the updated Record. They mirror the association endpoints in shape — including the `/delete` sub-path, for the reason given [there](#associations) — and carry the reshare gate rather than the write bit, so a write-holder who is neither owner nor creator gets `403`.
+`GET` uses the envelope `{ "permissions": [...] }` as its response body. The `POST` takes `{ "changes": [...] }`, a list of `AssociationEdit` — `{ "op": "add" | "remove", "association": <permission element> }` — and applies it as one write, so granting `read` and `write` together never passes through a state holding only the `write`. It answers `200` with the updated Record. It mirrors the association endpoint in shape and carries the reshare gate rather than the write bit, so a write-holder who is neither owner nor creator gets `403`. `repoint` is something the journal records, never something a caller sends, so it is `400` here as on the association endpoint. A list naming a `tag`, `attachment` or `relationship` element is `400`: see [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
 
 **The `permissions` key on `PATCH /records/:id` is the declarative spelling**, replacing the whole set — `[]` makes the record private. The endpoints amend it, which is what survives two admins sharing one record at once.
 
@@ -456,11 +464,15 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
+GET  /records/:id/versions?beforeVersion=4&limit=50
+                                      — at most 50 versions older than 4, exclusive
 GET  /records/:id/versions/:version   — get a specific version
 POST /records/:id/restore/:version    — restore a version (creates new version, no rewrite)
 ```
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Every requester who passes that gate gets the same body. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
+
+**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, paged like [the journal](#journal) but newest first.** `limit` bounds the page and `beforeVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `beforeVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
 
 **A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`** — no version has ever captured any of the four (see [Versioning § Version history](./versioning.md#version-history)). `WireVersion` has no such field, so a server that emits one is writing a key every client drops.
 
@@ -468,7 +480,7 @@ The second durable tier a mutation writes is [the change journal](./journal.md),
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Records](#records). It settles `content` and `typeId` alone, so it never moves the record and never lists or unlists it: neither the **403** nor the **409** a change set's `parentId` can earn has a site here. A snapshot naming a `file-ref` the requester cannot currently reach still answers **403**, which is the only reference a restore can re-convey. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus the association endpoints (which report `associate`/`dissociate` without ever bumping `version` or snapshotting), plus create and purge. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge, the association and permission endpoints, and a `PATCH` naming only no-bump keys — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
 
 ## Journal
 
@@ -516,7 +528,7 @@ GET /records/:id/journal?limit=50    — at most 50 entries
 
 **This endpoint is not optional**, and a server answering `404` for a record it holds leaves `APIAdapter` unable to honor a method `StackClient` requires. Because an empty log means _nothing changed_ unconditionally ([Journal § Reading it](./journal.md#reading-it)), a record the server does not have is the one `404` this endpoint gives — and it is required, since an empty log for a nonexistent or purged record would be the one answer a server must not give.
 
-**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and the two that displace something carry `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
+**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and a `repoint` carries `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It carries what an `associate()` overwrote in place and what a `dissociate()` took away, annotation included, and has no counterpart on [the change feed](./change-feed.md#frames), which reports only what is current across two flat lists, nor on a snapshot, since an association change bumps no `version`. A server that flattens it to the feed's shape serves a log that cannot answer the question the tier exists for.
 
 **`seq` here is the entry's, not the feed's** — a dense integer from 1 per record, never [the feed's opaque whole-stack `cursor`](./change-feed.md#frames), and no value crosses between them. See [Journal § Ordering](./journal.md#ordering).
 
@@ -542,15 +554,14 @@ GET    /records/:id/associations?kind=tag
 GET    /records/:id/associations?kind=attachment
 GET    /records/:id/associations?kind=relationship
 GET    /records/:id/associations?label=avatar  — filter by label across all kinds
-POST   /records/:id/associations               — add an association
-POST   /records/:id/associations/delete        — remove an association (by body)
+POST   /records/:id/associations               — apply a list of association changes
 ```
 
-Removing an association is a `POST` to a `/delete` sub-path, not a `DELETE` with a body — `DELETE` request bodies have no defined semantics (RFC 9110 §9.3.5), and this protocol is meant to be implemented behind arbitrary proxies, gateways, and localhost setups that may drop or reject them. The discriminant (which association to remove) travels as a JSON body either way, so the endpoint is a `POST` like every other body-carrying mutation.
+The `POST` takes `{ "changes": [...] }`, a list of `AssociationEdit`: `{ "op": "add" | "remove", "association": <element> }`. The list is applied as one write, removes before adds, so swapping one association for another is a single request with no intermediate state and one [journal entry](./journal.md#the-entry). `repoint` is something the journal records, never something a caller sends, so it is `400` like any other unknown `op`; an `add` naming an attachment the record already holds re-points it in place. There is no `/delete` sub-path: removes ride in the same body, which also spares the `DELETE`-with-a-body spelling, whose request bodies have no defined semantics (RFC 9110 §9.3.5) behind arbitrary proxies and gateways.
 
-Neither endpoint reads `If-Match`, and one sent to either is ignored rather than refused — see [Optimistic concurrency](#records) above — and both answer `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had, and produces no new entry in `GET .../versions`.
+The endpoint does not read `If-Match`, and one sent to it is ignored rather than refused — see [Optimistic concurrency](#records) above — and it answers `200` with the updated Record, per the rule under [Records](#records). That record carries whatever `version`/`updatedAt` it already had, and produces no new entry in `GET .../versions`.
 
-**These two amend the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoints rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoints to add or remove one. See [Data model § Mutations](./data-model.md#mutations).
+**This endpoint amends the set; `PATCH /records/:id`'s `associations` key replaces it.** Adding one tag through `POST .../associations` leaves every other association alone and succeeds even if another writer added one in the meantime, which is why the delta spelling has its own endpoint rather than being folded into the change set. Use the key to state a record's whole association set — typically alongside other aspects, in one version — and the endpoint to add or remove some. See [Data model § Mutations](./data-model.md#mutations).
 
 `GET .../associations` response shape is consistent regardless of kind:
 
@@ -595,6 +606,8 @@ GET  /types        — list all types known to this stack
 GET  /types/:id    — get one type definition (id is URL-encoded)
 POST /types        — register a type, or evolve an existing one in place
 ```
+
+**`POST /types` is served to the stack owner acting alone** and answers `403` otherwise, delegation included — the rule [`POST /records/:id/migrate`](#migration-commit) applies to everyone but an installed app. An app that needs its types defined ships them in its [manifest](./apps.md) for the owner to install. A Type is stack-wide: every app reading the family validates against it, and no grant confers defining one (see [Access control § Type-level grants](./access-control.md#type-level-grants)). `ScopedStack` has no `defineType()`, so a server serves this endpoint through an unscoped `Stack` after checking `isOwnerActingAlone()`. `GET /types` and `GET /types/:id` stay open to any authenticated requester, since a client needs a schema to validate and render the records it can reach.
 
 **The body is a whole Type**, as `GET /types/:id` returns one. `id`, `name` and `schema` are read, as is `migratesFrom` when present; `baseId`, `version`, `schemaHash` and `createdAt` are accepted and ignored, since `defineType()` derives or stamps each of them. Any other key is refused (see [Unrecognized input](#unrecognized-input)).
 
@@ -685,6 +698,29 @@ Owner only. Returns `409 Conflict` if any record in the stack still references t
 ### Access
 
 Attachment permissions are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
+
+## Installs
+
+```
+POST /installs  — present an app's manifest for the owner to approve
+```
+
+How an app holding its own key asks to be installed (see [App installs § Over the wire](./apps.md#over-the-wire)). Only the asking is specified here; the owner approves through whatever the server offers, with `Stack.planInstall()` and `installApp()`.
+
+**The body is `{ "manifest": { … } }`**, an `AppManifest`: `appId`, `name`, optional `version`, `types` (each read as a [`POST /types`](#types) body is) and `requests` (each `{ baseId, actions }`). `parseInstallBody()` from `@haverstack/core/wire` reads it, refusing an unknown key at either level with **400** like any other [unrecognized input](#unrecognized-input). **The key being installed is never in the body**: it is the session's principal.
+
+**The request must come from the key acting as itself.** A delegated session names someone else as the subject, and an install is for the key that authenticated, so it answers **403** (code `permission`).
+
+The server plans the manifest for the session's key and answers with the result:
+
+| Status | Body                                      | When                                                                                                                                             |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `202`  | `{ "status": "pending" }`                 | Applying the manifest would change something. The server queues it for the owner and writes nothing to the stack.                                |
+| `200`  | `{ "status": "installed", "install": … }` | The plan is empty — `isPlanEmpty()` from `@haverstack/core` decides — and `install` is the `_install` record, which the key can read.            |
+| `422`  | `validation`                              | The manifest defines a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons, or a request breaks the grant rules. |
+| `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                 |
+
+Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. A client refuses `requestInstall()` locally when discovery does not advertise `installs`, rather than learning it as a `404`.
 
 ## Entity
 

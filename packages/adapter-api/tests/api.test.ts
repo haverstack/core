@@ -6,7 +6,6 @@ import {
   APIAdapterError,
   APIAdapterCapabilityError,
   APIAdapterVersionError,
-  APIAdapterOwnerMismatchError,
   APIAdapterAuthUnsupportedError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,
@@ -24,10 +23,17 @@ import {
   openAdapter,
   useFetchMock,
 } from './helpers.js';
+import { OwnerMismatchError } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
-import type { StackRecord, StackType, RecordVersion, DataAssociation } from '@haverstack/core';
+import type {
+  StackRecord,
+  StackType,
+  RecordVersion,
+  DataAssociation,
+  AuthorityAssociation,
+} from '@haverstack/core';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -269,13 +275,13 @@ describe('open — version negotiation', () => {
 });
 
 // -------------------------------------------------------
-// open() — expectedOwnerEntityId
+// open() — ownerEntityId
 // -------------------------------------------------------
 
 // Discovery identity is unsigned and the server can't prove it, so stating
 // the DID you expect is the only check a client has. See
 // docs/spec/wire-format.md § Identity is trusted on transport.
-describe('open — expectedOwnerEntityId', () => {
+describe('open — ownerEntityId', () => {
   const OWNER_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
   const OTHER_DID = 'did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG';
   const ownedDiscovery = { ...DISCOVERY, entityId: OWNER_DID };
@@ -285,7 +291,7 @@ describe('open — expectedOwnerEntityId', () => {
     const adapter = await APIAdapter.open({
       url: BASE_URL,
       token: TOKEN,
-      expectedOwnerEntityId: OWNER_DID,
+      ownerEntityId: OWNER_DID,
     });
     expect(adapter.ownerEntityId).toBe(OWNER_DID);
   });
@@ -293,8 +299,8 @@ describe('open — expectedOwnerEntityId', () => {
   test('refuses a server reporting a different owner', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
   test('carries both DIDs for a caller that wants to report them', async () => {
@@ -302,18 +308,18 @@ describe('open — expectedOwnerEntityId', () => {
     const err = await APIAdapter.open({
       url: BASE_URL,
       token: TOKEN,
-      expectedOwnerEntityId: OWNER_DID,
+      ownerEntityId: OWNER_DID,
     }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(APIAdapterOwnerMismatchError);
-    expect((err as APIAdapterOwnerMismatchError).expectedOwnerEntityId).toBe(OWNER_DID);
-    expect((err as APIAdapterOwnerMismatchError).actualOwnerEntityId).toBe(OTHER_DID);
+    expect(err).toBeInstanceOf(OwnerMismatchError);
+    expect((err as OwnerMismatchError).expected).toBe(OWNER_DID);
+    expect((err as OwnerMismatchError).actual).toBe(OTHER_DID);
   });
 
   test('refuses discovery carrying no owner at all — absence is not a match', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: undefined }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
   test('compares exactly — a DID differing only in case is a mismatch', async () => {
@@ -322,12 +328,12 @@ describe('open — expectedOwnerEntityId', () => {
       APIAdapter.open({
         url: BASE_URL,
         token: TOKEN,
-        expectedOwnerEntityId: OWNER_DID.toLowerCase(),
+        ownerEntityId: OWNER_DID.toLowerCase(),
       }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+    ).rejects.toThrow(OwnerMismatchError);
   });
 
-  test('an omitted expectedOwnerEntityId opens against whatever owner is reported', async () => {
+  test('an omitted ownerEntityId opens against whatever owner is reported', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     const adapter = await APIAdapter.open({ url: BASE_URL, token: TOKEN });
     expect(adapter.ownerEntityId).toBe(OTHER_DID);
@@ -336,8 +342,8 @@ describe('open — expectedOwnerEntityId', () => {
   test('refuses before sending any other request', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, entityId: OTHER_DID }));
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
-    ).rejects.toThrow(APIAdapterOwnerMismatchError);
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
+    ).rejects.toThrow(OwnerMismatchError);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -348,7 +354,7 @@ describe('open — expectedOwnerEntityId', () => {
       jsonResponse({ ...DISCOVERY, version: '2.0', entityId: OTHER_DID }),
     );
     await expect(
-      APIAdapter.open({ url: BASE_URL, token: TOKEN, expectedOwnerEntityId: OWNER_DID }),
+      APIAdapter.open({ url: BASE_URL, token: TOKEN, ownerEntityId: OWNER_DID }),
     ).rejects.toThrow(APIAdapterVersionError);
   });
 });
@@ -423,13 +429,13 @@ describe('open — DID credential handshake', () => {
 
   // A signature keeps its value after the connection is abandoned, so it is
   // never spent on a server this client has already decided to refuse.
-  test('does not handshake against a server failing the expectedOwnerEntityId check', async () => {
+  test('does not handshake against a server failing the ownerEntityId check', async () => {
     const credential = stubCredential();
     mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
     await APIAdapter.open({
       url: BASE_URL,
       credential,
-      expectedOwnerEntityId: 'did:key:zSomeoneElse',
+      ownerEntityId: 'did:key:zSomeoneElse',
     }).catch(() => undefined);
     expect(credential.sign).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -673,14 +679,33 @@ describe('createRecord', () => {
 // -------------------------------------------------------
 
 describe('getRecord', () => {
-  test('sends GET /records/:id', async () => {
+  test('sends GET /records/:id, opting into tombstones', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
     await adapter.getRecord('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123`,
+      `${BASE_URL}/records/rec-abc123?includeDeleted=true`,
       expect.objectContaining({ method: 'GET' }),
     );
+  });
+
+  test('an id is sent as one encoded path segment', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
+    await adapter.getRecord('x?purge=true#/../types');
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/x%3Fpurge%3Dtrue%23%2F..%2Ftypes?includeDeleted=true`,
+      expect.anything(),
+    );
+  });
+
+  test('an id of "." or ".." is refused before any request', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockClear();
+    for (const id of ['.', '..']) {
+      await expect(adapter.deleteRecord(id)).rejects.toBeInstanceOf(StackBadRequestError);
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   test('parses response into StackRecord with Date objects', async () => {
@@ -1237,51 +1262,57 @@ describe('queryRecords', () => {
 });
 
 // -------------------------------------------------------
-// associate / dissociate
+// amendAssociations
 // -------------------------------------------------------
 
-describe('associate', () => {
+describe('amendAssociations', () => {
+  const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
+  const grant: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+
   test('sends POST /records/:id/associations', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.associate('rec-abc123', assoc);
+    await adapter.amendAssociations('rec-abc123', [{ op: 'add', association: assoc }]);
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/associations`,
       expect.objectContaining({ method: 'POST' }),
     );
   });
 
-  test('sends the association as JSON body', async () => {
+  test('sends the whole list as one request body', async () => {
     const adapter = await openAdapter();
+    mockFetch.mockClear();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.associate('rec-abc123', assoc);
+    const changes = [
+      { op: 'remove' as const, association: assoc },
+      { op: 'add' as const, association: { kind: 'tag' as const, label: 'new' } },
+    ];
+    await adapter.amendAssociations('rec-abc123', changes);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual(assoc);
+    expect(JSON.parse(init.body as string)).toEqual({ changes });
   });
-});
 
-describe('dissociate', () => {
-  // POST, not DELETE — a DELETE body has no defined wire semantics.
-  test('sends POST /records/:id/associations/delete', async () => {
+  test('routes a list of authority elements to /permissions', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.dissociate('rec-abc123', assoc);
+    await adapter.amendAssociations('rec-abc123', [{ op: 'add', association: grant }]);
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123/associations/delete`,
+      `${BASE_URL}/records/rec-abc123/permissions`,
       expect.objectContaining({ method: 'POST' }),
     );
   });
 
-  test('sends the association as JSON body', async () => {
+  test('refuses a list mixing authority and data before sending anything', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse(RECORD_RAW));
-    const assoc: DataAssociation = { kind: 'tag', label: 'starred' };
-    await adapter.dissociate('rec-abc123', assoc);
-    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual(assoc);
+    mockFetch.mockClear();
+    await expect(
+      adapter.amendAssociations('rec-abc123', [
+        { op: 'add', association: assoc },
+        { op: 'add', association: grant },
+      ]),
+    ).rejects.toThrow(StackBadRequestError);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -1296,19 +1327,15 @@ describe('a mutation that bumps a version must answer with a Record', () => {
     target: { kind: 'record', recordId: 'rec-other' },
   };
 
-  test('associate reports an empty body as a protocol error', async () => {
+  test('amendAssociations reports an empty body as a protocol error', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(noContent());
-    const thrown = await adapter.associate('rec-abc123', ASSOC).catch((err: unknown) => err);
+    const thrown = await adapter
+      .amendAssociations('rec-abc123', [{ op: 'add', association: ASSOC }])
+      .catch((err: unknown) => err);
     expect(thrown).toBeInstanceOf(APIAdapterError);
     // The endpoint is named, so a foreign server's gap is identifiable.
     expect((thrown as Error).message).toContain('POST /records/rec-abc123/associations');
-  });
-
-  test('dissociate reports an empty body as a protocol error', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(noContent());
-    await expect(adapter.dissociate('rec-abc123', ASSOC)).rejects.toThrow(APIAdapterError);
   });
 
   test('a change set reports an empty body as a protocol error', async () => {
@@ -1333,7 +1360,7 @@ describe('a mutation that bumps a version must answer with a Record', () => {
 describe('getVersions', () => {
   test('sends GET /records/:id/versions', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [VERSION_RAW], cursor: null }));
     await adapter.getVersions('rec-abc123');
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/rec-abc123/versions`,
@@ -1343,7 +1370,7 @@ describe('getVersions', () => {
 
   test('parses version array with Date objects', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([VERSION_RAW]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [VERSION_RAW], cursor: null }));
     const versions = await adapter.getVersions('rec-abc123');
     expect(versions).toHaveLength(1);
     expect(versions[0].version).toBe(1);
@@ -1352,13 +1379,50 @@ describe('getVersions', () => {
     expect(versions[0].createdBy?.subjectId).toBe('entity-owner-123');
   });
 
+  test('follows cursor as beforeVersion to the end when no limit is given', async () => {
+    const adapter = await openAdapter();
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 3 }], cursor: 3 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 1 }], cursor: null }),
+      );
+    const versions = await adapter.getVersions('rec-abc123');
+    expect(versions.map((v) => v.version)).toEqual([3, 1]);
+    expect(mockFetch.mock.calls[2][0]).toBe(
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3`,
+    );
+  });
+
+  test('sends limit and beforeVersion, and caps the result at limit', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        versions: [
+          { ...VERSION_RAW, version: 2 },
+          { ...VERSION_RAW, version: 1 },
+        ],
+        cursor: null,
+      }),
+    );
+    const versions = await adapter.getVersions('rec-abc123', { beforeVersion: 3, limit: 1 });
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3&limit=1`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(versions.map((v) => v.version)).toEqual([2]);
+  });
+
   // A snapshot describes content and the type it is read under; containment
   // bumps no version, so no snapshot is taken of it. A foreign server that
   // sends one anyway is writing a key with no field to land in.
   // See docs/spec/versioning.md § Version history.
   test('a parentId from a foreign server is dropped', async () => {
     const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse([{ ...VERSION_RAW, parentId: 'rec-box' }]));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ versions: [{ ...VERSION_RAW, parentId: 'rec-box' }], cursor: null }),
+    );
     const [parsed] = await adapter.getVersions('rec-abc123');
     expect('parentId' in parsed).toBe(false);
   });
@@ -1450,8 +1514,10 @@ describe('a mutation answering with no Record body', () => {
     ['commitMigration', (a: APIAdapter) => a.commitMigration('rec-abc123', 'x/note@2', {})],
     ['deleteRecord', (a: APIAdapter) => a.deleteRecord('rec-abc123')],
     ['undeleteRecord', (a: APIAdapter) => a.undeleteRecord('rec-abc123')],
-    ['associate', (a: APIAdapter) => a.associate('rec-abc123', tag)],
-    ['dissociate', (a: APIAdapter) => a.dissociate('rec-abc123', tag)],
+    [
+      'amendAssociations',
+      (a: APIAdapter) => a.amendAssociations('rec-abc123', [{ op: 'add', association: tag }]),
+    ],
     ['restoreVersion', (a: APIAdapter) => a.restoreVersion('rec-abc123', 1)],
   ] as const)('%s reports it as a wire-format failure', async (_name, call) => {
     const adapter = await openAdapter();

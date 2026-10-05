@@ -58,10 +58,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     },
     queryRecords: async () => ({ records: [], cursor: null }),
     getJournal: async () => [],
-    associate: async () => {
-      throw new Error('not implemented');
-    },
-    dissociate: async () => {
+    amendAssociations: async () => {
       throw new Error('not implemented');
     },
     getVersions: async () => [],
@@ -201,12 +198,8 @@ describe('combineAdapters', () => {
           seen.create = opts;
           return r;
         },
-        associate: async (_id, _assoc, opts) => {
-          seen.associate = opts;
-          return null as never;
-        },
-        dissociate: async (_id, _assoc, opts) => {
-          seen.dissociate = opts;
+        amendAssociations: async (_id, _changes, opts) => {
+          seen.amend = opts;
           return null as never;
         },
       }),
@@ -225,12 +218,14 @@ describe('combineAdapters', () => {
       },
       journal,
     );
-    await adapter.associate('r1', { kind: 'tag', label: 'x' }, journal);
-    await adapter.dissociate('r1', { kind: 'tag', label: 'x' }, journal);
+    await adapter.amendAssociations(
+      'r1',
+      [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
+      journal,
+    );
 
     expect(seen.create).toBe(journal);
-    expect(seen.associate).toBe(journal);
-    expect(seen.dissociate).toBe(journal);
+    expect(seen.amend).toBe(journal);
   });
 
   describe('optional capability forwarding', () => {

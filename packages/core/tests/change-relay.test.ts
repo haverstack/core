@@ -7,7 +7,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
-import { MemoryAdapter } from '../src/testing.js';
+import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
 import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
 
 const NOTE = 'com.example.test/note@1';
@@ -20,6 +20,9 @@ const REMOTE_EDITOR = 'did:key:zRemote';
  * assert what a subscriber saw.
  */
 class RelayingMemoryAdapter extends MemoryAdapter {
+  static override async open(opts: MemoryAdapterOpenOptions): Promise<RelayingMemoryAdapter> {
+    return new RelayingMemoryAdapter(opts);
+  }
   readonly relays: {
     opts: SubscribeChangesOptions;
     push: (change: RecordChange) => void;
@@ -58,7 +61,7 @@ let adapter: RelayingMemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new RelayingMemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await RelayingMemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -208,7 +211,9 @@ describe('a stack whose adapter relays', () => {
 
 describe('a stack whose adapter does not relay', () => {
   test('refuses `since`, which names a cursor it never minted', async () => {
-    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(
+      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
+    );
     await local.defineType({
       id: NOTE,
       name: 'Note',
@@ -230,7 +235,9 @@ describe('a scoped view of a stack that relays', () => {
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {
-    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(
+      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
+    );
     await local.defineType({
       id: NOTE,
       name: 'Note',
@@ -245,7 +252,9 @@ describe('a scoped view of a stack that relays', () => {
   });
 
   test('refuses `since` even when the adapter relays nothing', async () => {
-    const local = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+    const local = await Stack.open(
+      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
+    );
     await local.defineType({
       id: NOTE,
       name: 'Note',

@@ -306,6 +306,21 @@ describe('isCompatible', () => {
   });
 });
 
+describe('hashSchema enum', () => {
+  test('reordering enum values does not change the hash', async () => {
+    const h1 = await hashSchema({ s: { kind: 'string', enum: ['a', 'b'] } });
+    const h2 = await hashSchema({ s: { kind: 'string', enum: ['b', 'a'] } });
+    expect(h1).toBe(h2);
+  });
+
+  test('an enum, and its values, change the hash', async () => {
+    const plain = await hashSchema({ s: { kind: 'string' } });
+    const ab = await hashSchema({ s: { kind: 'string', enum: ['a', 'b'] } });
+    const ac = await hashSchema({ s: { kind: 'string', enum: ['a', 'c'] } });
+    expect(new Set([plain, ab, ac]).size).toBe(3);
+  });
+});
+
 // -------------------------------------------------------
 // diffSchemas
 // -------------------------------------------------------
@@ -610,5 +625,35 @@ describe('buildTypeId', () => {
     const id = buildTypeId(baseId, version);
     const parsed = parseTypeId(id);
     expect(parsed).toEqual({ baseId, version });
+  });
+});
+
+describe('diffSchemas enum', () => {
+  const withEnum = (values?: string[]): TypeSchema => ({
+    s: { kind: 'string', ...(values && { enum: values }) },
+  });
+
+  test('adding an enum to an existing string field is drift', () => {
+    expect(diffSchemas(withEnum(), withEnum(['a']))).toEqual([
+      { path: 's', message: 'enum added to an existing string field' },
+    ]);
+  });
+
+  test('removing enum values is drift', () => {
+    expect(diffSchemas(withEnum(['a', 'b', 'c']), withEnum(['a']))).toEqual([
+      { path: 's', message: 'enum values removed: "b", "c"' },
+    ]);
+  });
+
+  test('removing the enum is additive', () => {
+    expect(diffSchemas(withEnum(['a']), withEnum())).toEqual([]);
+  });
+
+  test('adding enum values is additive', () => {
+    expect(diffSchemas(withEnum(['a']), withEnum(['a', 'b']))).toEqual([]);
+  });
+
+  test('reordering enum values is not a change', () => {
+    expect(diffSchemas(withEnum(['a', 'b']), withEnum(['b', 'a']))).toEqual([]);
   });
 });

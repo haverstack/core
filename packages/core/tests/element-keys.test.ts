@@ -4,6 +4,7 @@ import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { Association, DataAssociation, AuthorityAssociation } from '../src/types.js';
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'did:key:owner';
 
@@ -11,7 +12,7 @@ let stack: Stack;
 let recordId: string;
 
 beforeEach(async () => {
-  stack = await Stack.open(new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' }));
+  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }));
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
   recordId = (await stack.create(NOTE, { text: 'x' })).id;
 });
@@ -37,8 +38,8 @@ describe('an association element carries only the keys its kind defines', () => 
       await expect(stack.mutate(recordId, { associations: [bad] })).rejects.toThrow(
         new StackBadRequestError(message),
       );
-      await expect(stack.associate(recordId, bad)).rejects.toThrow(
-        new StackBadRequestError('Unknown key in association: scope'),
+      await expect(stack.associate(recordId, [bad])).rejects.toThrow(
+        new StackBadRequestError('Unknown key in changes[0].association: scope'),
       );
     });
   }
@@ -47,7 +48,7 @@ describe('an association element carries only the keys its kind defines', () => 
     const upload = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' });
     const { fileId } = upload.content as { fileId: string };
     const a = { kind: 'attachment', label: 'avatar', fileId, attachmentRecordId: upload.id };
-    await expect(stack.associate(recordId, a as DataAssociation)).resolves.toBeDefined();
+    await expect(stack.associate(recordId, [a as DataAssociation])).resolves.toBeDefined();
   });
 
   test('a key its target arm does not define is refused, even one another arm defines', async () => {
@@ -56,8 +57,8 @@ describe('an association element carries only the keys its kind defines', () => 
       label: 'author',
       target: { kind: 'entity', entityId: 'did:key:a', ns: 'atproto' },
     } as DataAssociation;
-    await expect(stack.associate(recordId, a)).rejects.toThrow(
-      new StackBadRequestError('Unknown key in association.target: ns'),
+    await expect(stack.associate(recordId, [a])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association.target: ns'),
     );
   });
 
@@ -78,8 +79,8 @@ describe('a permission element carries only the keys its kind and grantee define
 
   test('an unknown key on the grantee is refused', async () => {
     const p = read({ kind: 'entity', entityId: 'did:key:a', scope: 'all' });
-    await expect(stack.grantAccess(recordId, p)).rejects.toThrow(
-      new StackBadRequestError('Unknown key in permission.grantee: scope'),
+    await expect(stack.grantAccess(recordId, [p])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association.grantee: scope'),
     );
     await expect(stack.mutate(recordId, { permissions: [p] })).rejects.toThrow(
       new StackBadRequestError('Unknown key in permissions[0].grantee: scope'),
@@ -88,13 +89,13 @@ describe('a permission element carries only the keys its kind and grantee define
 
   test('a key from the other grantee arm is refused rather than ignored', async () => {
     const p = read({ kind: 'entity', entityId: 'did:key:a', role: 'admin' });
-    await expect(stack.grantAccess(recordId, p)).rejects.toThrow(StackBadRequestError);
+    await expect(stack.grantAccess(recordId, [p])).rejects.toThrow(StackBadRequestError);
   });
 
   test('an unknown key on the element itself is refused', async () => {
     const anyone = extra({ kind: 'anyone', label: 'read' } as AuthorityAssociation, 'until');
-    await expect(stack.grantAccess(recordId, anyone)).rejects.toThrow(
-      new StackBadRequestError('Unknown key in permission: until'),
+    await expect(stack.grantAccess(recordId, [anyone])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association: until'),
     );
   });
 });
@@ -103,10 +104,10 @@ describe('a grant target carries only the keys its tier defines', () => {
   test('grantType() and revokeType() refuse an unknown key', async () => {
     const grantee = { kind: 'entity', entityId: 'did:key:a', scope: 'all' } as never;
     const message = 'Unknown key in grant target: scope';
-    await expect(stack.grantType(NOTE, { actions: ['read-any'], grantee })).rejects.toThrow(
+    await expect(stack.grantType(fam(NOTE), { actions: ['read-any'], grantee })).rejects.toThrow(
       new StackBadRequestError(message),
     );
-    await expect(stack.revokeType(NOTE, { actions: ['read-any'], grantee })).rejects.toThrow(
+    await expect(stack.revokeType(fam(NOTE), { actions: ['read-any'], grantee })).rejects.toThrow(
       new StackBadRequestError(message),
     );
   });

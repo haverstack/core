@@ -22,7 +22,8 @@ runRecordAdapterConformance({
       `conformance-sqlite-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     mkdirSync(currentDir, { recursive: true });
-    return NativeSQLiteRecordAdapter.initialize({
+    return NativeSQLiteRecordAdapter.open({
+      create: 'exclusive',
       path: join(currentDir, 'test.db'),
       ownerEntityId: 'did:key:conformance-test',
     });

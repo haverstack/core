@@ -60,7 +60,8 @@ beforeEach(async () => {
   testDir = join(tmpdir(), `sort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   dbPath = join(testDir, 'test.db');
-  adapter = await NativeSQLiteRecordAdapter.initialize({
+  adapter = await NativeSQLiteRecordAdapter.open({
+    create: 'exclusive',
     path: dbPath,
     ownerEntityId: 'entity-123',
   });
@@ -226,15 +227,18 @@ describe('paginating a content sort', () => {
     await create(ARTICLE, { title: 'a', order: 1 });
     await create(ARTICLE, { title: 'b', order: 2 });
 
-    const page = await adapter.queryRecords({ sort: { contentField: 'order' }, limit: 1 });
+    const page = await adapter.queryRecords({
+      sort: { contentField: 'order', direction: 'asc' },
+      limit: 1,
+    });
     const cursor = page.cursor as string;
 
-    await expect(adapter.queryRecords({ sort: { contentField: 'title' }, cursor })).rejects.toThrow(
-      StackBadRequestError,
-    );
-    await expect(adapter.queryRecords({ sort: { field: 'createdAt' }, cursor })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ sort: { contentField: 'title', direction: 'asc' }, cursor }),
+    ).rejects.toThrow(StackBadRequestError);
+    await expect(
+      adapter.queryRecords({ sort: { field: 'createdAt', direction: 'asc' }, cursor }),
+    ).rejects.toThrow(StackBadRequestError);
     await expect(adapter.queryRecords({ cursor })).rejects.toThrow(StackBadRequestError);
   });
 
@@ -242,9 +246,15 @@ describe('paginating a content sort', () => {
     await create(ARTICLE, { title: 'a' });
     await create(ARTICLE, { title: 'b' });
 
-    const page = await adapter.queryRecords({ sort: { field: 'createdAt' }, limit: 1 });
+    const page = await adapter.queryRecords({
+      sort: { field: 'createdAt', direction: 'asc' },
+      limit: 1,
+    });
     await expect(
-      adapter.queryRecords({ sort: { contentField: 'title' }, cursor: page.cursor as string }),
+      adapter.queryRecords({
+        sort: { contentField: 'title', direction: 'asc' },
+        cursor: page.cursor as string,
+      }),
     ).rejects.toThrow(StackBadRequestError);
   });
 });

@@ -52,7 +52,7 @@ write, which is the whole reason this type needs no author field.
 - **Threading is `parentId`, flat — and any record can anchor a thread.** A board
   thread's anchor is a message with no parent; a comment section's anchor is the record
   being discussed — comments on a blog post are messages parented to the `article`,
-  and the same move gives photos, polls, and events their discussions. Replies set
+  and the same move gives images, polls, and events their discussions. Replies set
   `parentId` to the anchor. The thread view is one indexed query
   (`parentId = <anchor>`, sort `createdAt` asc); the board index is another
   (`typeId = message@1, parentId = null`, which finds exactly the threads that _are_

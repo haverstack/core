@@ -9,6 +9,7 @@ import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackRecord, TokenSession } from '../src/types.js';
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'did:key:owner';
 const MEMBER = 'did:key:member';
@@ -234,10 +235,10 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
   let stack: Stack;
 
   beforeEach(async () => {
-    adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     stack = await Stack.open(adapter);
     await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: MEMBER },
     });

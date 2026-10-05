@@ -17,7 +17,8 @@
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
-import { StackBadRequestError } from './errors.js';
+import { StackBadRequestError, StackValidationError } from './errors.js';
+import { familyIdProblem } from './schema.js';
 import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
@@ -25,6 +26,7 @@ import { NATIVE_SORT_FIELDS } from './types.js';
 import type {
   AnyoneAssociation,
   Association,
+  AssociationEdit,
   AttachmentAssociation,
   AuthorityAssociation,
   DataAssociation,
@@ -32,6 +34,7 @@ import type {
   ExternalTarget,
   GrantGrantee,
   JournalQuery,
+  VersionsQuery,
   Grantee,
   PermissionAssociation,
   RecordTarget,
@@ -187,6 +190,22 @@ export function assertValidSort(sort: QuerySort | undefined): void {
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
     );
   }
+}
+
+/**
+ * The sort every adapter receives: a named sort with no `direction` is
+ * ascending, resolved here so no adapter carries its own default. No sort
+ * stays absent — the adapter's unsorted order is `createdAt` newest first,
+ * and an explicit sort would be re-checked against the server's declared
+ * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
+ */
+export function normalizeSort(
+  sort: QuerySort | undefined,
+): (QuerySort & { direction: 'asc' | 'desc' }) | undefined {
+  if (!sort) return undefined;
+  return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
+    direction: 'asc' | 'desc';
+  };
 }
 
 /**
@@ -493,6 +512,63 @@ export function validateAssociations(
 }
 
 /**
+ * Hold an association edit list to the rules every verb shares: non-empty,
+ * every element a known `op` over a well-formed association, one surface,
+ * and each identity named once — a list that both removes and adds one
+ * identity is the same ambiguity as naming it twice. `repoint` is the
+ * journal's word, never a request. Asked of the whole list before anything
+ * is read or written. See docs/spec/data-model.md § Mutations.
+ */
+export function assertAssociationEdits(
+  changes: unknown,
+  surface: string,
+  half: 'data' | 'authority',
+): asserts changes is AssociationEdit[] {
+  if (!Array.isArray(changes) || changes.length === 0) {
+    throw new StackValidationError([
+      { path: 'changes', message: `${surface} names at least one change.` },
+    ]);
+  }
+  const errors: ValidationError[] = [];
+  changes.forEach((raw: unknown, i) => {
+    const path = `changes[${i}]`;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      errors.push({ path, message: `${path} must be an object.` });
+      return;
+    }
+    const edit = raw as { op?: unknown; association?: unknown };
+    if (edit.op !== 'repoint') assertKnownKeys(edit, ['op', 'association'], path);
+    if (edit.op === 'repoint') {
+      errors.push({
+        path: `${path}.op`,
+        message:
+          'op: "repoint" is recorded by the journal, not requested. ' +
+          "Send { op: 'add', association }: an add naming an attachment the record already holds re-points it in place.",
+      });
+    } else if (edit.op !== 'add' && edit.op !== 'remove') {
+      errors.push({ path: `${path}.op`, message: 'op must be "add" or "remove".' });
+    }
+    errors.push(...validateAssociation(edit.association as Association, `${path}.association`));
+  });
+  if (errors.length > 0) throw new StackValidationError(errors);
+
+  const associations = (changes as AssociationEdit[]).map((c) => c.association);
+  if (half === 'data') assertDataAssociations(associations, surface);
+  else assertAuthorityAssociations(associations, surface);
+
+  const duplicates: ValidationError[] = [];
+  associations.forEach((a, i) => {
+    if (associations.slice(0, i).some((b) => associationEqual(a, b))) {
+      duplicates.push({
+        path: `changes[${i}]`,
+        message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
+      });
+    }
+  });
+  if (duplicates.length > 0) throw new StackValidationError(duplicates);
+}
+
+/**
  * Reject an association filter that names neither of its halves, or whose
  * relationship target is malformed. `RelatedToFilter` and `AttachmentFilter`
  * promise one half is always present; without the runtime check a filter
@@ -521,6 +597,20 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
 }
 
 /**
+ * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
+ * against registered families, so a TypeId there would match nothing and
+ * say nothing. See docs/spec/data-model.md § Filter.
+ */
+export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } | undefined): void {
+  if (filter?.baseId === undefined) return;
+  const errors = (Array.isArray(filter.baseId) ? filter.baseId : [filter.baseId])
+    .map((b) => familyIdProblem(b, 'filter.baseId'))
+    .filter((m): m is string => m !== null)
+    .map((message) => ({ path: 'filter.baseId', message }));
+  if (errors.length > 0) throw new StackValidationError(errors);
+}
+
+/**
  * Hold a journal window to the shape both adapters can honor identically.
  *
  * Unvalidated, a negative `limit` diverges rather than failing: a JS
@@ -541,6 +631,24 @@ export function assertValidJournalQuery(query: JournalQuery | undefined): void {
     if (!Number.isInteger(value) || value < 0) {
       throw new StackBadRequestError(
         `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
+      );
+    }
+  }
+}
+
+/**
+ * Refuse a `getVersions()` window the adapters would read differently, as
+ * assertValidJournalQuery() does for the journal. No ceiling is imposed:
+ * omitting `limit` reads every version by contract.
+ */
+export function assertValidVersionsQuery(query: VersionsQuery | undefined): void {
+  if (!query) return;
+  for (const key of ['beforeVersion', 'limit'] as const) {
+    const value = query[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < 1) {
+      throw new StackBadRequestError(
+        `Invalid versions ${key} ${String(value)}: expected a positive integer.`,
       );
     }
   }

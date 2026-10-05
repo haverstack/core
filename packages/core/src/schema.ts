@@ -10,6 +10,7 @@
  */
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
+import type { ReadonlyTypeSchema } from './type-handle.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -57,8 +58,9 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
     };
   }
 
-  // Scalar
+  // Scalar. `enum` is sorted so reordering the values is not a change.
   return {
+    ...(def.kind === 'string' && def.enum && { enum: [...def.enum].sort() }),
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
   };
@@ -169,8 +171,10 @@ const isCompatibleAtDepth = (
  * read-compatible kind; array/object fields recurse. See
  * docs/spec/data-model.md § Type compatibility.
  */
-export const isCompatible = (candidateSchema: TypeSchema, requiredSchema: TypeSchema): boolean =>
-  isCompatibleAtDepth(candidateSchema, requiredSchema, 0);
+export const isCompatible = (
+  candidateSchema: ReadonlyTypeSchema,
+  requiredSchema: ReadonlyTypeSchema,
+): boolean => isCompatibleAtDepth(candidateSchema as TypeSchema, requiredSchema as TypeSchema, 0);
 
 // -------------------------------------------------------
 // Schema evolution legality (drift detection)
@@ -215,6 +219,22 @@ const diffField = (
       path,
       message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
     });
+  }
+  // An enum narrows what a string field accepts when it is added or loses
+  // values, and widens it when it is removed or gains them.
+  if (stored.kind === 'string' && candidate.kind === 'string') {
+    if (!stored.enum && candidate.enum) {
+      violations.push({ path, message: 'enum added to an existing string field' });
+    } else if (stored.enum && candidate.enum) {
+      const kept = new Set(candidate.enum);
+      const removed = stored.enum.filter((v) => !kept.has(v));
+      if (removed.length > 0) {
+        violations.push({
+          path,
+          message: `enum values removed: ${removed.map((v) => JSON.stringify(v)).join(', ')}`,
+        });
+      }
+    }
   }
   // Opening a declared container, or closing an open one, changes which
   // content it accepts in a way no field-by-field diff would show.
@@ -313,13 +333,19 @@ export const buildTypeId = (baseId: string, version: number): string => `${baseI
 export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;
 
 /**
- * True if typeId is well-formed as either a bare baseId (no version
- * suffix) or a versioned TypeId ("baseId@version") — the shape
- * GrantContent.typeId accepts, the same tolerance baseIdOf() applies.
- * Not used by defineType(), which requires a version and needs the parsed
- * {baseId, version} itself — it calls parseTypeId() directly instead.
+ * Why `value` cannot name a type family, or null if it can. A family is a
+ * bare `BaseId`; a versioned TypeId names one version and is refused with the
+ * family to pass instead. See docs/spec/data-model.md § Types.
  */
-export const isWellFormedTypeId = (typeId: string): boolean => {
-  if (typeof typeId !== 'string' || typeId.trim().length === 0) return false;
-  return !typeId.includes('@') || parseTypeId(typeId) !== null;
+export const familyIdProblem = (value: unknown, label: string): string | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return `${label}: expected a non-empty baseId`;
+  }
+  if (value.includes('@')) {
+    const parsed = parseTypeId(value);
+    return parsed
+      ? `${label}: "${value}" names one version; pass the family "${parsed.baseId}"`
+      : `${label}: "${value}" is not a well-formed baseId (expected "baseId", with no "@version")`;
+  }
+  return null;
 };

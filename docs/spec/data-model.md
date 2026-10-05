@@ -22,7 +22,7 @@ type StackRecord = {
   createdBy?: Actor; // The author. A scoped write always stamps it, so absent means an unscoped Stack wrote the Record (see Authorship and attribution)
   updatedBy?: Actor; // Who performed the most recent mutation. Unlike createdBy, it moves with every write
   deletedAt?: Date; // Present if soft-deleted
-  unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Access control)
+  unlistedAt?: Date; // Present if withheld from enumeration — reachable by get(), absent from query()/the feed by default (see Unlisted records)
   permissions?: AuthorityAssociation[]; // Who reaches this Record (see Access control)
   associations?: DataAssociation[]; // Tags, attachments, relationships
 };
@@ -135,9 +135,28 @@ Content is a patch because uniformity costs more here than it buys. [`limits.con
 
 **`patchContent(id, patch, opts)`** is the content-only spelling, exactly `mutate()` with `contentPatch` alone. Content edits outnumber every other kind by a wide margin, and the name says what the operation does instead of promising a symmetry with `create()` that a patch does not have.
 
-**`associate()` and `dissociate()` are not the `associations` key.** Each adds or removes a single Association, matched by kind, label and payload, and is a no-op when the Record already stands that way. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
+**`associate()` and `dissociate()` are not the `associations` key.** Each takes a list of Associations to add or remove, matched by kind, label and payload, as one atomic write and one [journal entry](./journal.md#the-entry); an element the Record already stands that way on is a no-op for that element, and a call where every element is a no-op returns the Record without writing. Neither bumps `version` or `updatedAt`, per the rule above. The key replaces the set; the methods amend it. The difference is load-bearing under concurrency — two apps tagging one Record both succeed through the methods and race through the key — so the delta spelling is kept for the operation that most needs it, rather than folded into a declarative envelope, where "add this one" is not a thing that can be said.
 
-**`grantAccess()` and `revokeAccess()` stand in the same relation to the `permissions` key**, and carry the reshare gate rather than the write bit — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). The concurrency warning above applies to `permissions` exactly as it does to `associations`: two admins granting different people through the key clobber, where the verbs let both land.
+**`amendAssociations(id, changes)` is the atomic way to add and remove in one write.** It takes a list of `AssociationEdit` — the [journal's](./journal.md#the-entry) `{ op: 'add' | 'remove', association }` shape without `repoint` — and `associate()` and `dissociate()` are the same call with one half each. Swapping a cover is one call, one write and one journal entry:
+
+```ts
+stack.amendAssociations(bookId, [
+  { op: 'remove', association: oldCover },
+  { op: 'add', association: newCover },
+]);
+```
+
+`repoint` is the journal's word, never a request: it is refused with `StackValidationError` at the element, and `400 bad_request` on the wire. An `add` naming an attachment the Record already holds re-points it in place, which is all a `repoint` could say.
+
+**A list is held to one set of rules**, whichever verb carries it, before anything is read or written:
+
+- An empty list is refused with `StackValidationError`.
+- A list naming one identity twice is refused, as the `associations` key is ([Associations are keyed by identity](./adapters.md#associations-are-keyed-by-identity)). So is a list that both removes and adds one identity.
+- A list never mixes authority and data elements ([Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not)).
+- A `remove` matches on identity, as `dissociate()` does.
+- The [write-implies-read](./access-control.md#write-implies-read) and `_group` at-least-one-admin checks read the post-state of the whole call.
+
+**`grantAccess()`, `revokeAccess()` and `amendAccess()` stand in the same relation to the `permissions` key**, and carry the reshare gate rather than the write bit — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). `grantAccess()` and `revokeAccess()` take lists, and `amendAccess(id, changes)` is `amendAssociations()` for permissions. The concurrency warning above applies to `permissions` exactly as it does to `associations`: two admins granting different people through the key clobber, where the verbs let both land.
 
 **What the envelope does not carry.** `typeId` moves only through [`commitMigration()`](#type-migrations), which replaces content wholesale under a new schema and carries its own owner-only gate. `deletedAt` moves only through `delete()`/`undelete()`: a tombstone transition is a lifecycle step rather than an edit, and [mutations are refused against a tombstone](./versioning.md#mutations-are-refused-not-applied-to-a-tombstone) rather than bundled with one. `createdAt` and `updatedAt` are settable at [create time only, by the owner acting alone](#backdating-on-import). Every remaining native field is stamped by the write itself or is create-only — [Reparenting](#reparenting) gives the full split.
 
@@ -176,7 +195,7 @@ type RelationshipTarget =
 
 **Association identity is `(kind, label)` plus the payload that names a referent** — `fileId` for an attachment, the target for a relationship. An attachment's `attachmentRecordId` is outside it: the pointer [annotates a reference rather than naming one](./attachments.md#naming-the-upload-a-reference-came-from). Identity is what `dissociate()` matches on, what a second `associate()` of the same reference lands on, and the primary key every adapter stores an association under.
 
-**An element carries only the keys its kind defines**, at every depth: the keys in the types above, a relationship target's keys for its own `kind`, and a permission grantee's for its own (see [Access control § Record-level permissions](./access-control.md#record-level-permissions)). Any other key is refused with `StackBadRequestError` (wire: **400**) on every write that takes an element — `create()`, `mutate()`, `associate()`, `dissociate()`, `grantAccess()`, `revokeAccess()` — and on a `relatedTo` filter target. A key from another arm counts as unknown: `role` on an entity grantee is refused, not ignored. An adapter stores only the keys it has a place for, so an extra key would otherwise answer 200 and then disappear. The same holds for a [type-level grant](./access-control.md#type-level-grants) target given to `grantType()`, `revokeType()` or `listTypeGrants()`, and for a `_grant` record's `grantee`, which as content is refused with `StackValidationError` (**422**).
+**An element carries only the keys its kind defines**, at every depth: the keys in the types above, a relationship target's keys for its own `kind`, and a permission grantee's for its own (see [Access control § Record-level permissions](./access-control.md#record-level-permissions)). Any other key is refused with `StackBadRequestError` (wire: **400**) on every write that takes an element — `create()`, `mutate()`, `associate()`, `dissociate()`, `amendAssociations()`, `grantAccess()`, `revokeAccess()`, `amendAccess()` — and on a `relatedTo` filter target. A key from another arm counts as unknown: `role` on an entity grantee is refused, not ignored. An adapter stores only the keys it has a place for, so an extra key would otherwise answer 200 and then disappear. The same holds for a [type-level grant](./access-control.md#type-level-grants) target given to `grantType()`, `revokeType()` or `listTypeGrants()`, and for a `_grant` record's `grantee`, which as content is refused with `StackValidationError` (**422**).
 
 **An association list holds distinct identities.** A list naming one identity twice — `create()`'s `associations`, or a change set's — is refused with `StackValidationError` (wire: **400**), not collapsed to the last entry. Two entries under one identity describe a state no store can hold, since a store keys them; accepting the list would leave which of the two the record ends up with to whichever adapter is underneath, and would leave [a journal entry](./journal.md#the-entry) reporting a prior state twice with no way to say which edit displaced it. Every way of producing such a list is a caller bug, which is why it is refused on the same terms as [an empty change set](#mutations).
 
@@ -190,7 +209,7 @@ type RelationshipTarget =
 
 This is a **front-door check, not an invariant.** Deleting a container never touches its children, so a `parentId` resolving to nothing remains an ordinary state at rest, and consumers must handle one. What the check buys is that a caller cannot mint one: a dangling parent now means a container was removed, rather than that somebody asserted a reference to nothing.
 
-**`restoreVersion()` has no `parentId` to check.** [A snapshot carries no containment](./versioning.md#version-history) and a restore settles none, so it is never a caller naming a destination and never a site the front-door check applies to. It can still dangle a [file reference](./attachments.md#garbage-collection), and is the only write that can: a snapshot's content is put back as it stands, whatever has been deleted since, the same shape as validating it against the snapshot's own `typeId` rather than the record's current one. A restore honors history instead of re-litigating it.
+**`restoreVersion()` has no `parentId` to check.** [A snapshot carries no containment](./versioning.md#version-history) and a restore settles none, so it is never a caller naming a destination and never a site the front-door check applies to. The one dangling reference a restore can produce is a file reference — see [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
 **A record may not become its own ancestor.** Every site that adds a containment edge walks the proposed ancestor chain and refuses with `StackConflictError` (wire: **409**) on arriving back at the record: a `mutate()` naming `parentId`, and a `create()` supplying **both** `id` and `parentId`. Those are the only two: [a restore adds no edge](./versioning.md#restore-semantics), so it has no chain to walk. A generated ID names nothing, so an ordinary create cannot close a loop and skips the walk; a caller-supplied one can, since existing records may already point at it — though with the existence check above, a chain leading to a not-yet-created id can only have come from an adapter write beneath `Stack`.
 
@@ -224,7 +243,7 @@ Which arms a `ScopedStack` gates on creation, and why the rest are ungated rathe
 
 A **Type** defines the schema for the `content` field of a Record. Types are identified by a **namespaced, versioned string ID** controlled by the app author — the app is the real coordination mechanism between stacks, so Type identity is scoped to the app that defined it.
 
-A **type family** is every version of one Type, named by its **`BaseId`**: the `TypeId` with its `@version` suffix stripped. An API that takes only a family — `RecordFilter.baseId`, `migrateAll(baseId)` — names it `baseId` and types it `BaseId`; the type-level grant verbs, which accept either, take `typeOrBaseId: TypeId | BaseId` (see [Access control](./access-control.md#type-level-grants)).
+A **type family** is every version of one Type, named by its **`BaseId`**: the `TypeId` with its `@version` suffix stripped. An API that takes only a family — `RecordFilter.baseId`, `migrateAll(baseId)` — names it `baseId` and types it `BaseId`, and so do the type-level grant verbs, `grantType(baseId, …)` and `revokeType(baseId, …)` (see [Access control](./access-control.md#type-level-grants)). **A family argument takes a `BaseId` only and refuses a `TypeId`** with `StackValidationError`, naming the family to pass instead — `"com.example.myapp/note@2" names one version; pass the family "com.example.myapp/note"`. `BaseId` is a `string` alias, so the compiler cannot catch the mix-up and the refusal happens at runtime. An argument that means one version takes a `TypeId`, and nothing accepts both: dropping the suffix would leave a call that reads as naming one version while acting on all of them.
 
 ```ts
 type TypeId = string; // e.g. "com.example.myapp/note@2"
@@ -240,7 +259,8 @@ type ScalarFieldKind =
   | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex)
 
 type FieldDef =
-  | { kind: ScalarFieldKind; required?: boolean }
+  | { kind: 'string'; enum?: string[]; required?: boolean }
+  | { kind: Exclude<ScalarFieldKind, 'string'>; required?: boolean }
   | { kind: 'array'; items: FieldDef; open?: false; required?: boolean } // recursive
   | { kind: 'array'; open: true; required?: boolean } // elements unvalidated
   | { kind: 'object'; properties: TypeSchema; open?: false; required?: boolean } // recursive
@@ -269,6 +289,8 @@ type DefineTypeOptions = {
 };
 ```
 
+`required: false` makes a field optional, not nullable: [content fields are never `null`](#absent-content-fields).
+
 **`defineType()` takes one `DefineTypeOptions` object**, the same argument style as `registerMigration({ from, to, migrate })`. `id` and `name` are both strings, so naming them keeps a call from swapping them silently. `baseId`, `version`, `schemaHash` and `createdAt` are derived, never supplied.
 
 ```ts
@@ -282,7 +304,13 @@ await stack.defineType({
 
 **Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)). **`open: true` declares the container open** — a list or object whose interior the schema does not describe, and the one way to store content the schema cannot name. A container declares either its interior or `open`, never neither: opacity is a claim the schema makes, not something inferred from a missing `items`/`properties`, so a schema that forgets to describe its elements is a mistake rather than a silently unchecked field. Query reach is unaffected: a path still walks into an open container, since the query engine reads the content rather than the schema. See [Undeclared content fields](#undeclared-content-fields).
 
+**A `string` field can declare `enum`, a non-empty list of the values it may hold.** A value outside the list is a `StackValidationError` at its path, naming the allowed values. `defineType()` refuses an empty list, non-string or duplicate entries, and `enum` on any kind but `string`. The schema is then the one place the allowed values live, so an app's union type (`'want' | 'reading' | 'finished'`) has something to derive from rather than drifting from it. The [schema hash](#schema-drift-detection) sorts the values, so reordering them is not a change.
+
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
+
+**A `date` field holds a string, and a `Date` is refused.** The error says what to pass instead: `date.toISOString()` for a moment in time, or a `"YYYY-MM-DD"` string for a calendar day. A `Date` is a moment, a `date` field often means a calendar day, and core cannot tell which the app meant, so it makes the app choose rather than converting. Converting would also store a time-zone-dependent day, and a `Date` written in could not be read back as one: content is JSON, and the stored form is a string. Wherever validation names the type it got, a `Date` is named `a Date`.
+
+**Content is plain JSON at every depth, `open` containers included.** Only `null`, booleans, finite numbers, strings, arrays and plain objects (prototype `Object.prototype` or `null`) are accepted; anything else — a `Date`, `NaN`, `Infinity`, `undefined` inside an open value, a class instance, a `Map`, a function, a circular reference — is a `StackValidationError` at its path. `open` says the schema does not describe the shape, not that the content may stop being JSON; without the check, adapters that store a value as given and adapters that serialize it would read back different things. **Nesting is capped at 32 levels**, counted from the top-level field and the same inside an open container as in declared ones: a deeper value is a `StackValidationError` at the path where it crosses the cap, so no write buys an unbounded validation walk.
 
 **`file-ref` fields are real references, not just strings that look like fileIds.** A `file-ref` value must be a well-formed fileId (SHA-256 hex) — validated at write time, though referential existence is not (the same stance as `record-ref`; upload-before-associate flows make strictness hostile). What `file-ref` buys over a plain `string` field holding the same value: the [`referencesFileId` query filter](#filter), [`deleteAttachment()`'s reference check](./attachments.md#deleting-attachments), and attachment-access conveyance under `ScopedStack` all treat a top-level `file-ref` field as a real reference to the file, the same way an `attachment` Association is. An app that stores a fileId in a plain `string` field keeps working but gets none of that — no delete protection, no access conveyance, no garbage-collection protection. Only top-level scalar `file-ref` fields are indexed this way; a `file-ref` nested in an array or object is validated, and reachable by a content filter path, but not indexed as a reference — so it gets no delete protection, access conveyance or GC protection. **Indexing a content field, whether as a reference or [for sorting](#sorting-by-a-content-field), reaches top-level scalars only**, while query reach extends to depth: they are separate mechanisms, and one rule covers both.
 
@@ -298,7 +326,7 @@ This matters because `defineType()` takes a `TypeSchema` but a schema arriving a
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, and no container [opened or closed](#undeclared-content-fields). An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no `enum` that narrows what a string field accepts: adding an `enum` to a field, or removing values from one, needs a new version, while removing an `enum` or adding values to one accepts strictly more and stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -330,7 +358,7 @@ Apps that care about semantics filter by exact `typeId`; apps that want flexibil
 
 ### System types
 
-Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), and `_attachment@1` ([Attachments](./attachments.md)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All six are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
+Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), `_attachment@1` ([Attachments](./attachments.md)), and `_install@1` ([App installs](./apps.md#the-_install-record)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All seven are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
 
 ### Type migrations
 
@@ -352,7 +380,7 @@ stack.registerMigration({
 });
 ```
 
-The migration registry is **per-stack-instance** — different stacks can be at different migration states without interfering. Registration is part of app startup, immediately after creating the Stack.
+The migration registry is **per-stack-instance** and lives in memory — different stacks can be at different migration states without interfering. Nothing about it is stored, so registration runs at **every** startup, for every `Stack` instance, including one opened over `APIAdapter`: immediately after `Stack.open()`, before the first read that asks for `presentAt: 'latest'` or the first `migrateAll()`. It is not an install step. An install function that registers migrations beside `defineType()` and runs once leaves every later instance with an empty registry.
 
 **What the library does with registered migrations:**
 
@@ -360,14 +388,33 @@ The migration registry is **per-stack-instance** — different stacks can be at 
 - **`presentAt: 'latest'`** — an explicit opt-in on both `get()` and `query()` that applies the registered migration chain in memory before returning. Nothing is written to disk; this is a read-time convenience, never a persistence mechanism. It is a property of the app instance that registered the chain, so it never travels: a server [rejects a request carrying `presentAt`](./wire-format.md#records) rather than dropping it. Throws `StackMigrationError` when a matched Record's version can't be reconciled with what this app instance has registered (see stale-writer behavior below).
 - **A content patch never migrates.** `mutate()` validates the merged content against the Record's _own current_ stored Type — never the latest — and writes back at the same `typeId`. An unrelated content edit can never fold an invisible schema rewrite into the same version-history entry. This is also why content read through `presentAt: 'latest'` is not writable back wholesale, and why [the content key is a patch](#mutations).
 - **Path composition** — migrations between adjacent versions are automatically chained (v1→v2→v3), so apps only ever register one step at a time.
-- **`migrateAll("com.example.myapp/note")`** eagerly commits all pending migrations for a type family in one deliberate pass — call it at app startup after registering migrations, or after a schema change. It sweeps soft-deleted and unlisted Records unconditionally (`includeDeleted`/`includeUnlisted` are not caller options in either direction — see [Deletion](./versioning.md#deletion) and [Unlisted records](./unlisted.md)), validates each migrated result against the target Type's schema before writing, and aborts immediately on the first validation failure (a buggy migration function is a bug to surface, not to paper over by skipping the offending records) — anything already committed earlier in the pass stays committed. Previous content is snapshotted to version history before each write.
-- **`commitMigration(id, toTypeId, content)`** is the single-record counterpart, changing one Record's `typeId` and `content` together in one step. Unlike `migrateAll()`, `content` here is supplied by the caller rather than produced by a registered `Migration` function — the client-side app that owns `toTypeId` computes it, and the library validates it against `toTypeId`'s schema exactly as `create()`/`mutate()` validate against a schema. This is what backs the wire's `POST /records/:id/migrate` (see [Wire format](./wire-format.md#records)). Under `ScopedStack` it is **owner-acting-alone**, matching `migrateAll()`'s own absence from `StackClient` — no grant or record-level `write` substitutes for it (see [Access control](./access-control.md#type-level-grants)). Previous content and `typeId` are snapshotted to version history first, same as `migrateAll()`.
+- **`migrateAll("com.example.myapp/note")`** eagerly commits all pending migrations for a type family in one deliberate pass, taking each Record to the end of the registered chain rather than to a version the caller names — which is why it takes a `BaseId` and refuses a versioned `TypeId` — call it at app startup after registering migrations, or after a schema change. It sweeps soft-deleted and unlisted Records (`includeDeleted`/`includeUnlisted` are not caller options in either direction — see [Deletion](./versioning.md#deletion) and [Unlisted records](./unlisted.md)); the one narrower sweep is `{ sweep: 'listed' }`, for an installed app that can reach neither (see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types)). It validates each migrated result against the target Type's schema before writing, and aborts immediately on the first validation failure (a buggy migration function is a bug to surface, not to paper over by skipping the offending records) — anything already committed earlier in the pass stays committed. Previous content is snapshotted to version history before each write.
+- **`commitMigration(id, toTypeId, content)`** is the single-record counterpart, changing one Record's `typeId` and `content` together in one step. Unlike `migrateAll()`, `content` here is supplied by the caller rather than produced by a registered `Migration` function — the client-side app that owns `toTypeId` computes it, and the library validates it against `toTypeId`'s schema exactly as `create()`/`mutate()` validate against a schema. This is what backs the wire's `POST /records/:id/migrate` (see [Wire format](./wire-format.md#records)). Under `ScopedStack` it is **owner-acting-alone**, matching `migrateAll()`'s own absence from `StackClient` — no grant or record-level `write` substitutes for it (see [Access control](./access-control.md#type-level-grants)) — except for an installed app within its own families (see [App installs](./apps.md#migrating-an-installed-apps-types)). Previous content and `typeId` are snapshotted to version history first, same as `migrateAll()`.
 
   Because `content` is a full replacement written under a new `typeId`, a migration commit is create-shaped at the destination and update-shaped over the Record as it stands, and owes both sets of integrity checks. DID bindings are held to immutability across the union of the two families' binding fields — a card can neither shed its `did` by migrating out of `_entity`/`_app` nor pick one up on the way in — and to uniqueness in the destination family (see [Identity § DID bindings](./identity.md#did-bindings)). An `_attachment@1` Record's `fileId`, `mimeType` and `size` stay immutable, and a Record arriving from outside that family is held to the same mimeType-establishment check `create()` applies. Migrating _into_ `_group` is refused outright: a group's `admin` roster entry is stamped at creation and a migration cannot stamp one, so it would produce a group nobody but the owner can manage — version-to-version migration within `_group` stays open and carries the existing roster with it.
 
   **`migrateAll()` applies these same checks**, on the same shared write path. That a `Migration` function is app code rather than a request body is not a trust boundary here: the app calling `commitMigration()` is the same app that registered the function, and neither is entitled to move a DID binding or repoint an attachment. `registerMigration()` also places no constraint on `from` and `to` sharing a `baseId`, so a registered path can itself cross type families — which is precisely what these checks are about. A migration function that would violate one aborts the pass like any other validation failure.
 
 **Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it's registered _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
+
+### Type handles
+
+A schema written once as a literal gives the compiler everything it needs to type content. `typeHandle(id, schema)` returns a plain value carrying the `TypeId` (`id`), its family (`baseId`) and the `schema`; `ContentOf<S>` derives the content type from the schema and `PatchOf<S>` the `contentPatch` type. A required field is present in `ContentOf`; every other field is optional. `PatchOf` makes every field optional and allows `null` only on a field that is not required, since a required field can be replaced but not removed. `defineType()` takes `{ ...handle, name }`, so one literal serves both.
+
+A handle names exactly one version. A call that means the whole family takes `handle.baseId`, never `handle.id`.
+
+`get()`, `query()`, `create()`, `mutate()`, `patchContent()` and `subscribe()` each have an overload taking the handle first. A typed read:
+
+- reads at [`presentAt: 'latest'`](#type-migrations), so the stale-writer error applies;
+- throws `StackBadRequestError` unless the record's `typeId` is exactly the handle's `id`, so a record of another Type, or one whose family has moved past the handle's version, is refused rather than cast;
+- throws `StackValidationError` when an `enum` field holds a value the handle's schema does not list. An enum may gain values within a version ([additive evolution](#additive-evolution-within-a-version)), so a reader older than the writer can meet one; throwing keeps the derived union exact, and the reader fails loudly until it upgrades;
+- sees live records only. `includeDeleted` is not offered and is refused at runtime, so a tombstone, whose `content` is `{}`, is never typed as the handle's content. A caller who wants tombstones uses the untyped read.
+
+A typed `subscribe()` delivers only changes to records of exactly the handle's `id`, with `record`, when present, typed as the content. An event carries its record as stored, which a subscription cannot migrate, so other versions of the family are not delivered. A record holding an enum value the handle does not list arrives without its `record`, as it does wherever the emitter cannot supply one; the typed `get()` then says why. The change filter takes every key but `typeId` and `baseId`.
+
+A typed `query()` matches the handle's whole family, then applies the checks above to every record. A typed write first reads the record and refuses one stored at another `typeId`, since a patch is validated against the record's own stored Type; a missing, unreadable or deleted record is left to the untyped write to refuse.
+
+The derived types are a convenience over [runtime validation](#types), which stays the guarantee. A Type known only at runtime has no static shape and stays `Record<string, unknown>`.
 
 ### Additive evolution within a version
 
@@ -377,6 +424,8 @@ Not every schema change needs a version bump. **Additive-in-place** changes — 
 - **Writers preserve fields they don't touch** — [a content patch](#mutations) retains any field the caller didn't name.
 
 This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it. Adding the field to the schema is what licenses writing it — see [Undeclared content fields](#undeclared-content-fields) — and that is a `defineType()` call, not a version bump.
+
+Widening a string field's `enum` (adding values, or removing it) is additive for the same reason a new optional field is: the schema accepts strictly more. Narrowing one is not, and needs a version bump. See [Schema drift detection](#schema-drift-detection).
 
 **A version bump is a consolidation point**, warranted when:
 
@@ -416,11 +465,19 @@ This is a `Stack` invariant, not an adapter or server concern — it holds for e
 
 ### Undefined values in a patch
 
-[A content patch](#mutations) keeps an omitted field at its current value and removes one set to `null`. `undefined` is neither, and there is no third meaning left for it to carry — so **a top-level patch key whose value is `undefined` is rejected with `StackValidationError` (422)**. This is a `contentPatch` rule only: `create()` and `commitMigration()` take a whole content object, where an undefined field is simply a field the record does not have, and the schema's own required-field check already speaks to it.
+[A content patch](#mutations) keeps an omitted field at its current value and removes one set to `null`. `undefined` is neither, and there is no third meaning left for it to carry — so **a top-level patch key whose value is `undefined` is rejected with `StackValidationError` (422)**. This is a `contentPatch` rule only: `create()` and `commitMigration()` take a whole content object, where `null` and `undefined` are both [absent](#absent-content-fields) and the schema's own required-field check speaks to the result.
 
 It cannot arrive over the wire — JSON has no `undefined`, and `JSON.stringify` omits the key rather than emitting one — so every occurrence is an in-process caller spreading a partial object, meaning either "leave this alone" or "remove this" and spelling neither. Accepting it would resolve the ambiguity twice over, differently each time: storage drops the key on serialization, landing on the first, while the checks that ask whether a patch _names_ a field land on the second. Those checks are load-bearing — [binding immutability](./identity.md#did-bindings), [attachment field immutability](./attachments.md#the-_attachment-record-type), and `ScopedStack`'s owner-only fence on `_app` bindings all read the key as a claim on the field. A write-holder patching an `_app` card with `{ did: undefined }` would be refused for repointing a DID it never sent, and the refusal would be a permission error naming a field the caller did not set.
 
 This is a `Stack` invariant, so every adapter inherits it. `ScopedStack.mutate()` additionally applies it ahead of its own binding fences, so a patch carrying `undefined` is a validation error for every requester rather than a validation error for the owner and a permission refusal for everyone else.
+
+### Absent content fields
+
+**A content field is never `null`.** The schema expresses that a field is optional, not that it is nullable, and a patch already uses `null` to mean "remove" — one value cannot be both removable and settable. So `null` means absent on every write path: `create()` and `commitMigration()` drop top-level fields set to `null` or `undefined` before storing, and a patch with `null` removes the field. Reads never return `null` for a content field, and `create()` returns the content as stored.
+
+The rule recurses into declared nested objects, including those inside declared arrays, and stops at `open` objects and arrays, whose interior is opaque to core and keeps any `null`s it holds. An app that needs "explicitly none" as distinct from "never set" says so in the schema, for example with an enum value like `'declined'`.
+
+Adapters give `undefined` the same meaning: a field set to `undefined` is stored as no key at all.
 
 ### Content field names
 
@@ -432,7 +489,7 @@ A content filter key is a **dot-separated path** (see [Filter](#filter)), so a f
 
 The reserved set is wider than what SQLite's JSON path grammar treats as syntax today (`.`, `[`, `]`, `$`, `"`). `*` and `#` are held back against a path grammar that later grows a wildcard or a last-element form. Reserving a character costs nothing while no record contains one and costs every stored record afterward, so the choice is deliberately made early and wide.
 
-The escape-convention alternative — a filter key of `emails\.value` meaning the literal field — was rejected because it fails silently in the one case that matters: app code building a key from a variable field name forgets to escape and gets a different question answered, with no error anywhere. A write-time rule fails loudly, at the moment a caller can still choose another name.
+Field names are refused rather than escaped. An escape convention — a filter key of `emails\.value` meaning the literal field — fails silently in the one case that matters: app code building a key from a variable field name forgets to escape and gets a different question answered, with no error anywhere. A write-time rule fails loudly, at the moment a caller can still choose another name.
 
 ## Queries
 
@@ -467,7 +524,7 @@ type RecordFilter = {
   search?: string;
 
   // Lifecycle states excluded by default
-  includeDeleted?: boolean; // see Versioning & deletion
+  includeDeleted?: boolean; // see Versioning & deletion; get() takes the same option
   includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
 };
 
@@ -499,19 +556,25 @@ A path that descends through a scalar, or through a field that isn't there, reac
 
 **A segment is a value, never syntax.** An adapter resolving a path MUST carry each segment as a bound parameter matched against a key, rather than assembling it into a path expression — so no field name a write would accept can be reinterpreted as syntax, and no key can make the statement itself malformed. The 32-segment cap is what keeps that statement inside the engine's own limits: a SQLite adapter walks a segment with two `json_each` joins, and 32 segments is the longest path that fits SQLite's 64-table join limit. The cap and the generated shape move together — a longer path is refused because it could not be executed, not merely because it is unusual.
 
-**Multi-segment keys need the `'path'` rung of `filter.content`**, where a single-segment key needs only `'field'` — see [Capability-gated filters](#capability-gated-filters).
+**Multi-segment keys need the `'path'` rung of `filter.content`**, where a single-segment key needs only `'field'` — see [Capability-gated filters](#capability-gated-filters), and [Adapter capabilities](./adapters.md#adapter-capabilities) for why the reach is one ordered value rather than a flag per rung.
 
 **Nested fields are not indexed, and depth multiplies cost.** A path filter is an unindexed walk of every candidate record's JSON: the grammar is bounded, the execution time is not. It is a harsher bucket than full-text search, which at least runs against an index — here each segment fans out across every element of an array it meets, so a deep path over records holding large arrays costs the product of those widths. On a personal stack the only session it slows is the caller's own; a server serving many requesters owes the bound described in [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost), and should treat path depth as an input worth limiting below the cap.
 
 **A `content` filter value of `null` means "no value at the path, or a value that is `null`"** — not "match nothing." Plain equality (SQL `= NULL`, or JS `===` against a possibly-absent key) is never true for a missing field, which would make `{ content: { x: null } }` silently return an empty result. Every adapter, including test doubles, matches a record whose path reaches nothing and one that stores a literal `null` alike, since from the caller's side both mean "no value here." A _missing intermediate_ therefore matches too: `{ content: { 'address.city': null } }` matches a record with no `address` at all, one whose `address` has no `city`, and one storing `city: null`. So does an empty array along the path, which reaches no value by the same reading.
 
-`baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what keeps `typeId`-filtered queries from silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set, and a server [rejects a request carrying `baseId`](./wire-format.md#records) rather than dropping it. An unknown `baseId` returns an empty result set rather than throwing.
+`baseId` matches every version of a type family — resolved against registered Types (via `listTypes()`), not string-parsed from `typeId`, so it works regardless of which versions happen to exist. This is what keeps `typeId`-filtered queries from silently missing not-yet-migrated older-version records under [explicit, owner-driven migration](#type-migrations): filter by `baseId` to see the whole family, or `typeId` for an exact version. Given both, they intersect. `Stack.query()` resolves `baseId` client-side before dispatching to the adapter — adapters and the wire protocol only ever see a concrete `typeId` set, and a server [rejects a request carrying `baseId`](./wire-format.md#records) rather than dropping it. An unknown `baseId` returns an empty result set rather than throwing, but a `baseId` carrying an `@version` suffix is refused with `StackValidationError` — it names one version, which is `typeId`'s job, and resolving it to an empty family would return nothing without saying why. `ChangeFilter.baseId` follows the same rule.
+
+**A query hides exactly three things by default, and nothing else**:
+
+- **Soft-deleted Records**, which `includeDeleted` opts back in. `get()` hides them too — `get(id)` on a tombstone answers `null` — and takes the same option. See [Deletion](./versioning.md#deletion).
+- **Unlisted Records**, which `includeUnlisted` opts back in — under `ScopedStack`, for the owner acting alone only. See [Unlisted records](./unlisted.md).
+- **`_config`**, always (below).
+
+So an unfiltered `query()` returns every Record the caller can read, from every app, system types such as `_entity@1` and `_grant@1` included. An app filters by `typeId`, `baseId` or `appId` to get its own. System Records are not hidden because anything that must see the whole stack — a reference check before deleting a file, a backup or export — would otherwise have to opt back in, and a missed opt-out would lose data silently.
 
 By default, `query()` (like `get()`) returns Records exactly as stored — see [`presentAt: 'latest'`](#type-migrations) to migrate results in memory instead.
 
 **`query()` never returns the `_config` record**, regardless of filter — it's addressable only by ID, via `get('_config')` or the adapter's own typed `ownerEntityId`/`timezone` properties (see [Stack initialization](../spec.md#stack-initialization)). This is the one exception to "adapters are storage engines, `Stack` is the invariant layer": the exclusion must live in the adapter's own query predicate (a `WHERE` clause, or the equivalent for an in-memory adapter) rather than be post-filtered by `Stack`, since post-filtering after the adapter applies `limit` would silently under-fill a page. Every adapter — including test doubles — implements this exclusion directly; it is not optional convention.
-
-**Unlisted Records are excluded by default too**, the same posture as soft-deleted ones: `includeUnlisted` opts a query back in, and — unlike `includeDeleted` — `ScopedStack` restricts that opt-in to the owner acting alone. See [Unlisted records](./unlisted.md).
 
 ### Sorting and pagination
 
@@ -533,6 +596,19 @@ type QueryResult = {
 ```
 
 Pagination is cursor-based rather than offset-based, so it works consistently across adapters and doesn't drift when records are inserted mid-page. A `cursor` that can't be decoded — an unknown sort field, a non-numeric sort value, or a corrupted/malformed blob — is a structurally malformed request, not a content-validation failure: adapters throw `StackBadRequestError`, which maps to **400** (code `bad_request`), not 422 and not a bare 500.
+
+**Direction defaults follow SQL.** A sort that names a field runs `asc` unless `direction` says otherwise, whether the field is native or a content field, so `sort: { contentField: 'name' }` reads A→Z. A query with no sort answers by `createdAt`, newest first, the order a feed-style listing reads in. The two meet in one visible quirk: `sort: { field: 'createdAt' }` returns oldest first, the opposite of the unsorted default on the same field. No single default direction fits both a `name` and a `date`, and core cannot tell them apart at query time (a query can span Types), so the rule keys on nothing but whether a sort was named. `Stack.query()` and `ScopedStack.query()` resolve both defaults before an adapter sees the query, so `queryRecords()` always receives a sort with an explicit `direction`, or none.
+
+**Every list's order is stated here.**
+
+| Call                     | Order                                                                |
+| ------------------------ | -------------------------------------------------------------------- |
+| `query()`, no sort       | `createdAt`, newest first                                            |
+| `query()` with a sort    | `direction`, default `asc`                                           |
+| `getVersions()`          | newest first ([Versioning](./versioning.md))                         |
+| `getJournal()`           | oldest first ([Journal](./journal.md))                               |
+| `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md)) |
+| `listTypeGrants()`       | newest first                                                         |
 
 **A sort names either a native column or a content field, never both**, and a request naming both is rejected with `StackBadRequestError` (**400**) rather than resolved in one direction. They are two members rather than one widened `field` because a content field may be named `version`, `createdAt` or `updatedAt`, and a `'content.publishedAt'` prefix would collide with the [path separator](#filter) a filter key is split on.
 
@@ -580,7 +656,7 @@ The lowercasing is **locale-independent**. A locale-sensitive fold orders Turkis
 - No script-aware ordering. CJK orders by code point.
 - No natural-number ordering: `item10` precedes `item9`.
 
-Locale-correct ordering is out of reach for a stored key regardless of effort, because the correct locale is the _reader's_ and a single index can only encode one. It would need a comparator registered with the engine, which neither SQLite build this project targets can accept — and an ICU-backed comparator would make an order depend on the ICU version each runtime happens to bundle, which is exactly the divergence the [conformance fixtures](./adapters.md) exist to catch.
+Locale-correct ordering is out of reach for a stored key regardless of effort, because the correct locale is the _reader's_ and a single index can only encode one. It would need a comparator registered with the engine, which neither SQLite build this project targets can accept — and an ICU-backed comparator would make an order depend on the ICU version each runtime happens to bundle, which is exactly the divergence the [conformance suite](./adapters.md#conformance) exists to catch.
 
 ### Capability-gated filters
 
@@ -592,7 +668,7 @@ Locale-correct ordering is out of reach for a stored key regardless of effort, b
 
 **A sort is gated the same way.** `sort.contentField` needs the adapter's `sort.contentField`, and a native `sort.field` must appear in its `sort.fields`; a sort an adapter hasn't declared throws `StackBadRequestError` rather than being answered in some other order — which a caller reading one bounded page has no way to notice. `sort.contentField` and `filter.content` are independent: a server may order by a content field without offering to filter on one, or the reverse.
 
-**A multi-segment content key needs `filter.content: 'path'`**; a single-segment key needs `'field'`. Why the reach is one ordered value rather than a flag per rung is [Adapter capabilities](./adapters.md#adapter-capabilities). A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
+A `search` that sanitizes to nothing (a bare `*`, punctuation-only input) is treated as a legitimate zero-match query rather than an omitted filter — matching nothing is honest; silently returning the full table is not.
 
 **Search text is repaired, not rejected.** `filter.search` is the one filter carrying a query language, and it holds what a person typed into a box — where an unbalanced quote (`5" nails`), a trailing operator (`cats AND`) or a leading one is ordinary input on the way to a longer query, not a malformed request. The FTS sanitizers close an odd trailing quote, drop operators left without an operand, and reduce everything outside a phrase to letters, digits, marks, whitespace, parens and quotes — so the search runs against the terms actually present rather than failing. Text inside a phrase is left alone: `"cats AND dogs"` is literal to the engine, and rewriting inside it would change what was asked for.
 

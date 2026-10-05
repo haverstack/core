@@ -8,12 +8,14 @@ import type {
   JournalEntryInput,
   JournalOptions,
   JournalQuery,
+  VersionsQuery,
   RecordChangeSet,
   ActorOptions,
   StackQuery,
   QueryResult,
   RecordFilter,
   Association,
+  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   StackCapabilities,
@@ -24,6 +26,7 @@ import { SYSTEM_TYPES } from './types.js';
 import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
+
 import {
   StackVersionConflictError,
   StackConflictError,
@@ -31,8 +34,15 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
-import { associationEqual } from './record-changes.js';
+import { applyAssociationEdits, assertOneSurface, associationEqual } from './record-changes.js';
 
+/** Core resolves the default direction; an adapter only ever sees an explicit one. */
+const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
+  if (sort.direction === undefined) {
+    throw new StackBadRequestError('queryRecords() received a sort without a direction.');
+  }
+  return sort.direction;
+};
 /** An array stands for its elements; anything else stands for itself. */
 const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
 
@@ -63,6 +73,13 @@ const valuesAtContentPath = (content: Record<string, unknown>, segments: string[
   // `tags` array contains the value.
   return current.flatMap(spreadValue);
 };
+
+// An `undefined` field is a field the record does not have; storing the key
+// would make `'u' in content` differ from adapters that serialize to JSON.
+const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
+
+export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
 
 /**
  * In-memory StackAdapter with offset-based cursor pagination. Implements
@@ -98,22 +115,26 @@ export class MemoryAdapter implements StackAdapter {
   readonly types = new Map<string, StackType>();
   readonly blobs = new Map<string, { data: Uint8Array; modifiedAt: Date }>();
 
-  constructor({
-    ownerEntityId = '',
-    timezone,
-  }: { ownerEntityId?: string; timezone?: string } = {}) {
-    this.ownerEntityId = ownerEntityId;
-    this.timezone = timezone;
+  // Protected only so IncapableMemoryAdapter can extend; callers go through open().
+  protected constructor(opts: MemoryAdapterOpenOptions) {
+    this.ownerEntityId = opts.ownerEntityId;
+    this.timezone = opts.timezone;
+  }
+
+  /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
+  static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
+    return new MemoryAdapter(opts);
   }
 
   async createRecord(record: StackRecord, opts: JournalOptions = {}) {
     if (this.records.has(record.id)) {
       throw new StackConflictError(`Record already exists: "${record.id}"`);
     }
-    this.records.set(record.id, { ...record });
+    const stored = { ...record, content: withoutUndefined(record.content) };
+    this.records.set(record.id, stored);
     this.order.push(record.id);
-    this.appendJournal(record.id, opts.journal, record);
-    return record;
+    this.appendJournal(record.id, opts.journal, stored);
+    return stored;
   }
 
   async getRecord(id: string) {
@@ -374,7 +395,7 @@ export class MemoryAdapter implements StackAdapter {
     return JSON.stringify([
       sort?.contentField ?? null,
       sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort?.direction ?? 'desc',
+      sort ? requireDirection(sort) : 'desc',
     ]);
   }
 
@@ -436,7 +457,7 @@ export class MemoryAdapter implements StackAdapter {
    * (docs/spec/data-model.md § Sorting by a content field).
    */
   private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
-    const direction = sort?.direction ?? 'desc';
+    const direction = sort ? requireDirection(sort) : 'desc';
     const sign = direction === 'asc' ? 1 : -1;
     const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
 
@@ -468,37 +489,27 @@ export class MemoryAdapter implements StackAdapter {
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
-  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.associate(). */
-  async associate(id: string, association: Association, opts: JournalOptions = {}) {
+  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.amendAssociations(). */
+  async amendAssociations(id: string, changes: AssociationEdit[], opts: JournalOptions = {}) {
+    assertOneSurface(changes);
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    // Upsert on identity, mirroring the SQLite adapters' ON CONFLICT: a
-    // re-pointed `attachmentRecordId` lands on the association already
-    // there rather than adding a second reference to the same file. Both
-    // halves of the partition share one table, so both reach this verb.
-    const assocs = allAssociations(record);
-    const next = assocs.some((a) => associationEqual(a, association))
-      ? assocs.map((a) => (associationEqual(a, association) ? association : a))
-      : [...assocs, association];
-    const updated = withAssociationSet(record, next);
+    const updated = withAssociationSet(
+      record,
+      applyAssociationEdits(allAssociations(record), changes),
+    );
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;
   }
 
-  /** Never bumps `version`/`updatedAt` — see associate(). */
-  async dissociate(id: string, association: Association, opts: JournalOptions = {}) {
-    const record = this.records.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const assocs = allAssociations(record).filter((a) => !associationEqual(a, association));
-    const updated = withAssociationSet(record, assocs);
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
-  }
-
-  async getVersions(id: string) {
-    return this.versions.get(id) ?? [];
+  async getVersions(id: string, query: VersionsQuery = {}) {
+    const newestFirst = [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
+    const before =
+      query.beforeVersion === undefined
+        ? newestFirst
+        : newestFirst.filter((v) => v.version < query.beforeVersion!);
+    return query.limit === undefined ? before : before.slice(0, query.limit);
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
@@ -592,7 +603,10 @@ export class MemoryAdapter implements StackAdapter {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-    const updated = this.bump({ ...record, typeId: toTypeId, content }, opts);
+    const updated = this.bump(
+      { ...record, typeId: toTypeId, content: withoutUndefined(content) },
+      opts,
+    );
     this.records.set(id, updated);
     this.appendJournal(id, opts.journal, updated);
     return updated;
@@ -649,7 +663,7 @@ export class MemoryAdapter implements StackAdapter {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
     if (!this.blobs.has(fileId)) {
-      this.blobs.set(fileId, { data, modifiedAt: new Date() });
+      this.blobs.set(fileId, { data: new Uint8Array(data), modifiedAt: new Date() });
     }
     return fileId;
   }
@@ -659,7 +673,7 @@ export class MemoryAdapter implements StackAdapter {
     }
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
-    return blob.data;
+    return new Uint8Array(blob.data);
   }
   async deleteBlob(fileId: string) {
     this.blobs.delete(fileId);
@@ -702,6 +716,10 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
       contentBytes: null,
     },
   };
+
+  static override async open(opts: MemoryAdapterOpenOptions): Promise<IncapableMemoryAdapter> {
+    return new IncapableMemoryAdapter(opts);
+  }
 }
 
 /** Whether an association carries authority — mirrors core's own predicate. */
@@ -710,7 +728,7 @@ const isAuthority = (a: Association): a is AuthorityAssociation =>
 
 /**
  * A record's whole association table, both projections rejoined — what
- * associate()/dissociate() act on, since storage keys all kinds alike.
+ * amendAssociations() acts on, since storage keys all kinds alike.
  */
 function allAssociations(record: StackRecord): Association[] {
   return [...(record.associations ?? []), ...(record.permissions ?? [])];

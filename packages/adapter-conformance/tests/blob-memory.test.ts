@@ -7,6 +7,6 @@ import { runBlobAdapterConformance } from '../src/blob.js';
 
 runBlobAdapterConformance({
   name: 'MemoryAdapter',
-  open: () => new MemoryAdapter(),
+  open: () => MemoryAdapter.open({ ownerEntityId: 'did:key:test' }),
   listBlobs: true,
 });

@@ -1,5 +1,44 @@
 # @haverstack/commons
 
+## 0.36.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`6782ac9`](https://github.com/haverstack/core/commit/6782ac9a5c4e9211d979011f6a5eb46068768760), [`de4e587`](https://github.com/haverstack/core/commit/de4e587155f36cf077f47311b2677905211ee062), [`8049dd0`](https://github.com/haverstack/core/commit/8049dd0fda562d9e491e375613e2378fc93a63a8), [`ef500b8`](https://github.com/haverstack/core/commit/ef500b8cc0ffde261ae1294ac54f8a64bd9428d3)]:
+  - @haverstack/core@0.41.0
+
+## 0.35.0
+
+### Minor Changes
+
+- [#399](https://github.com/haverstack/core/pull/399) [`f57b470`](https://github.com/haverstack/core/commit/f57b470a85ca7807db175658161aec35b26a1b69) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Export each commons type as a type handle (`id`, `baseId`, `schema`, plus `name`), so `stack.create(NOTE, …)` and the other typed overloads derive content types from the canonical schema. `CommonsType` is now generic over its schema.
+
+### Patch Changes
+
+- Updated dependencies [[`a23b58b`](https://github.com/haverstack/core/commit/a23b58bf2cb911bb094dcfa9533c57454f06ca24), [`20f636a`](https://github.com/haverstack/core/commit/20f636abf14ff485e1c493707e1e1e35a051d07b), [`fb55e1f`](https://github.com/haverstack/core/commit/fb55e1fb992f106d42239b295cf9ba93b2b2c81b), [`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa), [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4), [`c5da1f5`](https://github.com/haverstack/core/commit/c5da1f53bddfcf8f68cabb10a9d2df48104c8d71), [`38e7e9a`](https://github.com/haverstack/core/commit/38e7e9a852b69871ef591cea6506ed0d42b9839d), [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1), [`1963d5d`](https://github.com/haverstack/core/commit/1963d5da5d5d268768641b18f2f66bc50cc29a11), [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d), [`1568139`](https://github.com/haverstack/core/commit/15681396bd7e8c40f8fe7c4674dc25bd34ae64d4), [`9326323`](https://github.com/haverstack/core/commit/9326323f9a0546deedafe21db09cbaee32e5f77e), [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a), [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736), [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5), [`a4f7b74`](https://github.com/haverstack/core/commit/a4f7b74849941e5b84d062879090e46359aad827), [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8), [`22a33cb`](https://github.com/haverstack/core/commit/22a33cbf42e80f2311090ae67341607c7f4d976e), [`9e33c53`](https://github.com/haverstack/core/commit/9e33c53e6fb963c62ba36161acedeedea32167ab), [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070)]:
+  - @haverstack/core@0.40.0
+
+## 0.34.0
+
+### Minor Changes
+
+- [#357](https://github.com/haverstack/core/pull/357) [`44c2f68`](https://github.com/haverstack/core/commit/44c2f684f006263fe92e1795901067904f5b787a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the `org.haverstack/photo@1` type to `org.haverstack/image@1` (export `PHOTO` → `IMAGE`), since paintings, drawings, scans, and screenshots belong in it as much as photos. Its required `file-ref` field is `file` (was `image`) and the capture-time field is `capturedAt` (was `takenAt`). See docs/commons/image.md.
+
+## 0.33.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`a431168`](https://github.com/haverstack/core/commit/a43116869768b7f6e7f7a7bb9712d6821d831498), [`4a3bc8e`](https://github.com/haverstack/core/commit/4a3bc8e86f69296ce18413e2225e6f35557a3b1c)]:
+  - @haverstack/core@0.39.0
+
 ## 0.32.0
 
 ### Minor Changes

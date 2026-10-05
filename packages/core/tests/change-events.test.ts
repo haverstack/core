@@ -3,6 +3,7 @@ import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { RecordChange, StackRecord } from '../src/types.js';
 
+const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';
 const OTHER = 'com.example.test/memo@1';
@@ -21,7 +22,7 @@ const collector = () => {
 };
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -62,8 +63,8 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.delete(note.id);
     await stack.undelete(note.id);
@@ -74,7 +75,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
       [['associate'], 'changed'],
       [['dissociate'], 'changed'],
       [['reshare'], 'changed'],
-      [['delete'], 'deleted'],
+      [['delete'], 'removed'],
       [['undelete'], 'changed'],
       [['restore'], 'changed'],
     ]);
@@ -128,7 +129,7 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'v2' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
     await stack.patchContent(note.id, { text: 'v3' });
 
@@ -144,13 +145,13 @@ describe('a mutation that changes nothing emits nothing', () => {
   test.each([
     [
       're-adding an association already present',
-      async (id: string) => stack.associate(id, { kind: 'tag', label: 'starred' }),
-      async (id: string) => stack.associate(id, { kind: 'tag', label: 'starred' }),
+      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
+      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
     ],
     [
       'removing an association that is not there',
       async () => {},
-      async (id: string) => stack.dissociate(id, { kind: 'tag', label: 'absent' }),
+      async (id: string) => stack.dissociate(id, [{ kind: 'tag', label: 'absent' }]),
     ],
     [
       'setting a deep-equal permission set',
@@ -227,7 +228,7 @@ describe('every record emits, including the ones a query hides', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: '_grant@1' } });
 
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: AUTHOR },
     });
@@ -279,14 +280,14 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     expect(seen.map((c) => c.ops)).toEqual([['create']]);
   });
 
-  test('the unlist transition emits kind "deleted" despite the post-change state', async () => {
+  test('the unlist transition emits kind "removed" despite the post-change state', async () => {
     const note = await stack.create(NOTE, { text: 'was listed' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.mutate(note.id, { unlisted: true });
 
-    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['deleted', ['unlist']]]);
+    expect(seen.map((c) => [c.kind, c.ops])).toEqual([['removed', ['unlist']]]);
   });
 
   test('the list transition emits kind "changed", an upsert like undelete', async () => {
@@ -327,7 +328,7 @@ describe('actor names who performed the change', () => {
   });
 
   test('the actor moves with each write while the author stays put', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -347,7 +348,7 @@ describe('actor names who performed the change', () => {
   // explicit opt instead of being read off the record. See
   // docs/spec/versioning.md § Version history.
   test('associate()/dissociate() name the acting identity in the event even though they never restamp the record', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -355,8 +356,8 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.asEntity(EDITOR).associate(note.id, { kind: 'tag', label: 'x' });
-    await stack.asEntity(EDITOR).dissociate(note.id, { kind: 'tag', label: 'x' });
+    await stack.asEntity(EDITOR).associate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.asEntity(EDITOR).dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
 
     expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
     expect(seen[1]!.actor).toEqual({ subjectId: EDITOR });
@@ -370,7 +371,7 @@ describe('actor names who performed the change', () => {
   // this is, which can be a stranger to the association change. Absence
   // means unknown, never "the last editor".
   test('an actorless associate()/dissociate() names nobody, even after an unrelated bumping edit', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -380,19 +381,19 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.associate(note.id, { kind: 'tag', label: 'x' });
-    await stack.dissociate(note.id, { kind: 'tag', label: 'x' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
 
     expect(seen[0]!.actor).toBeUndefined();
     expect(seen[1]!.actor).toBeUndefined();
   });
 
   test('a delegated write names the principal beside the subject', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'entity', entityId: APP },
     });
@@ -418,7 +419,7 @@ describe('actor names who performed the change', () => {
   });
 
   test('appId rides a create and never a later version', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -464,7 +465,7 @@ describe('associationsAdded/associationsRemoved report the current change', () =
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsRemoved).toBeUndefined();
@@ -472,37 +473,41 @@ describe('associationsAdded/associationsRemoved report the current change', () =
 
   test('dissociate() reports the removed association by identity, nothing added', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, { kind: 'tag', label: 'starred' });
+    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsAdded).toBeUndefined();
   });
 
   // The whole point of this pair: a re-point is lossy (nothing snapshots
-  // associations any more), so the old attachmentRecordId must not surface
+  // associations), so the old attachmentRecordId must not surface
   // anywhere in the event — not as "removed", not tucked into "added".
   test('re-pointing an attachment reports only the new pointer; the old one appears nowhere', async () => {
     const { first, second, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: second.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: second.id,
+      },
+    ]);
 
     expect(seen[0]!.associationsAdded).toEqual([
       { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
@@ -514,16 +519,18 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('clearing a stored pointer reports the identity-only association as added', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, { kind: 'attachment', label: 'embed', fileId });
+    await stack.associate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
@@ -531,23 +538,25 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('dissociating a pointed attachment never repeats attachmentRecordId', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, {
-      kind: 'attachment',
-      label: 'embed',
-      fileId,
-      attachmentRecordId: first.id,
-    });
+    await stack.associate(note.id, [
+      {
+        kind: 'attachment',
+        label: 'embed',
+        fileId,
+        attachmentRecordId: first.id,
+      },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, { kind: 'attachment', label: 'embed', fileId });
+    await stack.dissociate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
 
   test('a mutate() change set swapping one tag for another reports both lists', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, { kind: 'tag', label: 'draft' });
+    await stack.associate(note.id, [{ kind: 'tag', label: 'draft' }]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
@@ -612,13 +621,13 @@ describe('a purged frame carries nothing about the record', () => {
     await stack.delete(soft.id);
     await stack.delete(purged.id, { purge: true });
 
-    expect(seen[0]).toMatchObject({ kind: 'deleted', parentId: parent.id });
+    expect(seen[0]).toMatchObject({ kind: 'removed', parentId: parent.id });
     expect(seen[1]!.kind).toBe('purged');
     expect(seen[1]!.parentId).toBeUndefined();
   });
 
   test('no author, so no durable note of whose record was erased', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -762,13 +771,13 @@ describe('filtering is exact', () => {
 
   test('kinds narrows to the branches a consumer handles', async () => {
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { typeId: NOTE, kinds: ['deleted', 'purged'] } });
+    await stack.subscribe(handler, { filter: { typeId: NOTE, kinds: ['removed', 'purged'] } });
 
     const note = await stack.create(NOTE, { text: 'a' });
     await stack.patchContent(note.id, { text: 'b' });
     await stack.delete(note.id);
 
-    expect(seen.map((c) => c.kind)).toEqual(['deleted']);
+    expect(seen.map((c) => c.kind)).toEqual(['removed']);
   });
 
   test('parentId reads the record, so it still filters a purge', async () => {
@@ -911,7 +920,7 @@ describe('filtering is exact', () => {
   });
 
   test('createdBy filters on the record author, not the actor', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
     });
@@ -928,11 +937,11 @@ describe('filtering is exact', () => {
   });
 
   test('createdBy matches a list of authors and the principal behind them', async () => {
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any'],
       grantee: { kind: 'authenticated' },
     });
-    await stack.grantType(NOTE, {
+    await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: APP },
     });

@@ -27,14 +27,17 @@ type RecordJournalEntry = {
 type AssociationChange =
   | { op: 'add'; association: Association }
   | { op: 'repoint'; association: Association; previous: Association }
-  | { op: 'remove'; previous: Association };
+  | { op: 'remove'; association: Association };
+
+/** What a caller sends: the journal's shape without `repoint`. */
+type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 ```
 
 **`associations` is the field with no counterpart on the feed, and it is shaped for this tier rather than borrowed from that one.** [A frame](./events.md#the-event-shape) carries two flat lists of what is true now, which is the right answer to "what just happened" and the wrong one to "what did it happen to": a list of prior states beside a list of current ones has no join key, and `(kind, label)` is not identity — one record holds two `cover` attachments for different files. So the journal carries the prior state **on the element that displaced it**, and every inverse is local to one edit.
 
 - **`add`** — an association the record did not hold under this identity.
-- **`repoint`** — an `associate()` that landed on an identity already there, overwriting its annotation in place. `previous` is the only durable record of the `attachmentRecordId` it discarded. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from).
-- **`remove`** — a dissociate. `previous` is the association **in full**, annotation included, which is what makes a removal as undoable as a re-point. A frame names identity only here, because a notification reports what is current; a log whose whole argument is prior state does not.
+- **`repoint`** — an `associate()` that landed on an identity already there, overwriting its annotation in place. `previous` is the only durable record of the `attachmentRecordId` it discarded. See [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from). A `repoint` is recorded, never requested: a caller sends `AssociationEdit`, the same shape without it.
+- **`remove`** — a dissociate. `association` is the element that was removed, **in full**, annotation included, which is what makes a removal as undoable as a re-point. A frame names identity only here, because a notification reports what is current; a log whose whole argument is prior state does not.
 
 `ops` still carries `associate`/`dissociate` — `associate` when any **data** element is an `add` or a `repoint`, `dissociate` when any is a `remove` — so the coarse branch reads the same on an entry as on a frame. An authority element's move is `reshare` instead, derived from the same delta so the op and the edits beneath it cannot disagree.
 
@@ -42,24 +45,28 @@ type AssociationChange =
 
 ### The inverse
 
-Undoing one entry's association change is a walk over `associations`, with no lookup into a sibling list:
+Undoing one entry's association changes is at most two calls, one per half of [the partition](./access-control.md#storage-unifies-the-api-does-not), passing each element's inverse to `amendAssociations()` / `amendAccess()`:
 
 ```ts
-for (const change of entry.associations ?? []) {
-  const element = change.op === 'add' ? change.association : change.previous;
-  const [add, remove] = isAuthority(element)
-    ? [stack.grantAccess, stack.revokeAccess]
-    : [stack.associate, stack.dissociate];
-  if (change.op === 'add') await remove(recordId, element);
-  else await add(recordId, element);
-}
+const inverse = (change: AssociationChange): AssociationEdit =>
+  change.op === 'add'
+    ? { op: 'remove', association: change.association }
+    : { op: 'add', association: change.op === 'repoint' ? change.previous : change.association };
+
+const edits = (entry.associations ?? []).map(inverse);
+const data = edits.filter((e) => !isAuthority(e.association));
+const authority = edits.filter((e) => isAuthority(e.association));
+if (data.length) await stack.amendAssociations(recordId, data);
+if (authority.length) await stack.amendAccess(recordId, authority);
 ```
 
-A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` is dropped. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
+An entry's inverse is valid input as it stands: it names each identity once, and `repoint` never appears in it.
+
+A `repoint` and a `remove` invert identically — putting an element back whether it was overwritten or taken away — and an `add` inverts to a `remove` of the same element. Nothing here asks which element of one list matched which element of another, which is the property the shape exists for. Which verb carries the inverse is the element's own half of [the partition](./access-control.md#storage-unifies-the-api-does-not): authority and data share this list because they share a delta, and never share a call because they carry different authority.
 
 Undoing a move and a listing transition is the same walk over one entry: `mutate(recordId, { parentId: entry.previousParentId })` for a `reparent`, and the opposite `unlisted` for an `unlist` or a `list`. Both undos are ordinary writes that append entries of their own — [nothing here rewrites the log](./versioning.md#restore-semantics), exactly as a restore never rewrites version history.
 
-A permission element's delta rides in that same list, on the same terms as a tag's: `previous` in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where every **movement** of a Record's ACL is recorded, and [reading it](#reading-it) is gated accordingly: the mutate surface for the entry, reshare authority for its authority half. The set a Record was created holding is not among them: a `created` entry carries no association edits, because nothing was displaced and the set is readable off the Record itself. What the journal uniquely keeps is prior state, and a create has none.
+A permission element's delta rides in that same list, on the same terms as a tag's: the element in full, one tagged edit per element the write moved. Nothing else retains it — a snapshot carries no permissions — so the journal is where every **movement** of a Record's ACL is recorded, and [reading it](#reading-it) is gated accordingly: the mutate surface for the entry, reshare authority for its authority half. The set a Record was created holding is not among them: a `created` entry carries no association edits, because nothing was displaced and the set is readable off the Record itself. What the journal uniquely keeps is prior state, and a create has none.
 
 ## The entry set is the event set
 
@@ -79,7 +86,7 @@ It is **not** the [change feed's `cursor`](./change-feed.md#frames), which is an
 
 ## Atomicity
 
-**An entry lands in the same atomic write as the mutation it describes.** Adapters accept it as an option on every mutating method — `associate()`/`dissociate()` included, which take no other — and append it inside their own transaction, after the write, reading `version`, `typeId` and `parentId` off the row it produced. `Stack` supplies only the half the record cannot report afterwards. A crash cannot leave a change unjournaled, and a failed mutation leaves no entry.
+**An entry lands in the same atomic write as the mutation it describes.** Adapters accept it as an option on every mutating method — `amendAssociations()` included, which takes no other — and append it inside their own transaction, after the write, reading `version`, `typeId` and `parentId` off the row it produced. `Stack` supplies only the half the record cannot report afterwards. A crash cannot leave a change unjournaled, and a failed mutation leaves no entry.
 
 ## A purge destroys the journal
 

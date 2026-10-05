@@ -13,6 +13,7 @@ The spec is split into focused documents:
 | [Data model](./spec/data-model.md)            | Records, IDs, associations, types, schemas, migrations, queries              |
 | [Identity](./spec/identity.md)                | DIDs, entities, apps, groups, authentication, key rotation                   |
 | [Access control](./spec/access-control.md)    | Record-level permissions, type-level grants, `ScopedStack` enforcement       |
+| [App installs](./spec/apps.md)                | Manifests, the `_install` record, and migration by an installed app          |
 | [Unlisted records](./spec/unlisted.md)        | Withholding a Record from enumeration, orthogonal to who may read it         |
 | [Refusals & disclosure](./spec/disclosure.md) | Which refusal a Record answers with, and what a refusal is allowed to reveal |
 | [Versioning & deletion](./spec/versioning.md) | Version history, restore, optimistic concurrency, soft delete/purge          |
@@ -33,13 +34,14 @@ A Stack is opened with the async factory `Stack.open(adapter, opts)`, which read
 // Persist `privateKey` yourself (OS keychain, encrypted file, ...); the
 // stack never stores it. See Identity.
 const { did, privateKey } = await generateDidKeypair();
-const adapter = await LocalAdapter.initialize({
+const adapter = await LocalAdapter.open({
   path: './my-stack.db',
-  ownerEntityId: did, // required — owner entity ID (a DID)
+  create: 'exclusive', // create it; fail if it already exists
+  ownerEntityId: did, // required whenever open() may create — owner entity ID (a DID)
   timezone: 'America/New_York', // optional — IANA timezone string, passthrough metadata
 });
 
-// Subsequent runs — open an existing database
+// Subsequent runs — open an existing database (`create` defaults to 'never')
 const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
 // Always the same — reads identity and timezone from the adapter.
@@ -52,13 +54,12 @@ stack.timezone; // from adapter.timezone — string | undefined
 
 `Stack.open()` throws `InvalidAdapterError` when the adapter has no `ownerEntityId`. Like `UseAfterCloseError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
 
-`LocalAdapter.initialize()` fails if the file already exists. `LocalAdapter.open()` fails if the file does not exist. This makes the distinction explicit and prevents silent config divergence.
-
-`LocalAdapter.openOrInitialize()` covers the common case where an app doesn't know which run it is on. It takes the same options, except that `ownerEntityId` also accepts a function — called **only** when the database has to be created, so a returning run neither mints a throwaway keypair nor needs one to hand:
+`create` names what `open()` does when the store is missing or present: `'never'` (the default) opens an existing store and fails if it is missing; `'ifMissing'` opens it if present and creates it if not; `'exclusive'` creates it and fails if it is present. Making the choice explicit prevents silent config divergence. `'ifMissing'` covers the common case where an app doesn't know which run it is on, and there `ownerEntityId` also accepts a function — called **only** when the database has to be created, so a returning run neither mints a throwaway keypair nor needs one to hand:
 
 ```ts
-const adapter = await LocalAdapter.openOrInitialize({
+const adapter = await LocalAdapter.open({
   path: './my-stack.db',
+  create: 'ifMissing',
   timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
@@ -68,9 +69,9 @@ const adapter = await LocalAdapter.openOrInitialize({
 });
 ```
 
-A plain-string `ownerEntityId` is also checked against the owner of an existing database: a mismatch releases the file and throws `LocalAdapterOwnerMismatchError`, the local counterpart of `APIAdapter`'s `APIAdapterOwnerMismatchError` (see [Wire format § Identity is trusted on transport](./spec/wire-format.md#identity-is-trusted-on-transport)). A function is never invoked just to compare.
+A plain-string `ownerEntityId` is also checked against the owner of an existing database: a mismatch releases the file and throws `OwnerMismatchError` (see [Wire format § Identity is trusted on transport](./spec/wire-format.md#identity-is-trusted-on-transport)). A function is never invoked just to compare. Every adapter that holds a stack's identity is opened the same way; see [Adapters § Construction](./spec/adapters.md#construction).
 
-**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `getEntityByDid`, `getOwnerEntity`, `mutate`, `patchContent`, `delete`, `undelete`, `associate`, `dissociate`, `grantAccess`, `revokeAccess`, `commitMigration`, `getVersions`, `getVersion`, `restoreVersion`, `getJournal`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`), `subscribe()` for [change events](./spec/events.md#subscribing), and a `capabilities` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted — see [Versioning § Version history](./spec/versioning.md#version-history).
+**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `getEntityByDid`, `getOwnerEntity`, `mutate`, `patchContent`, `delete`, `deleteAndReturn`, `undelete`, `associate`, `dissociate`, `amendAssociations`, `grantAccess`, `revokeAccess`, `amendAccess`, `commitMigration`, `getVersions`, `getVersion`, `restoreVersion`, `getJournal`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`), `subscribe()` for [change events](./spec/events.md#subscribing), and a `capabilities` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted (it answers with a `DeleteResult`) — see [Versioning § Version history](./spec/versioning.md#version-history).
 
 ### The `_config` record
 

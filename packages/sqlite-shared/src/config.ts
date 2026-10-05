@@ -28,8 +28,8 @@ export const insertConfigRecord = (
 
 /**
  * Reads the singleton _config@1 record, or null if this database has none.
- * Null is the signal an engine with no initialize()/open() split uses to
- * decide between reattaching and creating.
+ * Null is the signal an engine that cannot tell from the outside whether a
+ * store exists (a Durable Object) uses to decide between reattaching and creating.
  */
 export const tryReadStackConfig = (exec: SqlExecutor): StackConfig | null => {
   const row = exec.get<{ content: string }>(CONFIG_ROW_SQL);

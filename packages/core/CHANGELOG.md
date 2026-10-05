@@ -1,5 +1,75 @@
 # @haverstack/core
 
+## 0.41.0
+
+### Minor Changes
+
+- [#400](https://github.com/haverstack/core/pull/400) [`6782ac9`](https://github.com/haverstack/core/commit/6782ac9a5c4e9211d979011f6a5eb46068768760) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `POST /installs` lets an app present its manifest for the owner to approve, as the key its session authenticated with: `202 { status: 'pending' }` until approved, `200 { status: 'installed', install }` once applying it would change nothing. Discovery advertises it with `installs: { requests: true }`. `APIAdapter.requestInstall()` sends it, `parseInstallBody()` and `isPlanEmpty()` serve it, and `installApp()` gives each linked key read on its own `_install` record. A manifest may define only types in its own namespace (the family's namespace is the `appId`) and commons types, which it defines without claiming.
+
+- [#400](https://github.com/haverstack/core/pull/400) [`de4e587`](https://github.com/haverstack/core/commit/de4e587155f36cf077f47311b2677905211ee062) Thanks [@cuibonobo](https://github.com/cuibonobo)! - An installed app's `commitMigration()` is held to the file-reference gate. Requests compare as sets of actions, and a plan that changes only `name` or `version` is no longer empty.
+
+- [#400](https://github.com/haverstack/core/pull/400) [`8049dd0`](https://github.com/haverstack/core/commit/8049dd0fda562d9e491e375613e2378fc93a63a8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - App installs: `Stack.planInstall()`, `installApp()` and `uninstallApp()` apply an app's manifest (its types and the grants it requests) as one reviewable act, stored as a new `_install@1` system type that cannot be granted and only the owner acting alone may write. An installed app may commit migrations within the type families its install claims, to versions the owner approved, when it holds `update-any` on them. `migrateAll()` takes `{ sweep: 'listed' }` for a non-owner and returns `{ migrated, skipped }`.
+
+- [#401](https://github.com/haverstack/core/pull/401) [`ef500b8`](https://github.com/haverstack/core/commit/ef500b8cc0ffde261ae1294ac54f8a64bd9428d3) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Cap content nesting at 32 levels inside `open` containers too, the same cap declared fields meet. A deeper value is a `StackValidationError` at its path rather than a stack overflow.
+
+## 0.40.0
+
+### Minor Changes
+
+- [#390](https://github.com/haverstack/core/pull/390) [`a23b58b`](https://github.com/haverstack/core/commit/a23b58bf2cb911bb094dcfa9533c57454f06ca24) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.associate()` and `dissociate()` are replaced by `amendAssociations(id, changes, opts?)`, which applies a list of `AssociationEdit` as one write. `POST /records/:id/associations` and `/permissions` take `{ changes }` and the `/delete` sub-paths are removed. `parseAssociationEditsBody()` and `assertOneSurface()` are exported from `@haverstack/core`.
+
+- [#388](https://github.com/haverstack/core/pull/388) [`20f636a`](https://github.com/haverstack/core/commit/20f636abf14ff485e1c493707e1e1e35a051d07b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Content fields are never `null`: `create()` and `commitMigration()` drop top-level fields set to `null` or `undefined` (and the same inside declared nested objects, not `open` ones) before storing, and `create()` returns the stored content. `MemoryAdapter` no longer keeps `undefined`-valued keys.
+
+- [#389](https://github.com/haverstack/core/pull/389) [`fb55e1f`](https://github.com/haverstack/core/commit/fb55e1fb992f106d42239b295cf9ba93b2b2c81b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Content must be plain JSON at every depth, `open` containers included: a `Date`, `NaN`, `Infinity`, a class instance and the like are refused at their path. A `Date` in a `date` field is refused with a message saying to pass `toISOString()` or a `"YYYY-MM-DD"` string, and validation names a `Date` as `a Date` wherever it reports the type it got.
+
+- [#386](https://github.com/haverstack/core/pull/386) [`cb9643a`](https://github.com/haverstack/core/commit/cb9643a48c4ed8357cd1c2b2c90aeabbc36245aa) Thanks [@cuibonobo](https://github.com/cuibonobo)! - An argument that means a whole type family takes a `BaseId` and refuses a versioned `TypeId` with a `StackValidationError` naming the family to pass instead. This covers `migrateAll()`, `grantType()`, `revokeType()` (whose `typeOrBaseId` is now `baseId`), and `RecordFilter.baseId` / `ChangeFilter.baseId`.
+
+  `GrantContent.typeId` is renamed `baseId`, and the `_grant@1` schema with it. Every `_grant` write now refuses a versioned or protected-system-type target, not only `grantType()`, and a stored grant whose `baseId` carries an `@version` suffix confers nothing. The `_grant@1` fixtures carry `baseId`, and two new fixtures pin the `POST /records` refusals.
+
+- [#385](https://github.com/haverstack/core/pull/385) [`a1bea0e`](https://github.com/haverstack/core/commit/a1bea0e9ee2a420b238cbaa5592ec88c35976ca4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack.get()` and `ScopedStack.get()` hide soft-deleted records by default, as `query()` does: `get(id)` on a tombstone answers `null`. Pass `{ includeDeleted: true }` to read it back. Adds `parseGetRecordParams()` for `GET /records/:id`.
+
+- [#390](https://github.com/haverstack/core/pull/390) [`c5da1f5`](https://github.com/haverstack/core/commit/c5da1f53bddfcf8f68cabb10a9d2df48104c8d71) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A journal `remove` names its subject `association` instead of `previous`, so `previous` appears only on `repoint`. `AssociationEdit` is exported: the journal's shape without `repoint`.
+
+- [#394](https://github.com/haverstack/core/pull/394) [`38e7e9a`](https://github.com/haverstack/core/commit/38e7e9a852b69871ef591cea6506ed0d42b9839d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `associate()`, `dissociate()`, `grantAccess()` and `revokeAccess()` take arrays, each call one atomic write and one journal entry, and `amendAssociations()` / `amendAccess()` apply a list of adds and removes as one write. Granting edit access is `grantAccess(id, [read, write])`; `write` never implies `read`. `repoint` is refused as input.
+
+- [#383](https://github.com/haverstack/core/pull/383) [`bef7f3e`](https://github.com/haverstack/core/commit/bef7f3eaed7f034c744f6c4c95086c244ddac80d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `getVersions()` takes an optional `VersionsQuery` (`beforeVersion`, `limit`) and pages newest first, in the shape of `getJournal()`'s `JournalQuery`; omitting both reads every version. `GET /records/:id/versions` takes `?limit=` and `?beforeVersion=` and answers `{ versions, cursor }`, with `parseVersionsParams()` in `@haverstack/core/wire` to decode them. `APIAdapter` follows `cursor` to the end when no `limit` is given.
+
+- [#395](https://github.com/haverstack/core/pull/395) [`1568139`](https://github.com/haverstack/core/commit/15681396bd7e8c40f8fe7c4674dc25bd34ae64d4) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackPermissionError` requires a `message`, and every refusal now names what was refused: the verb, Record and type for a Record the requester can read, and the ID the caller passed for a reference or attachment.
+
+- [#391](https://github.com/haverstack/core/pull/391) [`9326323`](https://github.com/haverstack/core/commit/9326323f9a0546deedafe21db09cbaee32e5f77e) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `grantAccess()` and `revokeAccess()` throw `StackConflictError` on a soft-deleted record, like the other verbs that edit one.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`abed267`](https://github.com/haverstack/core/commit/abed2670c3a9017d21f23b4b6a31bde7cd3cde8a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Rename the change kind `deleted` to `removed`. It names what a subscriber does with its copy, and covers both a soft delete and an unlist; `ops` still says which. The set stays `created`, `changed`, `removed`, `purged`, and the `?kind=` filter and journal `kind` column take the new value.
+
+- [#380](https://github.com/haverstack/core/pull/380) [`dba0895`](https://github.com/haverstack/core/commit/dba0895678fefe80452b20ecfd14215e65a10736) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Open every identity-holding adapter with a single async `open()`. `NativeSQLiteRecordAdapter` and `LocalAdapter` replace `initialize()`/`open()`/`openOrInitialize()` with `open({ path, create?, ownerEntityId?, … })`, where `create` is `'never'` (default), `'ifMissing'` or `'exclusive'`. `DoSQLiteRecordAdapter.openOrInitialize()` is now `open()`. `APIAdapter`'s `expectedOwnerEntityId` option is renamed `ownerEntityId`. A plain-string `ownerEntityId` is checked against an existing store on every adapter, and a mismatch throws the new `OwnerMismatchError` from `@haverstack/core/adapter`, replacing `LocalAdapterOwnerMismatchError` and `APIAdapterOwnerMismatchError`. `MemoryAdapter` and `IncapableMemoryAdapter` (`@haverstack/core/testing`) are opened with `await X.open({ ownerEntityId })`; `ownerEntityId` is required.
+
+- [#384](https://github.com/haverstack/core/pull/384) [`d122a0a`](https://github.com/haverstack/core/commit/d122a0ad5f66bac3267f46a651f0122bb96e09e5) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A sort that names a field now defaults to ascending, native or content field alike, as `ORDER BY` does; a query with no sort still returns `createdAt`, newest first. `Stack.query()` resolves both defaults before an adapter sees the query, so `queryRecords()` always receives an explicit `direction`. `listTypeGrants()` states its newest-first order rather than inheriting it.
+
+- [#389](https://github.com/haverstack/core/pull/389) [`a4f7b74`](https://github.com/haverstack/core/commit/a4f7b74849941e5b84d062879090e46359aad827) Thanks [@cuibonobo](https://github.com/cuibonobo)! - String fields can declare `enum: [...]`, a non-empty list of allowed values. Validation refuses a value outside the list, `defineType()` refuses a malformed list, schema drift treats adding an `enum` or removing values as a change that needs a version bump, and the schema hash sorts the values.
+
+- [#385](https://github.com/haverstack/core/pull/385) [`721cbe3`](https://github.com/haverstack/core/commit/721cbe326806e64ead903fddd6034658b6e5d7f8) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack.mutate()`, `patchContent()`, `associate()`, `dissociate()` and `restoreVersion()` throw `StackConflictError` on a soft-deleted record, as `ScopedStack` already did. Call `undelete()` first.
+
+- [#392](https://github.com/haverstack/core/pull/392) [`22a33cb`](https://github.com/haverstack/core/commit/22a33cbf42e80f2311090ae67341607c7f4d976e) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Add `typeHandle()` and the derived `ContentOf` and `PatchOf` types, with typed overloads of `get`, `query`, `create`, `mutate`, `patchContent` and `subscribe` on `Stack` and `ScopedStack` that take a handle. A typed read checks the record is the handle's Type and refuses an unlisted enum value or a tombstone. `defineType()` accepts a handle's `id` and `schema`.
+
+- [#382](https://github.com/haverstack/core/pull/382) [`5813d84`](https://github.com/haverstack/core/commit/5813d84e8a909254875e67de22e157ed11efb070) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `MemoryAdapter.getVersions()` returns versions newest first, matching the SQLite adapters and `APIAdapter`. The order is now stated in the spec and `StackRecordAdapter`, and pinned by an `adapter-conformance` test.
+
+### Patch Changes
+
+- [#387](https://github.com/haverstack/core/pull/387) [`090b27c`](https://github.com/haverstack/core/commit/090b27c1e88aa24b151073b0e1eb95c881f94ce1) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `MemoryAdapter` copies blob bytes in `putBlob()` and `getBlob()`, so callers can no longer change stored blobs through a shared array.
+
+- [#396](https://github.com/haverstack/core/pull/396) [`1963d5d`](https://github.com/haverstack/core/commit/1963d5da5d5d268768641b18f2f66bc50cc29a11) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Document the two layers of an app — a data layer over `StackClient` and an owner-run install function over `Stack` — and that migration registration runs at every startup. The spec now states that `POST /types` is served to the owner acting alone.
+
+- [#397](https://github.com/haverstack/core/pull/397) [`9e33c53`](https://github.com/haverstack/core/commit/9e33c53e6fb963c62ba36161acedeedea32167ab) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Document that an unfiltered `query()` returns every readable record, system records included, so an app filters by `typeId`, `baseId` or `appId` to get its own.
+
+## 0.39.0
+
+### Minor Changes
+
+- [#353](https://github.com/haverstack/core/pull/353) [`a431168`](https://github.com/haverstack/core/commit/a43116869768b7f6e7f7a7bb9712d6821d831498) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The `./wire` request parsers refuse input their endpoint does not define instead of ignoring it. `parseQueryParams()`, `parseChangeParams()` and `parseJournalParams()` throw `StackBadRequestError` for an unknown query param, a repeat of a param that names one value, or a boolean param other than `true`/`false`. `parseQueryBody()` does the same for an unknown key at any depth, a non-object body, a non-boolean `includeDeleted`/`includeUnlisted` or a non-string `cursor`. `createOptionsFromWireRecord()` refuses a key no wire record carries. The rule is specified in docs/spec/wire-format.md § Unrecognized input, and four new error fixtures cover it.
+
+- [#356](https://github.com/haverstack/core/pull/356) [`4a3bc8e`](https://github.com/haverstack/core/commit/4a3bc8e86f69296ce18413e2225e6f35557a3b1c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/core/wire` adds a parser for every remaining endpoint core specifies, so a server no longer keeps its own list of their param and field names: `parseAuthChallengeBody()`, `parseAuthTokenBody()`, `parseEntityPatchBody()`, `parseTypeBody()`, `parseMigrationBody()`, `parseDeleteParams()`, `parseDownloadParams()` and `parseAssociationParams()`. Each refuses an unknown name or a malformed boolean with `StackBadRequestError`, and a known body field of the wrong type with `StackValidationError`. Two error fixtures pin a non-boolean `purge` and an unknown key on `POST /auth/token`.
+
+  `Stack` refuses an association, permission or grant-target element carrying a key its kind does not define, at every depth, with `StackBadRequestError`. This applies on every write that takes an element, on a `relatedTo` filter target, and on `grantType()`, `revokeType()` and `listTypeGrants()`. A `_grant` record's `grantee` is held to the same keys and refused with `StackValidationError`. A new error fixture pins an unknown key on a permission grantee.
+
 ## 0.38.0
 
 ### Minor Changes

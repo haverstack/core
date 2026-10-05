@@ -24,3 +24,9 @@ overrides:
   # miniflare pins sharp to exactly 0.35.2; GHSA-rgj7-g3m4-5g8c (libheif
   # RCE) is fixed in 0.35.4. Test-time only, via @cloudflare/vitest-pool-workers.
   sharp: 0.35.4
+  # miniflare pins undici to exactly 7.29.0; fixed in 7.29.1. Test-time only,
+  # via @cloudflare/vitest-pool-workers.
+  undici: 7.29.1
+  # minimatch 10.2.5 (via eslint) depends on brace-expansion 5.0.9; fixed in
+  # 5.0.12. Lint-time only.
+  brace-expansion: 5.0.12

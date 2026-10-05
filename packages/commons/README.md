@@ -31,12 +31,17 @@ import { defineCommonsTypes, NOTE, TASK } from '@haverstack/commons';
 // Register only the commons types your app actually writes.
 await defineCommonsTypes(stack, [NOTE, TASK]);
 
-const note = await stack.create(NOTE.id, { text: 'Hello, Haverstack!' });
+// Each constant is a type handle, so content is typed from the schema.
+const note = await stack.create(NOTE, { text: 'Hello, Haverstack!' });
+const tasks = await stack.query(TASK); // records: { content: { title: string; done: boolean; ... } }[]
 ```
 
-Each export (`NOTE`, `BOOKMARK`, `TASK`, `CONTACT`, `ARTICLE`, `PLACE`, `PAGE`, `PHOTO`,
-`POST`, `SITE`) is a `{ id, name, schema }` triple mirroring its type's `stack.defineType(...)` block in
-[`docs/commons/`](https://github.com/haverstack/core/tree/main/docs/commons) exactly.
+Each export (`NOTE`, `BOOKMARK`, `TASK`, `CONTACT`, `ARTICLE`, `PLACE`, `PAGE`, `IMAGE`,
+`POST`, `SITE`) is a [type handle](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#type-handles)
+— `{ id, baseId, schema }` — plus the `name` its type's `stack.defineType(...)` block in
+[`docs/commons/`](https://github.com/haverstack/core/tree/main/docs/commons) carries, mirroring
+that block exactly. Pass it to the typed overloads of `get`, `query`, `create`, `mutate`,
+`patchContent` and `subscribe`; use `NOTE.baseId` for calls about the whole family.
 `defineCommonsTypes()` is a thin loop over `stack.defineType()` — calling it again with
 types already registered is the ordinary idempotent no-op path (see `defineType`'s own
 docs), so it's safe to call on every app startup.

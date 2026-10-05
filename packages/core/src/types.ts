@@ -182,13 +182,20 @@ export type Association = DataAssociation | AuthorityAssociation;
  * One association a write moved, and what it moved from. Every inverse is
  * local to one element — there is no join back to a sibling list, so there
  * is no join key to get wrong. `previous` is carried in full, annotation
- * included, which is what makes both a `repoint` and a `remove` undoable.
+ * included, which is what makes a `repoint` undoable; a `remove` names the
+ * element it took away in `association`, in full.
  * See docs/spec/journal.md § The entry.
  */
 export type AssociationChange =
   | { op: 'add'; association: Association }
   | { op: 'repoint'; association: Association; previous: Association }
-  | { op: 'remove'; previous: Association };
+  | { op: 'remove'; association: Association };
+
+/**
+ * What a caller sends: the journal's shape without `repoint`, which the
+ * journal records and no caller requests. See docs/spec/journal.md § The entry.
+ */
+export type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 
 /**
  * The aspects of an existing record one mutate() call may move, in any
@@ -307,10 +314,19 @@ export type ScalarFieldKind =
   | 'record-ref' // Reference to another record by ID
   | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex) — indexed, unlike a plain `string` fileId
 
-export type ScalarFieldDef = {
-  kind: ScalarFieldKind;
+/**
+ * `enum` is a non-empty, duplicate-free list of the strings the field may
+ * hold. See docs/spec/data-model.md § Types.
+ */
+export type StringFieldDef = {
+  kind: 'string';
+  enum?: string[];
   required?: boolean;
 };
+
+export type ScalarFieldDef =
+  | StringFieldDef
+  | { kind: Exclude<ScalarFieldKind, 'string'>; required?: boolean };
 
 /**
  * A list. `open: true` leaves its elements unvalidated,
@@ -470,12 +486,40 @@ export type TypeGrant = {
 
 /** Content for _grant records */
 export type GrantContent = {
-  /** Which record type the grant applies to. */
-  typeId: TypeId;
+  /** The type family the grant applies to: a bare baseId, never a versioned TypeId. */
+  baseId: BaseId;
   /** Which actions are permitted. */
   actions: GrantAction[];
   /** Who the grant reaches. Required — see GrantGrantee. */
   grantee: GrantGrantee;
+};
+
+/** One type-level grant an app's manifest asks for. */
+export type InstallRequest = {
+  /** The type family, as `grantType()` takes it. */
+  baseId: BaseId;
+  actions: GrantAction[];
+};
+
+/**
+ * Content for _install records: what the owner approved of an app's
+ * manifest, one live record per `appId`. See docs/spec/apps.md.
+ */
+export type InstallContent = {
+  /**
+   * The software this install is for. A binding: immutable, and unique
+   * among installs, so one install answers for each app.
+   */
+  appId: AppId;
+  name: string;
+  version?: string;
+  /**
+   * Every type version the owner has approved for this app. The families
+   * they name are claimed by this install and by no other.
+   */
+  defines: TypeId[];
+  /** The grants each of the app's keys holds. */
+  requests: InstallRequest[];
 };
 
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
@@ -524,6 +568,8 @@ export const SYSTEM_TYPES = {
   ATTACHMENT: '_attachment',
   /** Stack-level configuration singleton. See ConfigContent. */
   CONFIG: '_config',
+  /** An owner's approval of an app's manifest. See InstallContent. */
+  INSTALL: '_install',
 } as const;
 
 // -------------------------------------------------------
@@ -572,7 +618,8 @@ export type RecordFilter = {
    * matches both "com.example/note@1" and "com.example/note@2" records.
    * Resolved against registered Types, not parsed from typeId strings, so
    * it works regardless of which versions happen to exist. Combined with
-   * typeId (if both given) as an intersection.
+   * typeId (if both given) as an intersection. A value carrying an
+   * `@version` suffix is refused with StackValidationError.
    */
   baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only
@@ -656,7 +703,10 @@ export type NativeSortField = (typeof NATIVE_SORT_FIELDS)[number];
  * `version` would otherwise be indistinguishable from the native column.
  * A `'content.'` prefix can't carry the distinction either: `.` is the
  * path separator `parseContentFilterKey()` splits on.
- * See docs/spec/data-model.md § Sorting by a content field.
+ * `direction` defaults to `asc` for any named sort, native or content, as
+ * `ORDER BY` does; a query with no sort is `createdAt`, newest first.
+ * See docs/spec/data-model.md § Sorting by a content field and
+ * § Sorting and pagination.
  */
 export type QuerySort =
   | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
@@ -829,8 +879,8 @@ export type SnapshotOptions = {
  * Whether a mutateRecord() call advances `version`/`updatedAt` at all.
  * `Stack` computes this from which aspects a change set actually moves — a
  * change set touching only `associations`, `parentId` and/or `unlisted`
- * doesn't bump, the same rule StackRecordAdapter.associate()/dissociate()
- * follow unconditionally. Absent means `true`; every other mutating method
+ * doesn't bump, the same rule StackRecordAdapter.amendAssociations()
+ * follows unconditionally. Absent means `true`; every other mutating method
  * bumps every time, so only mutateRecord() takes this. See
  * docs/spec/versioning.md § Version history.
  */
@@ -900,7 +950,7 @@ export type RecordJournalEntry = JournalEntryInput & {
 
 /**
  * Accepted by every mutating StackRecordAdapter method, and by
- * associate()/dissociate(), which take no other options. The adapter
+ * amendAssociations(), which takes no other options. The adapter
  * appends the entry inside the SAME write as the mutation, so a crash
  * between the two cannot leave a change unjournaled.
  *
@@ -919,6 +969,17 @@ export type JournalQuery = {
   limit?: number;
 };
 
+/**
+ * Window into a record's version history. Newest first, the reverse of
+ * JournalQuery; omitting both reads every version.
+ * See docs/spec/versioning.md § Version history.
+ */
+export type VersionsQuery = {
+  /** Versions strictly older than this, exclusive. */
+  beforeVersion?: number;
+  limit?: number;
+};
+
 // -------------------------------------------------------
 // Change events
 // -------------------------------------------------------
@@ -929,7 +990,7 @@ export type JournalQuery = {
  * `changed` is an upsert signal carrying nine distinct verbs.
  * See docs/spec/events.md § The event shape.
  */
-export type ChangeKind = 'created' | 'changed' | 'deleted' | 'purged';
+export type ChangeKind = 'created' | 'changed' | 'removed' | 'purged';
 
 /**
  * The precise verb behind a ChangeKind, for consumers that distinguish a
@@ -1153,12 +1214,12 @@ export interface StackRecordAdapter {
    * The content patch merges at the top level only — each key it names is
    * replaced whole. Never touches `typeId`; a type change goes through
    * commitMigration() instead. `associations` replaces the stored set,
-   * where associate()/dissociate() amend it.
+   * where amendAssociations() amends it.
    *
    * `opts.bumpsVersion` says whether this call advances `version`/
    * `updatedAt` and stores the snapshot — `false` for a change set that
    * touches only association sets, `permissions` among them, matching
-   * associate()/dissociate() below, which never bump. `Stack` computes it; an adapter never has to infer it
+   * amendAssociations() below, which never bumps. `Stack` computes it; an adapter never has to infer it
    * from the change set's own keys.
    *
    * `Stack` owns everything above storage: validation, the acyclicity
@@ -1188,20 +1249,32 @@ export interface StackRecordAdapter {
     id: RecordId,
     opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
   ): Promise<StackRecord>;
+  /**
+   * `query.sort`, when present, always carries a `direction`: `Stack`
+   * resolves the defaults before any adapter sees the query.
+   */
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
   // Associations
   /**
-   * Add an association. Never bumps `version`/`updatedAt` and never
-   * snapshots — a set-add composes regardless of write order.
-   * See docs/spec/versioning.md § Version history.
+   * Apply a list of adds and removes as one write, all or none, removes
+   * before adds. Never bumps `version`/`updatedAt` and never snapshots — a
+   * set-add composes regardless of write order. A list mixing authority
+   * and data elements is refused.
+   * See docs/spec/adapters.md § Amending associations.
    */
-  associate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
-  /** Remove an association. Never bumps `version`/`updatedAt` — see associate(). */
-  dissociate(id: RecordId, association: Association, opts?: JournalOptions): Promise<StackRecord>;
+  amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts?: JournalOptions,
+  ): Promise<StackRecord>;
 
   // Versions
-  getVersions(id: RecordId): Promise<RecordVersion[]>;
+  /**
+   * Snapshots newest first; omitting `query` reads every version.
+   * See docs/spec/versioning.md § Version history.
+   */
+  getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   /**
    * Standalone snapshot write, outside of a mutation's own atomic path.
@@ -1297,6 +1370,10 @@ export type BlobInfo = {
 export interface StackBlobAdapter {
   // Bytes only — "attachment" is the record-backed concept at the Stack layer
   putBlob(data: Uint8Array): Promise<FileId>;
+  /**
+   * Returns a plain `Uint8Array` (never a subclass such as `Buffer`) that the
+   * caller owns: changing it never changes the stored bytes.
+   */
   getBlob(fileId: FileId): Promise<Uint8Array>;
   deleteBlob(fileId: FileId): Promise<void>;
 

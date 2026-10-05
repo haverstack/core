@@ -33,6 +33,7 @@ import type {
   ChangeFilter,
   ChangeKind,
   JournalQuery,
+  VersionsQuery,
   NativeSortField,
   QuerySort,
   RecordFilter,
@@ -56,7 +57,7 @@ export function parseDate(val: unknown): Date | undefined {
 const POSITIVE_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
-const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
+const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'removed', 'purged']);
 const ASSOCIATION_KINDS: ReadonlySet<string> = new Set(['tag', 'attachment', 'relationship']);
 const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external']);
 
@@ -696,6 +697,40 @@ export function parseJournalParams(url: URL): JournalQuery {
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
   return query;
+}
+
+/**
+ * Parse `GET /records/:id/versions`'s query params into the `VersionsQuery`
+ * `getVersions()` takes. Absent params stay absent, for the reason
+ * parseJournalParams() leaves them so.
+ *
+ * `beforeVersion` is a snapshot's `version`, exclusive.
+ * See docs/spec/wire-format.md § Versions.
+ */
+export function parseVersionsParams(url: URL): VersionsQuery {
+  requireKnownParams(url, ['beforeVersion', 'limit']);
+  const query: VersionsQuery = {};
+  const beforeVersion = url.searchParams.get('beforeVersion');
+  if (beforeVersion !== null) {
+    query.beforeVersion = parsePositiveInt(beforeVersion, 'beforeVersion');
+  }
+  const limit = url.searchParams.get('limit');
+  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  return query;
+}
+
+// -------------------------------------------------------
+// GET /records/:id
+// -------------------------------------------------------
+
+/**
+ * Parse `GET /records/:id`'s query params into the `includeDeleted` flag. A
+ * misspelled or non-boolean value is refused rather than read as absent.
+ * See docs/spec/wire-format.md § Records.
+ */
+export function parseGetRecordParams(url: URL): { includeDeleted: boolean } {
+  requireKnownParams(url, ['includeDeleted']);
+  return { includeDeleted: booleanParam(url, 'includeDeleted') };
 }
 
 // -------------------------------------------------------

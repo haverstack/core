@@ -32,7 +32,7 @@ org.haverstack/contact@1
 org.haverstack/article@1
 org.haverstack/place@1
 org.haverstack/page@1
-org.haverstack/photo@1
+org.haverstack/image@1
 org.haverstack/post@1
 org.haverstack/site@1
 org.haverstack/message@1 (proposed — see below)
@@ -74,10 +74,11 @@ Three postures, in order of preference:
    can then read your records even though they've never heard of your type. Each type
    file documents its **read-compat core** — the minimal shape consumers should code
    against.
-3. **Migrate in later.** An existing app with its own type can add a lens to the commons
-   type when ready; the library's migration machinery only covers versions of the _same_
-   type, so this is an app-level export/import — which is still a one-time cost paid by
-   the app author, not a per-user export ritual.
+3. **Migrate in later.** An existing app with its own type can register a migration
+   into the commons type when ready and commit it with `migrateAll()` — a migration
+   path may cross type families (see
+   [Type migrations](../spec/data-model.md#type-migrations)). It is a one-time cost paid
+   by the app author, not a per-user export ritual.
 
 Consumers should filter by exact `typeId` when they need commons semantics, and use
 `isCompatible()` with the read-compat core when they want maximum reach.
@@ -101,9 +102,10 @@ these.
    that is one app's or one user's _view_ of the record — pinned, starred, read/unread,
    sort order, UI state — is not commons content. Use tag associations or app sidecar
    types.
-4. **Queryable fields are top-level scalars.** Only top-level scalar fields support
-   content filtering, so anything apps will plausibly filter on (`task.done`) must not
-   be nested. Arrays and objects are for data that is only ever read, not queried.
+4. **Sortable fields are top-level scalars.** A content filter reaches nested paths
+   and matches arrays element-wise, but only top-level scalars are indexed for sorting
+   and as file references, and a nested path is an unindexed walk. Anything apps will
+   plausibly sort or routinely filter on (`task.done`) stays at the top level.
 5. **Use the native machinery, don't duplicate it in content.** Tags are tag
    associations, not a `tags: string[]` field. Cross-references are relationship
    associations or `parentId`, not bare ID strings in content. Files are attachment
@@ -115,7 +117,7 @@ these.
    labeled content entries rather than associations. One carve-out, for references
    rather than data: a **constitutive reference** — the record is _about_ exactly one
    target and is invalid without it — is a schema-required `record-ref`/`file-ref`
-   content field (`vote.pollId`, `photo.image`), so validation can enforce it and
+   content field (`vote.pollId`, `image.file`), so validation can enforce it and
    read-compat can see it. Organizational references — optional, heterogeneous,
    legitimately re-parentable — stay native (`parentId`, relationship associations);
    "no bare ID strings" still holds, since `record-ref` is a typed kind, not a string.
@@ -165,8 +167,8 @@ sense for it.
   `{ ns: 'email', id: 'alice@example.com' }`. It is the resolution primitive — an
   inbound record whose author arrives as a foreign identifier is matched back to a
   known entity with one indexed `relatedTo` query — which is why it is an association
-  and not a content field: array fields are opaque to the query engine, so the same
-  list inside `_entity.content` would force a scan of every entity record. Machine
+  and not a content field: a nested content path is an unindexed walk, so the same
+  list inside `_entity.content` would scan every entity record. Machine
   identifiers only; a person's own words about someone belong on a `contact`.
 - **`syndicated-to`** — `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
   records that a copy of this record was published elsewhere. The canonical copy stays
@@ -176,7 +178,7 @@ sense for it.
   remote content address, which account it went out from — that is a record of the
   bridge's own type, related back to this one; the label alone carries only the link.
 - **`site`** — `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
-  on an `article`, `photo`, `bookmark`, or `post` means that record is published on the
+  on an `article`, `image`, `bookmark`, or `post` means that record is published on the
   named [`site`](./site.md). Multi-valued: two associations means the record is
   cross-posted to both sites. Structurally the same shape as `location` — a label
   pointing from any record at one commons type — and orthogonal to `page`'s own
@@ -251,7 +253,7 @@ examples (comments on a blog post are messages; private marginalia are notes).
 | `org.haverstack/article@1`  | [`article.md`](./article.md)   | Draft    | `{ title, text }`         |
 | `org.haverstack/place@1`    | [`place.md`](./place.md)       | Draft    | `{ latitude, longitude }` |
 | `org.haverstack/page@1`     | [`page.md`](./page.md)         | Draft    | `{ slug, text }`          |
-| `org.haverstack/photo@1`    | [`photo.md`](./photo.md)       | Draft    | `{ image }`               |
+| `org.haverstack/image@1`    | [`image.md`](./image.md)       | Draft    | `{ file }`                |
 | `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
 | `org.haverstack/site@1`     | [`site.md`](./site.md)         | Draft    | `{ title, baseUrl }`      |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
@@ -271,7 +273,7 @@ documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are
 materialized in @1), `file`/`document` (a first-class `file` type is expected to follow
-`photo`'s pattern; until a real writer needs it, a record plus attachment covers it), and
+`image`'s pattern; until a real writer needs it, a record plus attachment covers it), and
 `checkin` (subsumed by the `location` cross-type convention plus any record).
 
 ---
@@ -281,7 +283,9 @@ materialized in @1), `file`/`document` (a first-class `file` type is expected to
 [`@haverstack/commons`](../../packages/commons) exports the canonical schemas for
 every Draft-status type as constants and a `defineCommonsTypes(stack, [...])` helper,
 so registering a type exactly as written is a one-liner and the transcription drift
-the governance process exists to prevent is structurally impossible. Apps should
+the governance process exists to prevent is structurally impossible. Each constant is
+a [type handle](../spec/data-model.md#type-handles), so reads and writes through it
+are typed from the same schema. Apps should
 depend on the package rather than transcribing a fenced code block from this
 directory. These files are the design record: rationale, conventions, and read-compat
 cores live here, and the package's constants are kept in lockstep with them. Proposed

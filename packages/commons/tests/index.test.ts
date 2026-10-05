@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, expectTypeOf, beforeEach } from 'vitest';
 import { Stack, isCompatible } from '@haverstack/core';
-import type { TypeSchema } from '@haverstack/core';
+import type { ContentOf, TypeSchema } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import {
   NOTE,
@@ -10,19 +10,19 @@ import {
   ARTICLE,
   PLACE,
   PAGE,
-  PHOTO,
+  IMAGE,
   POST,
   SITE,
   defineCommonsTypes,
 } from '../src/index.js';
 
-const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO, POST, SITE];
+const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, IMAGE, POST, SITE];
 
 let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = new MemoryAdapter({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
   stack = await Stack.open(adapter);
 });
 
@@ -76,7 +76,7 @@ describe('read-compat cores', () => {
       slug: { kind: 'string', required: true },
       text: { kind: 'text', required: true },
     },
-    [PHOTO.id]: { image: { kind: 'file-ref', required: true } },
+    [IMAGE.id]: { file: { kind: 'file-ref', required: true } },
     [POST.id]: { text: { kind: 'text', required: true } },
     [SITE.id]: {
       title: { kind: 'string', required: true },
@@ -91,9 +91,40 @@ describe('read-compat cores', () => {
   });
 });
 
-describe('PHOTO', () => {
-  test('image is a required file-ref field, schema-enforced', async () => {
-    const defined = await defineCommonsTypes(stack, [PHOTO]);
-    expect(defined[0].schema.image).toEqual({ kind: 'file-ref', required: true });
+describe('IMAGE', () => {
+  test('file is a required file-ref field, schema-enforced', async () => {
+    const defined = await defineCommonsTypes(stack, [IMAGE]);
+    expect(defined[0].schema.file).toEqual({ kind: 'file-ref', required: true });
+  });
+});
+
+describe('typed handles', () => {
+  test('each constant carries its family as baseId', () => {
+    for (const type of ALL) {
+      expect(type.baseId).toBe(type.id.slice(0, type.id.lastIndexOf('@')));
+    }
+  });
+
+  test('content types derive from the schema', () => {
+    expectTypeOf<ContentOf<typeof NOTE.schema>>().toEqualTypeOf<{
+      text: string;
+      title?: string;
+      format?: string;
+    }>();
+    expectTypeOf<ContentOf<typeof CONTACT.schema>['emails']>().toEqualTypeOf<
+      { value: string; label?: string }[] | undefined
+    >();
+  });
+
+  test('typed create and get round-trip through the constant', async () => {
+    await defineCommonsTypes(stack, [TASK]);
+    const created = await stack.create(TASK, { title: 'Write tests', done: false });
+    expectTypeOf(created.content.done).toEqualTypeOf<boolean>();
+
+    const read = await stack.get(TASK, created.id);
+    expect(read?.content).toEqual({ title: 'Write tests', done: false });
+
+    // @ts-expect-error a required field is missing
+    await expect(stack.create(TASK, { title: 'No done flag' })).rejects.toThrow();
   });
 });

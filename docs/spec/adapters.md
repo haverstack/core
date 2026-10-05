@@ -6,7 +6,7 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`StackRecordAdapter`** — structured storage: capabilities, stack identity (`ownerEntityId`, `timezone`), all record/association/version/type methods, and optional lifecycle hooks (`flush`, `close`).
 
-**One record write, one adapter method.** `mutateRecord(id, changes, opts)` applies a [change set](./data-model.md#mutations) — any combination of content patch, `parentId`, `permissions`, `associations` and `unlisted` — inside a single transaction. When the change set names `contentPatch` — the one version-bumping aspect — that transaction also writes the snapshot and bumps `version` once; a set naming only `associations`, `permissions`, `parentId` and/or `unlisted` lands its rows and leaves `version`, `updatedAt` and the actor stamps where they stand. `opts.bumpsVersion` tells the adapter which case it's in, computed by `Stack` from the change set rather than inferred by the adapter. It is the primitive the whole mutate surface sits on rather than one method per aspect, because the aspects are one `UPDATE` over one row: separate methods would make a change set either several versions or an atomicity claim the storage layer could not honor. `Stack` still owns everything above storage — the acyclicity walk, schema validation, the per-key gates — exactly as it does for the single-aspect verbs that remain (`deleteRecord`, `undeleteRecord`, `restoreVersion`, `commitMigration`, each of which writes one version of its own, and `associate`/`dissociate`, neither of which ever does — see [Versioning § Version history](./versioning.md#version-history)).
+**One record write, one adapter method.** `mutateRecord(id, changes, opts)` applies a [change set](./data-model.md#mutations) — any combination of content patch, `parentId`, `permissions`, `associations` and `unlisted` — inside a single transaction. When the change set names `contentPatch` — the one version-bumping aspect — that transaction also writes the snapshot and bumps `version` once; a set naming only `associations`, `permissions`, `parentId` and/or `unlisted` lands its rows and leaves `version`, `updatedAt` and the actor stamps where they stand. `opts.bumpsVersion` tells the adapter which case it's in, computed by `Stack` from the change set rather than inferred by the adapter. It is the primitive the whole mutate surface sits on rather than one method per aspect, because the aspects are one `UPDATE` over one row: separate methods would make a change set either several versions or an atomicity claim the storage layer could not honor. `Stack` still owns everything above storage — the acyclicity walk, schema validation, the per-key gates — exactly as it does for the single-aspect verbs that remain (`deleteRecord`, `undeleteRecord`, `restoreVersion`, `commitMigration`, each of which writes one version of its own, and `amendAssociations`, which never does — see [Versioning § Version history](./versioning.md#version-history)).
 
 **Every mutating record method is atomic, whatever it touches.** A record write is rarely one statement — a create alone writes the record row, its associations, the full-text index, the content index and a [journal entry](./journal.md) — and an adapter must apply the whole set or none of it. Partial application is worse than failure: the method raises, so the caller takes the write as lost, while what survives contradicts that and can outlive the retry. The [snapshot's atomicity rule](./versioning.md#snapshot-atomicity) is one instance of this, not a separate one.
 
@@ -14,7 +14,7 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **`StackBlobAdapter`** — binary storage: `putBlob`, `getBlob`, `deleteBlob`, an optional `listBlobs()` capability, and optional lifecycle hooks. The names are deliberately not `*Attachment`: an attachment is the managed, record-backed concept at the `Stack` layer — permission-checked, reference-checked, carrying metadata — while a blob is the raw bytes beneath it. `putAttachmentWithMetadata()` (below) keeps its name because it really is the attachment operation.
 
-**`StackBlobAdapter` error contract:** `getBlob(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId.
+**`StackBlobAdapter` error contract:** `getBlob(fileId)` throws `StackNotFoundError` when no blob exists for `fileId`, and `StackBadRequestError` when `fileId` itself is malformed (not a 64-character lowercase hex string) — the same two conditions the wire format reports as 404 and 400, so an app written against a local adapter and one written against the API adapter can `instanceof`-check the same classes. Implementations must not return empty/placeholder bytes for an absent fileId. `getBlob()` returns a plain `Uint8Array` (prototype exactly `Uint8Array.prototype`, never a subclass such as `Buffer`) that the caller owns: changing it never changes the stored bytes, and changing the array passed to `putBlob()` afterwards never changes the stored copy. See [Attachments](./attachments.md).
 
 ```ts
 type StackAdapter = StackRecordAdapter &
@@ -30,7 +30,19 @@ type StackAdapter = StackRecordAdapter &
 
 ### Associations are keyed by identity
 
-Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `associate()` landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `amendAssociations()` add landing on an identity already stored overwrites it in place rather than adding a second row, and an association list handed to `mutateRecord()` collapses on that key, last wins. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+
+### Amending associations
+
+`StackRecordAdapter.amendAssociations(id, changes, opts?)` is the adapter's one association write: a list of `AssociationEdit` — `add` and `remove`, the [journal's shape](./journal.md#the-entry) without `repoint` — applied as **one write**, so a swap or a paired grant never exposes an intermediate state.
+
+- **All or none.** A SQL adapter runs the list in one transaction; a failure part-way leaves the record as it stood.
+- **Removes, then adds.** An add landing on an identity already stored overwrites it in place, and adds naming one identity [collapse on it](#associations-are-keyed-by-identity), last wins. A list that both adds and removes one identity leaves it present; `Stack` refuses such a list, so only a direct adapter call can name one.
+- **One surface per list.** A list mixing authority and data elements is refused with `StackBadRequestError`: `Stack` never builds one, and `APIAdapter` could not send it as one request. See [Access control § Storage unifies; the API does not](./access-control.md#storage-unifies-the-api-does-not).
+- **Never bumps `version` or `updatedAt`, and never snapshots.** One call appends at most one [journal entry](./journal.md#the-entry), carrying the `JournalEntryInput` the caller passed.
+- **A record that is not there is `StackNotFoundError`**, never an orphan row.
+
+`repoint` is not an input: `Stack` computes it against the record it read and hands it to the adapter only inside the journal entry.
 
 ## Package naming convention
 
@@ -61,7 +73,12 @@ import { combineAdapters } from '@haverstack/core/adapter';
 import { NativeSQLiteRecordAdapter } from '@haverstack/record-adapter-sqlite';
 import { S3BlobAdapter } from '@haverstack/blob-adapter-s3';
 
-const record = await NativeSQLiteRecordAdapter.initialize({ path, ownerEntityId, timezone });
+const record = await NativeSQLiteRecordAdapter.open({
+  path,
+  create: 'exclusive',
+  ownerEntityId,
+  timezone,
+});
 const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
 const stack = await Stack.open(adapter);
@@ -70,6 +87,31 @@ const stack = await Stack.open(adapter);
 `limits.attachmentBytes` lives on `StackCapabilities` (below), which `combineAdapters()` always reads from the `record` half — a blob-only package like `blob-adapter-s3` has no ceiling of its own to declare. Whichever `StackRecordAdapter` it's paired with should keep declaring `null`, per [the local-adapter rule](#adapter-capabilities) below: a blob adapter isn't the wire boundary that would justify one. Point `S3BlobAdapter` at Cloudflare R2 or another S3-compatible store by passing `endpoint` and `forcePathStyle: true`.
 
 All adapters support the full Record API. Performance guarantees differ; correctness does not.
+
+## Construction
+
+An adapter that holds a stack's identity has exactly one entry point, an async static `open(opts)`, and no public constructor. Whether `open()` may create a new stack is an option, not a separate method. Blob adapters hold no identity and keep their public constructors. `Stack.open(adapter)` stays a separate step, because `combineAdapters()` sits between the two.
+
+| Adapter                                             | Entry point                                   | `create`                                          |
+| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId?, … })`  | `'never'` (default), `'ifMissing'`, `'exclusive'` |
+| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId, timezone? })` | none: always creates if missing                   |
+| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`            | none: a client never creates                      |
+| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? })`          | none: always new                                  |
+
+`create` names what `open()` does when the store is missing or present, like `O_CREAT`/`O_EXCL`:
+
+- `'never'`: open an existing store, fail if missing.
+- `'ifMissing'`: open it if present, create it if not.
+- `'exclusive'`: create it, fail if present.
+
+`ownerEntityId` follows one rule everywhere it is accepted:
+
+- **Required whenever `open()` may create.** The type makes it required for `'ifMissing'` and `'exclusive'`, on the DO adapter and on `MemoryAdapter`. No adapter defaults it to `''`.
+- **A plain string or a lazy `() => string | Promise<string>`** on every creating path, called only when a store is actually created.
+- **A plain string is checked against an existing store's owner**, in every mode and on every adapter; a mismatch throws `OwnerMismatchError` (`expected`, `actual`, and a `where` naming the path, URL or Durable Object) and releases anything `open()` had acquired. A lazy provider is never called just to compare.
+
+`OwnerMismatchError` is exported from `@haverstack/core/adapter`, outside the `StackError` taxonomy alongside `InvalidAdapterError`: it reports a setup mistake, not a state a request can be in.
 
 ## Conformance
 
@@ -83,7 +125,7 @@ The invariants above are easy to state in prose and easy to violate silently —
 
 `SqlExecutor` is synchronous. Every SQLite binding in scope executes queries in-process without yielding, and the shared logic's explicit transaction boundaries (`SqlExecutor.transaction(fn)`) depend on that — an engine reached over a network (D1, libsql over HTTP) does not fit this interface without making it async throughout. `transaction(fn)` — not raw `BEGIN`/`COMMIT`/`ROLLBACK` strings — is the interface's transaction primitive specifically because it isn't universal SQL text: `record-adapter-sqlite` implements it as literal `BEGIN`/`COMMIT`/`ROLLBACK` around `fn()`, while `record-adapter-do-sqlite` implements it as `ctx.storage.transactionSync(fn)`, because Durable Object SQLite storage rejects raw multi-statement transaction SQL outright and does not auto-commit-then-roll-back on a later exception — verified against the real Workers runtime, not assumed. A binding that only had the three raw statements to work with couldn't reach that primitive at all.
 
-SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `associate()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
+SQLite-backed adapters enable foreign-key enforcement (`PRAGMA foreign_keys = ON`) so that operations like `amendAssociations()` against a nonexistent record fail loudly (`StackNotFoundError`) instead of silently creating an orphan row.
 
 **File compatibility:** the adapter produces a standard SQLite file with an FTS5 `records_fts` index. Any adapter reading it needs FTS5, not merely SQLite.
 
@@ -160,7 +202,7 @@ A stack's backing storage (a SQLite file, a JSON directory) has exactly one owni
 
 How each adapter honors the single-writer rule differs by what it actually is:
 
-- **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`/`initialize()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
+- **`record-adapter-sqlite`** (Node, real files) writes through `node:sqlite` under WAL journaling — page-level writes and crash safety are properties of the storage engine itself. It still acquires a PID-stamped lock file beside the database on `open()`, released on `close()`, so a second opener gets a clear, immediate error rather than discovering the trust-boundary problem the hard way. A stale lock (owning process no longer alive) is reclaimed automatically, and an explicit override is available for the rare case of PID reuse.
 - **`record-adapter-do-sqlite`** (Cloudflare Durable Objects, SQLite storage) needs no lock file at all — a Durable Object id maps to exactly one running instance, enforced by the platform itself, so the single-writer rule is a property of the runtime rather than something this adapter has to implement. There is likewise no `persist`/flush step: every write through `ctx.storage.sql` is durable by the time the call returns. The one real engine-specific wrinkle is transactions — DO SQLite rejects raw `BEGIN`/`COMMIT`/`ROLLBACK` outright, and (confirmed against the real runtime, not assumed) does not roll back a write on a later exception the way an open SQL transaction would; the adapter reaches `ctx.storage.transactionSync()` instead, through `SqlExecutor.transaction()` (see above).
 - **The planned whole-file `adapter-json`** reads its entire store into memory on open and rewrites it whole on every persist, so it must supply both guarantees itself: a PID lock file (to fail loudly on double-open) and an atomic temp-file-and-`rename()` persist (so a crash mid-write can't leave a torn, unreadable file). `record-adapter-sqlite` gets both from WAL and real file locking instead.
 
@@ -176,4 +218,4 @@ A failed flush still releases resources before the error propagates. The alterna
 
 **Every other method throws `UseAfterCloseError` once closed**, on both `Stack` and `ScopedStack`. Without the guard the failure surfaces as whatever the underlying engine says about a dangling handle — `node:sqlite`'s `ERR_INVALID_STATE`, or nothing at all on an adapter that silently accepts writes it will never persist. The asymmetry with `close()` is deliberate: teardown is idempotent because a caller cannot always know whether it already ran, while doing _work_ through a closed client is unambiguously a bug, and `flush()` is work.
 
-`UseAfterCloseError` sits outside the `StackError` taxonomy, alongside `IdGenerationError` and `InvalidDidError` (see [Wire format § The taxonomy root](./wire-format.md#the-taxonomy-root)). Every `StackError` maps to a wire status, and no server ever answers "your client is closed" — it is a local programming error, not a transportable failure. The stack-identity getters (`ownerEntityId`, `timezone`, `capabilities`) keep working after close: they read values cached at open and touch no storage.
+`UseAfterCloseError` sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./wire-format.md#the-taxonomy-root)). Every `StackError` maps to a wire status, and no server ever answers "your client is closed" — it is a local programming error, not a transportable failure. The stack-identity getters (`ownerEntityId`, `timezone`, `capabilities`) keep working after close: they read values cached at open and touch no storage.

@@ -7,7 +7,12 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterAuthError,
+  APIAdapterCapabilityError,
+  APIAdapterHandshakeError,
+} from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -22,10 +27,8 @@ import {
   patchContentFixtures,
   deleteRecordFixtures,
   undeleteRecordFixtures,
-  associateFixtures,
-  dissociateFixtures,
-  grantAccessFixtures,
-  revokeAccessFixtures,
+  amendAssociationsFixtures,
+  amendPermissionsFixtures,
   permissionsChangeFixtures,
   unlistedChangeFixtures,
   parentChangeFixtures,
@@ -35,12 +38,14 @@ import {
   restoreVersionFixtures,
   getJournalFixtures,
   commitMigrationFixtures,
+  installRequestFixtures,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
   authChallengeFixtures,
   authTokenFixtures,
   authSequenceFixtures,
+  getRecordSequenceFixtures,
   AUTH_FIXTURE_ORIGIN,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
@@ -48,7 +53,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { Association, RecordChangeSet, StackType } from '@haverstack/core';
+import type { AssociationEdit, RecordChangeSet, StackType } from '@haverstack/core';
 import type { WireAuthError } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -154,6 +159,29 @@ describe('auth handshake fixtures', () => {
     expect(second.requestBody).toEqual(first.requestBody);
     expect(first.responseStatus).toBe(200);
     expect(second.responseStatus).toBe(401);
+  });
+
+  // The tombstone is only pinned if the same path is read both ways after
+  // the delete: hidden by default, returned on request.
+  test('the get-record sequence reads a tombstone with and without includeDeleted', () => {
+    const [del, hidden, shown] = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete',
+    )!.steps;
+    expect(del.method).toBe('DELETE');
+    expect(hidden.path).toBe(shown.path.replace('?includeDeleted=true', ''));
+    expect(hidden.responseStatus).toBe(404);
+    expect(shown.responseStatus).toBe(200);
+    expect((shown.responseBody as { deletedAt?: string }).deletedAt).toBeDefined();
+  });
+
+  test('the unreadable get-record sequence answers the same 404 with and without includeDeleted', () => {
+    const [plain, opted] = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-unreadable',
+    )!.steps;
+    expect(opted.path).toBe(`${plain.path}?includeDeleted=true`);
+    expect(plain.responseStatus).toBe(404);
+    expect(opted.responseStatus).toBe(404);
+    expect(opted.responseBody).toEqual(plain.responseBody);
   });
 
   // Internally consistent and still refused: the signature verifies, but
@@ -440,36 +468,15 @@ const expectNoIfMatch = (init: RequestInit) => {
   expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
 };
 
-describe('associate fixtures', () => {
-  for (const fixture of associateFixtures) {
+describe('amendAssociations fixtures', () => {
+  for (const fixture of amendAssociationsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.associate(
+      const result = await adapter.amendAssociations(
         idFromPath(fixture.path),
-        fixture.requestBody as Association,
-      );
-
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
-      expect(init.method).toBe(fixture.method);
-      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
-      expect(result.version).toBe(fixture.responseBody!.version);
-      expectNoIfMatch(init);
-    });
-  }
-});
-
-describe('dissociate fixtures', () => {
-  for (const fixture of dissociateFixtures) {
-    test(fixture.name, async () => {
-      const adapter = await openAdapter();
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
-
-      const result = await adapter.dissociate(
-        idFromPath(fixture.path),
-        fixture.requestBody as Association,
+        (fixture.requestBody as { changes: AssociationEdit[] }).changes,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -487,15 +494,15 @@ describe('dissociate fixtures', () => {
 // server built on ScopedStack, so the routing is what keeps the client
 // honest. See docs/spec/access-control.md
 // § Storage unifies; the API does not.
-describe('grantAccess fixtures', () => {
-  for (const fixture of grantAccessFixtures) {
+describe('amendPermissions fixtures', () => {
+  for (const fixture of amendPermissionsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.associate(
+      const result = await adapter.amendAssociations(
         idFromPath(fixture.path),
-        fixture.requestBody as Association,
+        (fixture.requestBody as { changes: AssociationEdit[] }).changes,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -503,27 +510,6 @@ describe('grantAccess fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.permissions).toEqual(fixture.responseBody!.permissions);
-      expectNoIfMatch(init);
-    });
-  }
-});
-
-describe('revokeAccess fixtures', () => {
-  for (const fixture of revokeAccessFixtures) {
-    test(fixture.name, async () => {
-      const adapter = await openAdapter();
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
-
-      const result = await adapter.dissociate(
-        idFromPath(fixture.path),
-        fixture.requestBody as Association,
-      );
-
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
-      expect(init.method).toBe(fixture.method);
-      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
-      expect(result.permissions).toBeUndefined();
       expectNoIfMatch(init);
     });
   }
@@ -593,14 +579,26 @@ describe('getVersions fixtures', () => {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      // A fixture whose page reports a cursor documents one page of a
+      // longer history, so the adapter asks again; the second page is the end.
+      if (fixture.responseBody!.cursor !== null) {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ versions: [], cursor: null }));
+      }
 
-      const result = await adapter.getVersions(idFromPath(fixture.path));
+      const query = new URL(`${BASE_URL}${fixture.path}`).searchParams;
+      const beforeVersion = query.get('beforeVersion');
+      const limit = query.get('limit');
+      const result = await adapter.getVersions(idFromPath(fixture.path), {
+        ...(beforeVersion !== null && { beforeVersion: Number(beforeVersion) }),
+        ...(limit !== null && { limit: Number(limit) }),
+      });
 
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result).toHaveLength(fixture.responseBody!.length);
-      expect(result[0].content).toEqual(fixture.responseBody![0].content);
+      const documented = fixture.responseBody!.versions;
+      expect(result.map((v) => v.version)).toEqual(documented.map((v) => v.version));
+      expect(result[0].content).toEqual(documented[0].content);
     });
   }
 });
@@ -638,7 +636,9 @@ describe('getVersions after migrate/restore fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(result.map((v) => v.version)).toEqual(fixture.responseBody!.map((v) => v.version));
+      expect(result.map((v) => v.version)).toEqual(
+        fixture.responseBody!.versions.map((v) => v.version),
+      );
       // A snapshot never captures an association set, so neither the
       // fixture nor what the adapter parses out of it may name one.
       for (const version of result) expect(Object.keys(version)).not.toContain('associations');
@@ -722,6 +722,53 @@ describe('commitMigration fixtures', () => {
 });
 
 // -------------------------------------------------------
+// Install requests — the manifest travels as given, and the key never
+// travels at all: it is the session's.
+// -------------------------------------------------------
+
+describe('install request fixtures', () => {
+  const openWithInstalls = (): Promise<APIAdapter> =>
+    openDiscovered({ ...DISCOVERY, installs: { requests: true } }, { token: undefined });
+
+  for (const fixture of installRequestFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithInstalls();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(
+          ERROR_CLASS_FOR_CODE[body.error.code as never],
+        );
+      } else if (body.status === 'installed') {
+        const result = await attempt;
+        expect(result.status).toBe('installed');
+        expect(result.status === 'installed' && result.install.content).toEqual(
+          body.install.content,
+        );
+      } else {
+        expect(await attempt).toEqual({ status: 'pending' });
+      }
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+    });
+  }
+
+  test('a server advertising no install requests is refused locally', async () => {
+    const adapter = await openAdapter();
+    const calls = mockFetch.mock.calls.length;
+    await expect(
+      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
+    ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
+    expect(mockFetch.mock.calls.length).toBe(calls);
+  });
+});
+
+// -------------------------------------------------------
 // Error responses — pins that APIAdapter reconstructs the documented
 // core error class from each fixture's wire error body.
 // -------------------------------------------------------
@@ -752,6 +799,7 @@ const SERVER_ONLY_ERROR_FIXTURES = new Set([
   'error-bad-request-unknown-query-body-key',
   'error-bad-request-unknown-record-key',
   'error-bad-request-unknown-grantee-key',
+  'error-bad-request-amend-associations-repoint',
   'error-bad-request-non-boolean-purge',
   'error-bad-request-unknown-auth-token-key',
 ]);
@@ -787,10 +835,13 @@ describe('error response fixtures', () => {
           });
         }
         // An `anyone`/`permission` element travels on the permissions
-        // endpoint, which associate() selects from the element's own kind —
+        // endpoint, which amendAssociations() selects from the element's own kind —
         // see APIAdapter.associationPath().
         if (fixture.method === 'POST' && fixture.path.endsWith('/permissions')) {
-          return adapter.associate(idFromPath(fixture.path), fixture.requestBody as Association);
+          return adapter.amendAssociations(
+            idFromPath(fixture.path),
+            (fixture.requestBody as { changes: AssociationEdit[] }).changes,
+          );
         }
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
           const version = Number(fixture.path.split('/').pop());
