@@ -14,22 +14,14 @@
  * families without the owner running its code — see
  * ScopedStack.commitMigration().
  *
- * A manifest is signed by its publisher's key and numbered by release.
- * A live install pins that publisher and refuses an older release, so only
- * a newer manifest the same publisher signed can upgrade it. A publisher
- * may also certify each key of its app, which the plan reports.
- *
  * This module holds the parts that read an install as data: the write-time
- * shape rules, the family claim, manifest and key signing, and the plan diff. The verbs that write
+ * shape rules, the family claim, and the plan diff. The verbs that write
  * live on `Stack`. See docs/spec/apps.md.
  */
 
 import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES } from './grants.js';
 import { SYSTEM_TYPES } from './types.js';
-import { isValidDidKey, signWithDid, verifyDidSignature } from './did.js';
-import { base64urlDecode, base64urlEncode } from './auth.js';
-import { StackValidationError } from './errors.js';
 import type {
   AppId,
   AuthorityAssociation,
@@ -52,48 +44,9 @@ export type AppManifest = {
   appId: AppId;
   name: string;
   version?: string;
-  /**
-   * The DID of whoever publishes the app — a key of the author's, not one
-   * of the per-device keys being installed. See docs/spec/apps.md
-   * § Who publishes an app.
-   */
-  publisher: string;
-  /**
-   * A positive integer the publisher raises with every manifest it signs,
-   * so an older one cannot be replayed over a newer install.
-   * See docs/spec/apps.md § Who publishes an app.
-   */
-  release: number;
   types: DefineTypeOptions[];
   requests: InstallRequest[];
 };
-
-/** A manifest with its publisher's signature over manifestPayload(). */
-export type SignedManifest = {
-  manifest: AppManifest;
-  /** base64url Ed25519 signature. */
-  signature: string;
-};
-
-/**
- * What an install request carries: the signed manifest and, optionally,
- * the publisher's certificate for the key being installed.
- * See docs/spec/apps.md § Certified keys.
- */
-export type InstallSubmission = SignedManifest & {
-  /** base64url Ed25519 signature by the publisher over keyCertificatePayload(). */
-  keyCertificate?: string;
-};
-
-/**
- * Verifies a signature by a publisher whose DID method core does not
- * resolve — `did:web`, say. `did:key` needs none: its public key is the DID.
- */
-export type PublisherVerifier = (
-  publisher: string,
-  signature: Uint8Array,
-  payload: Uint8Array,
-) => Promise<boolean>;
 
 /** A request on a family this install does not define, and who owns that family. */
 export type ForeignRequest = InstallRequest & {
@@ -124,26 +77,6 @@ export type InstallPlan = {
   manifest: AppManifest;
   /** The key being installed. */
   did: EntityId;
-  /** The publisher's signature over `manifest`, carried so the plan can be verified again. */
-  signature: string;
-  /** The publisher's certificate for `did`, when one was presented. */
-  keyCertificate?: string;
-  /**
-   * Whether the publisher certified `did` as a key of this app. An
-   * uncertified key may still be approved; the owner is then the only check.
-   */
-  keyCertified: boolean;
-  /**
-   * Whether an uninstalled install is being taken up by a different
-   * publisher. Its keys are unlinked, so each must be installed again.
-   */
-  publisherChanged: boolean;
-  /**
-   * Whether the publisher's DID is a `did:web` whose domain is the
-   * `appId` reversed — the domain vouching for the namespace, beyond the
-   * key alone. See docs/spec/apps.md § Who publishes an app.
-   */
-  namespaceVerified: boolean;
   /** The install as it stood when planned — null for a first install. */
   existing: (StackRecord & { content: InstallContent }) | null;
   /** Families this install would claim that it does not claim yet. */
@@ -320,149 +253,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const MANIFEST_PAYLOAD_LABEL = 'haverstack-manifest-v1';
-
-/**
- * The bytes a publisher signs: a label, then the manifest as canonical
- * JSON — keys sorted at every depth, no whitespace — so the same manifest
- * signs the same way however it was serialized.
- */
-export function manifestPayload(manifest: AppManifest): Uint8Array {
-  return new TextEncoder().encode(`${MANIFEST_PAYLOAD_LABEL}\n${canonicalJson(manifest)}`);
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.keys(value)
-      .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`);
-    return `{${entries.join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-/** Sign `manifest` with the private key behind its `publisher`. */
-export async function signManifest(
-  manifest: AppManifest,
-  privateKey: CryptoKey,
-): Promise<SignedManifest> {
-  const signature = await signWithDid(privateKey, manifestPayload(manifest));
-  return { manifest, signature: base64urlEncode(signature) };
-}
-
-/**
- * Whether `publisher` signed `payload`. A `did:key` publisher is verified
- * from the DID itself; any other method needs `verifier`, and is refused
- * without one rather than taken on trust.
- */
-async function assertPublisherSigned(
-  publisher: string,
-  encoded: string,
-  payload: Uint8Array,
-  path: string,
-  what: string,
-  verifier?: PublisherVerifier,
-): Promise<void> {
-  const fail = (at: string, message: string): never => {
-    throw new StackValidationError([{ path: at, message }]);
-  };
-  if (typeof publisher !== 'string' || !publisher.startsWith('did:')) {
-    fail('manifest.publisher', 'Expected the publisher’s DID');
-  }
-  let signature: Uint8Array;
-  try {
-    signature = base64urlDecode(encoded);
-  } catch {
-    return fail(path, 'Expected a base64url signature');
-  }
-  let valid: boolean;
-  if (isValidDidKey(publisher)) {
-    valid = await verifyDidSignature(publisher, signature, payload).catch(() => false);
-  } else if (verifier) {
-    valid = await verifier(publisher, signature, payload);
-  } else {
-    return fail(
-      'manifest.publisher',
-      `Cannot verify a ${publisher.split(':')[1]} publisher without a verifier for that DID method`,
-    );
-  }
-  if (!valid) fail(path, `The signature is not the publisher’s over this ${what}`);
-}
-
-/** Refuse a manifest its publisher did not sign. */
-export async function assertManifestSigned(
-  signed: SignedManifest,
-  verifier?: PublisherVerifier,
-): Promise<void> {
-  await assertPublisherSigned(
-    signed.manifest.publisher,
-    signed.signature,
-    manifestPayload(signed.manifest),
-    'signature',
-    'manifest',
-    verifier,
-  );
-}
-
-const KEY_CERTIFICATE_LABEL = 'haverstack-app-key-v1';
-
-/**
- * The bytes a publisher signs to certify `did` as a key of `appId`. The
- * label keeps a certificate from ever verifying as a manifest, or the
- * reverse.
- */
-export function keyCertificatePayload(cert: { appId: AppId; did: EntityId }): Uint8Array {
-  return new TextEncoder().encode(
-    `${KEY_CERTIFICATE_LABEL}\n${canonicalJson({ appId: cert.appId, did: cert.did })}`,
-  );
-}
-
-/** Certify `did` as a key of `appId`, with the private key behind the app's publisher. */
-export async function certifyKey(
-  cert: { appId: AppId; did: EntityId },
-  privateKey: CryptoKey,
-): Promise<string> {
-  return base64urlEncode(await signWithDid(privateKey, keyCertificatePayload(cert)));
-}
-
-/**
- * Refuse a certificate that does not verify: one presented and wrong is a
- * forgery or a mistake, not an uncertified key.
- */
-export async function assertKeyCertified(
-  manifest: AppManifest,
-  did: EntityId,
-  keyCertificate: string,
-  verifier?: PublisherVerifier,
-): Promise<void> {
-  await assertPublisherSigned(
-    manifest.publisher,
-    keyCertificate,
-    keyCertificatePayload({ appId: manifest.appId, did }),
-    'keyCertificate',
-    'key',
-    verifier,
-  );
-}
-
-/**
- * The `appId` a `did:web` publisher's domain vouches for: its host
- * reversed, so `did:web:notes.example.com` vouches for `com.example.notes`.
- * Null for any other DID, or a `did:web` with a path or port.
- */
-export function appIdVouchedBy(publisher: string): AppId | null {
-  const match = /^did:web:([a-z0-9.-]+)$/i.exec(publisher);
-  if (!match) return null;
-  return match[1]!.toLowerCase().split('.').reverse().join('.');
-}
-
-/**
- * Whether two requests ask for the same family and the same set of
- * actions. Compared as sets, so a repeated action can't pad one list to
- * the other's length.
- */
+/** Whether two requests ask for the same family and exactly the same actions. */
 export function sameRequest(a: InstallRequest, b: InstallRequest): boolean {
   if (a.baseId !== b.baseId) return false;
   const as = new Set(a.actions);
@@ -484,7 +275,7 @@ export function grantIsRequest(
 /**
  * Whether applying `plan` would change nothing: the install is live, this
  * key is linked to it, the manifest adds and removes nothing, and its
- * `name`, `version` and `release` are the ones the install holds. A server
+ * `name` and `version` are the ones the install holds. A server
  * answers such a request as already installed rather than queuing it.
  * See docs/spec/wire-format.md § Installs.
  */
@@ -495,7 +286,6 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
     !plan.newKey &&
     plan.manifest.name === plan.existing.content.name &&
     (plan.manifest.version ?? null) === (plan.existing.content.version ?? null) &&
-    plan.manifest.release === plan.existing.content.release &&
     plan.newFamilies.length === 0 &&
     plan.newVersions.length === 0 &&
     plan.typeChanges.length === 0 &&
@@ -521,8 +311,5 @@ export function planFingerprint(plan: InstallPlan): string {
     plan.typeChanges,
     plan.newKey,
     plan.linkedKeys,
-    plan.namespaceVerified,
-    plan.keyCertified,
-    plan.publisherChanged,
   ]);
 }

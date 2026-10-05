@@ -514,18 +514,6 @@ export type InstallContent = {
   name: string;
   version?: string;
   /**
-   * The DID that signed the approved manifest. While the install is live,
-   * only a manifest the same publisher signed can change it.
-   */
-  publisher: string;
-  /** The approved manifest's release; an older one is refused. */
-  release: number;
-  /**
-   * Set once a key joins with the publisher's certificate. From then on a
-   * new key joins only with one. See docs/spec/apps.md § Certified keys.
-   */
-  keysCertified?: boolean;
-  /**
    * Every type version the owner has approved for this app. The families
    * they name are claimed by this install and by no other.
    */

@@ -39,8 +39,6 @@ import {
   getJournalFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
-  INSTALL_FIXTURE_KEY,
-  INSTALL_FIXTURE_PUBLISHER,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
@@ -67,8 +65,6 @@ import {
   StackSchemaDriftError,
   StackPayloadTooLargeError,
   StackTimeoutError,
-  manifestPayload,
-  keyCertificatePayload,
 } from '@haverstack/core';
 import {
   buildAuthChallengePayload,
@@ -76,7 +72,7 @@ import {
   base64urlDecode,
   didCredentialFromKeypair,
 } from '@haverstack/core/wire';
-import { generateDidKeypair, verifyDidSignature } from '@haverstack/core/did';
+import { generateDidKeypair } from '@haverstack/core/did';
 
 useFetchMock();
 
@@ -730,12 +726,6 @@ describe('commitMigration fixtures', () => {
 // travels at all: it is the session's.
 // -------------------------------------------------------
 
-// Forged on purpose, or refused before the signature is read.
-const UNSIGNED_INSTALL_FIXTURES = new Set([
-  'install-request-signature-not-the-publishers',
-  'install-request-manifest-type-derived-key',
-]);
-
 describe('install request fixtures', () => {
   const openWithInstalls = (): Promise<APIAdapter> =>
     openDiscovered({ ...DISCOVERY, installs: { requests: true } }, { token: undefined });
@@ -745,7 +735,7 @@ describe('install request fixtures', () => {
       const adapter = await openWithInstalls();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const attempt = adapter.requestInstall(fixture.requestBody!);
+      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
       const body = fixture.responseBody!;
       if ('error' in body) {
         await expect(attempt).rejects.toBeInstanceOf(
@@ -768,41 +758,11 @@ describe('install request fixtures', () => {
     });
   }
 
-  // The signatures are real, so a server can verify them rather than trust
-  // its own derivation of the signed bytes, except in UNSIGNED_INSTALL_FIXTURES.
-  test('every fixture signature but the unsigned ones is the publisher’s', async () => {
-    for (const fixture of installRequestFixtures) {
-      const { manifest, signature } = fixture.requestBody!;
-      expect(manifest.publisher).toBe(INSTALL_FIXTURE_PUBLISHER);
-      const valid = await verifyDidSignature(
-        manifest.publisher,
-        base64urlDecode(signature),
-        manifestPayload(manifest),
-      );
-      expect(valid, fixture.name).toBe(!UNSIGNED_INSTALL_FIXTURES.has(fixture.name));
-    }
-  });
-
-  test('every fixture key certificate but the misdirected one is the publisher’s', async () => {
-    for (const fixture of installRequestFixtures) {
-      const { manifest, keyCertificate } = fixture.requestBody!;
-      if (keyCertificate === undefined) continue;
-      const valid = await verifyDidSignature(
-        manifest.publisher,
-        base64urlDecode(keyCertificate),
-        keyCertificatePayload({ appId: manifest.appId, did: INSTALL_FIXTURE_KEY }),
-      );
-      expect(valid, fixture.name).toBe(
-        fixture.name !== 'install-request-certificate-not-for-this-key',
-      );
-    }
-  });
-
   test('a server advertising no install requests is refused locally', async () => {
     const adapter = await openAdapter();
     const calls = mockFetch.mock.calls.length;
     await expect(
-      adapter.requestInstall(installRequestFixtures[0]!.requestBody!),
+      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
     ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
     expect(mockFetch.mock.calls.length).toBe(calls);
   });

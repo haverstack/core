@@ -41,10 +41,10 @@ await stack.grantType('com.example.myapp/note', {
 });
 ```
 
-An app can instead ship those steps as a manifest — its types and the grants it asks for, signed by its publisher — which the owner reviews and applies in one call. The stack keeps the approval as an `_install` record, so the grants it made can be listed, upgraded and withdrawn together, and the app can migrate its own types without the owner running its code. See [App installs](./docs/spec/apps.md).
+An app can instead ship those steps as a manifest — its types and the grants it asks for — which the owner reviews and applies in one call. The stack keeps the approval as an `_install` record, so the grants it made can be listed, upgraded and withdrawn together, and the app can migrate its own types without the owner running its code. See [App installs](./docs/spec/apps.md).
 
 ```ts
-const plan = await stack.planInstall(signedManifest, { did: notesAppDid }); // show this to the owner
+const plan = await stack.planInstall(manifest, { did: notesAppDid }); // show this to the owner
 await stack.installApp(plan);
 ```
 

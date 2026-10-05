@@ -13,7 +13,7 @@ import {
   StackTimeoutError,
 } from '@haverstack/core';
 import type {
-  InstallSubmission,
+  AppManifest,
   NativeSortField,
   StackRecord,
   StackType,
@@ -806,12 +806,8 @@ export function supportsInstallRequests(discovery: DiscoveryResponse): boolean {
   return discovery.installs?.requests === true;
 }
 
-/**
- * POST /installs: a manifest, its publisher's signature, and optionally the
- * publisher's certificate for the session's key. The key being installed
- * is the session's, never named here.
- */
-export type WireInstallRequest = InstallSubmission;
+/** POST /installs. The key being installed is the session's, never named here. */
+export type WireInstallRequest = { manifest: AppManifest };
 
 /**
  * POST /installs answers `pending` (202) while the owner has not approved

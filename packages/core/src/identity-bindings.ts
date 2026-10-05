@@ -16,10 +16,7 @@ import { SYSTEM_TYPES } from './types.js';
  * claims one, and something later resolves through it. Every one of them is
  * immutable once set. See docs/spec/identity.md § DID bindings.
  */
-/** A content field something resolves through. */
-export type BindingField = 'did' | 'appId';
-
-const BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
+const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did', 'appId'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
   [SYSTEM_TYPES.INSTALL, ['appId'] as const],
@@ -40,15 +37,15 @@ const BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
  * card onto another's `appId` is what immutability already refuses.
  * See docs/spec/identity.md § DID bindings.
  */
-const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly BindingField[]> = new Map([
+const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did'] as const],
   [SYSTEM_TYPES.ENTITY, ['did'] as const],
   // One install answers for each app; see docs/spec/apps.md § The `_install` record.
   [SYSTEM_TYPES.INSTALL, ['appId'] as const],
 ]);
 
-export const bindingFieldsOf = (family: string): readonly BindingField[] =>
+export const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
   BINDING_FIELDS.get(family) ?? [];
 
-export const uniqueBindingFieldsOf = (family: string): readonly BindingField[] =>
+export const uniqueBindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
   UNIQUE_BINDING_FIELDS.get(family) ?? [];
