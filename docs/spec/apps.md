@@ -76,12 +76,14 @@ type InstallPlan = {
   requestsRemoved: InstallRequest[];
   foreignRequests: (InstallRequest & { owner: AppId | 'commons' | 'system' | null })[];
   typeChanges: { id: TypeId; change: 'new' | 'schema' | 'name' }[]; // types installApp() would write
-  newKey: boolean; // whether `did` is not yet linked to this install
+  newKey: boolean; // whether `did` is not yet linked, or linked through a soft-deleted `_app` card
   linkedKeys: EntityId[]; // keys already linked, whose grants the plan also sets
 };
 ```
 
 `typeChanges` lists every manifest type whose definition would write — not yet defined, or defined with a different schema or name — commons types included. Defining a commons type claims nothing, but the first definition of a version fixes its shape for every app that reads it, so the owner sees it like any other.
+
+A key whose `_app` card the owner soft-deleted counts as new: `installApp()` undeletes the card and restores its grants, so the owner approves that as they would a key never seen before, and the plan is never empty. `linkedKeys` lists only keys with a live card.
 
 `linkedKeys` matters most beside `newKey`: a new key on an existing install joins those keys as the same app (see [Who owns a family](#who-owns-a-family)), and `requestsAdded` and `requestsRemoved` apply to all of them.
 

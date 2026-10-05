@@ -89,7 +89,11 @@ export type InstallPlan = {
   foreignRequests: ForeignRequest[];
   /** Every manifest type `installApp()` would define or redefine. */
   typeChanges: TypeChange[];
-  /** Whether `did` is a key this install is not yet linked to. */
+  /**
+   * Whether `did` would gain access: not yet linked to this install, or
+   * linked through an `_app` card that is soft-deleted, which installApp()
+   * undeletes. See docs/spec/apps.md § Plan, then apply.
+   */
   newKey: boolean;
   /**
    * The keys already linked to the install. Each holds `requests`, so a

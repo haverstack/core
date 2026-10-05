@@ -182,6 +182,17 @@ describe('installApp()', () => {
     expect(plan.linkedKeys).toEqual([APP_DID]);
   });
 
+  test('a key whose _app card was soft-deleted is new to the plan', async () => {
+    await install(manifest());
+    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    await stack.delete(card.id);
+
+    const plan = await stack.planInstall(manifest(), { did: APP_DID });
+    expect(plan.newKey).toBe(true);
+    expect(plan.linkedKeys).toEqual([]);
+    expect(isPlanEmpty(plan)).toBe(false);
+  });
+
   test('a plan made before a type was defined is refused', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);

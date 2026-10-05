@@ -2917,7 +2917,11 @@ export class Stack implements StackClient {
       requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
       foreignRequests,
       typeChanges,
-      newKey: !existing || !card || !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
+      newKey:
+        !existing ||
+        !card ||
+        card.deletedAt !== undefined ||
+        !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
       linkedKeys,
     };
   }
