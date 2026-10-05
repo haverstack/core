@@ -4,45 +4,37 @@
  * The app layer a real consumer would write: it owns its types, wraps the
  * generic record API in domain verbs, and never touches an adapter
  * directly. It exists to exercise the Stack API the way an app author
- * meets it, so the places where it has to work around the library are
- * left visible and cross-referenced to FINDINGS.md rather than hidden.
+ * meets it, so the places where it still has to work around the library
+ * are left visible and cross-referenced to FINDINGS-2.md.
  *
- * Setup (defineType, registerMigration, migrateAll, grants) needs the full
- * `Stack`; everything else runs against `StackClient`, so the same class
- * serves the owner and a friend reading through `stack.asEntity()`.
+ * Three layers, as the root README's "Writing an app" lays out: an install
+ * function (owner, once per schema change), a startup function (every
+ * open), and a data layer over `StackClient`, so the same class serves the
+ * owner and a friend reading through `stack.asEntity()`.
  */
 
 import type {
   EntityId,
-  RecordChange,
   RecordId,
   RecordJournalEntry,
   RecordVersion,
   Stack,
   StackClient,
-  StackQuery,
   StackRecord,
+  TypedChange,
+  TypedQuery,
+  TypedRecord,
   Unsubscribe,
 } from '@haverstack/core';
 import { StackVersionConflictError } from '@haverstack/core';
-import {
-  BOOK,
-  BOOK_BASE,
-  BOOK_V1,
-  REVIEW,
-  SHELF,
-  bookType,
-  bookV1Type,
-  reviewType,
-  shelfType,
-} from './schema.ts';
-import type { BookContent, BookStatus, ReviewContent, ShelfContent } from './schema.ts';
+import { Book, BookV1, Review, Shelf } from './schema.ts';
+import type { BookContent, BookStatus } from './schema.ts';
 
 export const APP_ID = 'com.example.reading';
 
-export type Book = StackRecord & { content: BookContent };
-export type Shelf = StackRecord & { content: ShelfContent };
-export type Review = StackRecord & { content: ReviewContent };
+export type BookRecord = TypedRecord<typeof Book.schema>;
+export type ShelfRecord = TypedRecord<typeof Shelf.schema>;
+export type ReviewRecord = TypedRecord<typeof Review.schema>;
 
 export type BookFilter = {
   status?: BookStatus;
@@ -53,26 +45,22 @@ export type BookFilter = {
   pageSize?: number;
 };
 
-/** Every record read is untyped, so each read site narrows by hand. */
-const asBook = (r: StackRecord): Book => r as Book;
-
-/**
- * Registers the app's types and brings every stored book up to the
- * current schema. Owner-only: a ScopedStack cannot define types.
- */
-export async function installReadingList(stack: Stack): Promise<void> {
-  await stack.defineType(shelfType);
-  await stack.defineType(bookV1Type);
-  await stack.defineType(bookType);
-  await stack.defineType(reviewType);
+/** Every startup, right after Stack.open(): the registry lives in memory. */
+export function registerReadingListMigrations(stack: Stack): void {
   stack.registerMigration({
-    from: BOOK_V1,
-    to: BOOK,
-    // @1 stored 'done' for a finished book; @2 speaks 'finished'.
+    from: BookV1.id,
+    to: Book.id,
     migrate: (c) => ({ ...c, status: c.status === 'done' ? 'finished' : c.status }),
   });
-  // migrateAll takes a baseId; passing BOOK (a TypeId) throws.
-  await stack.migrateAll(BOOK_BASE);
+}
+
+/** Owner-only, once per stack and again after a schema change. */
+export async function installReadingList(stack: Stack): Promise<void> {
+  await stack.defineType({ ...Shelf, name: 'Shelf' });
+  await stack.defineType({ ...BookV1, name: 'Book' });
+  await stack.defineType({ ...Book, name: 'Book', migratesFrom: BookV1.id });
+  await stack.defineType({ ...Review, name: 'Review' });
+  await stack.migrateAll(Book.baseId);
 }
 
 export class ReadingList {
@@ -86,24 +74,21 @@ export class ReadingList {
   // Shelves and books
   // -------------------------------------------------------
 
-  async addShelf(name: string): Promise<Shelf> {
-    return this.client.create<ShelfContent>(SHELF, { name }, { appId: APP_ID });
+  async addShelf(name: string): Promise<ShelfRecord> {
+    return this.client.create(Shelf, { name }, { appId: APP_ID });
   }
 
-  async shelves(): Promise<Shelf[]> {
-    const { records } = await this.client.query({
-      filter: { typeId: SHELF },
-      sort: { contentField: 'name' },
-    });
-    return records as Shelf[];
+  async shelves(): Promise<ShelfRecord[]> {
+    const { records } = await this.client.query(Shelf, { sort: { contentField: 'name' } });
+    return records;
   }
 
   async addBook(
     content: Omit<BookContent, 'status'> & { status?: BookStatus },
     opts: { shelf?: RecordId; tags?: string[] } = {},
-  ): Promise<Book> {
-    return this.client.create<BookContent>(
-      BOOK,
+  ): Promise<BookRecord> {
+    return this.client.create(
+      Book,
       { status: 'want', ...content },
       {
         appId: APP_ID,
@@ -113,16 +98,12 @@ export class ReadingList {
     );
   }
 
-  async getBook(id: RecordId): Promise<Book | null> {
-    // presentAt: 'latest' so a caller never sees @1-shaped content, even
-    // before migrateAll() has swept this record.
-    const record = await this.client.get(id, { presentAt: 'latest' });
-    if (!record || record.deletedAt || !record.typeId.startsWith(`${BOOK_BASE}@`)) return null;
-    return asBook(record);
+  async getBook(id: RecordId): Promise<BookRecord | null> {
+    return this.client.get(Book, id);
   }
 
-  async startReading(id: RecordId): Promise<Book> {
-    return asBook(await this.client.patchContent(id, { status: 'reading' }));
+  async startReading(id: RecordId): Promise<BookRecord> {
+    return this.client.patchContent(Book, id, { status: 'reading' });
   }
 
   /**
@@ -130,83 +111,81 @@ export class ReadingList {
    * read — the optimistic-concurrency path. Returns null on a lost race so
    * the caller can re-read and decide.
    */
-  async finish(seen: Book, opts: { rating?: number; on?: Date } = {}): Promise<Book | null> {
+  async finish(
+    seen: BookRecord,
+    opts: { rating?: number; on?: Date } = {},
+  ): Promise<BookRecord | null> {
     const on = (opts.on ?? new Date()).toISOString().slice(0, 10);
     try {
-      const updated = await this.client.patchContent(
+      return await this.client.patchContent(
+        Book,
         seen.id,
         { status: 'finished', finishedOn: on, rating: opts.rating ?? null },
         { ifVersion: seen.version },
       );
-      return asBook(updated);
     } catch (err) {
       if (err instanceof StackVersionConflictError) return null;
       throw err;
     }
   }
 
-  async moveToShelf(id: RecordId, shelf: RecordId | null): Promise<Book> {
-    return asBook(await this.client.mutate(id, { parentId: shelf }));
+  async moveToShelf(id: RecordId, shelf: RecordId | null): Promise<BookRecord> {
+    return this.client.mutate(Book, id, { parentId: shelf });
   }
 
-  async tag(id: RecordId, label: string): Promise<Book> {
-    return asBook(await this.client.associate(id, { kind: 'tag', label }));
+  async tag(id: RecordId, label: string): Promise<BookRecord> {
+    return this.typed(await this.client.associate(id, [{ kind: 'tag', label }]));
   }
 
-  async untag(id: RecordId, label: string): Promise<Book> {
-    return asBook(await this.client.dissociate(id, { kind: 'tag', label }));
+  async untag(id: RecordId, label: string): Promise<BookRecord> {
+    return this.typed(await this.client.dissociate(id, [{ kind: 'tag', label }]));
   }
 
-  async linkIsbn(id: RecordId, isbn: string): Promise<Book> {
-    return asBook(
-      await this.client.associate(id, {
-        kind: 'relationship',
-        label: 'same-as',
-        target: { kind: 'external', ns: 'isbn', id: isbn },
-      }),
+  async linkIsbn(id: RecordId, isbn: string): Promise<BookRecord> {
+    return this.typed(
+      await this.client.associate(id, [
+        {
+          kind: 'relationship',
+          label: 'same-as',
+          target: { kind: 'external', ns: 'isbn', id: isbn },
+        },
+      ]),
     );
   }
 
-  async findByIsbn(isbn: string): Promise<Book | null> {
-    const { records } = await this.client.query({
+  async findByIsbn(isbn: string): Promise<BookRecord | null> {
+    const { records } = await this.client.query(Book, {
       filter: {
-        baseId: BOOK_BASE,
         relatedTo: { label: 'same-as', target: { kind: 'external', ns: 'isbn', id: isbn } },
       },
       limit: 1,
-      presentAt: 'latest',
     });
-    return records[0] ? asBook(records[0]) : null;
+    return records[0] ?? null;
   }
 
   /** Every matching book, following cursors until the last page. */
-  async *books(filter: BookFilter = {}): AsyncGenerator<Book> {
-    const query: StackQuery = {
+  async *books(filter: BookFilter = {}): AsyncGenerator<BookRecord> {
+    const query: TypedQuery = {
       filter: {
-        baseId: BOOK_BASE,
         ...(filter.status && { content: { status: filter.status } }),
         ...(filter.tag && { tags: [filter.tag] }),
         ...(filter.shelf && { parentId: filter.shelf }),
         ...(filter.search && { search: filter.search }),
       },
-      sort:
-        filter.sortBy === 'title'
-          ? { contentField: 'title', direction: 'asc' }
-          : { field: 'createdAt', direction: 'asc' },
+      sort: filter.sortBy === 'title' ? { contentField: 'title' } : { field: 'createdAt' },
       limit: filter.pageSize ?? 50,
-      presentAt: 'latest',
     };
-    let cursor: string | null | undefined;
+    let cursor: string | undefined;
     do {
-      const page = await this.client.query({ ...query, cursor: cursor ?? undefined });
-      for (const r of page.records) yield asBook(r);
-      cursor = page.cursor;
+      const page = await this.client.query(Book, { ...query, cursor });
+      yield* page.records;
+      cursor = page.cursor ?? undefined;
     } while (cursor);
   }
 
-  async listBooks(filter: BookFilter = {}): Promise<Book[]> {
-    const out: Book[] = [];
-    for await (const b of this.books(filter)) out.push(b);
+  async listBooks(filter: BookFilter = {}): Promise<BookRecord[]> {
+    const out: BookRecord[] = [];
+    for await (const book of this.books(filter)) out.push(book);
     return out;
   }
 
@@ -214,9 +193,9 @@ export class ReadingList {
   // Reviews (relationships between records)
   // -------------------------------------------------------
 
-  async review(bookId: RecordId, text: string): Promise<Review> {
-    return this.client.create<ReviewContent>(
-      REVIEW,
+  async review(bookId: RecordId, text: string): Promise<ReviewRecord> {
+    return this.client.create(
+      Review,
       { text },
       {
         appId: APP_ID,
@@ -227,36 +206,36 @@ export class ReadingList {
     );
   }
 
-  async reviewsOf(bookId: RecordId): Promise<Review[]> {
-    const { records } = await this.client.query({
-      filter: {
-        typeId: REVIEW,
-        relatedTo: { label: 'reviews', target: { kind: 'record', recordId: bookId } },
-      },
+  async reviewsOf(bookId: RecordId): Promise<ReviewRecord[]> {
+    const { records } = await this.client.query(Review, {
+      filter: { relatedTo: { label: 'reviews', target: { kind: 'record', recordId: bookId } } },
     });
-    return records as Review[];
+    return records;
   }
 
   // -------------------------------------------------------
   // Covers (attachments)
   // -------------------------------------------------------
 
-  async setCover(bookId: RecordId, bytes: Uint8Array, mimeType: string): Promise<Book> {
+  async setCover(bookId: RecordId, bytes: Uint8Array, mimeType: string): Promise<BookRecord> {
     const upload = await this.client.putAttachment(bytes, { mimeType, appId: APP_ID });
     const book = await this.client.get(bookId);
     const previous = book?.associations?.find(
       (a) => a.kind === 'attachment' && a.label === 'cover',
     );
-    // Two writes, not one: associate() adds, and the only replace is
-    // mutate({ associations }), which rewrites every tag too.
-    if (previous) await this.client.dissociate(bookId, previous);
-    return asBook(
-      await this.client.associate(bookId, {
-        kind: 'attachment',
-        label: 'cover',
-        fileId: upload.content.fileId,
-        attachmentRecordId: upload.id,
-      }),
+    return this.typed(
+      await this.client.amendAssociations(bookId, [
+        ...(previous ? [{ op: 'remove' as const, association: previous }] : []),
+        {
+          op: 'add',
+          association: {
+            kind: 'attachment',
+            label: 'cover',
+            fileId: upload.content.fileId,
+            attachmentRecordId: upload.id,
+          },
+        },
+      ]),
     );
   }
 
@@ -278,26 +257,37 @@ export class ReadingList {
       this.client.getVersions(id),
       this.client.getJournal(id),
     ]);
-    // Adapters disagree on getVersions() order (MemoryAdapter oldest-first,
-    // SQLite newest-first), so pin it here. See FINDINGS.md.
-    versions.sort((a, b) => a.version - b.version);
     return { versions, journal };
   }
 
-  async revert(id: RecordId, version: number): Promise<Book> {
-    return asBook(await this.client.restoreVersion(id, version));
+  async revert(id: RecordId, version: number): Promise<StackRecord> {
+    // A pre-migration snapshot restores as book@1, so the result is not
+    // necessarily a Book@2 and cannot be returned typed.
+    return this.client.restoreVersion(id, version);
   }
 
   async remove(id: RecordId): Promise<void> {
     await this.client.delete(id);
   }
 
-  async restore(id: RecordId): Promise<Book> {
-    return asBook(await this.client.undelete(id));
+  async restore(id: RecordId): Promise<BookRecord> {
+    return this.typed(await this.client.undelete(id));
   }
 
-  async onBookChange(handler: (change: RecordChange) => void): Promise<Unsubscribe> {
-    return this.client.subscribe(handler, { filter: { baseId: BOOK_BASE } });
+  async onBookChange(
+    handler: (change: TypedChange<typeof Book.schema>) => void,
+  ): Promise<Unsubscribe> {
+    return this.client.subscribe(Book, handler);
+  }
+
+  /**
+   * The association and lifecycle verbs have no typed overload, so their
+   * result is re-read through the handle. See FINDINGS-2.md.
+   */
+  private async typed(record: StackRecord): Promise<BookRecord> {
+    const book = await this.client.get(Book, record.id);
+    if (!book) throw new Error(`Book "${record.id}" vanished between write and read`);
+    return book;
   }
 }
 
@@ -308,16 +298,15 @@ export class ReadingList {
 /** Lets `friend` read every book and review, and nothing else. */
 export async function shareLibraryWith(stack: Stack, friend: EntityId): Promise<void> {
   const grantee = { kind: 'entity', entityId: friend } as const;
-  await stack.grantType(BOOK_BASE, { actions: ['read-any'], grantee });
-  await stack.grantType(REVIEW, { actions: ['read-any'], grantee });
+  await stack.grantType(Book.baseId, { actions: ['read-any'], grantee });
+  await stack.grantType(Review.baseId, { actions: ['read-any'], grantee });
 }
 
-/**
- * Lets `friend` edit one book. Record-level `write` is refused unless the
- * same grantee already holds `read`, so this is two ordered calls.
- */
+/** Lets `friend` edit one book. `write` never implies `read`, so both are named. */
 export async function letEdit(stack: Stack, bookId: RecordId, friend: EntityId): Promise<void> {
   const grantee = { kind: 'entity', entityId: friend } as const;
-  await stack.grantAccess(bookId, { kind: 'permission', label: 'read', grantee });
-  await stack.grantAccess(bookId, { kind: 'permission', label: 'write', grantee });
+  await stack.grantAccess(bookId, [
+    { kind: 'permission', label: 'read', grantee },
+    { kind: 'permission', label: 'write', grantee },
+  ]);
 }

@@ -11,8 +11,14 @@ import { join } from 'node:path';
 import { Stack, StackError } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
-import { BOOK_V1, bookV1Type } from './schema.ts';
-import { ReadingList, installReadingList, letEdit, shareLibraryWith } from './reading-list.ts';
+import { BookV1 } from './schema.ts';
+import {
+  ReadingList,
+  installReadingList,
+  letEdit,
+  registerReadingListMigrations,
+  shareLibraryWith,
+} from './reading-list.ts';
 
 const step = (title: string) => console.log(`\n── ${title}`);
 const show = (label: string, value: unknown) =>
@@ -26,16 +32,17 @@ const friend = await generateDidKeypair();
 try {
   step('A v1 build of the app writes two books');
   {
-    const adapter = await LocalAdapter.initialize({ path, ownerEntityId: me.did });
+    const adapter = await LocalAdapter.open({ path, create: 'exclusive', ownerEntityId: me.did });
     const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jen' } });
-    await stack.defineType(bookV1Type);
-    await stack.create(BOOK_V1, { title: 'Dune', author: 'Frank Herbert', status: 'done' });
-    await stack.create(BOOK_V1, { title: 'Piranesi', author: 'Susanna Clarke', status: 'want' });
+    await stack.defineType({ ...BookV1, name: 'Book' });
+    await stack.create(BookV1, { title: 'Dune', author: 'Frank Herbert', status: 'done' });
+    await stack.create(BookV1, { title: 'Piranesi', author: 'Susanna Clarke', status: 'want' });
     await stack.close();
   }
 
   step('The current build opens the same file and migrates');
   const stack = await Stack.open(await LocalAdapter.open({ path }));
+  registerReadingListMigrations(stack);
   await installReadingList(stack);
   const app = new ReadingList(stack);
   show('owner', (await stack.getOwnerEntity())?.content.name);

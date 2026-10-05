@@ -7,8 +7,14 @@ import type { RecordChange } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import { LocalAdapter } from '@haverstack/adapter-local';
-import { BOOK, BOOK_V1, bookV1Type } from '../src/schema.ts';
-import { ReadingList, installReadingList, letEdit, shareLibraryWith } from '../src/reading-list.ts';
+import { Book, BookV1 } from '../src/schema.ts';
+import {
+  ReadingList,
+  installReadingList,
+  letEdit,
+  registerReadingListMigrations,
+  shareLibraryWith,
+} from '../src/reading-list.ts';
 
 const owner = await generateDidKeypair();
 const friend = await generateDidKeypair();
@@ -17,15 +23,17 @@ type Harness = { open: () => Promise<Stack>; cleanup: () => void };
 
 const adapters: Record<string, () => Harness> = {
   memory: () => {
-    const adapter = new MemoryAdapter({ ownerEntityId: owner.did });
-    return { open: () => Stack.open(adapter), cleanup: () => {} };
+    const adapter = MemoryAdapter.open({ ownerEntityId: owner.did });
+    return { open: async () => Stack.open(await adapter), cleanup: () => {} };
   },
   local: () => {
     const dir = mkdtempSync(join(tmpdir(), 'reading-list-test-'));
     const path = join(dir, 'stack.db');
     return {
       open: async () =>
-        Stack.open(await LocalAdapter.openOrInitialize({ path, ownerEntityId: owner.did })),
+        Stack.open(
+          await LocalAdapter.open({ path, create: 'ifMissing', ownerEntityId: owner.did }),
+        ),
       cleanup: () => rmSync(dir, { recursive: true, force: true }),
     };
   },
@@ -39,6 +47,7 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
   beforeEach(async () => {
     harness = make();
     stack = await harness.open();
+    registerReadingListMigrations(stack);
     await installReadingList(stack);
     app = new ReadingList(stack);
   });
@@ -51,12 +60,13 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
   it('migrates books written by the v1 schema on install', async () => {
     await stack.close();
     stack = await harness.open();
-    await stack.defineType(bookV1Type);
-    const old = await stack.create(BOOK_V1, { title: 'Dune', author: 'Herbert', status: 'done' });
+    await stack.defineType({ ...BookV1, name: 'Book' });
+    const old = await stack.create(BookV1, { title: 'Dune', author: 'Herbert', status: 'done' });
+    registerReadingListMigrations(stack);
     await installReadingList(stack);
 
-    const stored = await stack.get(old.id);
-    expect(stored?.typeId).toBe(BOOK);
+    const stored = await stack.get(Book, old.id);
+    expect(stored?.typeId).toBe(Book.id);
     expect(stored?.content.status).toBe('finished');
   });
 
@@ -124,13 +134,13 @@ describe.each(Object.entries(adapters))('ReadingList over %s adapter', (_name, m
     expect((await app.reviewsOf(book.id)).map((r) => r.content.text)).toEqual(['Sharp.']);
   });
 
-  it('reports history oldest first and reverts content', async () => {
+  it('reports versions newest first, the journal oldest first, and reverts content', async () => {
     const book = await app.addBook({ title: 'Emma', author: 'Austen' });
     await app.startReading(book.id);
     await app.finish((await app.getBook(book.id))!);
 
     const { versions, journal } = await app.history(book.id);
-    expect(versions.map((v) => v.content.status)).toEqual(['want', 'reading']);
+    expect(versions.map((v) => v.content.status)).toEqual(['reading', 'want']);
     expect(journal.map((j) => j.ops[0])).toEqual(['create', 'patch', 'patch']);
     expect((await app.revert(book.id, 1)).content.status).toBe('want');
   });

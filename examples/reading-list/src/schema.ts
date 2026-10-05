@@ -1,61 +1,38 @@
 /**
- * The reading list's record types. Content interfaces are declared by hand
- * beside each schema because the library has no way to derive one from the
- * other — see FINDINGS.md, item 5.
+ * The reading list's record types, each written once as a type handle. The
+ * content types are derived from the schemas, so there is nothing to keep
+ * in step by hand.
  */
 
-import type { DefineTypeOptions } from '@haverstack/core';
+import { typeHandle } from '@haverstack/core';
+import type { ContentOf } from '@haverstack/core';
 
-export const NS = 'com.example.reading';
+export const Shelf = typeHandle('com.example.reading/shelf@1', {
+  name: { kind: 'string', required: true },
+});
 
-export const SHELF = `${NS}/shelf@1`;
-export const BOOK_BASE = `${NS}/book`;
-export const BOOK_V1 = `${BOOK_BASE}@1`;
-export const BOOK = `${BOOK_BASE}@2`;
-export const REVIEW = `${NS}/review@1`;
-
-export type BookStatus = 'want' | 'reading' | 'finished' | 'abandoned';
-
-export type ShelfContent = { name: string };
-
-export type BookContent = {
-  title: string;
-  author: string;
-  status: BookStatus;
-  pages?: number;
-  /** ISO 8601 — `date` fields take strings, not Date objects. */
-  finishedOn?: string;
-  /** 1–5, added in @2. */
-  rating?: number;
-};
-
-export type ReviewContent = { text: string };
-
-export const shelfType: DefineTypeOptions = {
-  id: SHELF,
-  name: 'Shelf',
-  schema: { name: { kind: 'string', required: true } },
-};
-
-const bookV1Schema = {
+const bookV1Fields = {
   title: { kind: 'string', required: true },
   author: { kind: 'string', required: true },
-  status: { kind: 'string', required: true },
   pages: { kind: 'number' },
   finishedOn: { kind: 'date' },
 } as const;
 
-export const bookV1Type: DefineTypeOptions = { id: BOOK_V1, name: 'Book', schema: bookV1Schema };
+/** The first release stored `status` as free text, and wrote 'done' for finished. */
+export const BookV1 = typeHandle('com.example.reading/book@1', {
+  ...bookV1Fields,
+  status: { kind: 'string', required: true },
+});
 
-export const bookType: DefineTypeOptions = {
-  id: BOOK,
-  name: 'Book',
-  migratesFrom: BOOK_V1,
-  schema: { ...bookV1Schema, rating: { kind: 'number' } },
-};
+export const Book = typeHandle('com.example.reading/book@2', {
+  ...bookV1Fields,
+  status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], required: true },
+  rating: { kind: 'number' },
+});
 
-export const reviewType: DefineTypeOptions = {
-  id: REVIEW,
-  name: 'Review',
-  schema: { text: { kind: 'text', required: true } },
-};
+export const Review = typeHandle('com.example.reading/review@1', {
+  text: { kind: 'text', required: true },
+});
+
+export type BookContent = ContentOf<typeof Book.schema>;
+export type BookStatus = BookContent['status'];

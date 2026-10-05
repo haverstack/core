@@ -1,0 +1,48 @@
+# API ergonomics findings, round 2
+
+The reading list rebuilt against core after the issues from [CONCLUSIONS.md](./CONCLUSIONS.md) landed. Item numbers in the scorecard match [FINDINGS.md](./FINDINGS.md). New findings continue from 17.
+
+## Verdict
+
+It's a clear improvement. All 16 round-one findings are fixed, and each was confirmed against the running code, not just the changelog. The biggest gain is type handles. The app lost its hand-written content interfaces, the status union, and every `as Book` cast, and a typo'd patch key, a value outside the enum, a missing required field, and `null` on a required field are now compile errors. `reading-list.ts` got shorter and reads more like domain code.
+
+What's left is mostly about how far the typing reaches. Typed calls cover create, get, query, mutate, patch and subscribe. The association, access and lifecycle verbs, query filters and migrations are still untyped, and one typed-read decision is harsh on list views (17).
+
+## Round-one scorecard
+
+| #   | Finding                                   | Now                                                                                                                                                                      |
+| --- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | `getVersions()` order per adapter         | Fixed. Newest first on both adapters. The test suite pins it on memory and SQLite, and the app's sort workaround is gone.                                                |
+| 2   | Unscoped `Stack` edits tombstones         | Fixed. `patchContent` and `associate` on a tombstone throw `StackConflictError` "…is soft-deleted; undelete it before mutating it."                                      |
+| 3   | Spec described a missing `get()` option   | Fixed. `get(id, { includeDeleted: true })` exists and `versioning.md` no longer says `delete()` returns nothing.                                                         |
+| 4   | `getAttachment()` type per adapter        | Fixed. Disk returns a plain `Uint8Array`, and the test's `Buffer` workaround is gone.                                                                                    |
+| 5   | Typed content stops at `create()`         | Mostly fixed. See 18–20 for what's left.                                                                                                                                 |
+| 6   | `get()` returns tombstones                | Fixed. `get()` and typed `get()` return `null` for a tombstone. `getBook()` lost its `deletedAt` guard.                                                                  |
+| 7   | `TypeId` vs `BaseId`                      | Fixed. `migrateAll`, `grantType` and `filter.baseId` refuse a `TypeId` and name the family to pass. `Book.baseId` makes the right call the easy one.                     |
+| 8   | Two ordered calls to grant write          | Fixed. `grantAccess(id, [read, write])`. A lone `write` still fails, and the message now ends with the exact call to make.                                               |
+| 9   | Can't replace one association             | Fixed. `setCover()` is one `amendAssociations()` call, one journal entry (`associate+dissociate`) and one change event.                                                  |
+| 10  | Undocumented `desc` default               | Fixed. A named sort defaults to `asc` (shelves now come back A→Z without `direction`), and no sort means newest first.                                                   |
+| 11  | `date` fields refuse `Date`               | Fixed by better wording: "got a Date. Pass date.toISOString() for a moment in time, or a "YYYY-MM-DD" string for a calendar day."                                        |
+| 12  | Unfiltered queries include system records | Fixed in the README quick start.                                                                                                                                         |
+| 13  | Inconsistent adapter construction         | Fixed. `MemoryAdapter.open()` and `LocalAdapter.open({ create })`.                                                                                                       |
+| 14  | Vague "Permission denied"                 | Fixed. For example: `Cannot update "…" (com.example.reading/book@2): requires update-own or update-any`.                                                                 |
+| 15  | Unlisting arrives as `deleted`            | Fixed. The kind is now `removed`.                                                                                                                                        |
+| 16  | Setup/data split                          | Documented in the README's "Writing an app", which this app now follows exactly. App installs (`planInstall`/`installApp`) cover apps the owner doesn't run, but see 25. |
+
+## New findings
+
+### Worth fixing
+
+17. **One unexpected enum value fails a whole typed query.** A typed read throws `StackValidationError` when a record holds an enum value the handle doesn't list. That's the right call for `get()`. But `query(handle)` runs the same check on every record, so one book written by a newer app version with a new status makes the whole page throw, and the list view goes blank. An older app can't page past it either, because the cursor never comes back. This is the case CONCLUSIONS §5 flagged and settled as "throw", but it hurts more on queries than on single reads. Options: skip and report the records that don't fit (a `rejected` list beside `records`), or derive the enum as `'want' | … | (string & {})` so callers have to handle unknown values.
+18. **Association, access and lifecycle verbs return untyped records.** `associate`, `dissociate`, `amendAssociations`, `grantAccess`, `revokeAccess`, `amendAccess`, `undelete` and `restoreVersion` have no handle overload. Domain methods like `tag()` and `restore()` that want to return a `BookRecord` have to re-read through the handle (the `typed()` helper in `reading-list.ts`). That's an extra round trip per call over `APIAdapter`. The cast-free alternative, exporting `narrowRecord`, isn't offered either. (`restoreVersion` arguably _should_ stay untyped, since a pre-migration snapshot restores as `@1`.)
+19. **Query filters and sorts aren't checked against the handle.** Inside `query(Book, …)`, `filter.content` is `Record<string, unknown>` and `sort.contentField` is `string`, so `content: { stauts: 'want' }` compiles and silently returns zero results. The handle knows the field names and value types. `content` could be `Partial<ContentOf<S>>` (for single-segment keys) and `contentField` could be `keyof ContentOf<S>`.
+20. **Migrations are untyped.** `registerMigration({ from: BookV1.id, to: Book.id, migrate })` takes `TypeId`s, and `migrate` receives and returns `Record<string, unknown>`. Accepting handles would let the compiler check `(c: ContentOf<V1>) => ContentOf<V2>`. Without that, the one place schema versions meet is the one place with no type help. A migration that forgets the new required field is caught only at `migrateAll()` time.
+
+### Smaller
+
+21. **Compile errors from the typed overloads are long.** Every mistake reports `TS2769: No overload matches this call` and prints the full expanded schema twice, once per overload. The useful line (`'stauts' does not exist … Did you mean 'status'?`) is in there, but buried. Errors on typed _results_ (`b.content.ratingg`) are short and clear. Separate method names, or a named schema type that TypeScript can print by name, would shorten these.
+22. **A typed `get()` of the wrong type throws `StackBadRequestError`.** `get(Book, shelfId)` throws instead of returning `null`. So `getBook(idFromUrl)` needs a try/catch to treat "not a book" like "not found", and over the wire the condition comes back as a 400. `null`, or a dedicated error, would fit how apps branch on it.
+23. **Non-content validation failures say "Content validation failed".** `migrateAll(TypeId)`, `grantType(TypeId)`, a bad `filter.baseId`, an empty `associate([])` and a duplicate in `amendAssociations` all throw `StackValidationError` with that header, followed by a precise line. The header is wrong for all of them. Also, `associate([])` reports its problem under `changes:` even though the argument is named `associations`.
+24. **Typed `subscribe()` and typed `query()` scope differently.** A typed query spans the family and migrates up. A typed subscription matches only the handle's exact version, so a change to a book still stored as `@1` isn't delivered. The code comment explains why (events carry the stored record and can't be migrated), and running `migrateAll()` at install hides it in practice, but nothing at the call site hints at the difference.
+25. **The root README contradicts the apps spec.** Under "Writing an app", it says "An app that isn't the owner has no way to install its own types yet". `docs/spec/apps.md` and `Stack.planInstall()` / `installApp()` now provide exactly that. A manifest built from this app's handles (`types: [{ ...Book, name: 'Book', migratesFrom: BookV1.id }]`) type-checks without casts, installs, and limits the app's key to the families it requested.
+26. **The handle doesn't carry `name` or `migratesFrom`.** Every `defineType` and every manifest entry repeats them beside the spread handle. It's a small papercut, and keeping handles minimal may be deliberate, but `migratesFrom` is part of what a version _is_.
