@@ -2429,6 +2429,46 @@ export const installRequestFixtures: ConformanceFixture<
       error: { code: 'permission', message: 'An install request must come from the key itself' },
     },
   },
+  {
+    name: 'install-request-key-not-certified',
+    description:
+      'POST /installs from a key not yet linked to an install whose keysCertified is set, ' +
+      'presenting no keyCertificate, answers 409 with code "conflict". Once a key has joined ' +
+      "with the publisher's certificate, every new key needs one, so a copy of the signed " +
+      'manifest is not enough to join. Assumes "com.example.notes" is installed from ' +
+      "INSTALL_FIXTURE_PUBLISHER with keysCertified set, and the session's key is not linked to it.",
+    method: 'POST',
+    path: '/installs',
+    requestBody: SIGNED_INSTALL,
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'conflict',
+        message: `"com.example.notes" takes new keys only with a keyCertificate from ${INSTALL_FIXTURE_PUBLISHER}`,
+      },
+    },
+  },
+  {
+    name: 'install-request-manifest-type-derived-key',
+    description:
+      'POST /installs whose manifest type carries a key a Type derives — here schemaHash — ' +
+      'answers 400 with code "bad_request", before any signature is checked. A manifest type ' +
+      'is id, name, schema and migratesFrom; a derived key is refused rather than dropped, ' +
+      'since dropping a signed key would fail the signature.',
+    method: 'POST',
+    path: '/installs',
+    requestBody: {
+      manifest: {
+        ...INSTALL_MANIFEST,
+        types: [{ ...INSTALL_MANIFEST.types[0]!, schemaHash: 'sha256:0' } as never],
+      },
+      signature: SIGNED_INSTALL.signature,
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: { code: 'bad_request', message: 'Unknown key in manifest.types[0]: schemaHash' },
+    },
+  },
 ];
 
 // -------------------------------------------------------

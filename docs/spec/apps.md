@@ -38,6 +38,7 @@ type InstallContent = {
   version?: string;
   publisher: string; // pinned while the install is live
   release: number; // the approved manifest's release
+  keysCertified?: boolean; // set once a key joins with a certificate — see Certified keys
   defines: TypeId[]; // every version the owner has approved
   requests: InstallRequest[]; // the grants each of the app's keys holds
 };
@@ -92,6 +93,8 @@ A publisher may vouch for a key as one of its app's by signing `keyCertificatePa
 
 **It is optional.** An uncertified key may still be approved; the owner is then the only check on whether it is really the app. A certificate that is presented and does not verify for this `appId` and key is refused with `StackValidationError` at `keyCertificate` rather than treated as absent: it is a forgery or a copy.
 
+**Once one key is certified, every new key must be.** Applying a plan whose key came with a certificate sets `_install.keysCertified`, and from then on `planInstall()` refuses a key not yet linked to the install that presents none, with `StackConflictError`. Without that, a key holding only a copy of the signed manifest could still ask to join an app whose real keys are all certified, and the owner would be the only check. Keys already linked are unaffected; the flag survives uninstalling, and clears only when a [new publisher](#who-publishes-an-app) takes the install up, since the old publisher's certificates say nothing about the new one's keys.
+
 **It proves what the publisher's issuing does.** For an app the publisher runs on its own servers, the publisher certifies the keys it holds, and a certified key is the app. For an app running on its users' devices, the publisher's private key cannot ship with it, so a device asks the publisher for a certificate — and the certificate then means only what the publisher checked before issuing it: a platform attestation, an account login, or nothing. The owner sees that a publisher vouches for the key; how much that is worth is the publisher's to earn.
 
 ## Plan, then apply
@@ -125,16 +128,18 @@ type InstallPlan = {
 
 `foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
-It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign or a key certificate that does not verify (`StackValidationError`), and a manifest under an `appId` live from another publisher, one older than the installed release, or a `did` whose `_app` card names a different `appId` (`StackConflictError`).
+It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), a manifest its publisher did not sign or a key certificate that does not verify (`StackValidationError`), and a manifest under an `appId` live from another publisher, one older than the installed release, a new key with no certificate on an install whose `keysCertified` is set, or a `did` whose `_app` card names a different `appId` (`StackConflictError`).
+
+A request is compared to the one the install holds by family and the _set_ of its actions, so repeating an action changes nothing.
 
 `installApp(plan, { verifyPublisher? })` applies the plan:
 
 1. Defines each of the manifest's types, with [schema drift](./data-model.md#schema-drift-detection) applying as it does to any `defineType()`.
 2. Registers the key on an `_app` card when it has none, undeleting a soft-deleted one. An existing card's `name` is left alone: it is the owner's label.
-3. Creates the install, or patches it — undeleting it first if it was uninstalled, and unlinking the old keys if its publisher changed. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
+3. Creates the install, or patches it — undeleting it first if it was uninstalled, and unlinking the old keys if its publisher changed. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests`, `name`, `version` and `release` become the manifest's, and `keysCertified` is set when the key came with a certificate.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing.
+**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name`, `version` and `release` are also the install's, so an upgrade that changes only those still reaches the owner.
 
 ## Migrating an installed app's types
 
@@ -144,6 +149,8 @@ It refuses what no approval could make valid: a type outside the app's own names
 2. The target TypeId is in that install's `defines` — a version the owner approved.
 3. The requester holds `update-any` on each family through a grant naming its DID directly. Default and group grants do not count, on the terms they do not count for [a principal](./access-control.md#who-a-grant-reaches). The manifest has to request it, so the plan shows it.
 4. The requester is acting alone — not delegated — as the DID of an `_app` card linked to the install.
+
+The new content is held to the [file-reference gate](./access-control.md#reference-creation-gating) a create applies: every `file-ref` field must name a file the app can already read, so a migration cannot point a Record at someone else's attachment.
 
 The Record must also be live. The owner may migrate a soft-deleted Record, but an app cannot read one, so its migration is refused with `StackConflictError` until the Record is undeleted.
 

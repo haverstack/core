@@ -1555,6 +1555,10 @@ export class ScopedStack implements StackClient {
         'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
       );
     }
+    // The new content is a fresh set of file references, so an app is held
+    // to the gate create() applies; otherwise a migration could point one of
+    // its records at any attachment and read the bytes through it.
+    if (!this.ownerActingAlone) await this.requireFileRefAccess(toTypeId, content);
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 

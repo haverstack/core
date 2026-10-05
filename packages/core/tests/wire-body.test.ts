@@ -230,6 +230,15 @@ describe('parseInstallBody', () => {
     });
   });
 
+  test('a manifest type carries no key a Type derives, since dropping one would void the signature', () => {
+    for (const key of ['baseId', 'version', 'schemaHash', 'createdAt']) {
+      const types = [{ ...manifest.types[0]!, [key]: 'x' }];
+      expect(() => parseInstallBody({ manifest: { ...manifest, types }, signature })).toThrow(
+        StackBadRequestError,
+      );
+    }
+  });
+
   test('an unknown key at either level, or a missing field, is not this request', () => {
     expect(() => parseInstallBody({ manifest, signature, did: DID })).toThrow(StackBadRequestError);
     expect(() => parseInstallBody({ manifest: { ...manifest, did: DID }, signature })).toThrow(

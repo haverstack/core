@@ -329,6 +329,39 @@ describe('what an installed app sees', () => {
     await stack.uninstallApp('com.example.notes');
     expect(isPlanEmpty(await planSigned(manifest(), { did: APP_DID }))).toBe(false);
   });
+
+  test('a manifest that changes only name, version or release is not an empty plan', async () => {
+    await install(manifest());
+    for (const change of [{ name: 'Notes+' }, { version: '1.0.1' }, { release: 2 }]) {
+      expect(
+        isPlanEmpty(await planSigned(manifest(change), { did: APP_DID })),
+        JSON.stringify(change),
+      ).toBe(false);
+    }
+    const bumped = await planSigned(manifest({ version: '1.0.1', release: 2 }), { did: APP_DID });
+    const record = await stack.installApp(bumped);
+    expect(record.content).toMatchObject({ version: '1.0.1', release: 2 });
+  });
+
+  test('requests compare as sets of actions, so a repeated action cannot keep one dropped', async () => {
+    await install(manifest({ requests: MIGRATING }));
+    const padded = await planSigned(
+      manifest({
+        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
+      }),
+      { did: APP_DID },
+    );
+    expect(padded.requestsRemoved).toEqual(MIGRATING);
+    const record = await stack.installApp(padded);
+    expect((await linkedGrants(record)).flatMap((g) => g.actions)).not.toContain('update-any');
+
+    const reordered = (actions: ('create' | 'read-any')[]) =>
+      manifest({ requests: [{ baseId: 'com.example.notes/note', actions }] });
+    await install(reordered(['read-any', 'create']));
+    expect(isPlanEmpty(await planSigned(reordered(['create', 'read-any']), { did: APP_DID }))).toBe(
+      true,
+    );
+  });
 });
 
 describe('the _install record', () => {
@@ -419,6 +452,22 @@ describe('commitMigration() for an installed app', () => {
       .commitMigration(note.id, NOTE_2, { text: 'hello', pinned: false });
     expect(migrated.typeId).toBe(NOTE_2);
     expect(migrated.updatedBy).toEqual({ subjectId: APP_DID });
+  });
+
+  test('new content may reference only files the app can already read', async () => {
+    const withPhoto = {
+      ...NOTE_2_TYPE,
+      schema: { text: { kind: 'text' }, photo: { kind: 'file-ref' } },
+    } as const;
+    await install(manifest({ types: [manifest().types[0]!, withPhoto], requests: MIGRATING }));
+    const note = await stack.create(NOTE_1, { text: 'hello' });
+    const owners = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
+    await expect(
+      stack
+        .asEntity(APP_DID)
+        .commitMigration(note.id, NOTE_2, { text: 'hello', photo: owners.content.fileId }),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.get(note.id))!.typeId).toBe(NOTE_1);
   });
 
   test('a soft-deleted record waits for an undelete', async () => {
@@ -655,6 +704,53 @@ describe('the publisher', () => {
         StackValidationError,
       );
     }
+  });
+
+  test('once a key is certified, a new key needs a certificate too', async () => {
+    const certified = async (did: string) =>
+      stack.planInstall(
+        {
+          ...(await signManifest(manifest(), publisherKey.privateKey)),
+          keyCertificate: await certifyKey(
+            { appId: 'com.example.notes', did },
+            publisherKey.privateKey,
+          ),
+        },
+        { did },
+      );
+    await install(manifest());
+    expect((await planSigned(manifest(), { did: OTHER_DID })).newKey).toBe(true);
+
+    const record = await stack.installApp(await certified(APP_DID));
+    expect(record.content.keysCertified).toBe(true);
+    await expect(planSigned(manifest(), { did: OTHER_DID })).rejects.toThrow(StackConflictError);
+    await stack.installApp(await certified(OTHER_DID));
+    // A key already linked is not new, so it needs none.
+    expect(isPlanEmpty(await planSigned(manifest(), { did: APP_DID }))).toBe(true);
+
+    await stack.uninstallApp('com.example.notes');
+    await expect(planSigned(manifest(), { did: PERSON })).rejects.toThrow(StackConflictError);
+  });
+
+  test('a new publisher taking up an install starts without certified keys', async () => {
+    const plan = await stack.planInstall(
+      {
+        ...(await signManifest(manifest(), publisherKey.privateKey)),
+        keyCertificate: await certifyKey(
+          { appId: 'com.example.notes', did: APP_DID },
+          publisherKey.privateKey,
+        ),
+      },
+      { did: APP_DID },
+    );
+    await stack.installApp(plan);
+    await stack.uninstallApp('com.example.notes');
+
+    const rotated = await generateDidKeypair();
+    const record = await stack.installApp(
+      await planSigned(manifest({ publisher: rotated.did }), { did: OTHER_DID }, rotated),
+    );
+    expect(record.content.keysCertified).toBeUndefined();
   });
 
   test('appIdVouchedBy() reverses a bare did:web host and nothing else', () => {

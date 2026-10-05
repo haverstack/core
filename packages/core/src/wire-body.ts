@@ -225,9 +225,18 @@ export function parseMigrationBody(body: unknown): WireMigrationRequest {
 // POST /installs
 // -------------------------------------------------------
 
+/** Every key a manifest type carries — a `DefineTypeOptions`'s. */
+const MANIFEST_TYPE_KEYS: readonly string[] = Object.keys({
+  id: true,
+  name: true,
+  schema: true,
+  migratesFrom: true,
+} satisfies Record<keyof DefineTypeOptions, true>);
+
 /**
  * Parse a `POST /installs` body, `{ manifest, signature, keyCertificate? }`,
- * into the submission `planInstall()` takes. Each type is read as a `POST /types` body is.
+ * into the submission `planInstall()` takes. Each type is read as a
+ * `POST /types` body is, less the keys `defineType()` derives.
  * Which families a manifest may define, and which requests the grant rules
  * allow, are `planInstall()`'s to judge. See docs/spec/wire-format.md § Installs.
  */
@@ -250,6 +259,10 @@ export function parseInstallBody(body: unknown): InstallSubmission {
     types: nestedArray(m, 'manifest', 'types').map((t, i) => {
       if (typeof t !== 'object' || t === null || Array.isArray(t))
         fieldError(`manifest.types[${i}]`, 'a type must be an object');
+      // Only what a manifest type carries: a key parseTypeBody() would
+      // drop is one the signature covers, and the stripped manifest would
+      // then fail to verify.
+      requireKnownBody(t, MANIFEST_TYPE_KEYS, `manifest.types[${i}]`);
       return parseTypeBody(t);
     }),
     requests: nestedArray(m, 'manifest', 'requests').map((r, i) => {

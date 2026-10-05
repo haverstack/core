@@ -458,11 +458,16 @@ export function appIdVouchedBy(publisher: string): AppId | null {
   return match[1]!.toLowerCase().split('.').reverse().join('.');
 }
 
-/** Whether two requests ask for the same family and exactly the same actions. */
+/**
+ * Whether two requests ask for the same family and the same set of
+ * actions. Compared as sets, so a repeated action can't pad one list to
+ * the other's length.
+ */
 export function sameRequest(a: InstallRequest, b: InstallRequest): boolean {
-  if (a.baseId !== b.baseId || a.actions.length !== b.actions.length) return false;
-  const actions = new Set(a.actions);
-  return b.actions.every((x) => actions.has(x));
+  if (a.baseId !== b.baseId) return false;
+  const as = new Set(a.actions);
+  const bs = new Set(b.actions);
+  return as.size === bs.size && [...bs].every((x) => as.has(x));
 }
 
 /** Whether a stored grant is exactly `request`, made out to `did`. */
@@ -478,7 +483,8 @@ export function grantIsRequest(
 
 /**
  * Whether applying `plan` would change nothing: the install is live, this
- * key is linked to it, and the manifest adds and removes nothing. A server
+ * key is linked to it, the manifest adds and removes nothing, and its
+ * `name`, `version` and `release` are the ones the install holds. A server
  * answers such a request as already installed rather than queuing it.
  * See docs/spec/wire-format.md § Installs.
  */
@@ -487,6 +493,9 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
     plan.existing !== null &&
     !plan.existing.deletedAt &&
     !plan.newKey &&
+    plan.manifest.name === plan.existing.content.name &&
+    (plan.manifest.version ?? null) === (plan.existing.content.version ?? null) &&
+    plan.manifest.release === plan.existing.content.release &&
     plan.newFamilies.length === 0 &&
     plan.newVersions.length === 0 &&
     plan.typeChanges.length === 0 &&

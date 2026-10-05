@@ -2926,6 +2926,15 @@ export class Stack implements StackClient {
 
     const linkedKeys: EntityId[] = [];
     const keptLinks = existing && !publisherChanged ? linkedIds(existing, INSTALL_APP_LABEL) : [];
+    const newKey = !card || !keptLinks.includes(card.id);
+    // Once the publisher has certified a key, an uncertified one joining is
+    // a downgrade only a copied manifest needs. See docs/spec/apps.md § Certified keys.
+    const certifiesKeys = !publisherChanged && existing?.content.keysCertified === true;
+    if (newKey && keyCertificate === undefined && certifiesKeys) {
+      throw new StackConflictError(
+        `"${manifest.appId}" takes new keys only with a keyCertificate from ${manifest.publisher}`,
+      );
+    }
     for (const id of keptLinks) {
       const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
       if (typeof key === 'string') linkedKeys.push(key);
@@ -2946,7 +2955,7 @@ export class Stack implements StackClient {
       requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
       foreignRequests,
       typeChanges,
-      newKey: !card || !keptLinks.includes(card.id),
+      newKey,
       linkedKeys,
     };
   }
@@ -2998,6 +3007,7 @@ export class Stack implements StackClient {
           ...(manifest.version !== undefined && { version: manifest.version }),
           publisher: manifest.publisher,
           release: manifest.release,
+          ...(fresh.keyCertified && { keysCertified: true }),
           defines,
           requests,
         },
@@ -3020,6 +3030,11 @@ export class Stack implements StackClient {
           version: manifest.version ?? null,
           publisher: manifest.publisher,
           release: manifest.release,
+          // A new publisher's certificates start afresh; the old one's bound nothing it signs.
+          keysCertified:
+            fresh.keyCertified || (!publisherChanged && existing.content.keysCertified)
+              ? true
+              : null,
           defines,
           requests,
         },
@@ -3327,6 +3342,7 @@ export class Stack implements StackClient {
         version: { kind: 'string' },
         publisher: { kind: 'string', required: true },
         release: { kind: 'number', required: true },
+        keysCertified: { kind: 'boolean' },
         defines: { kind: 'array', items: { kind: 'string' }, required: true },
         requests: {
           kind: 'array',
