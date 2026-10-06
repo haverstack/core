@@ -9,7 +9,7 @@ type AppManifest = {
   appId: AppId; // reverse-DNS, as on an _app card
   name: string;
   version?: string;
-  types: DefineTypeOptions[]; // the types the app defines
+  types: DefineTypeOptions[]; // the types the app defines; a type handle is one
   requests: InstallRequest[]; // the grants its keys hold
 };
 
@@ -20,7 +20,7 @@ const plan = await stack.planInstall(manifest, { did: appDid });
 await stack.installApp(plan);
 ```
 
-Migration functions are not part of a manifest. They are app code, registered at every startup with `registerMigration()` (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
+Migration functions are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
 
 `planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
 

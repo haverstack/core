@@ -136,13 +136,17 @@ const adapter = await LocalAdapter.open({
 // safe to keep passing on every open, it's a no-op once the record exists.
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 
-// Define a type. The handle carries the id and schema, and the compiler
+// Define a type. The handle carries the id, name and schema, and the compiler
 // derives the content type from it — no separate interface to keep in step.
-const Note = typeHandle('com.example.myapp/note@1', {
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
+const Note = typeHandle({
+  id: 'com.example.myapp/note@1',
+  name: 'Note',
+  schema: {
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+  },
 });
-await stack.defineType({ ...Note, name: 'Note' });
+await stack.defineType(Note);
 
 // Create a record
 const note = await stack.create(Note, {
@@ -184,18 +188,31 @@ An app has two layers, because the stack draws a line between them:
 - **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
 - **An install function that takes a `Stack`**, run by the owner. Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`. Over the wire, `POST /types` and `POST /records/:id/migrate` are served to the owner acting alone.
 
-`registerMigration()` belongs to neither. Its registry lives in memory on each `Stack` instance, so it runs at **every startup**, right after `Stack.open()` — an install function that registers migrations and runs once leaves every later start without them.
+Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
 ```ts
-import { Stack, typeHandle, type StackClient } from '@haverstack/core';
+import { Stack, migration, typeHandle, type StackClient } from '@haverstack/core';
 
-const NoteV1 = typeHandle('com.example.myapp/note@1', {
-  text: { kind: 'text', required: true },
+const NoteV1 = typeHandle({
+  id: 'com.example.myapp/note@1',
+  name: 'Note',
+  schema: { text: { kind: 'text', required: true } },
 });
-export const Note = typeHandle('com.example.myapp/note@2', {
-  text: { kind: 'text', required: true },
-  pinned: { kind: 'boolean', required: true },
+export const Note = typeHandle({
+  id: 'com.example.myapp/note@2',
+  name: 'Note',
+  migratesFrom: NoteV1,
+  schema: {
+    text: { kind: 'text', required: true },
+    pinned: { kind: 'boolean', required: true },
+  },
 });
+
+// Startup: pass to every Stack.open(). `content` is NoteV1's, and the
+// result must be Note's.
+export const noteMigrations = [
+  migration(NoteV1, Note, (content) => ({ ...content, pinned: false })),
+];
 
 // Data layer: whoever the stack lets in.
 export class Notes {
@@ -211,20 +228,11 @@ export class Notes {
   }
 }
 
-// Startup: every open, every Stack instance.
-export function registerNoteMigrations(stack: Stack) {
-  stack.registerMigration({
-    from: NoteV1.id,
-    to: Note.id,
-    migrate: (content) => ({ ...content, pinned: false }),
-  });
-}
-
 // Install: the owner, once per stack and again after a schema change.
 // defineType() is a no-op for a schema already stored, so re-running is safe.
 export async function installNotes(stack: Stack, appDid?: string) {
-  await stack.defineType({ ...NoteV1, name: 'Note' });
-  await stack.defineType({ ...Note, name: 'Note', migratesFrom: NoteV1.id });
+  await stack.defineType(NoteV1);
+  await stack.defineType(Note);
   await stack.migrateAll(Note.baseId);
   if (appDid) {
     await stack.grantType(Note.baseId, {
@@ -235,7 +243,7 @@ export async function installNotes(stack: Stack, appDid?: string) {
 }
 ```
 
-The owner's own app calls `registerNoteMigrations(stack)` and `installNotes(stack)`, then `new Notes(stack)`. A server hands each requester `new Notes(stack.asActor(session))`. An app that isn't the owner has no way to install its own types yet; the owner runs its install function for it.
+The owner's own app opens with `Stack.open(adapter, { migrations: noteMigrations })`, calls `installNotes(stack)`, then `new Notes(stack)`. A server hands each requester `new Notes(stack.asActor(session))`. An app that isn't the owner has no way to install its own types yet; the owner runs its install function for it.
 
 ---
 
@@ -299,27 +307,23 @@ A relationship's `target` says which identifier space its value lives in — a R
 
 ### Migrations
 
-Types can evolve over time. Register migration functions between adjacent versions — the library composes them into chains automatically:
+Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles, typed on both. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
 
 ```ts
-await stack.defineType({
+const NoteV2 = typeHandle({
   id: 'com.example.myapp/note@2',
   name: 'Note',
-  schema: {
-    text: { kind: 'text', required: true },
-    title: { kind: 'string', required: false },
-  },
-  migratesFrom: 'com.example.myapp/note@1',
+  migratesFrom: NoteV1,
+  schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
 });
 
-stack.registerMigration({
-  from: 'com.example.myapp/note@1',
-  to: 'com.example.myapp/note@2',
-  migrate: (content) => ({ ...content, title: '' }),
+const stack = await Stack.open(adapter, {
+  migrations: [migration(NoteV1, NoteV2, (content) => ({ ...content, title: '' }))],
 });
+await stack.defineType(NoteV2);
 ```
 
-Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Register migrations at every startup — see [Writing an app](#writing-an-app).
+Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Pass migrations at every startup — see [Writing an app](#writing-an-app).
 
 ### History, and watching for changes
 

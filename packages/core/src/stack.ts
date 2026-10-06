@@ -53,8 +53,6 @@ import type {
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
-  Migration,
-  MigrationFn,
   RecordVersion,
   StackCapabilities,
   IfVersionOptions,
@@ -183,6 +181,7 @@ import {
 } from './type-handle.js';
 import type {
   ContentOf,
+  Migration,
   PatchOf,
   ReadonlyTypeSchema,
   TypedChange,
@@ -317,6 +316,13 @@ export type StackOptions = {
    * both. See docs/spec/data-model.md § Record IDs.
    */
   idTimestampSkewMs?: number | null;
+  /**
+   * Every migration this app knows, built with `migration()`. Passed here
+   * rather than registered later so the chain is complete before the first
+   * read; two with the same `from` are refused. See
+   * docs/spec/data-model.md § Type migrations.
+   */
+  migrations?: readonly Migration[];
 };
 
 export type CollectAttachmentGarbageOptions = {
@@ -672,6 +678,12 @@ export class Stack implements StackClient {
       adapter,
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
     );
+    for (const m of opts.migrations ?? []) {
+      if (stack.migrations.has(m.from)) {
+        throw new StackMigrationError(`More than one migration from "${m.from}" was passed.`);
+      }
+      stack.migrations.set(m.from, m);
+    }
     await stack.seedSystemTypes();
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
@@ -868,27 +880,13 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Register a migration function between two adjacent Type versions; call
-   * at app startup after defineType(). Runs in-memory — nothing is written
-   * until migrateAll(). Adjacent migrations are composed into chains
-   * automatically.
-   */
-  registerMigration(migration: Migration): void {
-    this.assertOpen();
-    if (this.migrations.has(migration.from)) {
-      throw new StackMigrationError(`A migration from "${migration.from}" is already registered.`);
-    }
-    this.migrations.set(migration.from, migration);
-  }
-
-  /**
    * Find and compose a migration path from one TypeId to another.
    * Returns null if no path exists.
    */
-  private resolveMigrationPath(fromId: TypeId, toId: TypeId): MigrationFn | null {
+  private resolveMigrationPath(fromId: TypeId, toId: TypeId): Migration['migrate'] | null {
     if (fromId === toId) return (content) => content;
 
-    const fns: MigrationFn[] = [];
+    const steps: Migration[] = [];
     let current = fromId;
     const visited = new Set<TypeId>();
 
@@ -897,13 +895,13 @@ export class Stack implements StackClient {
         throw new StackMigrationError(`Migration cycle detected at "${current}"`);
       }
       visited.add(current);
-      const migration = this.migrations.get(current);
-      if (!migration) return null;
-      fns.push(migration.migrate);
-      current = migration.to;
+      const step = this.migrations.get(current);
+      if (!step) return null;
+      steps.push(step);
+      current = step.to;
     }
 
-    return (content) => fns.reduce((c, fn) => fn(c), content);
+    return (content) => steps.reduce((c, step) => step.migrate(c), content);
   }
 
   /**
@@ -1183,8 +1181,8 @@ export class Stack implements StackClient {
     if (parsed && knownMax !== undefined && parsed.version !== knownMax) {
       const direction =
         parsed.version > knownMax
-          ? `the record is newer than this app instance understands — update the app, or register the missing migrations`
-          : `no registered migration bridges the gap — call stack.registerMigration()`;
+          ? `the record is newer than this app instance understands — update the app, or pass it the missing migrations`
+          : `no migration passed to Stack.open() bridges the gap`;
       throw new StackMigrationError(
         `Record "${record.id}" is at "${record.typeId}", but this app instance has defined ` +
           `up to "${parsed.baseId}@${knownMax}": ${direction}. Omit presentAt: "latest" to ` +
@@ -2037,10 +2035,10 @@ export class Stack implements StackClient {
    * registered Migration function rather than a request body, but "app
    * code" is not a trust boundary here — the app calling commitMigration()
    * is the same app that registered the function, and neither may move a
-   * DID binding or repoint an attachment. registerMigration() also places
-   * no constraint on `from` and `to` sharing a baseId, so a migration path
-   * can cross type families; family-crossing is exactly what the checks
-   * below care about.
+   * DID binding or repoint an attachment. migration() also places no
+   * constraint on `from` and `to` sharing a baseId, so a migration path can
+   * cross type families; family-crossing is exactly what the checks below
+   * care about.
    */
   private async commitMigrationChecked(
     existing: StackRecord,

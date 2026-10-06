@@ -736,18 +736,6 @@ export type QueryResult = {
 };
 
 // -------------------------------------------------------
-// Migrations
-// -------------------------------------------------------
-
-export type MigrationFn = (content: Record<string, unknown>) => Record<string, unknown>;
-
-export type Migration = {
-  from: TypeId;
-  to: TypeId;
-  migrate: MigrationFn;
-};
-
-// -------------------------------------------------------
 // Stack capabilities
 // -------------------------------------------------------
 

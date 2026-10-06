@@ -11,7 +11,7 @@
  * Type. See docs/spec/data-model.md § Type handles.
  */
 
-import { StackBadRequestError, StackValidationError } from './errors.js';
+import { StackBadRequestError, StackMigrationError, StackValidationError } from './errors.js';
 import { parseTypeId } from './schema.js';
 import type { ValidationError } from './validate.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
@@ -132,30 +132,51 @@ export type TypedRecord<S extends ReadonlyTypeSchema> = Omit<StackRecord, 'conte
 // The handle
 // -------------------------------------------------------
 
-/** One version of one Type: its `TypeId`, its family and its schema. */
+/**
+ * One version of one Type: what `defineType()` takes, plus the family. Plain
+ * data, so a manifest can carry it as written. See docs/spec/data-model.md
+ * § Type handles.
+ */
 export type TypeHandle<S extends ReadonlyTypeSchema = ReadonlyTypeSchema> = {
   readonly id: TypeId;
   readonly baseId: BaseId;
+  readonly name: string;
   readonly schema: S;
+  readonly migratesFrom?: TypeId;
 };
 
 /**
- * Name a Type and its schema in one literal. Pass the result to
- * `defineType({ ...handle, name })` and to the typed overloads of
- * `StackClient`. A handle names exactly one version: `Book.baseId` is the
- * argument a call about the whole family takes.
+ * Name a Type, its display name, its schema and the version it migrates
+ * from in one literal. Pass the result to `defineType()`, a manifest's
+ * `types` and the typed overloads of `StackClient`. A handle names exactly
+ * one version: `Book.baseId` is the argument a call about the whole family
+ * takes.
  */
-export const typeHandle = <const S extends ReadonlyTypeSchema>(
-  id: TypeId,
-  schema: S,
-): TypeHandle<S> => {
+export const typeHandle = <const S extends ReadonlyTypeSchema>({
+  id,
+  name,
+  schema,
+  migratesFrom,
+}: {
+  id: TypeId;
+  name: string;
+  schema: S;
+  migratesFrom?: TypeHandle | TypeId;
+}): TypeHandle<S> => {
   const parsed = parseTypeId(id);
   if (!parsed) {
     throw new StackBadRequestError(
       `Invalid TypeId format: "${id}". Expected "namespace/name@version", e.g. "com.example.myapp/note@1".`,
     );
   }
-  return Object.freeze({ id, baseId: parsed.baseId, schema });
+  const from = typeof migratesFrom === 'object' ? migratesFrom.id : migratesFrom;
+  return Object.freeze({
+    id,
+    baseId: parsed.baseId,
+    name,
+    schema,
+    ...(from !== undefined && { migratesFrom: from }),
+  });
 };
 
 export const isTypeHandle = (value: unknown): value is TypeHandle =>
@@ -164,6 +185,41 @@ export const isTypeHandle = (value: unknown): value is TypeHandle =>
   typeof (value as TypeHandle).id === 'string' &&
   typeof (value as TypeHandle).baseId === 'string' &&
   typeof (value as TypeHandle).schema === 'object';
+
+// -------------------------------------------------------
+// Migrations
+// -------------------------------------------------------
+
+/**
+ * A step from one version of a family to the next, passed to `Stack.open()`
+ * and typed on both versions' content. `migrate` is a method so a typed
+ * migration fits a list of untyped ones. See docs/spec/data-model.md § Type
+ * migrations.
+ */
+export type Migration<From = Record<string, unknown>, To = Record<string, unknown>> = {
+  readonly from: TypeId;
+  readonly to: TypeId;
+  migrate(content: From): To;
+};
+
+/**
+ * Build the migration from `from` to `to`, which must name `from` as its
+ * `migratesFrom`: the pairing is checked once here, and `fn` is checked
+ * against both handles' content types.
+ */
+export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
+  from: TypeHandle<F>,
+  to: TypeHandle<T>,
+  fn: (content: ContentOf<F>) => NoInfer<ContentOf<T>>,
+): Migration<ContentOf<F>, ContentOf<T>> => {
+  if (to.migratesFrom !== from.id) {
+    throw new StackMigrationError(
+      `Cannot migrate "${from.id}" to "${to.id}": "${to.id}" migrates from ` +
+        `${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}.`,
+    );
+  }
+  return Object.freeze({ from: from.id, to: to.id, migrate: fn });
+};
 
 // -------------------------------------------------------
 // Typed read and write options

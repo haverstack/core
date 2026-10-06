@@ -291,7 +291,7 @@ type DefineTypeOptions = {
 
 `required: false` makes a field optional, not nullable: [content fields are never `null`](#absent-content-fields).
 
-**`defineType()` takes one `DefineTypeOptions` object**, the same argument style as `registerMigration({ from, to, migrate })`. `id` and `name` are both strings, so naming them keeps a call from swapping them silently. `baseId`, `version`, `schemaHash` and `createdAt` are derived, never supplied.
+**`defineType()` takes one `DefineTypeOptions` object**, which a [type handle](#type-handles) is. `id` and `name` are both strings, so naming them keeps a call from swapping them silently. `baseId`, `version`, `schemaHash` and `createdAt` are derived, never supplied.
 
 ```ts
 await stack.defineType({
@@ -326,7 +326,7 @@ This matters because `defineType()` takes a `TypeSchema` but a schema arriving a
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no `enum` that narrows what a string field accepts: adding an `enum` to a field, or removing values from one, needs a new version, while removing an `enum` or adding values to one accepts strictly more and stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` + `registerMigration()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no `enum` that narrows what a string field accepts: adding an `enum` to a field, or removing values from one, needs a new version, while removing an `enum` or adding values to one accepts strictly more and stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` plus a `migration()` passed to `Stack.open()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -364,23 +364,18 @@ Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#
 
 A Type's defining app is the only serious writer of its own types, so migration is **explicit and owner-driven**, not a side effect of a read or an unrelated write. Disk state changes version only via a deliberate `migrateAll()` pass or a per-record `commitMigration()` call — the invariant is that a Record's `typeId` never moves except through one of these two, so `query({ filter: { typeId } })` and grants targeting a type never silently miss not-yet-migrated records.
 
-Apps register migration functions between adjacent Type versions at startup. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
+An app builds one migration per step between adjacent Type versions with `migration(from, to, fn)` and passes them all to `Stack.open()`. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
 
 ```ts
-stack.registerMigration({
-  from: 'com.example.myapp/note@1',
-  to: 'com.example.myapp/note@2',
-  migrate: (content) => ({ ...content, title: '' }),
-});
+const noteV1ToV2 = migration(NoteV1, NoteV2, (content) => ({ ...content, title: '' }));
+const noteV2ToV3 = migration(NoteV2, NoteV3, (content) => ({ ...content, pinned: false }));
 
-stack.registerMigration({
-  from: 'com.example.myapp/note@2',
-  to: 'com.example.myapp/note@3',
-  migrate: (content) => ({ ...content, pinned: false }),
-});
+const stack = await Stack.open(adapter, { migrations: [noteV1ToV2, noteV2ToV3] });
 ```
 
-The migration registry is **per-stack-instance** and lives in memory — different stacks can be at different migration states without interfering. Nothing about it is stored, so registration runs at **every** startup, for every `Stack` instance, including one opened over `APIAdapter`: immediately after `Stack.open()`, before the first read that asks for `presentAt: 'latest'` or the first `migrateAll()`. It is not an install step. An install function that registers migrations beside `defineType()` and runs once leaves every later instance with an empty registry.
+`migration()` takes two [type handles](#type-handles), so `fn` is checked as `ContentOf` the first to `ContentOf` the second: a step that drops a required field or yields a value outside an `enum` does not compile. It refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle. A migration is a separate value from either handle: a handle is data a manifest carries over the wire, and may be shared by apps that do not run its family's migrations.
+
+The migration registry is **per-stack-instance** and lives in memory — different stacks can be at different migration states without interfering. Nothing about it is stored, so every `Stack.open()` is passed the app's migrations, including one over `APIAdapter`. The registry is complete before the first read, so no read or `migrateAll()` can run against a partial chain. `Stack.open()` refuses two migrations with the same `from` with `StackMigrationError`. Migrations are not an install step and not part of an [app manifest](./apps.md).
 
 **What the library does with registered migrations:**
 
@@ -393,13 +388,15 @@ The migration registry is **per-stack-instance** and lives in memory — differe
 
   Because `content` is a full replacement written under a new `typeId`, a migration commit is create-shaped at the destination and update-shaped over the Record as it stands, and owes both sets of integrity checks. DID bindings are held to immutability across the union of the two families' binding fields — a card can neither shed its `did` by migrating out of `_entity`/`_app` nor pick one up on the way in — and to uniqueness in the destination family (see [Identity § DID bindings](./identity.md#did-bindings)). An `_attachment@1` Record's `fileId`, `mimeType` and `size` stay immutable, and a Record arriving from outside that family is held to the same mimeType-establishment check `create()` applies. Migrating _into_ `_group` is refused outright: a group's `admin` roster entry is stamped at creation and a migration cannot stamp one, so it would produce a group nobody but the owner can manage — version-to-version migration within `_group` stays open and carries the existing roster with it.
 
-  **`migrateAll()` applies these same checks**, on the same shared write path. That a `Migration` function is app code rather than a request body is not a trust boundary here: the app calling `commitMigration()` is the same app that registered the function, and neither is entitled to move a DID binding or repoint an attachment. `registerMigration()` also places no constraint on `from` and `to` sharing a `baseId`, so a registered path can itself cross type families — which is precisely what these checks are about. A migration function that would violate one aborts the pass like any other validation failure.
+  **`migrateAll()` applies these same checks**, on the same shared write path. That a `Migration` function is app code rather than a request body is not a trust boundary here: the app calling `commitMigration()` is the same app that registered the function, and neither is entitled to move a DID binding or repoint an attachment. `migration()` also places no constraint on `from` and `to` sharing a `baseId`, so a registered path can itself cross type families — which is precisely what these checks are about. A migration function that would violate one aborts the pass like any other validation failure.
 
 **Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it's registered _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
 
 ### Type handles
 
-A schema written once as a literal gives the compiler everything it needs to type content. `typeHandle(id, schema)` returns a plain value carrying the `TypeId` (`id`), its family (`baseId`) and the `schema`; `ContentOf<S>` derives the content type from the schema and `PatchOf<S>` the `contentPatch` type. A required field is present in `ContentOf`; every other field is optional. `PatchOf` makes every field optional and allows `null` only on a field that is not required, since a required field can be replaced but not removed. `defineType()` takes `{ ...handle, name }`, so one literal serves both.
+A schema written once as a literal gives the compiler everything it needs to type content. `typeHandle({ id, name, schema, migratesFrom })` returns a plain, frozen value carrying the fields `defineType()` takes — the `TypeId` (`id`), the display `name`, the `schema` and, for a version after the first, `migratesFrom` — plus its family (`baseId`). `migratesFrom` may be given as the previous version's handle or its `TypeId`, and is stored as the `TypeId`. `ContentOf<S>` derives the content type from the schema and `PatchOf<S>` the `contentPatch` type. A required field is present in `ContentOf`; every other field is optional. `PatchOf` makes every field optional and allows `null` only on a field that is not required, since a required field can be replaced but not removed.
+
+A handle is a `DefineTypeOptions`, so `defineType(handle)` and a manifest's `types` take it as written, and `name` and `migratesFrom` are written once. It carries no migration function, which keeps it data: see [Type migrations](#type-migrations).
 
 A handle names exactly one version. A call that means the whole family takes `handle.baseId`, never `handle.id`.
 

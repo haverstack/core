@@ -9,6 +9,7 @@ import {
 } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { isPlanEmpty } from '../src/install.js';
+import { migration, typeHandle } from '../src/type-handle.js';
 import type { AppManifest } from '../src/install.js';
 import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types.js';
 
@@ -22,21 +23,23 @@ const NOTE_2 = 'com.example.notes/note@2';
 const TAG_1 = 'com.example.tags/tag@1';
 const COMMONS_NOTE = 'org.haverstack/note@1';
 
+const NOTE_1_TYPE = typeHandle({ id: NOTE_1, name: 'Note', schema: { text: { kind: 'text' } } });
+
 const manifest = (overrides: Partial<AppManifest> = {}): AppManifest => ({
   appId: 'com.example.notes',
   name: 'Notes',
   version: '1.0.0',
-  types: [{ id: NOTE_1, name: 'Note', schema: { text: { kind: 'text' } } }],
+  types: [NOTE_1_TYPE],
   requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
   ...overrides,
 });
 
-const NOTE_2_TYPE = {
+const NOTE_2_TYPE = typeHandle({
   id: NOTE_2,
   name: 'Note',
   schema: { text: { kind: 'text' }, pinned: { kind: 'boolean' } },
-  migratesFrom: NOTE_1,
-} as const;
+  migratesFrom: NOTE_1_TYPE,
+});
 
 const MIGRATING = [
   { baseId: 'com.example.notes/note', actions: ['read-any', 'update-any'] },
@@ -604,13 +607,11 @@ describe('commitMigration() for an installed app', () => {
 
 describe("migrateAll({ sweep: 'listed' })", () => {
   test('migrates live, listed records and counts the deleted ones it passed over', async () => {
-    await stack.defineType(manifest().types[0]!);
-    await stack.defineType(NOTE_2_TYPE);
-    stack.registerMigration({
-      from: NOTE_1,
-      to: NOTE_2,
-      migrate: (c) => ({ ...c, pinned: false }),
+    stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
+      migrations: [migration(NOTE_1_TYPE, NOTE_2_TYPE, (c) => ({ ...c, pinned: false }))],
     });
+    await stack.defineType(NOTE_1_TYPE);
+    await stack.defineType(NOTE_2_TYPE);
     const live = await stack.create(NOTE_1, { text: 'a' });
     const deleted = await stack.create(NOTE_1, { text: 'b' });
     await stack.delete(deleted.id);
