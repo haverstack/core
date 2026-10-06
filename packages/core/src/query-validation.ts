@@ -573,12 +573,15 @@ export function assertAssociationEdits(
  * assertAssociationEdits() for the verbs taking a bare association list —
  * associate(), grantAccess() and their inverses — asked before the list is
  * wrapped as edits, so each problem is reported under `param`, the name the
- * caller passed it as, rather than the wrapped list's `changes`.
+ * caller passed it as, rather than the wrapped list's `changes`. The checks
+ * run in the same order, so a wrong-surface element is refused as such
+ * before its duplicates are counted.
  */
 export function assertAssociationList(
   associations: unknown,
   surface: string,
   param: string,
+  half: 'data' | 'authority',
 ): asserts associations is Association[] {
   if (!Array.isArray(associations) || associations.length === 0) {
     throw new StackValidationError(
@@ -592,7 +595,12 @@ export function assertAssociationList(
       : [{ path: `${param}[${i}]`, message: `${param}[${i}] must be an object.` }],
   );
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  const listErrors = validateAssociations(associations as Association[], param);
+  const list = associations as Association[];
+  const shapeErrors = list.flatMap((a, i) => validateAssociation(a, `${param}[${i}]`));
+  if (shapeErrors.length > 0) throw new StackValidationError(shapeErrors, ARGUMENTS_INVALID);
+  if (half === 'data') assertDataAssociations(list, surface);
+  else assertAuthorityAssociations(list, surface);
+  const listErrors = validateAssociations(list, param);
   if (listErrors.length > 0) throw new StackValidationError(listErrors, ARGUMENTS_INVALID);
 }
 

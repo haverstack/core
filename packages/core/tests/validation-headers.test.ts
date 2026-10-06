@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
-import { StackValidationError } from '../src/errors.js';
+import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { DataAssociation, TypeGrant } from '../src/types.js';
 
@@ -69,6 +69,18 @@ describe('an argument refusal says the arguments were invalid, under their own n
     ).toEqual({ header: 'Invalid arguments:', paths: ['createdAt'] });
   });
 
+  test('create() and mutate() report argument and content problems in one refusal', async () => {
+    expect(await refusal(stack.create(NOTE, { text: 1 }, { associations: [TAG, TAG] }))).toEqual({
+      header: 'Invalid arguments:',
+      paths: ['associations[1]', 'text'],
+    });
+    expect(
+      await refusal(
+        stack.mutate(recordId, { associations: [TAG, TAG], contentPatch: { text: undefined } }),
+      ),
+    ).toEqual({ header: 'Invalid arguments:', paths: ['associations[1]', 'text'] });
+  });
+
   test('mutate() with a duplicate association', async () => {
     expect(await refusal(stack.mutate(recordId, { associations: [TAG, TAG] }))).toEqual({
       header: 'Invalid arguments:',
@@ -128,6 +140,20 @@ describe('an argument refusal says the arguments were invalid, under their own n
             header: 'Invalid arguments:',
             paths: ['associations[1]'],
           });
+        }
+      });
+
+      test('a wrong-surface element is refused as such, even when duplicated', async () => {
+        const read = { kind: 'anyone', label: 'read' } as never;
+        for (const verb of ['associate', 'dissociate'] as const) {
+          await expect(client()[verb](recordId, [read, read])).rejects.toBeInstanceOf(
+            StackBadRequestError,
+          );
+        }
+        for (const verb of ['grantAccess', 'revokeAccess'] as const) {
+          await expect(client()[verb](recordId, [TAG, TAG] as never)).rejects.toBeInstanceOf(
+            StackBadRequestError,
+          );
         }
       });
 

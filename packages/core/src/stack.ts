@@ -578,6 +578,21 @@ export interface StackClient {
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
+/**
+ * One refusal for every problem a call carries, content and arguments alike,
+ * so a caller fixes them in one round trip. Content is itself an argument,
+ * so a mixed set reads "Invalid arguments"; content alone keeps its header.
+ */
+function throwValidation(
+  contentErrors: ValidationError[],
+  argumentErrors: ValidationError[],
+): void {
+  if (argumentErrors.length > 0) {
+    throw new StackValidationError([...argumentErrors, ...contentErrors], ARGUMENTS_INVALID);
+  }
+  if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -1051,10 +1066,7 @@ export class Stack implements StackClient {
     if (opts.updatedAt !== undefined && updatedAt.getTime() < createdAt.getTime()) {
       argumentErrors.push({ path: 'updatedAt', message: 'updatedAt cannot precede createdAt.' });
     }
-    if (argumentErrors.length > 0) {
-      throw new StackValidationError(argumentErrors, ARGUMENTS_INVALID);
-    }
-    const errors = [
+    const contentErrors = [
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
       ...validateContent(content, type.schema),
@@ -1062,9 +1074,7 @@ export class Stack implements StackClient {
       ...validateGrantBaseId(typeId, content),
       ...validateInstall(typeId, content),
     ];
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
+    throwValidation(contentErrors, argumentErrors);
 
     assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
@@ -1370,17 +1380,14 @@ export class Stack implements StackClient {
         : []),
       ...(associations ? validateAssociations(associations) : []),
     ];
-    if (argumentErrors.length > 0) {
-      throw new StackValidationError(argumentErrors, ARGUMENTS_INVALID);
-    }
-    const errors = contentPatch
+    const patchErrors = contentPatch
       ? [
           ...validateReservedKeys(contentPatch),
           ...validatePatchValues(contentPatch),
           ...validateContentKeys(contentPatch),
         ]
       : [];
-    if (errors.length > 0) throw new StackValidationError(errors);
+    throwValidation(patchErrors, argumentErrors);
 
     await this.checkAttachmentAssociationPointers(associations, existing.associations);
 
@@ -1475,7 +1482,7 @@ export class Stack implements StackClient {
     associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    assertAssociationList(associations, 'associate()', 'associations');
+    assertAssociationList(associations, 'associate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'add', association })),
@@ -1496,7 +1503,7 @@ export class Stack implements StackClient {
     associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    assertAssociationList(associations, 'dissociate()', 'associations');
+    assertAssociationList(associations, 'dissociate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'remove', association })),
@@ -1557,7 +1564,7 @@ export class Stack implements StackClient {
     permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'grantAccess()', 'permissions');
+    assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'add', association })),
@@ -1576,7 +1583,7 @@ export class Stack implements StackClient {
     permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'revokeAccess()', 'permissions');
+    assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'remove', association })),
