@@ -95,6 +95,8 @@ import {
   StackSchemaDriftError,
   StackValidationError,
   StackVersionConflictError,
+  ARGUMENTS_INVALID,
+  SCHEMA_INVALID,
 } from './errors.js';
 import {
   assertQueryCapabilities,
@@ -106,6 +108,7 @@ import {
   assertValidSort,
   normalizeSort,
   assertAssociationEdits,
+  assertAssociationList,
   assertAuthorityAssociations,
   assertDataAssociations,
   filtersContent,
@@ -575,6 +578,21 @@ export interface StackClient {
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }
 
+/**
+ * One refusal for every problem a call carries, content and arguments alike,
+ * so a caller fixes them in one round trip. Content is itself an argument,
+ * so a mixed set reads "Invalid arguments"; content alone keeps its header.
+ */
+function throwValidation(
+  contentErrors: ValidationError[],
+  argumentErrors: ValidationError[],
+): void {
+  if (argumentErrors.length > 0) {
+    throw new StackValidationError([...argumentErrors, ...contentErrors], ARGUMENTS_INVALID);
+  }
+  if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -778,7 +796,7 @@ export class Stack implements StackClient {
     // JSON that no compiler has seen.
     const shapeErrors = validateSchemaShape(schema);
     if (shapeErrors.length > 0) {
-      throw new StackValidationError(shapeErrors);
+      throw new StackValidationError(shapeErrors, SCHEMA_INVALID);
     }
 
     const nameErrors = [
@@ -786,7 +804,7 @@ export class Stack implements StackClient {
       ...validateSchemaFieldNames(schema),
     ];
     if (nameErrors.length > 0) {
-      throw new StackValidationError(nameErrors);
+      throw new StackValidationError(nameErrors, SCHEMA_INVALID);
     }
 
     const schemaHash = await hashSchema(schema);
@@ -922,7 +940,9 @@ export class Stack implements StackClient {
   ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
     const problem = familyIdProblem(baseId, 'migrateAll');
-    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
+    if (problem) {
+      throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
+    }
     const types = await this.adapter.listTypes();
     const familyTypeIds = types.filter((t) => t.baseId === baseId).map((t) => t.id);
 
@@ -1033,13 +1053,7 @@ export class Stack implements StackClient {
     assertDataAssociations(opts.associations ?? [], 'associations');
     assertAuthorityAssociations(opts.permissions ?? [], 'permissions');
 
-    const errors = [
-      ...validateReservedKeys(content),
-      ...validateContentKeys(content),
-      ...validateContent(content, type.schema),
-      ...validateGrantee(typeId, content),
-      ...validateGrantBaseId(typeId, content),
-      ...validateInstall(typeId, content),
+    const argumentErrors = [
       ...validateAssociations(opts.permissions, 'permissions'),
       ...validatePermissions(opts.permissions),
       ...validateAssociations(opts.associations),
@@ -1050,11 +1064,17 @@ export class Stack implements StackClient {
     // on its own is caught too: defaulted-createdAt is now, which a
     // backdated updatedAt alone would still precede.
     if (opts.updatedAt !== undefined && updatedAt.getTime() < createdAt.getTime()) {
-      errors.push({ path: 'updatedAt', message: 'updatedAt cannot precede createdAt.' });
+      argumentErrors.push({ path: 'updatedAt', message: 'updatedAt cannot precede createdAt.' });
     }
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
+    const contentErrors = [
+      ...validateReservedKeys(content),
+      ...validateContentKeys(content),
+      ...validateContent(content, type.schema),
+      ...validateGrantee(typeId, content),
+      ...validateGrantBaseId(typeId, content),
+      ...validateInstall(typeId, content),
+    ];
+    throwValidation(contentErrors, argumentErrors);
 
     assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
@@ -1354,20 +1374,20 @@ export class Stack implements StackClient {
     if (associations) assertDataAssociations(associations, 'associations');
     if (permissions) assertAuthorityAssociations(permissions, 'permissions');
 
-    const errors = [
-      ...(contentPatch
-        ? [
-            ...validateReservedKeys(contentPatch),
-            ...validatePatchValues(contentPatch),
-            ...validateContentKeys(contentPatch),
-          ]
-        : []),
+    const argumentErrors = [
       ...(permissions
         ? [...validateAssociations(permissions, 'permissions'), ...validatePermissions(permissions)]
         : []),
       ...(associations ? validateAssociations(associations) : []),
     ];
-    if (errors.length > 0) throw new StackValidationError(errors);
+    const patchErrors = contentPatch
+      ? [
+          ...validateReservedKeys(contentPatch),
+          ...validatePatchValues(contentPatch),
+          ...validateContentKeys(contentPatch),
+        ]
+      : [];
+    throwValidation(patchErrors, argumentErrors);
 
     await this.checkAttachmentAssociationPointers(associations, existing.associations);
 
@@ -1462,6 +1482,7 @@ export class Stack implements StackClient {
     associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    assertAssociationList(associations, 'associate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'add', association })),
@@ -1482,6 +1503,7 @@ export class Stack implements StackClient {
     associations: DataAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    assertAssociationList(associations, 'dissociate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'remove', association })),
@@ -1542,6 +1564,7 @@ export class Stack implements StackClient {
     permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'add', association })),
@@ -1560,6 +1583,7 @@ export class Stack implements StackClient {
     permissions: AuthorityAssociation[],
     opts: ActorOptions = {},
   ): Promise<StackRecord> {
+    assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'remove', association })),
@@ -1604,7 +1628,7 @@ export class Stack implements StackClient {
    */
   private assertPermissionSet(next: AuthorityAssociation[]): void {
     const errors = validatePermissions(next);
-    if (errors.length > 0) throw new StackValidationError(errors);
+    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
   }
 
   /**
@@ -2315,12 +2339,15 @@ export class Stack implements StackClient {
       // succeeds does confirm the record it names, but only to a caller who
       // already has file access for those bytes.
       // See the anti-oracle rule in docs/spec/attachments.md.
-      throw new StackValidationError([
-        {
-          path: 'attachmentRecordId',
-          message: 'attachmentRecordId must name an `_attachment` record for this fileId',
-        },
-      ]);
+      throw new StackValidationError(
+        [
+          {
+            path: 'attachmentRecordId',
+            message: 'attachmentRecordId must name an `_attachment` record for this fileId',
+          },
+        ],
+        ARGUMENTS_INVALID,
+      );
     });
   }
 
@@ -2824,7 +2851,9 @@ export class Stack implements StackClient {
     this.assertOpen();
     validateGrantTarget(grant.grantee);
     const problem = familyIdProblem(baseId, 'revokeType');
-    if (problem) throw new StackValidationError([{ path: 'baseId', message: problem }]);
+    if (problem) {
+      throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
+    }
     const familyId = baseId;
     const actionSet = new Set(grant.actions);
     const all = await loadGrantRecords((q) => this.query(q));
@@ -3048,7 +3077,7 @@ export class Stack implements StackClient {
         }
       }
     });
-    if (errors.length > 0) throw new StackValidationError(errors);
+    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
     for (const r of manifest.requests) this.checkGrantValid(r.baseId, r.actions);
   }
 
@@ -3196,7 +3225,7 @@ export class Stack implements StackClient {
       });
     });
     if (errors.length > 0) {
-      throw new StackValidationError(errors);
+      throw new StackValidationError(errors, ARGUMENTS_INVALID);
     }
   }
 

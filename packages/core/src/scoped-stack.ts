@@ -74,6 +74,7 @@ import {
 } from './errors.js';
 import {
   assertAssociationEdits,
+  assertAssociationList,
   assertAuthorityAssociations,
   assertDataAssociations,
   assertSortCapability,
@@ -1350,6 +1351,7 @@ export class ScopedStack implements StackClient {
    * read so it cannot depend on who is asking.
    */
   async associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+    assertAssociationList(associations, 'associate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'add', association })),
@@ -1359,6 +1361,7 @@ export class ScopedStack implements StackClient {
 
   /** See associate() — the same write gate, the same kind refusal. */
   async dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+    assertAssociationList(associations, 'dissociate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'remove', association })),
@@ -1394,6 +1397,7 @@ export class ScopedStack implements StackClient {
    * See docs/spec/access-control.md § Record-level permissions.
    */
   async grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+    assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'add', association })),
@@ -1403,6 +1407,7 @@ export class ScopedStack implements StackClient {
 
   /** Withdraw elements of who reaches a record — see grantAccess(). */
   async revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+    assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'remove', association })),

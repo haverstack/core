@@ -17,7 +17,7 @@
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
-import { StackBadRequestError, StackValidationError } from './errors.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import { familyIdProblem } from './schema.js';
 import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
@@ -525,9 +525,10 @@ export function assertAssociationEdits(
   half: 'data' | 'authority',
 ): asserts changes is AssociationEdit[] {
   if (!Array.isArray(changes) || changes.length === 0) {
-    throw new StackValidationError([
-      { path: 'changes', message: `${surface} names at least one change.` },
-    ]);
+    throw new StackValidationError(
+      [{ path: 'changes', message: `${surface} names at least one change.` }],
+      ARGUMENTS_INVALID,
+    );
   }
   const errors: ValidationError[] = [];
   changes.forEach((raw: unknown, i) => {
@@ -550,7 +551,7 @@ export function assertAssociationEdits(
     }
     errors.push(...validateAssociation(edit.association as Association, `${path}.association`));
   });
-  if (errors.length > 0) throw new StackValidationError(errors);
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
 
   const associations = (changes as AssociationEdit[]).map((c) => c.association);
   if (half === 'data') assertDataAssociations(associations, surface);
@@ -565,7 +566,42 @@ export function assertAssociationEdits(
       });
     }
   });
-  if (duplicates.length > 0) throw new StackValidationError(duplicates);
+  if (duplicates.length > 0) throw new StackValidationError(duplicates, ARGUMENTS_INVALID);
+}
+
+/**
+ * assertAssociationEdits() for the verbs taking a bare association list —
+ * associate(), grantAccess() and their inverses — asked before the list is
+ * wrapped as edits, so each problem is reported under `param`, the name the
+ * caller passed it as, rather than the wrapped list's `changes`. The checks
+ * run in the same order, so a wrong-surface element is refused as such
+ * before its duplicates are counted.
+ */
+export function assertAssociationList(
+  associations: unknown,
+  surface: string,
+  param: string,
+  half: 'data' | 'authority',
+): asserts associations is Association[] {
+  if (!Array.isArray(associations) || associations.length === 0) {
+    throw new StackValidationError(
+      [{ path: param, message: `${surface} names at least one association.` }],
+      ARGUMENTS_INVALID,
+    );
+  }
+  const errors = associations.flatMap((raw: unknown, i) =>
+    typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+      ? []
+      : [{ path: `${param}[${i}]`, message: `${param}[${i}] must be an object.` }],
+  );
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+  const list = associations as Association[];
+  const shapeErrors = list.flatMap((a, i) => validateAssociation(a, `${param}[${i}]`));
+  if (shapeErrors.length > 0) throw new StackValidationError(shapeErrors, ARGUMENTS_INVALID);
+  if (half === 'data') assertDataAssociations(list, surface);
+  else assertAuthorityAssociations(list, surface);
+  const listErrors = validateAssociations(list, param);
+  if (listErrors.length > 0) throw new StackValidationError(listErrors, ARGUMENTS_INVALID);
 }
 
 /**
@@ -607,7 +643,7 @@ export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } |
     .map((b) => familyIdProblem(b, 'filter.baseId'))
     .filter((m): m is string => m !== null)
     .map((message) => ({ path: 'filter.baseId', message }));
-  if (errors.length > 0) throw new StackValidationError(errors);
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
 }
 
 /**
