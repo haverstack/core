@@ -12,7 +12,7 @@
  */
 
 import { StackBadRequestError, StackMigrationError, StackValidationError } from './errors.js';
-import { parseTypeId } from './schema.js';
+import { lineageProblem, parseTypeId } from './schema.js';
 import type { ValidationError } from './validate.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
 import type {
@@ -169,7 +169,10 @@ export const typeHandle = <const S extends ReadonlyTypeSchema>({
       `Invalid TypeId format: "${id}". Expected "namespace/name@version", e.g. "com.example.myapp/note@1".`,
     );
   }
-  const from = typeof migratesFrom === 'object' ? migratesFrom.id : migratesFrom;
+  const from =
+    typeof migratesFrom === 'object' && migratesFrom !== null ? migratesFrom.id : migratesFrom;
+  const problem = lineageProblem(id, from);
+  if (problem) throw new StackBadRequestError(problem);
   return Object.freeze({
     id,
     baseId: parsed.baseId,
@@ -191,7 +194,7 @@ export const isTypeHandle = (value: unknown): value is TypeHandle =>
 // -------------------------------------------------------
 
 /**
- * A step from one version of a family to the next, passed to `Stack.open()`
+ * A step from one version of a type to another, passed to `Stack.open()`
  * and typed on both versions' content. `migrate` is a method so a typed
  * migration fits a list of untyped ones. See docs/spec/data-model.md § Type
  * migrations.
@@ -203,16 +206,17 @@ export type Migration<From = Record<string, unknown>, To = Record<string, unknow
 };
 
 /**
- * Build the migration from `from` to `to`, which must name `from` as its
- * `migratesFrom`: the pairing is checked once here, and `fn` is checked
- * against both handles' content types.
+ * Build the migration from `from` to `to`, checking `fn` against both
+ * handles' content types. Within a family, `to` must name `from` as its
+ * `migratesFrom`; a step into another family has no lineage to check. See
+ * docs/spec/data-model.md § Type migrations.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
   fn: (content: ContentOf<F>) => NoInfer<ContentOf<T>>,
 ): Migration<ContentOf<F>, ContentOf<T>> => {
-  if (to.migratesFrom !== from.id) {
+  if (to.baseId === from.baseId && to.migratesFrom !== from.id) {
     throw new StackMigrationError(
       `Cannot migrate "${from.id}" to "${to.id}": "${to.id}" migrates from ` +
         `${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}.`,

@@ -5,7 +5,7 @@ import { migration, typeHandle } from '../src/type-handle.js';
 import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError, StackValidationError } from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
-import type { TypeSchema } from '../src/types.js';
+import type { TypeId, TypeSchema } from '../src/types.js';
 
 const OWNER = 'owner-123';
 
@@ -153,6 +153,22 @@ describe('typeHandle()', () => {
     expect('migratesFrom' in BookV1).toBe(false);
   });
 
+  test('takes migratesFrom only as an earlier version of its own family', () => {
+    const bookV3 = (migratesFrom: unknown) => () =>
+      typeHandle({
+        id: 'com.example.reading/book@3',
+        name: 'Book',
+        schema: {},
+        migratesFrom: migratesFrom as TypeId,
+      });
+    expect(bookV3(Shelf)).toThrow(StackBadRequestError);
+    expect(bookV3('com.example.reading/book@3')).toThrow(StackBadRequestError);
+    expect(bookV3('com.example.reading/book@4')).toThrow(StackBadRequestError);
+    expect(bookV3('book')).toThrow(StackBadRequestError);
+    expect(bookV3(null)).toThrow(StackBadRequestError);
+    expect(bookV3(BookV1)().migratesFrom).toBe(BookV1.id);
+  });
+
   test('refuses a malformed TypeId', () => {
     expect(() => typeHandle({ id: 'book', name: 'Book', schema: {} })).toThrow(
       StackBadRequestError,
@@ -198,13 +214,24 @@ describe('migration()', () => {
     migration(BookV1, Book, (c) => ({ ...c }));
   });
 
-  test('refuses a target that does not migrate from the source', () => {
-    expect(() => migration(Shelf, Book, () => ({ title: 'x', status: 'want' }))).toThrow(
-      `Cannot migrate "${Shelf.id}" to "${Book.id}": "${Book.id}" migrates from "${BookV1.id}".`,
+  test('refuses a target in the same family that does not migrate from the source', () => {
+    const BookV3 = typeHandle({
+      id: 'com.example.reading/book@3',
+      name: 'Book',
+      schema: Book.schema,
+      migratesFrom: Book,
+    });
+    expect(() => migration(BookV1, BookV3, () => ({ title: 'x', status: 'want' }))).toThrow(
+      `Cannot migrate "${BookV1.id}" to "${BookV3.id}": "${BookV3.id}" migrates from "${Book.id}".`,
     );
     expect(() => migration(Book, BookV1, (c) => ({ title: c.title, status: 'want' }))).toThrow(
       StackMigrationError,
     );
+  });
+
+  test('builds a step into another family without lineage', () => {
+    const m = migration(Shelf, Book, (c) => ({ title: c.name, status: 'want' }));
+    expect(m.migrate({ name: 'Fiction' })).toEqual({ title: 'Fiction', status: 'want' });
   });
 });
 

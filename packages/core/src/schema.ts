@@ -333,6 +333,25 @@ export const buildTypeId = (baseId: string, version: number): string => `${baseI
 export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;
 
 /**
+ * Why `migratesFrom` cannot be the lineage of `id`, or null if it can. A
+ * version migrates from an earlier version of its own family; a step into
+ * another family is a migration, not lineage. See docs/spec/data-model.md
+ * § Type migrations.
+ */
+export const lineageProblem = (id: string, migratesFrom: unknown): string | null => {
+  if (migratesFrom === undefined) return null;
+  const self = parseTypeId(id);
+  const from = typeof migratesFrom === 'string' ? parseTypeId(migratesFrom) : null;
+  if (!self || !from) {
+    return `migratesFrom must be a versioned TypeId, e.g. "com.example.myapp/note@1".`;
+  }
+  if (from.baseId !== self.baseId || from.version >= self.version) {
+    return `"${id}" cannot migrate from "${migratesFrom as string}": migratesFrom names an earlier version of the same family.`;
+  }
+  return null;
+};
+
+/**
  * Why `value` cannot name a type family, or null if it can. A family is a
  * bare `BaseId`; a versioned TypeId names one version and is refused with the
  * family to pass instead. See docs/spec/data-model.md § Types.

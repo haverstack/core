@@ -379,6 +379,14 @@ describe('defineType', () => {
     expect(type?.migratesFrom).toBe(NOTE_V1);
   });
 
+  test('refuses a migratesFrom that is not an earlier version of the same family', async () => {
+    for (const migratesFrom of ['com.example.other/note@1', NOTE_V2, 'note']) {
+      await expect(
+        stack.defineType({ id: NOTE_V2, name: 'Note', schema: {}, migratesFrom }),
+      ).rejects.toThrow(StackBadRequestError);
+    }
+  });
+
   // -------------------------------------------------------
   // Schema drift detection
   // -------------------------------------------------------
@@ -2086,6 +2094,50 @@ describe('Stack.open({ migrations })', () => {
     await expect(Stack.open(adapter, { migrations: [noteV1ToV2, again] })).rejects.toThrow(
       StackMigrationError,
     );
+  });
+
+  test('refuses a step that names something other than two TypeIds', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    for (const [from, to] of [
+      [NOTE_V1, 'com.example.test/note'],
+      ['note', NOTE_V2],
+    ]) {
+      await expect(Stack.open(adapter, { migrations: [{ from, to, migrate }] })).rejects.toThrow(
+        StackMigrationError,
+      );
+    }
+  });
+
+  test('refuses a step to the same or an earlier version of its family', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    for (const to of [NOTE_V1, 'com.example.test/note@0']) {
+      await expect(
+        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, migrate }] }),
+      ).rejects.toThrow(StackMigrationError);
+    }
+  });
+
+  test('refuses steps that form a cycle across families', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    const other = 'com.example.other/note@1';
+    await expect(
+      Stack.open(adapter, {
+        migrations: [
+          { from: NOTE_V1, to: NOTE_V2, migrate },
+          { from: NOTE_V2, to: other, migrate },
+          { from: other, to: NOTE_V1, migrate },
+        ],
+      }),
+    ).rejects.toThrow(`The migrations passed form a cycle through "${NOTE_V1}".`);
+  });
+
+  test('takes a step into another family', async () => {
+    const Other = typeHandle({ id: 'com.example.other/note@1', name: 'Other', schema: {} });
+    await stack.defineType(Other);
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await reopenWith(migration(NoteV1, Other, () => ({})));
+    await stack.migrateAll(fam(NOTE_V1));
+    expect((await stack.get(note.id))?.typeId).toBe(Other.id);
   });
 });
 
