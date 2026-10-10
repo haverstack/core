@@ -81,11 +81,9 @@ export class ScopeAuthority {
 
   /**
    * Whether unconditional owner authority applies — the owner acting as
-   * itself. The verbs that rest on it are irreversible or disclose the
-   * sharing graph, so delegation never carries one to a subject, whichever
-   * side the owner is on. Shared with the predicate a server applies to a
-   * session, which decides the same tier one step earlier. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
+   * itself. The verbs resting on it are irreversible or disclose the sharing
+   * graph, so delegation never carries it, whichever side the owner is on.
+   * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   get ownerActingAlone(): boolean {
     return isOwnerActingAlone(
@@ -100,16 +98,10 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether `grantee` holds a _grant covering one of `actions` for the
-   * type's family (grants match by baseId, so a version bump never orphans
-   * one). -own actions additionally require the author to be `grantee`,
-   * unless `matchOwn` is false — on the principal side of a delegated
-   * request the suffix reads as the bare verb, since which records are
-   * reachable is the subject's business. `allowDefault` decides whether a
-   * grant naming nobody counts.
-   *
-   * Reached only through subjectAllows()/principalHolds(), which fix those
-   * two flags per side. Call one of those instead.
+   * Whether `grantee` holds a _grant covering one of `actions` on the type's
+   * family. The flags are fixed per side of a delegation and mean nothing
+   * alone, so this is reached only through subjectAllows() and
+   * principalHolds(). See docs/spec/access-control.md § Who a grant reaches.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -177,18 +169,10 @@ export class ScopeAuthority {
   }
 
   /**
-   * The principal half of a delegated request's authority: does the app
-   * hold any grant permitting these verbs on this type at all. Bounds what
-   * the subject's own authority can reach through it, so a powerful app
-   * can never lend its reach to a weaker subject — nor the reverse.
-   * Vacuously true when there's no delegation, where the principal and
-   * subject checks would be the same question asked twice.
-   *
-   * Neither default nor group-targeted grants count here. "Any
-   * authenticated entity" is about people who turn up, not software the
-   * owner installed; and a roster is editable by any of the group's admins,
-   * so authority reaching a principal through one would let someone other
-   * than the owner name an app to a type.
+   * The principal half of a delegated request's authority, which bounds
+   * what the subject's reaches so neither lends its reach to the other.
+   * Vacuously true without delegation. Default and group grants do not
+   * count — see docs/spec/access-control.md § Who a grant reaches.
    */
   principalAllows(
     typeId: TypeId,
@@ -221,13 +205,9 @@ export class ScopeAuthority {
   }
 
   /**
-   * The subject half: which records are reachable, answered with `-own`
-   * matching and default grants both in force — the ordinary reading of a
-   * grant, since the subject is the entity a grant is written about.
-   *
-   * Paired with principalHolds() so that the two halves of the
-   * intersection are the only callers of hasGrant(): its flags differ per
-   * side and mean nothing on their own, so no call site sets them by hand.
+   * The subject half: which records are reachable, with `-own` matching and
+   * default grants in force — the ordinary reading of a grant, since the
+   * subject is the entity a grant is written about.
    */
   subjectAllows(
     typeId: TypeId,
@@ -247,11 +227,9 @@ export class ScopeAuthority {
   }
 
   /**
-   * How to refuse a record this request addressed by ID. A requester who
-   * can read the record is told it exists and the verb was refused;
-   * everyone else is told what a missing ID is told, so no one learns an ID
-   * is live who could not have learned it by reading. `message` therefore
-   * only ever reaches someone holding the record already.
+   * How to refuse a record this request addressed by ID: a permission error
+   * to a requester who can read it, the not-found answer to anyone else, so
+   * `message` only reaches someone holding the record already.
    * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
   async denialFor(record: StackRecord, message: string): Promise<StackError> {
@@ -307,14 +285,10 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether this request may reference `recordId` (as a parentId or
-   * relationship target). Missing and unreadable both return false —
-   * indistinguishable, so this can't probe for a record's existence.
-   *
-   * The owner acting alone passes without the lookup: there is no record in
-   * their own stack they may not read, so the gate could only refuse them
-   * for absence — which is `Stack`'s to answer, with a conflict that names
-   * the problem. See docs/spec/access-control.md § Reference-creation gating.
+   * Whether this request may reference `recordId` as a parent or target.
+   * Missing and unreadable are both false, so this probes nothing. The
+   * owner acting alone skips the lookup and leaves absence to `Stack`.
+   * See docs/spec/access-control.md § Reference-creation gating.
    */
   async canReadReferent(recordId: string): Promise<boolean> {
     if (this.ownerActingAlone) return true;
@@ -324,12 +298,9 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether this request can read some record referencing `fileId` —
-   * shared by canAccessFile() and the non-owner _attachment@1 create()
-   * carve-out, which deliberately excludes the uploader clause.
-   * `_attachment@1` records never match: the carve-out has to be satisfied
-   * by some *other* record referencing the file, or one successful guess
-   * would unlock unlimited further metadata records for the same fileId.
+   * Whether this request can read some record referencing `fileId`, other
+   * than an `_attachment@1` record — otherwise one correct guess would
+   * unlock unlimited further metadata records for the file.
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
   async hasReadableReference(fileId: string): Promise<boolean> {
@@ -409,14 +380,9 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether this request may decide who else reaches a record — the rule
-   * a reshare enforces, asked at create time too so the reach it
-   * withholds can't be taken one step earlier while authoring. A delegated
-   * app is denied it: widening access is the one thing containment most
-   * needs to hold. Refused rather than silently ignored, so an app never
-   * believes it published something it didn't. Not `ownerActingAlone`:
-   * the record is the subject's own, so an owner principal grants it no
-   * reach the subject lacks.
+   * Whether this request may widen who reaches a record, at create time or
+   * after. A delegated app may not, unless the owner is its principal:
+   * widening access is what containment most needs to hold.
    * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   mayGrantAccess(): boolean {
@@ -435,15 +401,10 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether this request may decide who else reaches `record` — the
-   * decision requireReshareOf() refuses on, without the refusal, for the
-   * read paths that project on it rather than throw.
-   *
-   * A `_group` asks management, not authorship: a creator later demoted
-   * from the admin roster shouldn't retain a side door to reassign who can
-   * read or write the group record. Everything else is intersected like
-   * every other authority here, or an owner principal would carry its
-   * subject to records the subject cannot touch.
+   * Whether this request may decide who else reaches `record`: management
+   * for a `_group`, so a demoted creator keeps no side door; otherwise the
+   * owner-or-author rule, asked of both sides of a delegation.
+   * See docs/spec/access-control.md § Record-level permissions.
    */
   canReshare(record: StackRecord): boolean {
     if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) return this.isGroupManager(record);

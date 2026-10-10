@@ -73,12 +73,10 @@ export type CreateRecordOptions = {
   unlisted?: boolean;
 };
 /**
- * CreateRecordOptions extended with createdAt/updatedAt, for backdating a
- * record's clock fields on import. Unscoped Stack.create() accepts them
- * unconditionally; ScopedStack.create() only from the stack owner acting
- * alone, since a grantee or a delegated app could otherwise forge a sort
- * position the same way a raw `id` could.
- * See docs/spec/data-model.md § Record IDs.
+ * CreateRecordOptions plus createdAt/updatedAt, for backdating on import.
+ * ScopedStack.create() takes them only from the owner acting alone: anyone
+ * else could forge a sort position with them, as with a raw `id`.
+ * See docs/spec/data-model.md § Backdating on import.
  */
 export type BackdatableCreateRecordOptions = CreateRecordOptions & {
   /**
@@ -106,13 +104,10 @@ export type StackOptions = {
    */
   ownerProfile?: { name: string; handle?: string };
   /**
-   * Clock-skew tolerance (ms) for two timestamp-prefix checks: the one
-   * ScopedStack.create() runs on a non-backdated create's client-supplied
-   * `id` against the current time, and the one Stack.create() runs between
-   * an explicit `id` and an explicit `createdAt` when both are supplied —
-   * reached directly when unscoped, or via ScopedStack.create() when the
-   * requester is the owner acting alone. Default: 24 hours; null disables
-   * both. See docs/spec/data-model.md § Record IDs.
+   * Clock-skew tolerance (ms) between a client-supplied `id`'s timestamp
+   * and the current time (a live scoped create) or an explicit `createdAt`
+   * (a backdated one). Default: 24 hours; null disables both checks.
+   * See docs/spec/data-model.md § Record IDs.
    */
   idTimestampSkewMs?: number | null;
   /**
@@ -264,14 +259,10 @@ export interface StackClient {
   /** getEntityByDid() for the one DID every stack reserves: its own owner. */
   getOwnerEntity(): Promise<StackRecord | null>;
   /**
-   * Apply a change set: any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted`, in one atomic write —
-   * producing one version where it names `contentPatch`, and none where it
-   * doesn't. Keys are read for presence, so `unlisted: false`
-   * and `parentId: null` are changes; a change set naming no key at all is
-   * a StackBadRequestError. Under ScopedStack each key carries its own gate and
-   * one refused key refuses the call.
-   * See docs/spec/data-model.md § Mutations.
+   * Apply a change set — any of `contentPatch`, `parentId`, `permissions`,
+   * `associations` and `unlisted` — as one atomic write, versioned only when
+   * it names `contentPatch`. Keys are read for presence; under ScopedStack
+   * one refused key refuses the call. See docs/spec/data-model.md § Mutations.
    */
   mutate<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -338,22 +329,15 @@ export interface StackClient {
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
   restoreVersion(id: RecordId, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
-   * A record's change journal, oldest first. On the mutate surface, on the
-   * same footing as getVersions() — a plain reader is refused.
-   *
-   * Required of every adapter rather than optional, which is why it sits
-   * here beside the rest: an empty log has to mean "nothing changed"
-   * unconditionally, so an adapter with nothing to read refuses and names
-   * why instead. See docs/spec/journal.md § Reading it.
+   * A record's change journal, oldest first, gated like getVersions().
+   * Required of every adapter, so an empty log always means "nothing
+   * changed". See docs/spec/journal.md § Reading it.
    */
   getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
   /**
-   * Commit a per-record migration: change `typeId` and `content` together,
-   * validated against `toTypeId`'s schema. The only way a record's typeId
-   * changes after creation — see docs/spec/wire-format.md § Migration
-   * commit. Takes `ifVersion` like every other mutation that bumps a
-   * record's version (see docs/spec/versioning.md § Optimistic
-   * concurrency); over the wire that is `If-Match`.
+   * Commit a per-record migration: `typeId` and `content` together,
+   * validated against `toTypeId`'s schema — the only way a record's typeId
+   * changes after creation. See docs/spec/wire-format.md § Migration commit.
    */
   commitMigration(
     id: RecordId,

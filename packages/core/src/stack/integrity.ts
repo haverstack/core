@@ -71,14 +71,10 @@ export async function checkBindingsOnUpdate(
 }
 
 /**
- * Bindings across a migration. `content` is a full replacement, so every
- * binding field either keeps its value, moves to a new one, or is shed by
- * omission — and immutability refuses the last two. Asked across the
- * union of both families' binding fields, so a card can neither shed its
- * DID by migrating out of `_entity`/`_app` nor pick one up on the way in.
- *
- * Uniqueness is asked only of the destination family, excluding the
- * record itself. See docs/spec/identity.md § DID bindings.
+ * Bindings across a migration, whose content replaces the old wholesale.
+ * Immutability is asked over both families' binding fields, so a card can
+ * neither shed a DID by migrating out nor pick one up on the way in;
+ * uniqueness, of the destination only. See docs/spec/identity.md § DID bindings.
  */
 export async function checkBindingsOnMigrate(
   stack: Stack,
@@ -106,15 +102,9 @@ export async function checkBindingsOnMigrate(
 }
 
 /**
- * A unique binding field is what a lookup resolves *by* — an Actor's
- * `principalId` by `_app.did`, its `subjectId` by `_entity.did`. Two cards
- * claiming one value would leave that lookup without a single answer, and
- * ambiguity is all an impersonating card needs. Enforced here rather than
- * by schema, since uniqueness is a property of the set, not of the value.
- *
- * Read-then-write, so two creates racing on one value can both pass:
- * closing that means a unique index over a JSON field, which is a
- * decision about where uniqueness lives rather than a local fix.
+ * Refuse a second card claiming a value an Actor is resolved by. A
+ * property of the set rather than the value, so no schema can say it.
+ * Read-then-write: two racing creates can both pass.
  * See docs/spec/identity.md § DID bindings.
  */
 export async function checkBindingUnique(
@@ -144,13 +134,10 @@ export async function checkBindingUnique(
 }
 
 /**
- * A binding is permanent once made: uniqueness stops a second card
- * claiming a value, but only immutability stops an existing card being
- * moved onto one, which reaches the same impersonation by another route.
- * Adopting a value is therefore a one-way step, and a subject whose key
- * changes gets a new card — matching identity.md's deferral of key
- * rotation, where a new key is a new identity rather than the same one
- * relabelled. See docs/spec/identity.md § DID bindings.
+ * A binding is permanent once made: uniqueness stops a second card claiming
+ * a value, but only immutability stops an existing card being moved onto
+ * one. A subject whose key changes gets a new card.
+ * See docs/spec/identity.md § DID bindings.
  */
 export function checkBindingImmutable(
   family: string,
@@ -181,14 +168,9 @@ export function checkBindingImmutable(
 const MAX_PARENT_DEPTH = 64;
 
 /**
- * The checks a *caller-named* destination owes, before the cycle walk:
- * `parentId` is a real, well-formed record id. Format first, so a
- * malformed one is a 400 naming the problem rather than a read that
- * cannot match. Existence closes the gap between the owner path and a
- * non-owner's, where canReadReferent() already refuses a parent that
- * isn't there.
- *
- * restoreVersion() deliberately does not call this — see its own comment.
+ * A caller-named `parentId` is a well-formed id of a record that exists —
+ * format first, so a malformed one is a 400 naming the problem. A restore
+ * names no destination and does not ask this.
  * See docs/spec/data-model.md § Reparenting.
  */
 export async function assertParentExists(
@@ -206,19 +188,10 @@ export async function assertParentExists(
 }
 
 /**
- * Refuse an edge that would make a record its own ancestor — asked at
- * every site that adds one. Nothing downstream (a generator deriving a
- * page path, a folder view) is written to survive a cycle.
- *
- * Walks the unscoped Stack: a walk that skipped the links a
- * requester cannot read would let a cycle be assembled through them and
- * break the invariant for every reader.
- *
- * Read-then-write, so two moves racing on opposite ends of one chain can
- * both pass — the same deferral as checkBindingUnique() above, since
- * closing it would put a graph constraint in the storage contract.
- * Consumers walking `parentId` should carry a visited set rather than
- * trust this alone. See docs/spec/data-model.md § Reparenting.
+ * Refuse an edge that would make a record its own ancestor. Walks the
+ * unscoped Stack, since links a requester cannot read could otherwise
+ * close a cycle. Read-then-write, so racing moves can both pass.
+ * See docs/spec/data-model.md § Reparenting.
  */
 export async function assertNoParentCycle(
   stack: Stack,
@@ -260,17 +233,10 @@ const ATTACHMENT_IMMUTABLE_FIELDS = [
 type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
 
 /**
- * mimeType is a property of the fileId, not the uploader's perspective:
- * the first metadata record for a fileId fixes it, and a conflicting
- * later upload is rejected. See docs/spec/attachments.md § The
- * `_attachment` record type.
- *
- * Best-effort by construction — check-then-create with no storage-level
- * uniqueness behind it, so two racing first uploads can both land on a
- * concurrent server. What survives that race is the *resolution*:
- * getAttachmentRecords() returns the candidates in the same total order
- * a server serving Content-Type applies, so both sides name the same
- * winner however many records exist.
+ * mimeType belongs to the fileId: its first metadata record fixes it, and
+ * a conflicting later one is refused. Best-effort against a racing first
+ * upload; what survives the race is a deterministic winner. See
+ * docs/spec/attachments.md § The `_attachment` record type.
  */
 export async function checkAttachmentMimeTypeOnCreate(
   stack: Stack,
@@ -297,15 +263,9 @@ export async function checkAttachmentMimeTypeOnCreate(
 }
 
 /**
- * An attachment association's `attachmentRecordId` names an `_attachment`
- * record for the same `fileId` — checked here so a reference can't be
- * annotated with an unrelated record's filename.
- *
- * Best-effort, like the mimeType check above: the named record can be
- * deleted afterwards, so every reader of the field falls back rather than
- * trusting it. `stored` is what the record already holds, asked so a
- * change set restating an association is never refused for a pointer the
- * record has carried since before the named record was deleted.
+ * An `attachmentRecordId` must name an `_attachment` record for the same
+ * `fileId`. Pointers already in `stored` are not re-asked, so restating an
+ * association never fails for a record deleted since.
  * See docs/spec/attachments.md § Naming the upload a reference came from.
  */
 export async function checkAttachmentAssociationPointers(
@@ -338,12 +298,9 @@ export async function checkAttachmentAssociationPointers(
     ) {
       return;
     }
-    // One message for every way of failing: a missing record and a record
-    // for other bytes must not be distinguishable, or this becomes an
-    // existence oracle for records the caller cannot read. A write that
-    // succeeds does confirm the record it names, but only to a caller who
-    // already has file access for those bytes.
-    // See the anti-oracle rule in docs/spec/attachments.md.
+    // One message for every way of failing, so this is no existence oracle
+    // for records the caller cannot read. See docs/spec/attachments.md
+    // § Creating `_attachment@1` records directly.
     throw new StackValidationError(
       [
         {
@@ -357,16 +314,9 @@ export async function checkAttachmentAssociationPointers(
 }
 
 /**
- * filename is the only mutable field on an `_attachment@1` record; fileId,
- * size and mimeType are immutable, and the correction flow is delete +
- * re-upload. `violates` decides what counts as touching one, because the
- * two write shapes disagree: a patch names only what it changes, while a
- * migration replaces content wholesale and necessarily re-sends all three.
- *
- * Repointing `fileId` is the one that matters most: an `_attachment@1`
- * record naming a fileId is what canAccessFile()'s uploader clause reads,
- * so moving an existing record onto another file's hash is a route to
- * bytes the record's author never uploaded.
+ * Refuse a write that moves an `_attachment@1` record's fileId, size or
+ * mimeType. `violates` decides what counts as a move, since a patch names
+ * only what it changes while a migration re-sends all three.
  * See docs/spec/attachments.md § The `_attachment` record type.
  */
 export function assertAttachmentImmutable(
@@ -403,15 +353,10 @@ export function checkConfigEntityIdUnchanged(
 }
 
 /**
- * Refuse a write that would leave a `_group` Record with no `admin` on its
- * roster. Asked of the roster the write would *produce*, which is the
- * whole of the self-removal question: an admin removing themselves passes
- * while another remains and is refused when they are the last, without
- * either case naming who is going.
- *
- * An integrity constraint on the Record, not a permission question, so it
- * lives here rather than in `ScopedStack` and binds every requester — the
- * stack owner included. See docs/spec/identity.md § Group.
+ * Refuse a write that would leave a `_group` Record with no `admin`, asked
+ * of the roster the write would produce. An integrity rule, not a
+ * permission, so it binds the stack owner too.
+ * See docs/spec/identity.md § Group.
  */
 export function assertGroupAdminRemains(record: StackRecord, next: DataAssociation[]): void {
   if (!isGroupRecord(record)) return;
