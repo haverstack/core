@@ -666,7 +666,9 @@ describe('enum', () => {
 
   test('a stored enum with no values list refuses every value rather than throwing', () => {
     const malformed = { status: { kind: 'enum' } } as unknown as TypeSchema;
-    expect(paths({ status: 'want' }, malformed)).toEqual(['status']);
+    expect(errorsFor({ status: 'want' }, malformed)).toEqual([
+      { path: 'status', message: 'The schema declares no enum values, so "want" is not allowed' },
+    ]);
   });
 });
 
@@ -707,7 +709,7 @@ describe('validateSchemaShape enum', () => {
 
   test('an enum key on any field is refused, not ignored', () => {
     expect(messages('{"s": {"kind": "string", "enum": ["a"]}}')).toEqual([
-      '"enum" is not a field modifier; use { kind: "enum", values }',
+      '"enum" is a field kind, not a field key',
     ]);
   });
 });

@@ -275,7 +275,7 @@ const unknownEnumValues = (
 ): void => {
   if (value === undefined || value === null) return;
   if (def.kind === 'enum') {
-    if (typeof value === 'string' && !enumAllows(def.values, value)) {
+    if (!enumAllows(def.values, value)) {
       errors.push({ path, message: enumMismatchMessage(def.values, value) });
     }
     return;

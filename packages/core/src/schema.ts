@@ -60,10 +60,11 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
   }
 
   // Scalar. An enum's `values` are sorted so reordering them is not a change.
+  // A stored enum may lack the list; it hashes as one that allows nothing.
   return {
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
-    ...(def.kind === 'enum' && { values: [...def.values].sort() }),
+    ...(def.kind === 'enum' && Array.isArray(def.values) && { values: [...def.values].sort() }),
   };
 };
 
@@ -99,10 +100,11 @@ export const hashSchema = async (schema: TypeSchema): Promise<string> => {
 /**
  * Kinds acceptable in a candidate field, per required kind. `string` and
  * `text` are mutually acceptable for reading, and either accepts an enum,
- * whose values are strings; everything else requires an exact match. See
+ * whose values are strings; everything else requires an exact match. A
+ * required enum takes the subset rule in isFieldCompatible instead. See
  * docs/spec/data-model.md § Type compatibility.
  */
-const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
+const READ_COMPATIBLE: Record<Exclude<ScalarFieldKind, 'enum'>, ScalarFieldKind[]> = {
   string: ['string', 'text', 'enum'],
   text: ['text', 'string', 'enum'],
   number: ['number'],
@@ -110,8 +112,6 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   date: ['date'],
   'record-ref': ['record-ref'],
   'file-ref': ['file-ref'],
-  // Never consulted: a required enum takes the subset rule in isFieldCompatible.
-  enum: ['enum'],
 };
 
 // Candidate schemas can come from another app's Type definition (the
@@ -239,8 +239,9 @@ const diffField = (
   }
   // Losing a value narrows what an enum accepts; gaining one widens it.
   if (stored.kind === 'enum' && candidate.kind === 'enum') {
+    // A stored Type is not re-validated, so its enum may lack the list.
     const kept = new Set(candidate.values);
-    const removed = stored.values.filter((v) => !kept.has(v));
+    const removed = (Array.isArray(stored.values) ? stored.values : []).filter((v) => !kept.has(v));
     if (removed.length > 0) {
       violations.push({
         path,

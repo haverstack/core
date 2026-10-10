@@ -1,7 +1,7 @@
 import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { migration, typeHandle } from '../src/type-handle.js';
+import { migration, narrowRecord, typeHandle } from '../src/type-handle.js';
 import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
 import {
   StackBadRequestError,
@@ -10,7 +10,7 @@ import {
   StackValidationError,
 } from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
-import type { TypeId, TypeSchema } from '../src/types.js';
+import type { StackRecord, TypeId, TypeSchema } from '../src/types.js';
 
 const OWNER = 'owner-123';
 
@@ -243,6 +243,15 @@ describe('migration()', () => {
 // -------------------------------------------------------
 // Typed reads and writes
 // -------------------------------------------------------
+
+describe('narrowRecord()', () => {
+  test('refuses a non-string value in an enum field', () => {
+    const record = { id: 'r1', typeId: Book.id, content: { title: 'Dune', status: 3 } };
+    expect(() => narrowRecord(Book, record as unknown as StackRecord)).toThrow(
+      StackValidationError,
+    );
+  });
+});
 
 describe.each([
   ['Stack', (s: Stack): StackClient => s],

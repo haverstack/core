@@ -47,7 +47,9 @@ export const enumMismatchMessage = (
   values: readonly string[] | undefined,
   value: unknown,
 ): string =>
-  `Expected one of ${(values ?? []).map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`;
+  Array.isArray(values) && values.length > 0
+    ? `Expected one of ${values.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`
+    : `The schema declares no enum values, so ${JSON.stringify(value)} is not allowed`;
 
 const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   switch (kind) {
@@ -404,10 +406,10 @@ const validateFieldDefShape = (
   if (def.values !== undefined && def.kind !== 'enum') {
     errors.push({ path, message: `"values" is only allowed on an enum field, not "${def.kind}"` });
   }
-  // Unknown keys are otherwise ignored, but this one would silently drop
-  // the constraint its author meant to declare.
+  // Unknown keys are otherwise ignored, but `enum` names a kind: as a key it
+  // would read as a constraint that nothing enforces.
   if (def.enum !== undefined) {
-    errors.push({ path, message: '"enum" is not a field modifier; use { kind: "enum", values }' });
+    errors.push({ path, message: '"enum" is a field kind, not a field key' });
   }
 
   if (def.kind === 'array') {

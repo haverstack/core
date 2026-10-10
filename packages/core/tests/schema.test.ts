@@ -319,6 +319,11 @@ describe('hashSchema enum', () => {
     const ac = await hashSchema({ s: { kind: 'enum', values: ['a', 'c'] } });
     expect(new Set([plain, ab, ac]).size).toBe(3);
   });
+
+  test('a stored enum with no values list hashes rather than throwing', async () => {
+    const malformed = { s: { kind: 'enum' } } as unknown as TypeSchema;
+    await expect(hashSchema(malformed)).resolves.toMatch(/\S/);
+  });
 });
 
 describe('isCompatible enum', () => {
@@ -713,5 +718,10 @@ describe('diffSchemas enum', () => {
 
   test('reordering enum values is not a change', () => {
     expect(diffSchemas(values('a', 'b'), values('b', 'a'))).toEqual([]);
+  });
+
+  test('a stored enum with no values list diffs rather than throwing', () => {
+    const malformed = { s: { kind: 'enum' } } as unknown as TypeSchema;
+    expect(diffSchemas(malformed, values('a'))).toEqual([]);
   });
 });
