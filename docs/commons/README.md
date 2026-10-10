@@ -74,9 +74,9 @@ Three postures, in order of preference:
    can then read your records even though they've never heard of your type. Each type
    file documents its **read-compat core** — the minimal shape consumers should code
    against.
-3. **Migrate in later.** An existing app with its own type can register a migration
-   into the commons type when ready and commit it with `migrateAll()` — a migration
-   path may cross type families (see
+3. **Migrate in later.** An existing app with its own type can pass `Stack.open()` a
+   migration into the commons type when ready and commit it with `migrateAll()` — a
+   migration path may cross type families (see
    [Type migrations](../spec/data-model.md#type-migrations)). It is a one-time cost paid
    by the app author, not a per-user export ritual.
 

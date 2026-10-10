@@ -39,9 +39,10 @@ export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './ins
 export { isPlanEmpty } from './install.js';
 
 // Type handles
-export { typeHandle } from './type-handle.js';
+export { typeHandle, migration } from './type-handle.js';
 export type {
   TypeHandle,
+  Migration,
   ContentOf,
   PatchOf,
   TypedRecord,
@@ -128,8 +129,6 @@ export type {
   NativeSortField,
   QueryResult,
   DateRange,
-  Migration,
-  MigrationFn,
   StackCapabilities,
   ContentFilterReach,
   MissingCapability,

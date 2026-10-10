@@ -22,6 +22,7 @@ import {
   baseIdOf,
   diffSchemas,
   familyIdProblem,
+  lineageProblem,
 } from './schema.js';
 import {
   dropAbsentFields,
@@ -53,8 +54,6 @@ import type {
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
-  Migration,
-  MigrationFn,
   RecordVersion,
   StackCapabilities,
   IfVersionOptions,
@@ -183,6 +182,7 @@ import {
 } from './type-handle.js';
 import type {
   ContentOf,
+  Migration,
   PatchOf,
   ReadonlyTypeSchema,
   TypedChange,
@@ -317,6 +317,13 @@ export type StackOptions = {
    * both. See docs/spec/data-model.md § Record IDs.
    */
   idTimestampSkewMs?: number | null;
+  /**
+   * Every migration this app knows, built with `migration()`. The chain is
+   * complete before the first read, and one that cannot be walked — two
+   * steps from one TypeId, or a cycle — is refused here. See
+   * docs/spec/data-model.md § Type migrations.
+   */
+  migrations?: readonly Migration[];
 };
 
 export type CollectAttachmentGarbageOptions = {
@@ -672,11 +679,51 @@ export class Stack implements StackClient {
       adapter,
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
     );
+    stack.setMigrations(opts.migrations ?? []);
     await stack.seedSystemTypes();
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
     }
     return stack;
+  }
+
+  /**
+   * Fill the registry, refusing anything the walkers in presentAtLatest()
+   * and migrateAll() could not follow. Each TypeId has at most one step out,
+   * so the graph is a set of chains, and a walk that comes back to a TypeId
+   * it already passed is a cycle.
+   */
+  private setMigrations(migrations: readonly Migration[]): void {
+    for (const m of migrations) {
+      const from = parseTypeId(m.from);
+      const to = parseTypeId(m.to);
+      if (!from || !to) {
+        throw new StackMigrationError(
+          `Migration "${m.from}" → "${m.to}" must name two versioned TypeIds.`,
+        );
+      }
+      if (from.baseId === to.baseId && to.version <= from.version) {
+        throw new StackMigrationError(
+          `Migration "${m.from}" → "${m.to}" must go to a later version of its family.`,
+        );
+      }
+      if (this.migrations.has(m.from)) {
+        throw new StackMigrationError(`More than one migration from "${m.from}" was passed.`);
+      }
+      this.migrations.set(m.from, m);
+    }
+    const acyclic = new Set<TypeId>();
+    for (const start of this.migrations.keys()) {
+      const walked = new Set<TypeId>();
+      for (let at: TypeId | undefined = start; at && !acyclic.has(at); ) {
+        if (walked.has(at)) {
+          throw new StackMigrationError(`The migrations passed form a cycle through "${at}".`);
+        }
+        walked.add(at);
+        at = this.migrations.get(at)?.to;
+      }
+      for (const id of walked) acyclic.add(id);
+    }
   }
 
   /**
@@ -807,6 +854,9 @@ export class Stack implements StackClient {
       throw new StackValidationError(nameErrors, SCHEMA_INVALID);
     }
 
+    const lineage = lineageProblem(id, migratesFrom);
+    if (lineage) throw new StackBadRequestError(lineage);
+
     const schemaHash = await hashSchema(schema);
     const existing = await this.getTypeCached(id);
 
@@ -868,42 +918,23 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Register a migration function between two adjacent Type versions; call
-   * at app startup after defineType(). Runs in-memory — nothing is written
-   * until migrateAll(). Adjacent migrations are composed into chains
-   * automatically.
-   */
-  registerMigration(migration: Migration): void {
-    this.assertOpen();
-    if (this.migrations.has(migration.from)) {
-      throw new StackMigrationError(`A migration from "${migration.from}" is already registered.`);
-    }
-    this.migrations.set(migration.from, migration);
-  }
-
-  /**
    * Find and compose a migration path from one TypeId to another.
    * Returns null if no path exists.
    */
-  private resolveMigrationPath(fromId: TypeId, toId: TypeId): MigrationFn | null {
+  private resolveMigrationPath(fromId: TypeId, toId: TypeId): Migration['migrate'] | null {
     if (fromId === toId) return (content) => content;
 
-    const fns: MigrationFn[] = [];
+    const steps: Migration[] = [];
     let current = fromId;
-    const visited = new Set<TypeId>();
 
     while (current !== toId) {
-      if (visited.has(current)) {
-        throw new StackMigrationError(`Migration cycle detected at "${current}"`);
-      }
-      visited.add(current);
-      const migration = this.migrations.get(current);
-      if (!migration) return null;
-      fns.push(migration.migrate);
-      current = migration.to;
+      const step = this.migrations.get(current);
+      if (!step) return null;
+      steps.push(step);
+      current = step.to;
     }
 
-    return (content) => fns.reduce((c, fn) => fn(c), content);
+    return (content) => steps.reduce((c, step) => step.migrate(c), content);
   }
 
   /**
@@ -912,13 +943,8 @@ export class Stack implements StackClient {
    */
   private latestTypeId(fromId: TypeId): TypeId {
     let current = fromId;
-    const visited = new Set<TypeId>();
-    while (this.migrations.has(current)) {
-      if (visited.has(current)) {
-        throw new StackMigrationError(`Migration cycle detected at "${current}"`);
-      }
-      visited.add(current);
-      current = this.migrations.get(current)!.to;
+    for (let step = this.migrations.get(current); step; step = this.migrations.get(current)) {
+      current = step.to;
     }
     return current;
   }
@@ -1183,8 +1209,8 @@ export class Stack implements StackClient {
     if (parsed && knownMax !== undefined && parsed.version !== knownMax) {
       const direction =
         parsed.version > knownMax
-          ? `the record is newer than this app instance understands — update the app, or register the missing migrations`
-          : `no registered migration bridges the gap — call stack.registerMigration()`;
+          ? `the record is newer than this app instance understands — update the app, or pass it the missing migrations`
+          : `no migration passed to Stack.open() bridges the gap`;
       throw new StackMigrationError(
         `Record "${record.id}" is at "${record.typeId}", but this app instance has defined ` +
           `up to "${parsed.baseId}@${knownMax}": ${direction}. Omit presentAt: "latest" to ` +
@@ -2034,13 +2060,10 @@ export class Stack implements StackClient {
    * per record would cost a read apiece for nothing.
    *
    * Both callers owe the same checks. migrateAll()'s content comes from a
-   * registered Migration function rather than a request body, but "app
-   * code" is not a trust boundary here — the app calling commitMigration()
-   * is the same app that registered the function, and neither may move a
-   * DID binding or repoint an attachment. registerMigration() also places
-   * no constraint on `from` and `to` sharing a baseId, so a migration path
-   * can cross type families; family-crossing is exactly what the checks
-   * below care about.
+   * Migration function rather than a request body, but "app code" is not
+   * a trust boundary here: neither caller may move a DID binding or repoint an
+   * attachment. A migration path can cross type families, which is exactly
+   * what the checks below care about.
    */
   private async commitMigrationChecked(
     existing: StackRecord,

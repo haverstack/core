@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
+import { migration, typeHandle } from '../src/type-handle.js';
 import type { RecordChange, StackRecord } from '../src/types.js';
 
 const fam = (typeId: string): string => typeId.split('@')[0]!;
@@ -237,12 +238,19 @@ describe('every record emits, including the ones a query hides', () => {
   });
 
   test('migrateAll fans out — one event per migrated record, no batch frame', async () => {
-    await stack.defineType({
-      id: NOTE_V2,
+    const NoteV1 = typeHandle({
+      id: NOTE,
       name: 'Note',
       schema: { text: { kind: 'text', required: true } },
     });
-    stack.registerMigration({ from: NOTE, to: NOTE_V2, migrate: (c) => c });
+    const NoteV2 = typeHandle({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: NoteV1.schema,
+      migratesFrom: NoteV1,
+    });
+    stack = await Stack.open(adapter, { migrations: [migration(NoteV1, NoteV2, (c) => c)] });
+    await stack.defineType(NoteV2);
     const ids = [];
     for (let i = 0; i < 3; i++) ids.push((await stack.create(NOTE, { text: `n${i}` })).id);
     const { seen, handler } = collector();
