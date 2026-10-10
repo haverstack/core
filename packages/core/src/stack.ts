@@ -180,6 +180,8 @@ import {
   typedQuery,
   typedSubscribe,
 } from './type-handle.js';
+import { checkExpectation, WRITE_EXPECTATION } from './write-expectation.js';
+import type { ExpectationOptions } from './write-expectation.js';
 import type {
   ContentOf,
   Migration,
@@ -1284,7 +1286,7 @@ export class Stack implements StackClient {
     }
     const id = first;
     const changes = second as RecordChangeSet;
-    const opts = (third ?? {}) as IfVersionOptions & ActorOptions;
+    const opts = (third ?? {}) as IfVersionOptions & ActorOptions & ExpectationOptions;
     this.assertOpen();
     assertNonEmptyChangeSet(changes);
 
@@ -1292,6 +1294,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    checkExpectation(existing, opts, changes.contentPatch !== undefined);
     this.refuseIfDeleted(existing);
 
     // Checked before validation, so a caller that lost the race learns its
@@ -1506,7 +1509,7 @@ export class Stack implements StackClient {
   async associate(
     id: RecordId,
     associations: DataAssociation[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'associate()', 'associations', 'data');
     return this.amendAssociations(
@@ -1527,7 +1530,7 @@ export class Stack implements StackClient {
   async dissociate(
     id: RecordId,
     associations: DataAssociation[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'dissociate()', 'associations', 'data');
     return this.amendAssociations(
@@ -1548,12 +1551,13 @@ export class Stack implements StackClient {
   async amendAssociations(
     id: RecordId,
     changes: AssociationEdit[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
     surface = 'amendAssociations()',
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(changes, surface, 'data');
     const existing = await this.requireRecord(id);
+    checkExpectation(existing, opts, false);
     this.refuseIfDeleted(existing);
     const current = existing.associations ?? [];
     const next = applyAssociationEdits(current, changes) as DataAssociation[];
@@ -1588,7 +1592,7 @@ export class Stack implements StackClient {
   async grantAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
     return this.amendAccess(
@@ -1607,7 +1611,7 @@ export class Stack implements StackClient {
   async revokeAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
     return this.amendAccess(
@@ -1626,12 +1630,13 @@ export class Stack implements StackClient {
   async amendAccess(
     id: RecordId,
     changes: AssociationEdit[],
-    opts: ActorOptions = {},
+    opts: ActorOptions & ExpectationOptions = {},
     surface = 'amendAccess()',
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(changes, surface, 'authority');
     const existing = await this.requireRecord(id);
+    checkExpectation(existing, opts, false);
     this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
     const next = applyAssociationEdits(current, changes) as AuthorityAssociation[];
@@ -1751,7 +1756,10 @@ export class Stack implements StackClient {
    * body from a separate read beforehand is exactly the race and the extra
    * round trip it exists to remove.
    */
-  async delete(id: RecordId, opts: DeleteRecordOptions & ActorOptions = {}): Promise<DeleteResult> {
+  async delete(
+    id: RecordId,
+    opts: DeleteRecordOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<DeleteResult> {
     const { referencedFileIds } = await this.deleteAndReturn(id, opts);
     return { referencedFileIds };
   }
@@ -1767,7 +1775,7 @@ export class Stack implements StackClient {
    */
   async deleteAndReturn(
     id: RecordId,
-    opts: DeleteRecordOptions & ActorOptions = {},
+    opts: DeleteRecordOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<DeleteAndReturnResult> {
     this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
@@ -1776,6 +1784,12 @@ export class Stack implements StackClient {
       );
     }
     if (opts.purge) {
+      // A purge otherwise reads nothing first, so an expectation costs it
+      // one read. The family cannot change between the read and the write.
+      if (opts[WRITE_EXPECTATION]) {
+        const current = await this.adapter.getRecord(id);
+        if (current) checkExpectation(current, opts, false);
+      }
       // The adapter hands back what it destroyed, captured inside the same
       // write: a read here instead would race the delete, and afterwards
       // there is nothing left to read. Null means there was no record, so
@@ -1795,6 +1809,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    checkExpectation(existing, opts, false);
     this.checkIfVersion(existing, opts.ifVersion);
     // A tombstone's references stand — undelete() must find its
     // attachments intact — so nothing is stranded and nothing is reported.
@@ -1834,12 +1849,16 @@ export class Stack implements StackClient {
    * throws StackNotFoundError for them just like any other missing record.
    * Snapshots and bumps version, same as delete().
    */
-  async undelete(id: RecordId, opts: IfVersionOptions & ActorOptions = {}): Promise<StackRecord> {
+  async undelete(
+    id: RecordId,
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    checkExpectation(existing, opts, false);
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
@@ -1960,13 +1979,16 @@ export class Stack implements StackClient {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts: IfVersionOptions & ActorOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     const existing = await this.adapter.getRecord(id);
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
+    // A snapshot is validated against its own stored Type, never the
+    // record's current one, so only the family is held to the expectation.
+    checkExpectation(existing, opts, false);
     this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
 

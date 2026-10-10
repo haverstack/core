@@ -91,6 +91,8 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
+import { checkFamily, WRITE_EXPECTATION } from './write-expectation.js';
+import type { ExpectationOptions } from './write-expectation.js';
 import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
 import { assertAttachmentSize } from './limits.js';
 import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
@@ -621,12 +623,13 @@ export class ScopedStack implements StackClient {
    */
   private async requireUpdatable(
     id: string,
-    opts: { mutating?: boolean } = {},
+    opts: { mutating?: boolean; expect?: ExpectationOptions } = {},
   ): Promise<StackRecord> {
     // The `_grant` write fence applies to mutating callers only: reading a
     // grant Record's history is not the escalation that fence exists to stop.
     return this.requireVerb(id, ['update-own', 'update-any'], {
       fenceGrantRecord: opts.mutating ?? true,
+      expect: opts.expect,
     });
   }
 
@@ -640,10 +643,13 @@ export class ScopedStack implements StackClient {
   private async requireVerb(
     id: string,
     actions: GrantAction[],
-    opts: { fenceGrantRecord: boolean },
+    opts: { fenceGrantRecord: boolean; expect?: ExpectationOptions },
   ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    // Ahead of the gate, so another family's record is not found whatever
+    // this requester may do to it — the answer a typed get() gives.
+    checkFamily(record, opts.expect);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
       if (!this.isGroupManager(record)) {
@@ -675,10 +681,10 @@ export class ScopedStack implements StackClient {
    * Fetch a record the subject can reach and the principal holds `delete` on
    * (via permissions or a delete grant), or throw.
    */
-  private requireDeletable(id: string): Promise<StackRecord> {
+  private requireDeletable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
     // No soft-delete refusal: undelete() shares this gate, and a tombstone
     // is exactly what it addresses.
-    return this.requireVerb(id, ['delete-own', 'delete-any'], { fenceGrantRecord: true });
+    return this.requireVerb(id, ['delete-own', 'delete-any'], { fenceGrantRecord: true, expect });
   }
 
   /**
@@ -1094,7 +1100,7 @@ export class ScopedStack implements StackClient {
     }
     const id = first;
     const changes = second as RecordChangeSet;
-    const opts = (third ?? {}) as IfVersionOptions;
+    const opts = (third ?? {}) as IfVersionOptions & ExpectationOptions;
     // Ahead of every gate: a malformed change set is a validation error
     // for every requester, rather than one for the owner and a permission
     // refusal for everyone else.
@@ -1129,7 +1135,9 @@ export class ScopedStack implements StackClient {
     // reshare keys need the record before their own gate, and a change set
     // carrying only those must not be held to the write gate it doesn't
     // need. One read either way.
-    const record = writes ? await this.requireUpdatable(id) : await this.requireReshareable(id);
+    const record = writes
+      ? await this.requireUpdatable(id, { expect: opts })
+      : await this.requireReshareable(id, opts);
     // Narrowed to what the gate below actually authorized. A key the gate
     // read as inert is dropped rather than forwarded: `Stack` recomputes
     // the delta against its own read of the record, so a key left standing
@@ -1213,9 +1221,10 @@ export class ScopedStack implements StackClient {
    * `permissions` and `unlisted` keys carry, which the write bit
    * deliberately does not confer.
    */
-  private async requireReshareable(id: string): Promise<StackRecord> {
+  private async requireReshareable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
+    checkFamily(record, expect);
     await this.requireOwnerForGrantRecord(record);
     await this.requireReshareOf(record);
     return record;
@@ -1350,21 +1359,31 @@ export class ScopedStack implements StackClient {
    * escalation the partition exists to stop, decided before any record is
    * read so it cannot depend on who is asking.
    */
-  async associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+  async associate(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts: ExpectationOptions = {},
+  ): Promise<StackRecord> {
     assertAssociationList(associations, 'associate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'add', association })),
+      opts,
       'associate()',
     );
   }
 
   /** See associate() — the same write gate, the same kind refusal. */
-  async dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord> {
+  async dissociate(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts: ExpectationOptions = {},
+  ): Promise<StackRecord> {
     assertAssociationList(associations, 'dissociate()', 'associations', 'data');
     return this.amendAssociations(
       id,
       associations.map((association) => ({ op: 'remove', association })),
+      opts,
       'dissociate()',
     );
   }
@@ -1377,15 +1396,16 @@ export class ScopedStack implements StackClient {
   async amendAssociations(
     id: RecordId,
     changes: AssociationEdit[],
+    opts: ExpectationOptions = {},
     surface = 'amendAssociations()',
   ): Promise<StackRecord> {
     assertAssociationEdits(changes, surface, 'data');
-    const record = await this.requireUpdatable(id);
+    const record = await this.requireUpdatable(id, { expect: opts });
     for (const change of changes) {
       if (change.op === 'add')
         await this.requireAssociationAccess(record.typeId, change.association);
     }
-    return this.stack.amendAssociations(id, changes, this.actor, surface);
+    return this.stack.amendAssociations(id, changes, { ...opts, ...this.actor }, surface);
   }
 
   /**
@@ -1396,21 +1416,31 @@ export class ScopedStack implements StackClient {
    * scoping access is for.
    * See docs/spec/access-control.md § Record-level permissions.
    */
-  async grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+  async grantAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts: ExpectationOptions = {},
+  ): Promise<StackRecord> {
     assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'add', association })),
+      opts,
       'grantAccess()',
     );
   }
 
   /** Withdraw elements of who reaches a record — see grantAccess(). */
-  async revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord> {
+  async revokeAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts: ExpectationOptions = {},
+  ): Promise<StackRecord> {
     assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
     return this.amendAccess(
       id,
       permissions.map((association) => ({ op: 'remove', association })),
+      opts,
       'revokeAccess()',
     );
   }
@@ -1419,11 +1449,12 @@ export class ScopedStack implements StackClient {
   async amendAccess(
     id: RecordId,
     changes: AssociationEdit[],
+    opts: ExpectationOptions = {},
     surface = 'amendAccess()',
   ): Promise<StackRecord> {
     assertAssociationEdits(changes, surface, 'authority');
-    await this.requireReshareable(id);
-    return this.stack.amendAccess(id, changes, this.actor, surface);
+    await this.requireReshareable(id, opts);
+    return this.stack.amendAccess(id, changes, { ...opts, ...this.actor }, surface);
   }
 
   /**
@@ -1432,7 +1463,10 @@ export class ScopedStack implements StackClient {
    * reach it, and delegation doesn't carry it either. Everyone else is
    * limited to soft delete.
    */
-  async delete(id: RecordId, opts: DeleteRecordOptions = {}): Promise<DeleteResult> {
+  async delete(
+    id: RecordId,
+    opts: DeleteRecordOptions & ExpectationOptions = {},
+  ): Promise<DeleteResult> {
     const { referencedFileIds } = await this.deleteAndReturn(id, opts);
     return { referencedFileIds };
   }
@@ -1446,13 +1480,16 @@ export class ScopedStack implements StackClient {
    */
   async deleteAndReturn(
     id: RecordId,
-    opts: DeleteRecordOptions = {},
+    opts: DeleteRecordOptions & ExpectationOptions = {},
   ): Promise<DeleteAndReturnResult> {
-    await this.requireDeletable(id);
+    await this.requireDeletable(id, opts);
     if (opts.purge && !this.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
-    return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
+    // Checked against the read above. Forwarded, it would cost a purge the
+    // read `Stack` otherwise skips, and a family cannot change in between.
+    const { [WRITE_EXPECTATION]: _checked, ...rest } = opts;
+    return this.stack.deleteAndReturn(id, { ...rest, ...this.actor });
   }
 
   /**
@@ -1460,8 +1497,11 @@ export class ScopedStack implements StackClient {
    * inverse of soft delete, so granting one direction without the other
    * would be backwards. Idempotent, per Stack.undelete().
    */
-  async undelete(id: RecordId, opts: IfVersionOptions = {}): Promise<StackRecord> {
-    await this.requireDeletable(id);
+  async undelete(
+    id: RecordId,
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    await this.requireDeletable(id, opts);
     return this.stack.undelete(id, { ...opts, ...this.actor });
   }
 
@@ -1508,9 +1548,9 @@ export class ScopedStack implements StackClient {
   async restoreVersion(
     id: RecordId,
     version: number,
-    opts: IfVersionOptions = {},
+    opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id);
+    const record = await this.requireUpdatable(id, { expect: opts });
     if (!this.ownerActingAlone) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
