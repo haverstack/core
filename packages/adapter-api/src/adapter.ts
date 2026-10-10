@@ -11,10 +11,10 @@
  * against a DID (`credential`) — see docs/spec/wire-format.md
  * § Authentication.
  *
- * v1 requires connectivity — offline queue is deferred. Opt-in
- * optimistic concurrency (ifVersion → If-Match) is supported: see the
- * ifVersion option on mutateRecord(), deleteRecord() and every
- * other mutation that bumps a version.
+ * Every call is a request: nothing is queued while the server is
+ * unreachable. Opt-in optimistic concurrency (ifVersion → If-Match) is
+ * supported: see the ifVersion option on mutateRecord(), deleteRecord()
+ * and every other mutation that bumps a version.
  *
  * The write options that describe storage rather than the request are
  * omitted from the methods below rather than dropped inside them, so the
@@ -175,8 +175,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Whether a feed error is one reconnecting cannot recover. A 4xx faults the
  * request, and the reconnect sends the same one, so retrying only spins. A
  * 5xx is the server's own trouble and may clear — a shed-load `timeout`
- * reconnects. The stream is closed by returning from the pump; the
- * subscriber has already been told via onError.
+ * reconnects.
  */
 const isFatalFeedError = (err: unknown): boolean => {
   if (err instanceof APIAdapterAuthError) return true;
@@ -217,13 +216,10 @@ export class APIAdapter implements StackAdapter {
   }
 
   /**
-   * Connect to a remote stack server. Calls GET /.well-known/stack to verify
-   * the server and populate StackCapabilities before returning.
-   *
-   * Throws APIAdapterAuthError on 401.
-   * Throws APIAdapterConnectionError if the server is unreachable.
-   * Throws OwnerMismatchError when `ownerEntityId` disagrees with
-   * the owner discovery reports.
+   * Connect to a remote stack server, reading its discovery document before
+   * returning. Throws APIAdapterAuthError on 401, APIAdapterConnectionError
+   * when the server is unreachable, and OwnerMismatchError when
+   * `ownerEntityId` disagrees with the owner discovery reports.
    */
   static async open(opts: APIAdapterOpenOptions): Promise<APIAdapter> {
     const baseUrl = opts.url.replace(/\/$/, '');
@@ -526,6 +522,7 @@ export class APIAdapter implements StackAdapter {
    * no version and answers with the record it destroyed, which is where
    * the files the purge stranded are read from. Null is reserved for a
    * purge that found nothing, the same shape a local adapter reports.
+   * See docs/spec/wire-format.md § Records.
    */
   async deleteRecord(
     id: RecordId,
@@ -542,9 +539,6 @@ export class APIAdapter implements StackAdapter {
       // its 404 is left to throw.
       ...(opts.purge && opts.ifVersion === undefined && { nullOn404: true }),
     });
-    // The purge answers with the record it destroyed: it is the only
-    // report of what it referenced, and every other row naming those files
-    // is gone. See docs/spec/wire-format.md § Records.
     return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
   }
 
@@ -609,11 +603,10 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
-   * One storage primitive, two endpoints: authority and data share a
-   * table and a delta, and never share a call, so the element's own kind
-   * picks the surface it travels on. A permission routed through the
-   * association endpoint would be refused by any server built on
-   * `ScopedStack`, which is the partition doing its job.
+   * One storage primitive, two endpoints: authority and data never share a
+   * call, so the element's own kind picks the surface it travels on. A
+   * permission sent to the association endpoint is refused by any server
+   * built on `ScopedStack`, which is the partition doing its job.
    * See docs/spec/access-control.md § Storage unifies; the API does not.
    */
   private static associationPath(association: Association | undefined): string {
@@ -821,13 +814,10 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   /**
-   * Relay the server's change feed. Resolves once the stream is live —
-   * after the server's `ready` frame — so that subscribe-then-query is
-   * gap-free: every change from that point on arrives as a frame.
-   *
-   * Reconnection is this adapter's business and the subscriber never hears
-   * about it, so long as the cursor closes the gap. `onReset` is what a gap
-   * it could not close looks like, and reconciling by query is the repair.
+   * Relay the server's change feed. Resolves on the server's `ready` frame,
+   * so subscribe-then-query is gap-free. Reconnecting is invisible to the
+   * subscriber while the cursor closes the gap; `onReset` reports a gap it
+   * could not close, which reconciling by query repairs.
    * See docs/spec/change-feed.md.
    */
   async subscribeChanges(

@@ -1091,12 +1091,11 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  // The two fields with no wire encoding. Stack.query() resolves baseId
-  // and applies presentAt before an adapter sees either, so these cover the
-  // direct adapter call — refused at both reaches, because otherwise the
-  // encoding decides the answer: the query body carries them to a server
-  // that answers 400, while the search params would drop them and widen the
-  // result set. See docs/spec/wire-format.md § Records.
+  // The two fields with no wire encoding, on a direct adapter call:
+  // Stack.query() resolves both first. Refused at both reaches, or the
+  // encoding would decide the answer — the body draws a 400 while search
+  // params would drop them and widen the result.
+  // See docs/spec/wire-format.md § Records.
   test.each([
     ["at reach 'path', which queries by body", 'path'],
     ["at reach 'none', which queries by search params", 'none'],
@@ -1445,12 +1444,10 @@ describe('getVersion', () => {
     expect(await adapter.getVersion('rec-abc123', 99)).toBeNull();
   });
 
-  // A stray `associations` key can still arrive from an older or foreign
-  // server — RecordVersion has no field for it, so the parser drops it
-  // rather than surfacing it. See docs/spec/versioning.md § Version history.
   // A snapshot is content and the typeId it is read under. Neither
-  // association half bumps a version, so a server emitting either is
-  // writing a key this client drops.
+  // association half bumps a version, so RecordVersion has no field for
+  // either, and a foreign server sending them has the keys dropped.
+  // See docs/spec/versioning.md § Version history.
   test('ignores stray associations and permissions keys', async () => {
     const adapter = await openAdapter();
     const withOptionals = {

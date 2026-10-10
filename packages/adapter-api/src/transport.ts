@@ -122,7 +122,7 @@ export const parseJsonBody = async (
 /**
  * A Record body a mutation is required to answer with. Every mutation that
  * bumps `version` returns one, so an empty body is a foreign server that
- * has not implemented the current wire format — reported as such rather
+ * has not implemented the wire format — reported as such rather
  * than as a property access on `undefined`.
  * See docs/spec/wire-format.md § Records.
  */

@@ -26,15 +26,11 @@ const successBody = async <T>(res: Response, path: string): Promise<T> =>
   requireBody((await parseJsonBody(res, 'POST', path)) as T | undefined, `POST ${path}`);
 
 /**
- * Earn a bearer token by proving possession of the credential's key.
- *
- * The signed payload binds the server's origin, so a signature made here
- * cannot be redeemed anywhere else — without that, a server a client
- * connects to could pass along a challenge from the client's real stack
- * and redeem the answer (docs/spec/wire-format.md § Authentication).
- *
- * A stale nonce is retried once: the window between issuing and signing is
- * small but real, and losing that race is not a credential failure.
+ * Earn a bearer token by proving possession of the credential's key. The
+ * signed payload binds the server's origin, so a server cannot relay a
+ * challenge from the client's real stack and redeem the answer. A stale
+ * nonce is retried once: losing the race between issuing and signing is
+ * not a credential failure. See docs/spec/wire-format.md § Authentication.
  */
 export const performHandshake = async (
   baseUrl: string,

@@ -19,28 +19,21 @@ export type SseFrame = { id?: string; event: string; data: string };
 export class SseDecoder {
   private buffer = '';
   /**
-   * A trailing `\r` held back from normalization. SSE line endings are CR,
-   * LF, or CRLF, and a chunk boundary can fall between the CR and the LF of
-   * a CRLF: normalizing per chunk would turn that lone CR into a `\n` and
-   * the next chunk's leading `\n` would complete a spurious `\n\n`, cutting
-   * one frame into two. Holding the CR until the next chunk decides whether
-   * it is half a CRLF (drop the following `\n`) or a lone CR (its own line
-   * separator) makes a frame split anywhere decode as one arriving whole.
+   * A trailing `\r` held until the next chunk. A chunk boundary can split a
+   * CRLF, and normalizing the lone CR would let the next chunk's `\n` close
+   * a spurious blank line, cutting one frame in two. The next chunk decides
+   * whether it was half a CRLF or a line ending of its own.
    */
   private pendingCr = false;
 
   push(chunk: string): SseFrame[] {
     let text = this.pendingCr ? '\r' + chunk : chunk;
     this.pendingCr = false;
-    // A trailing CR might be the first half of a CRLF split across chunks;
-    // hold it until the next push (or the stream's end) resolves it.
     if (text.endsWith('\r')) {
       this.pendingCr = true;
       text = text.slice(0, -1);
     }
     this.buffer += text.replace(/\r\n|\r/g, '\n');
-    // A frame with no terminating blank line grows the buffer without
-    // bound; a peer that never closes one would otherwise exhaust memory.
     if (this.buffer.length > MAX_SSE_BUFFER_BYTES) {
       throw new APIAdapterError(
         `Change feed frame exceeded ${MAX_SSE_BUFFER_BYTES} bytes without a frame boundary.`,
