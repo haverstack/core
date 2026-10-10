@@ -1,0 +1,77 @@
+/**
+ * Challenge–response handshake
+ * -------------------------------------------------------
+ * Earning a bearer token by proving possession of a DID's key.
+ * See docs/spec/wire-format.md § Authentication.
+ */
+
+import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wire';
+import type { DidCredential } from '@haverstack/core/wire';
+import { isWireAuthError, isRetryableAuthError } from '@haverstack/wire-types';
+import type { WireAuthChallengeResponse, WireAuthTokenResponse } from '@haverstack/wire-types';
+import { APIAdapterHandshakeError } from './errors.js';
+import { fetchOrThrow, readJsonBody, parseJsonBody, requireBody } from './transport.js';
+
+/** Build the typed error for a rejected handshake response. */
+const handshakeError = async (res: Response, path: string): Promise<Error> => {
+  const body = await readJsonBody(res);
+  if (isWireAuthError(body)) {
+    return new APIAdapterHandshakeError(body.error.code, body.error.message);
+  }
+  return new APIAdapterHandshakeError(undefined, `HTTP ${res.status}: POST ${path}`);
+};
+
+/** A handshake step's body, held to the same contract as every other success. */
+const successBody = async <T>(res: Response, path: string): Promise<T> =>
+  requireBody((await parseJsonBody(res, 'POST', path)) as T | undefined, `POST ${path}`);
+
+/**
+ * Earn a bearer token by proving possession of the credential's key.
+ *
+ * The signed payload binds the server's origin, so a signature made here
+ * cannot be redeemed anywhere else — without that, a server a client
+ * connects to could pass along a challenge from the client's real stack
+ * and redeem the answer (docs/spec/wire-format.md § Authentication).
+ *
+ * A stale nonce is retried once: the window between issuing and signing is
+ * small but real, and losing that race is not a credential failure.
+ */
+export const performHandshake = async (
+  baseUrl: string,
+  credential: DidCredential,
+  allowRetry = true,
+): Promise<WireAuthTokenResponse> => {
+  const post = (path: string, body: unknown): Promise<Response> =>
+    fetchOrThrow(baseUrl, `${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  const challengeRes = await post('/auth/challenge', { did: credential.did });
+  if (!challengeRes.ok) throw await handshakeError(challengeRes, '/auth/challenge');
+  const challenge = await successBody<WireAuthChallengeResponse>(challengeRes, '/auth/challenge');
+
+  const signature = await credential.sign(
+    buildAuthChallengePayload({ origin: baseUrl, did: credential.did, nonce: challenge.nonce }),
+  );
+
+  const tokenRes = await post('/auth/token', {
+    did: credential.did,
+    nonce: challenge.nonce,
+    signature: base64urlEncode(signature),
+  });
+  if (!tokenRes.ok) {
+    const err = await handshakeError(tokenRes, '/auth/token');
+    if (
+      allowRetry &&
+      err instanceof APIAdapterHandshakeError &&
+      err.code &&
+      isRetryableAuthError(err.code)
+    ) {
+      return performHandshake(baseUrl, credential, false);
+    }
+    throw err;
+  }
+  return successBody<WireAuthTokenResponse>(tokenRes, '/auth/token');
+};
