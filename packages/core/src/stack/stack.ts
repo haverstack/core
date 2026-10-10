@@ -135,6 +135,7 @@ import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
+import * as attachments from './attachments.js';
 import {
   assertAttachmentImmutable,
   assertGroupAdminRemains,
@@ -187,13 +188,6 @@ import type {
 // -------------------------------------------------------
 // Supporting definitions
 // -------------------------------------------------------
-
-/**
- * Default grace period for Stack.collectAttachmentGarbage(), covering the
- * upload-then-associate window. See docs/spec/attachments.md § Garbage
- * collection.
- */
-const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * An Actor in the one form `Stack` stores: a `principalId` equal to the
@@ -1732,7 +1726,11 @@ export class Stack implements StackClient {
         );
       }
     } else {
-      deletedRecords = await this.deleteUnreferencedAttachmentRecordsFallback(fileId, opts);
+      deletedRecords = await attachments.deleteUnreferencedAttachmentRecordsFallback(
+        this,
+        fileId,
+        opts,
+      );
     }
 
     if (!deletedRecords.length) {
@@ -1747,37 +1745,6 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Non-atomic fallback for adapters that don't implement
-   * deleteUnreferencedAttachmentRecords(): a concurrent associate() can
-   * race between the reference check below and the deletes it guards.
-   */
-  private async deleteUnreferencedAttachmentRecordsFallback(
-    fileId: string,
-    opts: ActorOptions = {},
-  ): Promise<StackRecord[]> {
-    // A soft-deleted or unlisted record still counts as a reference — it
-    // must find its attachments intact on undelete or relisting. See
-    // docs/spec/attachments.md § Deleting attachments.
-    const refResult = await this.query({
-      filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
-      limit: 1,
-    });
-    if (refResult.records.length > 0) {
-      throw new StackConflictError('Attachment is still referenced by one or more records');
-    }
-
-    // Soft-deleted, unlisted, and later-version metadata is cleaned up
-    // too — none of it may be left pointing at deleted bytes.
-    const metaRecords = await this.getAttachmentRecords(fileId);
-
-    for (const record of metaRecords) {
-      await this.delete(record.id, { purge: true, ...opts });
-    }
-
-    return metaRecords;
-  }
-
-  /**
    * Sweep for attachment bytes unreachable from any record — live or
    * soft-deleted — and delete bytes + metadata. Deletion goes through
    * deleteAttachment(), so a file re-referenced by sweep time is skipped,
@@ -1787,74 +1754,11 @@ export class Stack implements StackClient {
     opts: CollectAttachmentGarbageOptions & ActorOptions = {},
   ): Promise<CollectAttachmentGarbageResult> {
     this.assertOpen();
-    const graceMs = opts.graceMs ?? DEFAULT_GC_GRACE_MS;
-    const dryRun = opts.dryRun ?? false;
-    const now = Date.now();
-
-    const metaRecords = await queryAllPages((q) => this.query(q), {
-      filter: { baseId: SYSTEM_TYPES.ATTACHMENT, includeDeleted: true, includeUnlisted: true },
-    });
-
-    // Newest metadata record's createdAt per fileId, and its size (constant
-    // across records sharing a fileId, since content-addressing guarantees
-    // identical bytes) — used for the grace check and reclaimedBytes.
-    const metaByFile = new Map<string, { newestAt: number; size: number }>();
-    for (const record of metaRecords) {
-      const content = record.content as AttachmentContent;
-      const createdAt = record.createdAt.getTime();
-      const existing = metaByFile.get(content.fileId);
-      if (!existing || createdAt > existing.newestAt) {
-        metaByFile.set(content.fileId, { newestAt: createdAt, size: content.size });
-      }
-    }
-
-    // Bare-bytes orphans: blobs with zero metadata records, only
-    // discoverable if the blob adapter implements listBlobs().
-    const blobByFile = new Map<string, { modifiedAt: number; size: number }>();
-    if (this.adapter.listBlobs) {
-      for (const file of await this.adapter.listBlobs()) {
-        blobByFile.set(file.fileId, { modifiedAt: file.modifiedAt.getTime(), size: file.size });
-      }
-    }
-
-    const candidateFileIds = new Set([...metaByFile.keys(), ...blobByFile.keys()]);
-
-    const deletedFileIds: FileId[] = [];
-    let reclaimedBytes = 0;
-
-    for (const fileId of candidateFileIds) {
-      const refResult = await this.query({
-        filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
-        limit: 1,
-      });
-      if (refResult.records.length > 0) continue;
-
-      const meta = metaByFile.get(fileId);
-      const blob = blobByFile.get(fileId);
-      const newestAt = meta?.newestAt ?? blob?.modifiedAt;
-      if (newestAt !== undefined && now - newestAt < graceMs) continue;
-
-      const size = meta?.size ?? blob?.size ?? 0;
-
-      if (dryRun) {
-        deletedFileIds.push(fileId);
-        reclaimedBytes += size;
-        continue;
-      }
-
-      try {
-        await this.deleteAttachment(fileId, { actor: opts.actor });
-      } catch (err) {
-        // Raced with a new reference, or another sweep/call already removed
-        // it — not a sweep failure, just move on to the next candidate.
-        if (err instanceof StackConflictError || err instanceof StackNotFoundError) continue;
-        throw err;
-      }
-      deletedFileIds.push(fileId);
-      reclaimedBytes += size;
-    }
-
-    return { deletedFileIds, reclaimedBytes };
+    return attachments.collectAttachmentGarbage(
+      this,
+      this.adapter.listBlobs?.bind(this.adapter),
+      opts,
+    );
   }
 
   // -------------------------------------------------------
