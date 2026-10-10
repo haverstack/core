@@ -113,8 +113,8 @@ const READ_COMPATIBLE: Record<Exclude<ScalarFieldKind, 'enum'>, ScalarFieldKind[
   'file-ref': ['file-ref'],
 };
 
-// Candidate schemas can come from another app's Type definition (the
-// untrusted side of duck-typed consumption), so recursion into array
+// Candidate schemas can come from another app's Type definition, whose
+// shape validation bounds its depth, so recursion into array
 // items / object properties is depth-bounded — matches MAX_VALIDATION_DEPTH
 // in validate.ts. Past the limit we can't verify compatibility, so we
 // fail closed (treat as incompatible) rather than risk a stack overflow.

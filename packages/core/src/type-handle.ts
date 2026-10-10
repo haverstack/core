@@ -262,7 +262,11 @@ export type TypedQuery = Omit<StackQuery, 'filter' | 'presentAt'> & {
   filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
 };
 
-/** A change whose `record`, when present, is the handle's content. */
+/**
+ * A change whose `record`, when present, is the handle's content. Absent
+ * where an untyped change's would be, and when the record has migrated off
+ * the handle's version; the typed `get()` then says why.
+ */
 export type TypedChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
   record?: TypedRecord<S>;
 };
@@ -374,7 +378,11 @@ export const typedSubscribe = <S extends ReadonlyTypeSchema>(
   client.subscribe(
     (change) => {
       const { record, ...rest } = change;
-      handler(record ? { ...rest, record: narrowRecord(handle, record) } : rest);
+      // A record migrated off the handle's version still matches the filter
+      // by its previous typeId, and arrives without `record`.
+      handler(
+        record?.typeId === handle.id ? { ...rest, record: narrowRecord(handle, record) } : rest,
+      );
     },
     { ...opts, filter: { ...opts.filter, typeId: handle.id } },
   );

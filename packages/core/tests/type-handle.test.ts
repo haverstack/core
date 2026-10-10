@@ -481,6 +481,31 @@ describe.each([
     expect(seen).toEqual(['removed']);
   });
 
+  test('subscribe() delivers a record migrated off the handle without its record', async () => {
+    const BookV3 = typeHandle({
+      id: 'com.example.reading/book@3',
+      name: 'Book',
+      schema: { ...Book.schema, isbn: { kind: 'string' } },
+      migratesFrom: Book,
+    });
+    stack = await Stack.open(adapter, { migrations: [migration(Book, BookV3, (c) => c)] });
+    await stack.defineType(BookV3);
+    client = view(stack);
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+
+    const seen: TypedChange<typeof Book.schema>[] = [];
+    const stop = await client.subscribe(Book, (change) => seen.push(change), {
+      includeRecords: true,
+    });
+    await stack.migrateAll(Book.baseId);
+    await settle();
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].recordId).toBe(book.id);
+    expect(seen[0].record).toBeUndefined();
+  });
+
   test('subscribe() delivers a record holding an enum value the handle does not list', async () => {
     const seen: TypedChange<typeof Book.schema>[] = [];
     const book = await client.create(Book, { title: 'Dune', status: 'want' });
