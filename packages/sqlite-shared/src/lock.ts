@@ -32,7 +32,7 @@ const isProcessAlive = (pid: number): boolean => {
  */
 export const acquireLock = (dbPath: string, force?: boolean): void => {
   const lockPath = lockPathFor(dbPath);
-  const info = existsSync(lockPath) ? readLock(lockPath) : null;
+  const info = readLock(lockPath);
   if (info) {
     const ownedBySelf = info.pid === process.pid;
     if (!ownedBySelf && !force && isProcessAlive(info.pid)) {

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
-import { encodeCursor, decodeCursor, makeCursor, SORT_FIELDS } from '../src/cursor.js';
+import { encodeCursor, decodeCursor, makeCursor } from '../src/cursor.js';
 import type { ScalarFieldKind, StackRecord } from '@haverstack/core';
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
@@ -121,14 +121,7 @@ describe('makeCursor', () => {
   });
 });
 
-describe('SORT_FIELDS', () => {
-  // This package's name for the set, not a second copy of it: a cursor's
-  // `native` field is narrowed against exactly what core admits as a sort
-  // field, and a fourth column added there must not need finding here too.
-  test('is exactly the set core admits as a sort field', () => {
-    expect(SORT_FIELDS).toEqual([...NATIVE_SORT_FIELDS]);
-  });
-
+describe('native sort fields', () => {
   test('round-trips a cursor on every field it names', () => {
     const record = makeRecord();
     for (const field of NATIVE_SORT_FIELDS) {

@@ -8,4 +8,4 @@
 export * from './record.js';
 export { TOKENS_SCHEMA_SQL } from './schema.js';
 export { acquireLock, releaseLock } from './lock.js';
-export { SharedTokenLogic, type SharedTokenLogicDeps } from './token-logic.js';
+export { SharedTokenLogic } from './token-logic.js';

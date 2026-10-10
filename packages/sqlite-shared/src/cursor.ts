@@ -11,16 +11,6 @@ import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
 import { contentSortEntry } from '@haverstack/core/adapter';
 import type { StackRecord, NativeSortField, QuerySort, ScalarFieldKind } from '@haverstack/core';
 
-export type SortField = NativeSortField;
-
-/**
- * Re-exported under this package's own name rather than re-spelled: the
- * set a cursor's `native` field is narrowed against is the same set core
- * narrows a wire request's sort field to, and a fourth column added there
- * must not need finding here too.
- */
-export const SORT_FIELDS: readonly SortField[] = NATIVE_SORT_FIELDS;
-
 /**
  * Which partition of the ordering a cursor sits in: a native column or a
  * content field's number, text, or absent value. The three content cases
@@ -31,7 +21,7 @@ export const SORT_FIELDS: readonly SortField[] = NATIVE_SORT_FIELDS;
 export type CursorKind = 'native' | 'num' | 'text' | 'absent';
 
 export type DecodedCursor =
-  | { kind: 'native'; field: SortField; value: number; id: string }
+  | { kind: 'native'; field: NativeSortField; value: number; id: string }
   | { kind: 'num'; field: string; value: number; id: string }
   | { kind: 'text'; field: string; value: string; id: string }
   | { kind: 'absent'; field: string; id: string };
@@ -82,20 +72,20 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
       throw new StackBadRequestError(`Invalid cursor: non-numeric sort value`);
     }
     if (k === 'native') {
-      if (!SORT_FIELDS.includes(f as SortField)) {
+      if (!NATIVE_SORT_FIELDS.includes(f as NativeSortField)) {
         throw new StackBadRequestError(`Invalid cursor: unknown sort field "${f}"`);
       }
-      return { kind: 'native', field: f as SortField, value: v, id: i };
+      return { kind: 'native', field: f as NativeSortField, value: v, id: i };
     }
     return { kind: 'num', field: f, value: v, id: i };
   }
   throw malformed();
 };
 
-export const getSortField = (query: { sort?: QuerySort }): SortField =>
+export const getSortField = (query: { sort?: QuerySort }): NativeSortField =>
   query.sort?.field ?? 'createdAt';
 
-export const getSortColumn = (field: SortField): string =>
+export const getSortColumn = (field: NativeSortField): string =>
   field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
 
 /**

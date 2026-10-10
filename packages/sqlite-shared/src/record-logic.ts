@@ -90,6 +90,9 @@ const versionConflict = (id: string, expected: number, actual: number): StackVer
     actual,
   );
 
+const recordNotFound = (id: string): StackNotFoundError =>
+  new StackNotFoundError(`Record not found: "${id}"`);
+
 /**
  * Every `versions` column beyond the (record_id, version) key, and the
  * values for them in the same order — one list, so the INSERT that writes a
@@ -174,11 +177,26 @@ export class SharedSqlRecordLogic {
    * the actual current version for the caller to act on).
    */
   private throwVersionConflict(id: string, expectedVersion: number | undefined): never {
-    const row = this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [
-      id,
-    ]);
-    if (!row) throw new StackNotFoundError(`Record not found: "${id}"`);
-    throw versionConflict(id, expectedVersion as number, row.version);
+    const version = this.currentVersion(id);
+    if (version === undefined) throw recordNotFound(id);
+    throw versionConflict(id, expectedVersion as number, version);
+  }
+
+  private currentVersion(id: string): number | undefined {
+    return this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [id])
+      ?.version;
+  }
+
+  /**
+   * The read a content-rewriting mutation makes before its transaction, so
+   * the precondition settles before fts5Strategy.remove() runs — see
+   * checkExpectedVersion().
+   */
+  private async readForMutation(id: string, ifVersion: number | undefined): Promise<StackRecord> {
+    const existing = await this.getRecord(id);
+    if (!existing) throw recordNotFound(id);
+    this.checkExpectedVersion(existing, ifVersion);
+    return existing;
   }
 
   /**
@@ -312,9 +330,12 @@ export class SharedSqlRecordLogic {
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
-    if (!row) return null;
-    const associations = this.getAssociationsForRecord(id);
-    return rowToRecord(row, associations);
+    return row ? this.hydrate(row) : null;
+  }
+
+  /** A records row with its association set attached. */
+  private hydrate(row: Record<string, unknown>): StackRecord {
+    return rowToRecord(row, this.getAssociationsForRecord(row.id as string));
   }
 
   /**
@@ -344,9 +365,7 @@ export class SharedSqlRecordLogic {
     changes: RecordChangeSet,
     opts: MutateOptions & BumpVersionOptions = {},
   ): Promise<StackRecord> {
-    const existing = await this.getRecord(id);
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.ifVersion);
+    const existing = await this.readForMutation(id, opts.ifVersion);
 
     const now = toMs(new Date());
 
@@ -372,7 +391,7 @@ export class SharedSqlRecordLogic {
     if (opts.bumpsVersion === false) {
       this.exec.transaction(() => {
         const current = this.readRecord(id);
-        if (!current) throw new StackNotFoundError(`Record not found: "${id}"`);
+        if (!current) throw recordNotFound(id);
         this.checkExpectedVersion(current, opts.ifVersion);
         if (sets.length > 0) {
           this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
@@ -445,7 +464,7 @@ export class SharedSqlRecordLogic {
       // A CAS against a record that isn't there is a failed precondition,
       // not the "nothing to delete" that an unconditional purge
       // reports by returning null.
-      if (ifVersion !== undefined) throw new StackNotFoundError(`Record not found: "${id}"`);
+      if (ifVersion !== undefined) throw recordNotFound(id);
       return null;
     }
     this.checkExpectedVersion(purged, ifVersion);
@@ -476,9 +495,7 @@ export class SharedSqlRecordLogic {
     version: number,
     opts: MutateOptions = {},
   ): Promise<StackRecord> {
-    const existing = await this.getRecord(id);
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.ifVersion);
+    await this.readForMutation(id, opts.ifVersion);
 
     const target = await this.getVersion(id, version);
     if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
@@ -507,9 +524,7 @@ export class SharedSqlRecordLogic {
     // work starts. rewriteContent()'s UPDATE still carries the guard, so a
     // writer slipping in between the two is caught rather than overwritten
     // — same shape as mutateRecord() and restoreVersion().
-    const existing = await this.getRecord(id);
-    if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.ifVersion);
+    await this.readForMutation(id, opts.ifVersion);
 
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
@@ -568,10 +583,7 @@ export class SharedSqlRecordLogic {
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    const records = page.map((row) => {
-      const associations = this.getAssociationsForRecord(row.id as string);
-      return rowToRecord(row, associations);
-    });
+    const records = page.map((row) => this.hydrate(row));
 
     const lastRecord = records[records.length - 1];
     const cursor =
@@ -716,10 +728,7 @@ export class SharedSqlRecordLogic {
     } catch (err) {
       if (!(err instanceof StackConflictError)) throw err;
 
-      const row = this.exec.get<{ version: number }>('SELECT version FROM records WHERE id = ?', [
-        id,
-      ]);
-      if (!row || row.version !== version.version) throw err;
+      if (this.currentVersion(id) !== version.version) throw err;
 
       this.overwriteVersionRow(id, version);
     }
@@ -751,7 +760,7 @@ export class SharedSqlRecordLogic {
       type_id: string;
       parent_id: string | null;
     }>('SELECT version, type_id, parent_id FROM records WHERE id = ?', [recordId]);
-    if (!row) throw new StackNotFoundError(`Record not found: "${recordId}"`);
+    if (!row) throw recordNotFound(recordId);
 
     this.exec.run(
       `INSERT INTO journal
@@ -783,7 +792,7 @@ export class SharedSqlRecordLogic {
     // that isn't there cannot be spelled that way. A purged record is gone,
     // and gets the same refusal. See docs/spec/journal.md § Reading it.
     if (!this.exec.get('SELECT 1 FROM records WHERE id = ?', [id])) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
+      throw recordNotFound(id);
     }
     const conditions = ['record_id = ?'];
     const values: unknown[] = [id];
@@ -853,8 +862,7 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord> {
     assertOneSurface(changes);
     this.exec.transaction(() => {
-      if (!this.readRecord(recordId))
-        throw new StackNotFoundError(`Record not found: "${recordId}"`);
+      if (!this.readRecord(recordId)) throw recordNotFound(recordId);
       for (const change of changes) {
         if (change.op !== 'remove') continue;
         const { association } = change;
@@ -946,7 +954,7 @@ export class SharedSqlRecordLogic {
         );
       } catch (err) {
         if (isForeignKeyViolation(err)) {
-          throw new StackNotFoundError(`Record not found: "${recordId}"`);
+          throw recordNotFound(recordId);
         }
         throw err;
       }

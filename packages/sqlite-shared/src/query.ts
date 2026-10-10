@@ -15,13 +15,8 @@
 
 import { StackBadRequestError, type StackQuery } from '@haverstack/core';
 import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import {
-  decodeCursor,
-  getSortColumn,
-  getSortField,
-  type DecodedCursor,
-  type SortField,
-} from './cursor.js';
+import type { NativeSortField } from '@haverstack/core';
+import { decodeCursor, getSortColumn, getSortField, type DecodedCursor } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
 /** One statement plus the parameters it binds, in textual order. */
@@ -135,7 +130,7 @@ const cursorMismatch = (cursor: DecodedCursor, field: string): StackBadRequestEr
     `Cursor sort field "${cursor.field}" does not match query sort field "${field}"`,
   );
 
-const nativeCursor = (cursor: DecodedCursor, field: SortField) => {
+const nativeCursor = (cursor: DecodedCursor, field: NativeSortField) => {
   if (cursor.kind !== 'native' || cursor.field !== field) throw cursorMismatch(cursor, field);
   return cursor;
 };
@@ -417,9 +412,10 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
 
   if (contentField === undefined) {
     const { conditions, params } = recordConditions(query);
-    const col = getSortColumn(getSortField(query));
+    const field = getSortField(query);
+    const col = getSortColumn(field);
     if (decoded) {
-      const cursor = nativeCursor(decoded, getSortField(query));
+      const cursor = nativeCursor(decoded, field);
       conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
       params.push(cursor.value, cursor.value, cursor.id);
     }
