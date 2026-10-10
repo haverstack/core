@@ -1,243 +1,84 @@
-import {
-  NATIVE_SORT_FIELDS,
-  StackError,
-  StackValidationError,
-  StackPermissionError,
-  StackNotFoundError,
-  StackConflictError,
-  StackVersionConflictError,
-  StackMigrationError,
-  StackBadRequestError,
-  StackSchemaDriftError,
-  StackPayloadTooLargeError,
-  StackTimeoutError,
-} from '@haverstack/core';
-import type {
-  AppManifest,
-  NativeSortField,
-  StackRecord,
-  StackType,
-  RecordVersion,
-  AssociationChange,
-  AuthorityAssociation,
-  DataAssociation,
-  ValidationError,
-  SchemaDriftViolation,
-  StackErrorCode,
-  ChangeKind,
-  Actor,
-  ChangeActor,
-  ChangeOp,
-  RecordChange,
-  RecordJournalEntry,
-  StackCapabilities,
-  ContentFilterReach,
-} from '@haverstack/core';
-
 /**
- * An Actor on the wire — the same two fields, spelled the same way, so an
- * alias rather than a second definition to drift.
+ * @haverstack/wire-types
+ * -------------------------------------------------------
+ * The HTTP wire format's shapes and the encodings between them and core's
+ * types, shared by `@haverstack/adapter-api` and any server implementation
+ * so both sides read the same contract. One module per endpoint group, the
+ * same split `@haverstack/conformance-fixtures` uses. See
+ * docs/spec/wire-format.md.
  */
-export type WireActor = Actor;
 
-/** Copied field by field, so a response never aliases a stored record's object. */
-function serializeActor(a: Actor): WireActor {
-  const w: WireActor = { subjectId: a.subjectId };
-  if (a.principalId !== undefined) w.principalId = a.principalId;
-  return w;
-}
+export type {
+  WireActor,
+  WireRecord,
+  WireQueryResponse,
+  WireType,
+  WireVersion,
+  WireVersionsResponse,
+} from './records.js';
+export { serializeRecord, serializeType, serializeVersion } from './records.js';
 
-export type WireRecord = {
-  id: string;
-  typeId: string;
-  createdAt: string;
-  updatedAt: string;
-  content: Record<string, unknown>;
-  version: number;
-  parentId?: string;
-  appId?: string;
-  createdBy?: WireActor;
-  updatedBy?: WireActor;
-  deletedAt?: string;
-  unlistedAt?: string;
-  permissions?: AuthorityAssociation[];
-  associations?: DataAssociation[];
-};
+export type { WireJournalEntry, WireJournalResponse } from './journal.js';
+export { serializeJournalEntry } from './journal.js';
 
-/**
- * The response envelope of `GET /records` and `POST /records/query`.
- *
- * `cursor` is the only end-of-results signal: `records` may be empty while
- * `cursor` is non-null, since a server filters a bounded window of stored
- * Records per request against the requester's permissions.
- *
- * There is no count of the whole match — see docs/spec/wire-format.md
- * § Response envelope.
- */
-export type WireQueryResponse = {
-  records: WireRecord[];
-  cursor: string | null;
-};
+export type { WireErrorCode, WireError } from './errors.js';
+export {
+  WIRE_ERROR_STATUS,
+  STATUS_TO_CODE,
+  isWireError,
+  serializeError,
+  deserializeError,
+  errorForStatus,
+} from './errors.js';
 
-export type WireType = {
-  id: string;
-  baseId: string;
-  version: number;
-  name: string;
-  schema: Record<string, unknown>;
-  schemaHash: string;
-  migratesFrom?: string;
-  createdAt: string;
-};
+export type { DiscoveryResponse, DiscoveryCapabilities } from './discovery.js';
+export {
+  WIRE_PROTOCOL_VERSION,
+  normalizeCapabilities,
+  parseProtocolVersion,
+  isProtocolCompatible,
+} from './discovery.js';
 
-/**
- * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
- * root. A snapshot is state, not an instruction, so it takes the same
- * shape the record it describes takes — `null` is an input spelling
- * (a change set's `parentId`, a `parentId=null` filter) and never appears
- * on a response. See docs/spec/wire-format.md § Versions.
- *
- * No `associations` field: association changes don't bump `version`,
- * so no version ever snapshots the association set. See
- * docs/spec/versioning.md § Version history.
- */
-export type WireVersion = {
-  version: number;
-  typeId: string;
-  content: Record<string, unknown>;
-  updatedAt: string;
-  createdBy?: WireActor;
-  updatedBy?: WireActor;
-};
+export type {
+  DiscoveryAuth,
+  AuthMethod,
+  WireAuthChallengeRequest,
+  WireAuthTokenRequest,
+  AuthChallengeResponse,
+  AuthTokenResponse,
+  WireAuthErrorCode,
+  WireAuthError,
+} from './auth.js';
+export {
+  AUTH_METHOD_DID_CHALLENGE,
+  supportsDidChallenge,
+  WIRE_AUTH_ERROR_STATUS,
+  isWireAuthError,
+  isRetryableAuthError,
+} from './auth.js';
 
-export function serializeRecord(r: StackRecord): WireRecord {
-  const w: WireRecord = {
-    id: r.id,
-    typeId: r.typeId,
-    createdAt: r.createdAt.toISOString(),
-    updatedAt: r.updatedAt.toISOString(),
-    content: r.content,
-    version: r.version,
-  };
-  if (r.parentId !== undefined) w.parentId = r.parentId;
-  if (r.appId !== undefined) w.appId = r.appId;
-  if (r.createdBy !== undefined) w.createdBy = serializeActor(r.createdBy);
-  if (r.updatedBy !== undefined) w.updatedBy = serializeActor(r.updatedBy);
-  if (r.deletedAt !== undefined) w.deletedAt = r.deletedAt.toISOString();
-  if (r.unlistedAt !== undefined) w.unlistedAt = r.unlistedAt.toISOString();
-  if (r.permissions !== undefined) w.permissions = r.permissions;
-  if (r.associations !== undefined) w.associations = r.associations;
-  return w;
-}
+export type {
+  DiscoveryChanges,
+  ChangeTransport,
+  WireRecordChange,
+  WireChangeActor,
+  WireReadyFrame,
+  ChangeResetReason,
+  WireResetFrame,
+} from './change-feed.js';
+export {
+  CHANGE_TRANSPORT_SSE,
+  supportsChangeFeed,
+  serializeChangeActor,
+  serializeChange,
+  CHANGE_FRAME_READY,
+  CHANGE_FRAME_RECORD,
+  CHANGE_FRAME_RESET,
+  isValidCursor,
+} from './change-feed.js';
 
-export function serializeType(t: StackType): WireType {
-  const w: WireType = {
-    id: t.id,
-    baseId: t.baseId,
-    version: t.version,
-    name: t.name,
-    schema: t.schema as Record<string, unknown>,
-    schemaHash: t.schemaHash,
-    createdAt: t.createdAt.toISOString(),
-  };
-  if (t.migratesFrom !== undefined) w.migratesFrom = t.migratesFrom;
-  return w;
-}
-
-export function serializeVersion(v: RecordVersion): WireVersion {
-  const w: WireVersion = {
-    version: v.version,
-    typeId: v.typeId,
-    content: v.content,
-    updatedAt: v.updatedAt.toISOString(),
-  };
-  if (v.createdBy !== undefined) w.createdBy = serializeActor(v.createdBy);
-  if (v.updatedBy !== undefined) w.updatedBy = serializeActor(v.updatedBy);
-  return w;
-}
-
-// -------------------------------------------------------
-// Change journal
-// -------------------------------------------------------
-
-/**
- * One journal entry as `GET /records/:id/journal` carries it. Every field
- * a `RecordJournalEntry` holds, since the whole entry is what makes a
- * change recoverable — an envelope with a verb, an actor and a delta, and
- * no `content`, which lives on a snapshot.
- *
- * `seq` is a dense integer from 1, per record — never the change feed's
- * opaque `cursor`, and nothing may be carried from one to the other. See
- * docs/spec/wire-format.md § Journal.
- */
-export type WireJournalEntry = {
-  seq: number;
-  at: string;
-  kind: ChangeKind;
-  ops: ChangeOp[];
-  version: number;
-  typeId: string;
-  parentId?: string;
-  actor?: WireChangeActor;
-  /**
-   * The container the move took the record out of — and the one field on
-   * any response where `null` is a value rather than an input spelling.
-   * Absent means this entry is not a reparent; present and `null` means it
-   * moved out of the root. Collapsing the two would lose which one
-   * happened, so the root sentinel travels here as it does on a request.
-   */
-  previousParentId?: string | null;
-  /**
-   * One tagged edit per association the write moved, each carrying its own
-   * `previous` where it had one. Has no counterpart on the change feed,
-   * which reports what is true now across two flat lists.
-   */
-  associations?: AssociationChange[];
-};
-
-/**
- * The response envelope of `GET /records/:id/journal`.
- *
- * `cursor` is the only end-of-log signal, as it is on a query: a server
- * may cap a page below the `limit` asked for, so a short page does not
- * mean an exhausted log. It carries the `seq` to send as the next
- * `afterSeq`, and is null once nothing follows.
- */
-export type WireJournalResponse = {
-  entries: WireJournalEntry[];
-  cursor: number | null;
-};
-
-/**
- * The response envelope of `GET /records/:id/versions`.
- *
- * `cursor` is the only end-of-history signal, as on the journal: a server
- * may cap a page below the `limit` asked for. It carries the `version` to
- * send as the next `beforeVersion`, and is null once nothing follows.
- */
-export type WireVersionsResponse = {
-  versions: WireVersion[];
-  cursor: number | null;
-};
-
-export function serializeJournalEntry(e: RecordJournalEntry): WireJournalEntry {
-  const w: WireJournalEntry = {
-    seq: e.seq,
-    at: e.at.toISOString(),
-    kind: e.kind,
-    // Copied for the same reason serializeChange() copies: the array
-    // belongs to the entry the adapter read, not to this response.
-    ops: [...e.ops],
-    version: e.version,
-    typeId: e.typeId,
-  };
-  if (e.parentId !== undefined) w.parentId = e.parentId;
-  if (e.actor !== undefined) w.actor = serializeChangeActor(e.actor);
-  // Presence, not truthiness: `null` is the root and has to survive.
-  if (e.previousParentId !== undefined) w.previousParentId = e.previousParentId;
-  if (e.associations !== undefined) w.associations = e.associations;
-  return w;
-}
+export type { DiscoveryInstalls, WireInstallRequest, WireInstallResponse } from './installs.js';
+export { supportsInstallRequests } from './installs.js';
 
 /**
  * Re-exported from `@haverstack/core/wire`, which decodes wire dates on the
@@ -245,562 +86,3 @@ export function serializeJournalEntry(e: RecordJournalEntry): WireJournalEntry {
  * core's `StackErrorCode` rather than restating it.
  */
 export { parseDate } from '@haverstack/core/wire';
-
-// -------------------------------------------------------
-// Error responses
-// -------------------------------------------------------
-//
-// The round-trip contract for core's typed error taxonomy: a server
-// serializes a caught core error via serializeError(), and APIAdapter
-// reconstructs the same class via deserializeError(). `code` is the
-// authoritative discriminator; status is a transport hint. See
-// docs/spec/wire-format.md § Error responses.
-
-/**
- * Alias of core's StackErrorCode: the vocabulary belongs with the classes
- * that carry it, and StackError.code is typed by it, so re-declaring the
- * union here would be a second copy to drift.
- */
-export type WireErrorCode = StackErrorCode;
-
-export type WireError = {
-  error: {
-    code: WireErrorCode;
-    message: string;
-    /** Field-level validation failures. Only present for code: 'validation'. */
-    details?: ValidationError[];
-    /** ifVersion/If-Match precondition state. Only present for code: 'version_conflict'. */
-    versionConflict?: {
-      recordId: string;
-      expectedVersion: number;
-      actualVersion: number;
-    };
-    /** The rejected defineType() call's target and violations. Only present for code: 'schema_drift'. */
-    schemaDrift?: {
-      typeId: string;
-      violations: SchemaDriftViolation[];
-    };
-  };
-};
-
-/** Canonical HTTP status for each wire error code. */
-export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
-  bad_request: 400,
-  permission: 403,
-  not_found: 404,
-  conflict: 409,
-  // 412 (not 409): RFC 7232's status for a failed If-Match precondition,
-  // and distinct from 'conflict' — StackVersionConflictError is not a
-  // StackConflictError subtype (see its doc comment), so each code keeps
-  // its own unambiguous status, including for the status-only fallback
-  // below.
-  version_conflict: 412,
-  validation: 422,
-  /**
-   * No core code path currently produces a StackMigrationError over the
-   * wire (migration-graph errors are thrown during client-side migration
-   * registration, never as a server response) — this entry exists so a
-   * future server-side migration-graph check has a defined status to use.
-   */
-  migration: 500,
-  // Shares 409 with 'conflict', so a schema-drift response without a
-  // parseable body degrades to a generic StackConflictError in
-  // status-only reconstruction. See docs/spec/wire-format.md § Wire error
-  // body.
-  schema_drift: 409,
-  // 413 is unambiguous — no other wire code shares it — so status-only
-  // reconstruction (STATUS_TO_CODE below) recovers this class even from a
-  // bodyless response (e.g. a reverse proxy's own request-entity-too-large
-  // page, not the server's JSON error body).
-  payload_too_large: 413,
-  /**
-   * 503, not 408 or 504: the request arrived fine (408 says it didn't) and
-   * the server is not a gateway (504 says it is) — it declined to keep
-   * spending its own time on this one. Retryable, which is the part a
-   * client acts on, and the reason a query timeout must not reuse
-   * `bad_request`: that code means "malformed, retrying won't help."
-   */
-  timeout: 503,
-};
-
-/**
- * Statuses that unambiguously imply a wire error code, for reconstructing
- * an error from status alone when a response has no parseable wire error
- * body. 500 is deliberately excluded — it would misclassify ordinary
- * server bugs as StackMigrationError. See docs/spec/wire-format.md
- * § Wire error body.
- */
-export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
-  400: 'bad_request',
-  403: 'permission',
-  404: 'not_found',
-  409: 'conflict',
-  412: 'version_conflict',
-  422: 'validation',
-  413: 'payload_too_large',
-  // 503 is deliberately excluded, for the same reason as 500: a bodyless
-  // 503 is a load balancer or a restarting process saying "not right now",
-  // and reporting that as StackTimeoutError would tell an app its query
-  // was too expensive when the server never saw it. The typed body is
-  // what distinguishes the two, so `timeout` only reconstructs from one.
-};
-
-const KNOWN_CODES = new Set<string>(Object.keys(WIRE_ERROR_STATUS));
-
-/** Whether `body` is `{ error: { code, message } }` with a code from `codes`. */
-function hasErrorBody(body: unknown, codes: ReadonlySet<string>): boolean {
-  if (!body || typeof body !== 'object') return false;
-  const err = (body as Record<string, unknown>).error;
-  if (!err || typeof err !== 'object') return false;
-  const code = (err as Record<string, unknown>).code;
-  const message = (err as Record<string, unknown>).message;
-  return typeof code === 'string' && codes.has(code) && typeof message === 'string';
-}
-
-/** Type guard: does this parsed JSON body look like a WireError? */
-export function isWireError(body: unknown): body is WireError {
-  return hasErrorBody(body, KNOWN_CODES);
-}
-
-/**
- * Convert a thrown core error into its wire response. Used by server
- * implementations. Returns null for anything that isn't a StackError —
- * callers fall back to their own generic error handling, so an ordinary bug
- * stays a bare 500 rather than being dressed as a protocol error.
- */
-export function serializeError(err: unknown): { status: number; body: WireError } | null {
-  if (!(err instanceof StackError)) return null;
-  const error: WireError['error'] = { code: err.code, message: err.message };
-  // The three classes carrying structured payload still need instanceof: a
-  // literal `code` doesn't narrow a class type to its subclass in TypeScript.
-  // Order-independent, since these are leaves with no subtype relation.
-  if (err instanceof StackValidationError) {
-    error.details = err.errors;
-  } else if (err instanceof StackVersionConflictError) {
-    error.versionConflict = {
-      recordId: err.recordId,
-      expectedVersion: err.expectedVersion,
-      actualVersion: err.actualVersion,
-    };
-  } else if (err instanceof StackSchemaDriftError) {
-    error.schemaDrift = { typeId: err.typeId, violations: err.violations };
-  }
-  return { status: WIRE_ERROR_STATUS[err.code], body: { error } };
-}
-
-/** Reconstruct the core error a WireError body describes. */
-export function deserializeError(body: WireError): Error {
-  const { code, message, details, versionConflict, schemaDrift } = body.error;
-  switch (code) {
-    case 'validation':
-      // The header is the message's first line, kept so a reconstructed
-      // error still says what the server validated.
-      return new StackValidationError(details ?? [], message.split('\n')[0].replace(/:$/, ''));
-    case 'permission':
-      return new StackPermissionError(message);
-    case 'not_found':
-      return new StackNotFoundError(message);
-    case 'conflict':
-      return new StackConflictError(message);
-    case 'version_conflict':
-      return new StackVersionConflictError(
-        message,
-        versionConflict?.recordId ?? '',
-        versionConflict?.expectedVersion ?? -1,
-        versionConflict?.actualVersion ?? -1,
-      );
-    case 'bad_request':
-      return new StackBadRequestError(message);
-    case 'migration':
-      return new StackMigrationError(message);
-    case 'schema_drift':
-      return new StackSchemaDriftError(schemaDrift?.typeId ?? '', schemaDrift?.violations ?? []);
-    case 'payload_too_large':
-      return new StackPayloadTooLargeError(message);
-    case 'timeout':
-      return new StackTimeoutError(message);
-  }
-}
-
-/**
- * Reconstruct a core error from an HTTP status alone (no usable wire error
- * body). Returns null for statuses with no unambiguous code — callers
- * should fall back to a generic adapter-level error.
- */
-export function errorForStatus(status: number, message: string): Error | null {
-  const code = STATUS_TO_CODE[status];
-  return code ? deserializeError({ error: { code, message } }) : null;
-}
-
-// -------------------------------------------------------
-// Discovery
-// -------------------------------------------------------
-
-/**
- * The wire protocol this package describes. Bump the major when a change
- * would make an older client read a response wrongly; bump the minor for
- * additions an older client can ignore. See docs/spec/wire-format.md
- * § Version negotiation.
- */
-export const WIRE_PROTOCOL_VERSION = '1.0';
-
-/** GET /.well-known/stack. See docs/spec/wire-format.md § Discovery. */
-export type DiscoveryResponse = {
-  version: string;
-  entityId: string;
-  timezone?: string;
-  capabilities?: DiscoveryCapabilities;
-  auth?: DiscoveryAuth;
-  changes?: DiscoveryChanges;
-  installs?: DiscoveryInstalls;
-};
-
-/**
- * `capabilities` as it arrives, before normalizeCapabilities() reads it: a
- * foreign server may omit any part of it, and may name a reach or a sort
- * field this client has never heard of. Typed loosely on exactly the
- * fields where that can happen, so the runtime checks that place them are
- * visible as checks rather than as casts.
- * See docs/spec/wire-format.md § Discovery.
- */
-export type DiscoveryCapabilities = {
-  filter?: { content?: string; contentPresent?: boolean; search?: boolean };
-  sort?: { fields?: string[]; contentField?: boolean };
-  limits?: { attachmentBytes?: number | null; contentBytes?: number | null };
-};
-
-const CONTENT_FILTER_REACHES = new Set<string>(['none', 'field', 'path']);
-const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
-
-/**
- * Read a discovery response's capabilities, resolving anything absent,
- * malformed or unrecognized to the least capable value it could stand for
- * — one rule, applied once, rather than a default per key at each call
- * site. Silence is never a claim in either direction: a client that read
- * an omitted flag as support would send a query the server drops and
- * present the unfiltered superset that comes back as a filtered result.
- *
- * A `null` limit is the one entry that reads as permissive, because it
- * says only that this client cannot pre-check; the server's own ceiling
- * still answers with a 413.
- * See docs/spec/adapters.md § Adapter capabilities.
- */
-export function normalizeCapabilities(
-  capabilities: DiscoveryCapabilities | undefined,
-): StackCapabilities {
-  const filter = capabilities?.filter;
-  const sort = capabilities?.sort;
-  const limits = capabilities?.limits;
-  const reach = filter?.content;
-  return {
-    filter: {
-      content: CONTENT_FILTER_REACHES.has(reach as string) ? (reach as ContentFilterReach) : 'none',
-      contentPresent: filter?.contentPresent === true,
-      search: filter?.search === true,
-    },
-    sort: {
-      fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
-      contentField: sort?.contentField === true,
-    },
-    limits: {
-      attachmentBytes: finiteOrNull(limits?.attachmentBytes),
-      contentBytes: finiteOrNull(limits?.contentBytes),
-    },
-  };
-}
-
-/** A ceiling this client can compare against, or null for "cannot pre-check". */
-const finiteOrNull = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isFinite(value) ? value : null;
-
-/**
- * How a token can be earned here. Optional, and absent means only whatever
- * issuance scheme the server arranged out of band — a client holding a DID
- * credential then has nothing to perform and is told so at open(), rather
- * than discovering it as a 404 partway through a handshake.
- *
- * An object rather than a boolean because issuance is the surface most
- * likely to grow one: a consent flow arrives as another entry here.
- */
-export type DiscoveryAuth = {
-  methods: AuthMethod[];
-};
-
-/** The challenge–response handshake of docs/spec/wire-format.md § Authentication. */
-export const AUTH_METHOD_DID_CHALLENGE = 'did-challenge';
-
-export type AuthMethod = typeof AUTH_METHOD_DID_CHALLENGE;
-
-/** Whether a server advertises the DID challenge–response handshake. */
-export function supportsDidChallenge(discovery: DiscoveryResponse): boolean {
-  return discovery.auth?.methods?.includes(AUTH_METHOD_DID_CHALLENGE) ?? false;
-}
-
-/**
- * The change feed a server offers, absent when it offers none. An object
- * rather than a boolean for the same reason `auth` is one: this surface
- * grows entries — another transport, batched frames — and the alternative
- * is a boolean followed by three more of them.
- *
- * See docs/spec/change-feed.md.
- */
-export type DiscoveryChanges = {
-  transports: ChangeTransport[];
-  /**
-   * Whether a resume cursor is honored. `false` is conformant and means
-   * every reconnect is answered with a `reset` frame.
-   */
-  resume: boolean;
-  /** Whether `?include=record` is honored. Never honored for a purge. */
-  records: boolean;
-};
-
-/** Server→client streaming over `fetch`. The only transport in this version. */
-export const CHANGE_TRANSPORT_SSE = 'sse';
-
-export type ChangeTransport = typeof CHANGE_TRANSPORT_SSE;
-
-/**
- * Whether a server offers a change feed this client can consume. A client
- * checks this and fails locally rather than learning it as a 404 partway
- * through a connection — the same reason `auth.methods` exists.
- */
-export function supportsChangeFeed(discovery: DiscoveryResponse): boolean {
-  return discovery.changes?.transports?.includes(CHANGE_TRANSPORT_SSE) ?? false;
-}
-
-// -------------------------------------------------------
-// Authentication handshake
-// -------------------------------------------------------
-
-/**
- * The two request bodies, re-exported from `@haverstack/core/wire`, whose
- * parsers return them — one definition, as with `parseDate`.
- */
-export type { WireAuthChallengeRequest, WireAuthTokenRequest } from '@haverstack/core/wire';
-
-/** POST /auth/challenge response. */
-export type AuthChallengeResponse = {
-  /** Opaque, single-use, base64url-charset. Bound to the requested DID. */
-  nonce: string;
-  expiresAt: string;
-};
-
-/**
- * POST /auth/token response. Both identities are always present, and this
- * endpoint always reports them equal — a handshake proves key possession,
- * which says nothing about whom that key may act for. The pair is reported
- * anyway so an issuance path that does delegate needs no new shape.
- * See docs/spec/wire-format.md § Authentication.
- */
-export type AuthTokenResponse = {
-  token: string;
-  expiresAt?: string;
-  principalId: string;
-  subjectId: string;
-};
-
-/**
- * Auth failures have their own vocabulary, deliberately outside
- * WireErrorCode: no Stack operation has begun, so none of them is a
- * StackError and none has a class to reconstruct. The split a client acts
- * on is retryable versus fatal — a stale nonce warrants a fresh handshake,
- * a rejected signature never will.
- */
-export type WireAuthErrorCode =
-  | 'invalid_did'
-  | 'unknown_nonce'
-  | 'expired_nonce'
-  | 'invalid_signature';
-
-export type WireAuthError = {
-  error: {
-    code: WireAuthErrorCode;
-    message: string;
-  };
-};
-
-export const WIRE_AUTH_ERROR_STATUS: Record<WireAuthErrorCode, number> = {
-  // Malformed input, not a rejected credential — there is nothing here to
-  // authenticate yet.
-  invalid_did: 400,
-  unknown_nonce: 401,
-  expired_nonce: 401,
-  invalid_signature: 401,
-};
-
-/** Codes a fresh handshake can resolve. Anything else is fatal to retry. */
-const RETRYABLE_AUTH_CODES = new Set<WireAuthErrorCode>(['unknown_nonce', 'expired_nonce']);
-
-const KNOWN_AUTH_CODES = new Set<string>(Object.keys(WIRE_AUTH_ERROR_STATUS));
-
-/** Type guard: does this parsed JSON body look like a WireAuthError? */
-export function isWireAuthError(body: unknown): body is WireAuthError {
-  return hasErrorBody(body, KNOWN_AUTH_CODES);
-}
-
-/** Whether retrying the handshake from a fresh nonce could succeed. */
-export function isRetryableAuthError(code: WireAuthErrorCode): boolean {
-  return RETRYABLE_AUTH_CODES.has(code);
-}
-
-// -------------------------------------------------------
-// Change feed
-// -------------------------------------------------------
-
-/**
- * One change, as a `record` frame carries it. The envelope describes the
- * change and nothing else: the record's own provenance rides `record`,
- * where a consumer that wants it asks for it. See docs/spec/events.md
- * § Attribution.
- */
-export type WireRecordChange = {
-  kind: ChangeKind;
-  /** Every aspect this version moved; never empty. See RecordChange.ops. */
-  ops: ChangeOp[];
-  recordId: string;
-  typeId: string;
-  version: number;
-  updatedAt: string;
-  parentId?: string;
-  actor?: WireChangeActor;
-  /** Present when `ops` includes `associate`. See RecordChange.associationsAdded. */
-  associationsAdded?: DataAssociation[];
-  /** Present when `ops` includes `dissociate`. See RecordChange.associationsRemoved. */
-  associationsRemoved?: DataAssociation[];
-  record?: WireRecord;
-  cursor?: string;
-};
-
-/** Who performed a change. Never who authored the record. Same shape as core's. */
-export type WireChangeActor = ChangeActor;
-
-/** Shared by a change frame and a journal entry — one actor encoding, not two. */
-export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
-  const w: WireChangeActor = serializeActor(actor);
-  if (actor.appId !== undefined) w.appId = actor.appId;
-  return w;
-}
-
-/**
- * A change as a server frames it. A purge carries neither the record nor
- * its parent, whatever the subscriber asked for: purge is the
- * erasure primitive, and a frame carrying the body — or anything else
- * pointing at it — hands every subscriber a permanent copy of what the
- * stack has just destroyed.
- *
- * The rule lives here rather than at each call site because a server holds
- * the purged record at that moment, for the readability check it can only
- * make before the write, and so is in exactly the position to leak it. See
- * docs/spec/events.md § Purged records carry nothing.
- */
-export function serializeChange(c: RecordChange): WireRecordChange {
-  const w: WireRecordChange = {
-    kind: c.kind,
-    // Copied, not aliased: a frame is serialized once and delivered to
-    // every subscriber, and the array it came from belongs to the emission.
-    ops: [...c.ops],
-    recordId: c.recordId,
-    typeId: c.typeId,
-    version: c.version,
-    updatedAt: c.updatedAt.toISOString(),
-  };
-  if (c.actor !== undefined) w.actor = serializeChangeActor(c.actor);
-  if (c.cursor !== undefined) w.cursor = c.cursor;
-  if (c.kind === 'purged') return w;
-  if (c.parentId !== undefined) w.parentId = c.parentId;
-  if (c.associationsAdded !== undefined) w.associationsAdded = c.associationsAdded;
-  if (c.associationsRemoved !== undefined) w.associationsRemoved = c.associationsRemoved;
-  if (c.record !== undefined) w.record = serializeRecord(c.record);
-  return w;
-}
-
-/**
- * Frame names. Every frame carries one, and a client MUST ignore a name it
- * does not recognize — which is what makes a new frame an additive, minor
- * change rather than a break. See docs/spec/change-feed.md.
- */
-export const CHANGE_FRAME_READY = 'ready';
-export const CHANGE_FRAME_RECORD = 'record';
-export const CHANGE_FRAME_RESET = 'reset';
-
-/**
- * Sent first on every connection, before any change. It is what makes
- * subscribe-then-query gap-free: everything after it is in the stream.
- */
-export type WireReadyFrame = {
-  /** The head cursor. Absent from a server that mints none (`resume: false`). */
-  cursor?: string;
-};
-
-/**
- * Why a cursor could not be honored. Informational — a client's repair is
- * the same for all three, and it is reconciling by query.
- */
-export type ChangeResetReason = 'cursor_expired' | 'not_supported' | 'overflow';
-
-/** Your cursor cannot be honored; resynchronize by query. */
-export type WireResetFrame = {
-  reason: ChangeResetReason;
-};
-
-/**
- * A cursor travels in an SSE `id:` field, so a value spanning a line would
- * truncate the frame carrying it. Same charset and same reason as the auth
- * nonce — see docs/spec/wire-format.md § The handshake.
- */
-const CURSOR_FORMAT = /^[A-Za-z0-9_-]+$/;
-
-/** Whether a cursor is framable: unreserved base64url characters only. */
-export function isValidCursor(cursor: string): boolean {
-  return CURSOR_FORMAT.test(cursor);
-}
-
-/** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */
-export function parseProtocolVersion(version: string): { major: number; minor: number } | null {
-  const match = /^(\d+)\.(\d+)$/.exec(version);
-  return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
-}
-
-/**
- * Majors must match; minors never have to. A higher server minor is additive
- * fields this client ignores, and a higher client minor is optional fields
- * the server may omit — neither can make a response read wrongly, which is
- * the only thing a major bump signals.
- */
-export function isProtocolCompatible(version: string, against = WIRE_PROTOCOL_VERSION): boolean {
-  const server = parseProtocolVersion(version);
-  const client = parseProtocolVersion(against);
-  return server !== null && client !== null && server.major === client.major;
-}
-
-// -------------------------------------------------------
-// Installs
-// -------------------------------------------------------
-
-/**
- * Whether a server takes install requests at `POST /installs`. Absent means
- * it does not, and a client says so locally rather than learning it as a
- * 404. An object for the same reason `changes` is one.
- * See docs/spec/wire-format.md § Installs.
- */
-export type DiscoveryInstalls = {
-  requests: boolean;
-};
-
-/** Whether a server advertises `POST /installs`. */
-export function supportsInstallRequests(discovery: DiscoveryResponse): boolean {
-  return discovery.installs?.requests === true;
-}
-
-/** POST /installs. The key being installed is the session's, never named here. */
-export type WireInstallRequest = { manifest: AppManifest };
-
-/**
- * POST /installs answers `pending` (202) while the owner has not approved
- * this manifest for this key, and `installed` (200) once applying it would
- * change nothing.
- */
-export type WireInstallResponse =
-  | { status: 'pending' }
-  | { status: 'installed'; install: WireRecord };
