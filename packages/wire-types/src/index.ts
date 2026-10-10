@@ -19,7 +19,6 @@ import type {
   StackType,
   RecordVersion,
   AssociationChange,
-  AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   ValidationError,
@@ -35,11 +34,11 @@ import type {
   ContentFilterReach,
 } from '@haverstack/core';
 
-/** An Actor on the wire — the same two fields, spelled the same way. */
-export type WireActor = {
-  subjectId: string;
-  principalId?: string;
-};
+/**
+ * An Actor on the wire — the same two fields, spelled the same way, so an
+ * alias rather than a second definition to drift.
+ */
+export type WireActor = Actor;
 
 /** Copied field by field, so a response never aliases a stored record's object. */
 function serializeActor(a: Actor): WireActor {
@@ -348,14 +347,19 @@ export const STATUS_TO_CODE: Partial<Record<number, WireErrorCode>> = {
 
 const KNOWN_CODES = new Set<string>(Object.keys(WIRE_ERROR_STATUS));
 
-/** Type guard: does this parsed JSON body look like a WireError? */
-export function isWireError(body: unknown): body is WireError {
+/** Whether `body` is `{ error: { code, message } }` with a code from `codes`. */
+function hasErrorBody(body: unknown, codes: ReadonlySet<string>): boolean {
   if (!body || typeof body !== 'object') return false;
   const err = (body as Record<string, unknown>).error;
   if (!err || typeof err !== 'object') return false;
   const code = (err as Record<string, unknown>).code;
   const message = (err as Record<string, unknown>).message;
-  return typeof code === 'string' && KNOWN_CODES.has(code) && typeof message === 'string';
+  return typeof code === 'string' && codes.has(code) && typeof message === 'string';
+}
+
+/** Type guard: does this parsed JSON body look like a WireError? */
+export function isWireError(body: unknown): body is WireError {
+  return hasErrorBody(body, KNOWN_CODES);
 }
 
 /**
@@ -569,23 +573,17 @@ export function supportsChangeFeed(discovery: DiscoveryResponse): boolean {
 // Authentication handshake
 // -------------------------------------------------------
 
-/** POST /auth/challenge request. */
-export type AuthChallengeRequest = {
-  did: string;
-};
+/**
+ * The two request bodies, re-exported from `@haverstack/core/wire`, whose
+ * parsers return them — one definition, as with `parseDate`.
+ */
+export type { WireAuthChallengeRequest, WireAuthTokenRequest } from '@haverstack/core/wire';
 
 /** POST /auth/challenge response. */
 export type AuthChallengeResponse = {
   /** Opaque, single-use, base64url-charset. Bound to the requested DID. */
   nonce: string;
   expiresAt: string;
-};
-
-/** POST /auth/token request. `signature` is base64url. */
-export type AuthTokenRequest = {
-  did: string;
-  nonce: string;
-  signature: string;
 };
 
 /**
@@ -638,12 +636,7 @@ const KNOWN_AUTH_CODES = new Set<string>(Object.keys(WIRE_AUTH_ERROR_STATUS));
 
 /** Type guard: does this parsed JSON body look like a WireAuthError? */
 export function isWireAuthError(body: unknown): body is WireAuthError {
-  if (!body || typeof body !== 'object') return false;
-  const err = (body as Record<string, unknown>).error;
-  if (!err || typeof err !== 'object') return false;
-  const code = (err as Record<string, unknown>).code;
-  const message = (err as Record<string, unknown>).message;
-  return typeof code === 'string' && KNOWN_AUTH_CODES.has(code) && typeof message === 'string';
+  return hasErrorBody(body, KNOWN_AUTH_CODES);
 }
 
 /** Whether retrying the handshake from a fresh nonce could succeed. */
@@ -679,10 +672,8 @@ export type WireRecordChange = {
   cursor?: string;
 };
 
-/** Who performed a change. Never who authored the record. */
-export type WireChangeActor = WireActor & {
-  appId?: string;
-};
+/** Who performed a change. Never who authored the record. Same shape as core's. */
+export type WireChangeActor = ChangeActor;
 
 /** Shared by a change frame and a journal entry — one actor encoding, not two. */
 export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
@@ -782,12 +773,6 @@ export function isProtocolCompatible(version: string, against = WIRE_PROTOCOL_VE
   const client = parseProtocolVersion(against);
   return server !== null && client !== null && server.major === client.major;
 }
-
-/**
- * The body of `POST /records/:id/associations` and `/permissions`: one
- * list, applied as one write. See docs/spec/wire-format.md § Associations.
- */
-export type WireAssociationEditsRequest = { changes: AssociationEdit[] };
 
 // -------------------------------------------------------
 // Installs

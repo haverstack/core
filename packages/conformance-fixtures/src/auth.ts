@@ -1,7 +1,7 @@
 import type {
-  AuthChallengeRequest,
+  WireAuthChallengeRequest,
   AuthChallengeResponse,
-  AuthTokenRequest,
+  WireAuthTokenRequest,
   AuthTokenResponse,
   WireAuthError,
 } from '@haverstack/wire-types';
@@ -46,7 +46,7 @@ export const AUTH_FIXTURE_OTHER_DID_SIGNATURE =
   'HV-vmd5p9cj6V4HjTUWLt1ySnFpp-hT4P_Lh_JXueTV8D992L4V-oEyL6koGY-kbkMB3ulJTLf7SYfnuXkXZDQ';
 
 export const authChallengeFixtures: ConformanceFixture<
-  AuthChallengeRequest,
+  WireAuthChallengeRequest,
   AuthChallengeResponse | WireAuthError
 >[] = [
   {
@@ -80,7 +80,7 @@ export const authChallengeFixtures: ConformanceFixture<
 ];
 
 export const authTokenFixtures: ConformanceFixture<
-  AuthTokenRequest,
+  WireAuthTokenRequest,
   AuthTokenResponse | WireAuthError
 >[] = [
   {
