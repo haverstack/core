@@ -327,14 +327,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Idempotent bootstrap for StackOptions.ownerProfile. Filters by family
-   * only (content filtering is capability-gated) and matches `content.did`
-   * in memory, cursor-walking so an owner card past page one isn't missed
-   * and duplicated. The probe must be blind to nothing the binding rules
-   * see, or it mints a card they then refuse and the stack won't open with
-   * `ownerProfile`: soft-deleted cards still reserve their `did`, and a card
-   * migrated to a later version still holds one.
-   * See docs/spec/identity.md § DID bindings.
+   * Idempotent bootstrap for StackOptions.ownerProfile. Its probe sees every
+   * card the binding rules do, deleted and migrated ones included, or it
+   * would mint one they then refuse and the stack would not reopen.
+   * See docs/spec/identity.md § Entity.
    */
   private async ensureOwnerEntity(profile: { name: string; handle?: string }): Promise<void> {
     const entityTypeId = `${SYSTEM_TYPES.ENTITY}@1`;
@@ -381,11 +377,9 @@ export class Stack implements StackClient {
 
   /**
    * Scope to an Actor — a delegated app acting for its user, or a
-   * TokenSession exactly as StackTokenStore.lookupToken() returns it, which
-   * is what a server should reach for at its request boundary. Authority is
-   * the intersection of both parties' grants, while authorship and `-own`
-   * resolve against the subject. Taking the pair whole leaves no order to
-   * swap. See docs/spec/access-control.md § Delegation: principal and subject.
+   * TokenSession as StackTokenStore.lookupToken() returns it, which is what
+   * a server should pass at its request boundary.
+   * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   asActor(actor: Actor): ScopedStack {
     const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
@@ -512,15 +506,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Eagerly migrate all records of a type family to the latest version —
-   * the only way disk state changes version. Sweeps soft-deleted records
-   * too, validates each result before writing, and aborts on the first
-   * validation failure. See docs/spec/data-model.md § Type migrations.
-   *
-   * `sweep: 'listed'` is for a contained app over `APIAdapter`, which can
-   * neither enumerate unlisted records nor read a deleted one's content:
-   * it migrates live, listed records and counts the deleted ones it passed
-   * over in `skipped`. See docs/spec/apps.md § Migrating an installed app's types.
+   * Migrate every record of a family, deleted ones included, to the latest
+   * version, aborting on the first that fails validation. `sweep: 'listed'`
+   * is for a contained app that cannot see unlisted or deleted content.
+   * See docs/spec/data-model.md § Type migrations.
    */
   async migrateAll(
     baseId: BaseId,
@@ -583,15 +572,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Create a new record. Validates content against the type's schema.
-   * `_group` records get their author stamped as the first `admin` roster
-   * association here — the single stamping site for both Stack.create()
-   * and ScopedStack.create(). `opts.createdAt`/`updatedAt` let a caller
-   * backdate an imported record's clock fields — unconditionally here;
-   * ScopedStack.create() forwards to this same method, but only reaches
-   * this far with them when the requester is the stack owner acting alone
-   * — see BackdatableCreateRecordOptions and docs/spec/data-model.md §
-   * Record IDs.
+   * Create a record, validated against its type's schema. The one site that
+   * stamps a `_group`'s author as its first `admin`, for scoped creates too.
+   * Backdating is accepted unconditionally here; ScopedStack decides who may.
+   * See docs/spec/data-model.md § Backdating on import.
    */
   async create<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -618,13 +602,10 @@ export class Stack implements StackClient {
     }
     const content = dropAbsentFields(input, type.schema);
 
-    // Copied, never aliased: an import loop that reuses one Date across rows
-    // (`d.setTime(...)` per record) would otherwise retro-edit every record
-    // it had already written, with no version bump and no change event.
-    // `instanceof Date`, not `!== undefined`, because this runs ahead of the
-    // error block below and .getTime() on a non-Date off the wire would
-    // throw before validateClockField() could report it; the fallback value
-    // never reaches storage, since that recorded error still throws.
+    // Copied, never aliased: an import loop reusing one Date would otherwise
+    // retro-edit every record it had written. `instanceof`, so a non-Date
+    // off the wire reaches validateClockField() below rather than throwing
+    // here; the fallback never reaches storage.
     const createdAt =
       opts.createdAt instanceof Date ? new Date(opts.createdAt.getTime()) : new Date();
     const updatedAt =
@@ -767,13 +748,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply a change set as one atomic write — see the StackClient
-   * declaration above for what it accepts. Atomicity is what it is for: a
-   * publish is one act, so nothing it names may half-land.
-   *
-   * Every key present is checked against the record as it stands, and a set
-   * already satisfied in all of them writes nothing. Content is validated
-   * against the record's *current* stored type; `typeId` never changes here.
+   * Apply a change set as one atomic write — see StackClient.mutate(). A
+   * set the record already satisfies writes nothing, and content is checked
+   * against the record's current stored type.
    * See docs/spec/data-model.md § Mutations.
    */
   async mutate<S extends ReadonlyTypeSchema>(
@@ -835,12 +812,9 @@ export class Stack implements StackClient {
     // See docs/spec/versioning.md § Version history.
     const bumps = bumpsVersion(ops);
 
-    // Computed against the same before/after changeSetOps compared, so
-    // whether associate/dissociate/reshare appear in `ops` and what
-    // the journal lists can never disagree. Both halves of the partition
-    // produce the same tagged edits and travel as one list: the journal's
-    // argument is prior state, and an ACL element's is no different from a
-    // tag's. See docs/spec/events.md § The event shape.
+    // From the same before/after changeSetOps compared, so `ops` and the
+    // journal cannot disagree; ACL and data edits travel as one list.
+    // See docs/spec/events.md § The event shape.
     const assocDelta = [
       ...(changes.associations
         ? associationDelta(existing.associations ?? [], changes.associations)
@@ -894,15 +868,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Every check a change set owes before anything is written, in one pass:
-   * one refused key refuses the call, so none of them may run after a
-   * partial write. Returns the merged content when the set carries a
-   * content patch, since the caller needs it to decide whether content
-   * actually moved.
-   *
-   * Parent existence and acyclicity are asked only when the destination
-   * differs from where the record already sits — a move to where it
-   * already is names no new edge, and would otherwise cost a read apiece.
+   * Every check a change set owes, all before anything is written. Returns
+   * the merged content for a content patch, which the caller compares to
+   * decide whether content moved. A parent is checked only when it changes.
    */
   private async validateChangeSet(
     id: string,
@@ -994,15 +962,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Add associations to a record — no-bump and no snapshot, per the
-   * StackClient declaration above.
-   *
-   * An association the record already holds, saying the same thing, is a
-   * no-op; one matching an existing association's identity but naming a
-   * different `attachmentRecordId` — or none, which clears the one stored —
-   * re-points it in place rather than adding a second reference to the same
-   * file. What a re-point overwrote is kept only by the journal, on that
-   * entry's `repoint`. See docs/spec/journal.md § The entry.
+   * Add associations to a record, without a version bump. One matching an
+   * existing association's identity but a different `attachmentRecordId`
+   * re-points it in place. See docs/spec/attachments.md § Naming the upload
+   * a reference came from.
    */
   async associate(
     id: RecordId,
@@ -1164,22 +1127,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Soft-delete a record (default) or purge it permanently, removing
-   * the record and its version history. Soft delete snapshots and bumps
-   * version; a no-op if already deleted. `_config` is never deletable
-   * (docs/spec.md § The `_config` record). See docs/spec/versioning.md
-   * § Deletion.
-   *
-   * A purge reports the files the record referenced. It deletes none of
-   * them — byte lifetime is not the purged record's to decide — but it
-   * destroys the only rows naming them, so a caller who means to erase the
-   * bytes too has nowhere else to read the argument from afterwards. See
-   * docs/spec/attachments.md § A purge strands the bytes it referenced.
-   *
-   * deleteAndReturn() is this plus the record itself; reach for that
-   * instead when the caller needs the record too — building a response
-   * body from a separate read beforehand is exactly the race and the extra
-   * round trip it exists to remove.
+   * Soft-delete a record, or purge it with its history. A purge reports
+   * the files the record referenced, deleting none of them. Use
+   * deleteAndReturn() when the record is needed too. See
+   * docs/spec/versioning.md § Deletion and docs/spec/attachments.md § A
+   * purge strands the bytes it referenced.
    */
   async delete(
     id: RecordId,
@@ -1190,13 +1142,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * delete(), reporting the record it acted on alongside the files it
-   * stranded: as it stood immediately before destruction for a
-   * purge, or as the resulting tombstone for a soft delete. Both are
-   * captured inside the same write that destroys or tombstones the record,
-   * never a read beforehand — a read-then-delete would leave a window
-   * where a concurrent write can land, get destroyed or overwritten by
-   * this call, and never appear in the record this returns.
+   * delete(), plus the record it acted on — before destruction for a purge,
+   * the tombstone for a soft delete — captured inside the same write, so no
+   * concurrent write can land unseen between a read and the delete.
    */
   async deleteAndReturn(
     id: RecordId,
@@ -1382,13 +1330,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * A record's change journal, oldest first — what moved, who moved it, and
-   * the association deltas nothing else retains. `ScopedStack` applies the
-   * mutate-surface gate; this layer is unscoped and trusted by definition.
-   *
-   * A record that isn't there is StackNotFoundError, a purged one included:
-   * a destroyed log and an empty one are not the same answer.
-   * See docs/spec/journal.md § Reading it.
+   * A record's change journal, oldest first, ungated. A missing or purged
+   * record is StackNotFoundError, since a destroyed log and an empty one
+   * are not the same answer. See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     this.assertOpen();
@@ -1472,16 +1416,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration — the single-record counterpart to
-   * migrateAll(), with `content` supplied by the caller rather than by a
-   * registered Migration function. See docs/spec/wire-format.md § Migration
-   * commit.
-   *
-   * Because `content` is a full replacement written under a new `typeId`,
-   * this is create-shaped at the destination *and* update-shaped over the
-   * record as it stands, so it owes both sets of integrity checks. Missing
-   * either half would make migrate a second, unguarded write path to a
-   * state create()/mutate() refuse to reach.
+   * Commit a per-record migration with caller-supplied content. Create-shaped
+   * at the destination and update-shaped over the record, so it owes both
+   * sets of integrity checks. See docs/spec/data-model.md § Type migrations.
    */
   async commitMigration(
     id: RecordId,
@@ -1496,16 +1433,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The checked migration write, shared by commitMigration() and
-   * migrateAll(). Takes the record already in hand rather than an id: a
-   * batch pass holds each record from its own query page, and re-fetching
-   * per record would cost a read apiece for nothing.
-   *
-   * Both callers owe the same checks. migrateAll()'s content comes from a
-   * Migration function rather than a request body, but "app code" is not
-   * a trust boundary here: neither caller may move a DID binding or repoint an
-   * attachment. A migration path can cross type families, which is exactly
-   * what the checks below care about.
+   * The checked migration write behind commitMigration() and migrateAll(),
+   * taking the record in hand so a batch pass needs no re-read. A Migration
+   * function is held to the same checks as a request body: app code is no
+   * trust boundary here.
    */
   private async commitMigrationChecked(
     existing: StackRecord,
@@ -1536,13 +1467,9 @@ export class Stack implements StackClient {
     const toFamily = baseIdOf(toTypeId);
     const existingContent = existing.content as Record<string, unknown>;
 
-    // A `_group` record's `admin` roster entry is stamped by create(), the
-    // single site that does it — migrate cannot, since the adapter's
-    // commitMigration() writes `typeId` and `content` alone and leaves
-    // associations untouched. Minting one here would produce a group with
-    // an empty roster, manageable by nobody but the owner, so migrating
-    // *into* the family is refused. Version-to-version stays open and
-    // carries the existing roster with it.
+    // Only create() stamps a group's first `admin`, so a record migrated
+    // *into* `_group` would have an empty roster. Version-to-version within
+    // the family keeps its roster. See docs/spec/data-model.md § Type migrations.
     if (toFamily === SYSTEM_TYPES.GROUP && fromFamily !== SYSTEM_TYPES.GROUP) {
       throw new StackConflictError(
         'Cannot migrate a record into _group: a group’s admin roster is stamped at creation. ' +
@@ -1590,12 +1517,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Store bytes and create an _attachment@1 metadata record (owner-
-   * attributed, no createdBy), returning that record — `content.fileId`
-   * addresses the bytes, `id` addresses the metadata. Delegates to the
-   * adapter's atomic putAttachmentWithMetadata() when implemented, trusting
-   * the returned record as backend-authoritative; otherwise falls back to
-   * bytes-then-create(). See docs/spec/wire-format.md § Attachments.
+   * Store bytes and create their `_attachment@1` metadata record, returning
+   * it: `content.fileId` addresses the bytes, `id` the metadata. Uses the
+   * adapter's atomic putAttachmentWithMetadata() where there is one.
+   * See docs/spec/wire-format.md § Attachments.
    */
   async putAttachment(
     data: Uint8Array,
@@ -1628,16 +1553,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Every `_attachment` record describing `fileId`, earliest-recorded
-   * first — so `records[0]` is the one that establishes the file's
-   * mimeType, and firstRecordedAttachment() is only needed by a caller
-   * narrowing the set further. See docs/spec/attachments.md § Finding a
-   * `fileId`'s metadata records.
-   *
-   * On `Stack` and not `StackClient`: the lookup answers a presentation
-   * question about an access decision already made, so a scoped version
-   * would impose a second, different permission check rather than a
-   * narrower correct answer.
+   * Every `_attachment` record describing `fileId`, earliest-recorded first.
+   * Not on StackClient: it presents an access decision already made, which
+   * a scoped version would only check a second, different way. See
+   * docs/spec/attachments.md § Finding a `fileId`'s metadata records.
    */
   async getAttachmentRecords(
     fileId: FileId,
@@ -1722,14 +1641,9 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Observe every change made through this Stack. Unscoped, so no
-   * permission filter applies — a caller holding a `Stack` already reaches
-   * every record by other means; `ScopedStack.subscribe()` is the filtered
-   * view. See docs/spec/events.md.
-   *
-   * Async so that a remote stack can resolve once its feed is live, which
-   * makes subscribe-then-query the gap-free startup order everywhere. A
-   * local stack is live immediately.
+   * Observe every change made through this Stack, unfiltered. Async so a
+   * remote stack resolves once its feed is live, making subscribe-then-query
+   * gap-free. See docs/spec/events.md § Subscribing.
    */
   async subscribe<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -1775,15 +1689,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Ask the adapter to relay changes that originated elsewhere. Absent on
-   * every local adapter, where one process owns the storage and there is
-   * no third party whose writes could have been missed.
-   *
-   * The subscription's own filter goes to the relay rather than being
-   * applied on the way back: the emitter at the far end holds the record,
-   * so it can answer `createdBy` and `parentId`, which the envelope
-   * deliberately does not carry. That is also why a relay is opened per
-   * subscription rather than shared.
+   * Ask the adapter to relay changes made elsewhere, if it can. One relay
+   * per subscription, carrying its filter to the far end, which holds the
+   * records that filter needs. See docs/spec/events.md § Where events come
+   * from.
    */
   private async openRelay(
     handler: (change: RecordChange) => void,
@@ -1854,22 +1763,10 @@ export class Stack implements StackClient {
   // -------------------------------------------------------
 
   /**
-   * Create a _grant record authorizing `grantee` to take `actions` on
-   * records of `typeId`: `{ kind: 'entity' }` for one DID, `{ kind: 'group' }`
-   * for a `_group` Record's roster at a role, `{ kind: 'authenticated' }` for
-   * any authenticated entity. The type-level mirror of grantAccess() —
-   * subject first, grantee inside the element.
-   *
-   * Granting an **app** a `-own` action does not contain it the way the
-   * suffix suggests: when that app acts for someone, `-own` is read as the
-   * bare verb and the subject decides which records are in reach, so in a
-   * personal stack — where nearly every record is owner-authored — a
-   * delegated `read-own` is close to `read-any`. Grant an app the types it
-   * needs, not the suffix that looks narrowest. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   *
-   * `baseId` names the whole family and is refused when it carries an
-   * `@version` suffix. See docs/spec/access-control.md § Type-level grants.
+   * Create a `_grant` authorizing `grantee` to take `actions` on `baseId`'s
+   * family. An app's `-own` is read as the bare verb when it acts for
+   * someone, so grant it the types it needs, not the narrowest-looking
+   * suffix. See docs/spec/access-control.md § Type-level grants.
    */
   async grantType(
     baseId: BaseId,
@@ -1880,18 +1777,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * List _grant records. Omit `query` for all grants;
-   * `{ kind: 'authenticated' }` for only default grants;
-   * `{ kind: 'group' }` for grants naming that exact group and role, or
-   * `role: 'any'` for every grant naming the group;
-   * `{ kind: 'entity' }` for the grants that currently apply to that entity
-   * (ones naming them, ones naming a group they belong to at a role they
-   * hold, plus every default grant) — the same resolution hasGrant() uses.
-   *
-   * Every arm but `entity` answers identity — what `grantType()` would have
-   * written with the same argument. The `entity` arm answers coverage, so
-   * its result is not a preview of what `revokeType()` would withdraw.
-   * See docs/spec/access-control.md § Type-level grants.
+   * List `_grant` records: all of them, or those `grantType()` would have
+   * written for the same grantee. The `entity` arm instead lists what
+   * currently applies to that entity, so it is not a preview of what
+   * `revokeType()` would withdraw. See docs/spec/access-control.md § Listing
+   * and revoking.
    */
   async listTypeGrants(query?: GrantQuery): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
@@ -1899,17 +1789,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The inverse of grantType(): soft-deletes the _grant records on
-   * `baseId`'s family matching `grant`, at the same granularity
-   * grantType() writes — the grantee is matched whole, role included, and
-   * the actions exactly. A soft delete like any other — the owner can
-   * undelete a revocation.
-   *
-   * Returns the grants it withdrew, as they stood: an array, where
-   * revokeAccess() returns one Record, because one target can match several
-   * _grant records. An empty result is not an error — re-running a
-   * revocation has to stay safe. See
-   * docs/spec/access-control.md § Listing and revoking.
+   * The inverse of grantType(): soft-deletes the matching `_grant` records,
+   * grantee and actions matched exactly, and returns them. Matching nothing
+   * is not an error, so re-running a revocation stays safe.
+   * See docs/spec/access-control.md § Listing and revoking.
    */
   async revokeType(
     baseId: BaseId,
@@ -1936,12 +1819,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply an approved plan: define the manifest's types, register the
-   * key's `_app` card if it has none, write the `_install` Record, and
-   * bring every linked key's grants to exactly what the manifest requests.
-   * Refuses a plan the stack has moved on from with StackConflictError, so
-   * what is applied is what was approved. Reinstalls a soft-deleted
-   * install. See docs/spec/apps.md § Plan, then apply.
+   * Apply an approved plan: types, the key's `_app` card, the `_install`
+   * Record and every linked key's grants. A plan the stack has moved on
+   * from is a StackConflictError, so what lands is what was approved.
+   * See docs/spec/apps.md § Plan, then apply.
    */
   async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
@@ -1980,12 +1861,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The options every version-bumping adapter write carries: the `ifVersion`
-   * precondition, the prior-state snapshot that has to land in the same
-   * atomic write, and who to attribute the change to. Taken together so a
-   * new mutating verb cannot quietly omit one — the actor's `principalId`
-   * most of all, whose absence reads as an undelegated write.
-   * See docs/spec/versioning.md § Version history.
+   * The options every version-bumping adapter write carries — precondition,
+   * prior-state snapshot and actor — taken together so a new verb cannot
+   * omit one. See docs/spec/versioning.md § Version history.
    */
   private writeOptions(existing: StackRecord, opts: IfVersionOptions & ActorOptions) {
     return {
@@ -1996,13 +1874,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Snapshot of a record's prior state, passed with the mutating adapter
-   * call so snapshot and mutation land in one atomic write. Carries what
-   * only a snapshot preserves: `content` and the `typeId` it is read
-   * under. Containment, listing and associations — the authority ones
-   * among them — are all kept by the journal instead, so no version ever
-   * snapshots them and there is nothing for a restore to roll them back
-   * to. See docs/spec/versioning.md § Version history.
+   * A record's prior state for the version it is about to leave: `content`
+   * and the `typeId` it is read under, which only a snapshot keeps. The
+   * journal keeps everything else. See docs/spec/versioning.md § Version
+   * history.
    */
   private buildVersionSnapshot(record: StackRecord): RecordVersion {
     return {
