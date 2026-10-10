@@ -3,14 +3,7 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
-# @cloudflare/workers-types publishes a new calendar-versioned release
-# roughly every 24h, so resolving to "latest" almost always lands inside a
-# minimumReleaseAge supply-chain policy window. Pinned to a safely-aged
-# version — applies repo-wide since it's only a transitive dependency of
-# wrangler / @cloudflare/vitest-pool-workers, nothing here depends on it
-# directly for anything version-sensitive.
 overrides:
-  '@cloudflare/workers-types': 5.20260817.1
   # Security overrides for vulnerable transitive dependencies whose direct
   # parents pin them below the patched version. Both parents are already at
   # their latest release, so there is nothing to upgrade to upstream yet.
@@ -20,12 +13,10 @@ overrides:
   # tsup 8.5.1 depends on esbuild ^0.27.0; GHSA-g7r4-m6w7-qqqr is fixed in
   # 0.28.1. Build-time only.
   esbuild: 0.28.2
-  # miniflare pins sharp to exactly 0.35.2; GHSA-rgj7-g3m4-5g8c (libheif
-  # RCE) is fixed in 0.35.4. Test-time only, via @cloudflare/vitest-pool-workers.
-  sharp: 0.35.4
+  # miniflare pins sharp to exactly 0.35.2; GHSA-rgj7-g3m4-5g8c and
+  # GHSA-wq5f-xc86-pv6w are fixed in 0.35.5. Test-time only, via
+  # @cloudflare/vitest-pool-workers.
+  sharp: 0.35.5
   # miniflare pins undici to exactly 7.29.0; fixed in 7.29.1. Test-time only,
   # via @cloudflare/vitest-pool-workers.
   undici: 7.29.1
-  # minimatch 10.2.5 (via eslint) depends on brace-expansion 5.0.9; fixed in
-  # 5.0.12. Lint-time only.
-  brace-expansion: 5.0.12
