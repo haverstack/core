@@ -16,7 +16,7 @@ import { filtersContent } from '../query-validation.js';
 import { associationIdentical, isGroupRecord } from '../record-changes.js';
 import { validateParentId } from '../record-id.js';
 import { baseIdOf } from '../schema.js';
-import { findFirstMatch } from '../stack-reads.js';
+import { findFirstMatch } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Association,

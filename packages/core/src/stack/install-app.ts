@@ -34,7 +34,7 @@ import {
 } from '../install.js';
 import { filtersContent } from '../query-validation.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
-import { findAppCardByDid, loadInstallRecords, queryAllPages } from '../stack-reads.js';
+import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import {
   validateSchemaFieldNames,

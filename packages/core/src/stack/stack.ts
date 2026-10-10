@@ -120,7 +120,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from '../record-id.js';
-import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from '../stack-reads.js';
+import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
 import {
   applyAssociationEdits,
   assertNonEmptyChangeSet,

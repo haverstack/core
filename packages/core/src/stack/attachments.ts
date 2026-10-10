@@ -9,7 +9,7 @@
  */
 
 import { StackConflictError, StackNotFoundError } from '../errors.js';
-import { queryAllPages } from '../stack-reads.js';
+import { queryAllPages } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   ActorOptions,

@@ -27,7 +27,7 @@ import type {
   StackRecord,
   TypeId,
 } from './types/index.js';
-import { queryAllPages } from './stack-reads.js';
+import { queryAllPages } from './stack/reads.js';
 import type { ValidationError } from './validate.js';
 
 /**

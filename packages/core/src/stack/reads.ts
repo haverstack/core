@@ -10,8 +10,8 @@
  * None of these is a public API.
  */
 
-import { StackBadRequestError } from './errors.js';
-import { SYSTEM_TYPES } from './types/index.js';
+import { StackBadRequestError } from '../errors.js';
+import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   AppContent,
   EntityContent,
@@ -20,7 +20,7 @@ import type {
   QueryResult,
   StackQuery,
   StackRecord,
-} from './types/index.js';
+} from '../types/index.js';
 
 /** Default page size used to fill a permission-filtered query result. */
 export const DEFAULT_QUERY_LIMIT = 50;

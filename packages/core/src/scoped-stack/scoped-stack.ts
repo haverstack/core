@@ -85,7 +85,7 @@ import {
   findAppCardByDid,
   loadInstallRecords,
   lookupEntityByDid,
-} from '../stack-reads.js';
+} from '../stack/reads.js';
 import {
   assertNonEmptyChangeSet,
   associationDelta,

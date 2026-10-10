@@ -21,7 +21,7 @@ import {
 } from '../grants.js';
 import { filtersContent } from '../query-validation.js';
 import { baseIdOf } from '../schema.js';
-import { findFirstMatch, queryAllPages } from '../stack-reads.js';
+import { findFirstMatch, queryAllPages } from '../stack/reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
