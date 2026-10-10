@@ -36,7 +36,7 @@ import type {
   StackRecord,
   TypeId,
 } from './types/index.js';
-import type { DefineTypeOptions } from './stack/stack.js';
+import type { DefineTypeOptions } from './stack/client.js';
 import type { ValidationError } from './validate.js';
 
 /** What an app ships: the types it defines and the grants it asks for. */

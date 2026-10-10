@@ -34,7 +34,7 @@ export type {
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   MigrateAllOptions,
-} from './stack/stack.js';
+} from './stack/client.js';
 export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
 export { isPlanEmpty } from './install.js';
 

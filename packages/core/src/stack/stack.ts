@@ -172,6 +172,21 @@ import {
   isGroupRecord,
 } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
+import { MigrationRegistry } from './migrations.js';
+import { SYSTEM_TYPE_DEFINITIONS } from './system-types.js';
+import type {
+  BackdatableCreateRecordOptions,
+  CollectAttachmentGarbageOptions,
+  CollectAttachmentGarbageResult,
+  DefineTypeOptions,
+  DeleteAndReturnResult,
+  DeleteRecordOptions,
+  DeleteResult,
+  GetRecordOptions,
+  MigrateAllOptions,
+  StackClient,
+  StackOptions,
+} from './client.js';
 import {
   isTypeHandle,
   typedCreate,
@@ -184,7 +199,6 @@ import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from '../write-exp
 import type { ExpectationOptions } from '../write-expectation.js';
 import type {
   ContentOf,
-  Migration,
   PatchOf,
   ReadonlyTypeSchema,
   TypedChange,
@@ -196,7 +210,7 @@ import type {
 } from '../type-handle.js';
 
 // -------------------------------------------------------
-// Supporting types
+// Supporting definitions
 // -------------------------------------------------------
 
 /**
@@ -249,344 +263,6 @@ const ATTACHMENT_IMMUTABLE_FIELDS = [
 
 type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
 
-export type CreateRecordOptions = {
-  /**
-   * Client-minted record ID. Must be 12 lowercase Crockford base-32
-   * characters and may not use the reserved `_` prefix. Omit to let the
-   * library generate one. See Stack.create() and ScopedStack.create()
-   * for the validation each applies.
-   */
-  id?: RecordId;
-  parentId?: RecordId;
-  /**
-   * The author. ScopedStack sets this from its own identities; callers of
-   * plain Stack supply it only when reconstructing an attributed write.
-   * See StackRecord.createdBy.
-   */
-  createdBy?: Actor;
-  /** Reverse-DNS identifier of the writing software — see AppId. */
-  appId?: AppId;
-  permissions?: AuthorityAssociation[];
-  associations?: DataAssociation[];
-  /**
-   * Create the record already unlisted, so the create event itself is
-   * withheld from the feed — there is no window where the record exists
-   * and is listed before a mutation catches up. See
-   * docs/spec/unlisted.md.
-   */
-  unlisted?: boolean;
-};
-/**
- * CreateRecordOptions extended with createdAt/updatedAt, for backdating a
- * record's clock fields on import. Unscoped Stack.create() accepts them
- * unconditionally; ScopedStack.create() only from the stack owner acting
- * alone, since a grantee or a delegated app could otherwise forge a sort
- * position the same way a raw `id` could.
- * See docs/spec/data-model.md § Record IDs.
- */
-export type BackdatableCreateRecordOptions = CreateRecordOptions & {
-  /**
-   * The record's creation time. When `id` is also supplied, its embedded
-   * timestamp must agree with this within `idTimestampSkewMs` (default 24h;
-   * see StackOptions.idTimestampSkewMs) or the create throws
-   * StackValidationError. Omit `id` to have it derived from this timestamp
-   * instead. Defaults to now.
-   */
-  createdAt?: Date;
-  /**
-   * The record's last-modified time. Defaults to `createdAt` (or now, if
-   * `createdAt` is omitted too) — never to the actual current time — so a
-   * plain import doesn't fabricate a fake edit. Must not precede
-   * `createdAt`.
-   */
-  updatedAt?: Date;
-};
-
-export type StackOptions = {
-  /**
-   * Ensures the owner's own `_entity` profile record exists, creating it on
-   * first run. Idempotent — safe to pass on every open. See
-   * docs/spec/identity.md § Entity.
-   */
-  ownerProfile?: { name: string; handle?: string };
-  /**
-   * Clock-skew tolerance (ms) for two timestamp-prefix checks: the one
-   * ScopedStack.create() runs on a non-backdated create's client-supplied
-   * `id` against the current time, and the one Stack.create() runs between
-   * an explicit `id` and an explicit `createdAt` when both are supplied —
-   * reached directly when unscoped, or via ScopedStack.create() when the
-   * requester is the owner acting alone. Default: 24 hours; null disables
-   * both. See docs/spec/data-model.md § Record IDs.
-   */
-  idTimestampSkewMs?: number | null;
-  /**
-   * Every migration this app knows, built with `migration()`. The chain is
-   * complete before the first read, and one that cannot be walked — two
-   * steps from one TypeId, or a cycle — is refused here. See
-   * docs/spec/data-model.md § Type migrations.
-   */
-  migrations?: readonly Migration[];
-};
-
-export type CollectAttachmentGarbageOptions = {
-  /**
-   * How recent an unreferenced file must be to survive collection, covering
-   * the upload-then-associate window. Default: 24 hours. Pass 0 to collect
-   * anything unreferenced right now.
-   */
-  graceMs?: number;
-  /** Compute what would be deleted without deleting anything. Default: false. */
-  dryRun?: boolean;
-};
-
-export type CollectAttachmentGarbageResult = {
-  /** The files collected — or, on a dry run, the ones that would be. */
-  deletedFileIds: FileId[];
-  reclaimedBytes: number;
-};
-
-export type GetRecordOptions = {
-  /**
-   * Records are returned exactly as stored by default. Pass "latest" to
-   * apply the registered migration chain in memory — never written back.
-   * See docs/spec/data-model.md § Type migrations.
-   */
-  presentAt?: 'stored' | 'latest';
-  /**
-   * Soft-deleted records are hidden by default, as query() hides them: a
-   * tombstone reads as `null`. Pass true to read it back.
-   * See docs/spec/versioning.md § Deletion.
-   */
-  includeDeleted?: boolean;
-};
-
-export type DeleteRecordOptions = IfVersionOptions & {
-  /** If true, permanently remove the record and all its history. Default: false */
-  purge?: boolean;
-};
-
-/**
- * What a delete reports back. Information, not action: a purge never
- * touches the blob store, and nothing here is deleted by having been
- * named. See docs/spec/attachments.md § A purge strands the bytes it
- * referenced.
- */
-export type DeleteResult = {
-  /**
-   * The files the purged record referenced — its attachment associations
-   * and its `file-ref` content fields, deduplicated. The purge removes the
-   * only rows naming them, so this is the caller's one chance to hold the
-   * argument `deleteAttachment()` takes. Empty on a soft delete, which
-   * strands nothing: a tombstone's references stand.
-   */
-  referencedFileIds: FileId[];
-};
-
-/**
- * What deleteAndReturn() reports back — DeleteResult plus the record itself,
- * captured inside the same atomic operation as the destroy rather than a
- * read beforehand. See Stack.deleteAndReturn().
- */
-export type DeleteAndReturnResult = DeleteResult & {
-  /**
-   * The record as it stood at the moment of deletion: immediately before
-   * destruction for a purge, or the resulting tombstone for a soft
-   * delete. Null only for the purge no-op — there was nothing to
-   * delete, and nothing to report; every other outcome throws instead of
-   * returning null (see Stack.delete()'s own no-op cases).
-   */
-  record: StackRecord | null;
-};
-
-/** Options for Stack.migrateAll(). */
-export type MigrateAllOptions = {
-  /**
-   * `'all'` (the default) sweeps every record of the family, deleted and
-   * unlisted included. `'listed'` sweeps only what a non-owner can
-   * enumerate and read whole. See docs/spec/apps.md § Migrating an
-   * installed app's types.
-   */
-  sweep?: 'all' | 'listed';
-};
-
-/** The argument to Stack.defineType(). */
-export type DefineTypeOptions = {
-  id: TypeId;
-  name: string;
-  /** A handle's `schema` is accepted as written, readonly members and all. */
-  schema: ReadonlyTypeSchema;
-  migratesFrom?: TypeId;
-};
-
-// -------------------------------------------------------
-// StackClient interface
-// -------------------------------------------------------
-
-/**
- * The app-facing record API, implemented by both Stack and ScopedStack.
- * Accept this type in plugin or extension code to remain adapter-agnostic
- * and work equally well with a full Stack or a permission-scoped view.
- */
-export interface StackClient {
-  readonly capabilities: StackCapabilities;
-  create<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    content: ContentOf<S>,
-    opts?: CreateRecordOptions,
-  ): Promise<TypedRecord<S>>;
-  create<T extends Record<string, unknown> = Record<string, unknown>>(
-    typeId: TypeId,
-    content: T,
-    opts?: CreateRecordOptions,
-  ): Promise<StackRecord & { content: T }>;
-  /**
-   * Typed read: the record at `presentAt: 'latest'`, checked to be exactly
-   * the handle's Type, else it throws. An enum field may hold a value the
-   * handle does not list. Live records only — a tombstone reads as `null`,
-   * and there is no `includeDeleted`.
-   * See docs/spec/data-model.md § Type handles.
-   */
-  get<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-  ): Promise<TypedRecord<S> | null>;
-  get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
-  /** Typed read of the handle's whole family — see the typed `get()`. */
-  query<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    query?: TypedQuery,
-  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
-  query(query?: StackQuery): Promise<QueryResult>;
-  /**
-   * Resolve a DID to its `_entity` card — family-wide and soft-deleted
-   * inclusive, per docs/spec/identity.md § DID bindings. No caching.
-   *
-   * Under `ScopedStack`, `null` covers missing, unreadable, and (unless the
-   * owner is acting alone) unlisted — never evidence the card is absent.
-   */
-  getEntityByDid(did: EntityId): Promise<StackRecord | null>;
-  /** getEntityByDid() for the one DID every stack reserves: its own owner. */
-  getOwnerEntity(): Promise<StackRecord | null>;
-  /**
-   * Apply a change set: any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted`, in one atomic write —
-   * producing one version where it names `contentPatch`, and none where it
-   * doesn't. Keys are read for presence, so `unlisted: false`
-   * and `parentId: null` are changes; a change set naming no key at all is
-   * a StackBadRequestError. Under ScopedStack each key carries its own gate and
-   * one refused key refuses the call.
-   * See docs/spec/data-model.md § Mutations.
-   */
-  mutate<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    changes: TypedChangeSet<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
-  mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
-  /** mutate() with `contentPatch` alone — the common case, named for it. */
-  patchContent<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    patch: PatchOf<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
-  patchContent(
-    id: RecordId,
-    patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions,
-  ): Promise<StackRecord>;
-  /**
-   * Add associations in one atomic write and one journal entry. Never bumps
-   * `version`/`updatedAt` and takes no `ifVersion` — a set-add composes
-   * regardless of write order. See docs/spec/data-model.md § Mutations and
-   * docs/spec/versioning.md § Version history.
-   */
-  associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
-  /** Remove associations, matched by identity — see associate(). */
-  dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
-  /**
-   * Apply a list of adds and removes to a record's data associations as one
-   * atomic write — the cover swap. associate() and dissociate() are this with
-   * one half each; `mutate({ associations })` is the only whole-set write.
-   * `repoint` is not a request: an add naming an attachment the record
-   * already holds re-points it. See docs/spec/data-model.md § Mutations.
-   */
-  amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
-  /**
-   * Extend who reaches a record — the record-level mirror of the type-level
-   * `grantType()`, and the amending spelling of the `permissions` key, which
-   * replaces the whole set. `write` never implies `read`: grant both,
-   * `grantAccess(id, [read, write])`. No-bump, like associate().
-   * See docs/spec/access-control.md § Write implies read.
-   */
-  grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
-  /** Withdraw elements of who reaches a record — see grantAccess(). */
-  revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
-  /**
-   * amendAssociations() for permissions: adds and removes in one atomic
-   * write, so a downgrade (remove `write`, keep `read`) is one change.
-   * See docs/spec/access-control.md § Record-level permissions.
-   */
-  amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
-  delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
-  /**
-   * delete(), plus the record it acted on — read and destroyed as one
-   * atomic operation, so a caller that needs the record for its own
-   * response (e.g. a server building a purge's body) never opens a
-   * gap between reading it and destroying it. See Stack.deleteAndReturn().
-   */
-  deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
-  undelete(id: RecordId, opts?: IfVersionOptions): Promise<StackRecord>;
-  getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
-  getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
-  restoreVersion(id: RecordId, version: number, opts?: IfVersionOptions): Promise<StackRecord>;
-  /**
-   * A record's change journal, oldest first. On the mutate surface, on the
-   * same footing as getVersions() — a plain reader is refused.
-   *
-   * Required of every adapter rather than optional, which is why it sits
-   * here beside the rest: an empty log has to mean "nothing changed"
-   * unconditionally, so an adapter with nothing to read refuses and names
-   * why instead. See docs/spec/journal.md § Reading it.
-   */
-  getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]>;
-  /**
-   * Commit a per-record migration: change `typeId` and `content` together,
-   * validated against `toTypeId`'s schema. The only way a record's typeId
-   * changes after creation — see docs/spec/wire-format.md § Migration
-   * commit. Takes `ifVersion` like every other mutation that bumps a
-   * record's version (see docs/spec/versioning.md § Optimistic
-   * concurrency); over the wire that is `If-Match`.
-   */
-  commitMigration(
-    id: RecordId,
-    toTypeId: TypeId,
-    content: Record<string, unknown>,
-    opts?: IfVersionOptions,
-  ): Promise<StackRecord>;
-  getAttachment(fileId: FileId): Promise<Uint8Array>;
-  putAttachment(
-    data: Uint8Array,
-    opts: PutAttachmentOptions,
-  ): Promise<StackRecord & { content: AttachmentContent }>;
-  deleteAttachment(fileId: FileId): Promise<void>;
-  collectAttachmentGarbage(
-    opts?: CollectAttachmentGarbageOptions,
-  ): Promise<CollectAttachmentGarbageResult>;
-  /**
-   * Typed subscription: delivers only changes to records of exactly the
-   * handle's Type, each `record` typed as its content. See
-   * docs/spec/data-model.md § Type handles.
-   */
-  subscribe<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    handler: (change: TypedChange<S>) => void,
-    opts?: TypedSubscribeOptions,
-  ): Promise<Unsubscribe>;
-  subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
-}
-
 /**
  * One refusal for every problem a call carries, content and arguments alike,
  * so a caller fixes them in one round trip. Content is itself an argument,
@@ -607,13 +283,6 @@ function throwValidation(
 // -------------------------------------------------------
 
 export class Stack implements StackClient {
-  private readonly migrations = new Map<TypeId, Migration>();
-  /**
-   * Highest version this instance has defineType()'d, per baseId — what
-   * this app process understands, as distinct from what exists in shared
-   * storage. Used to detect the stale-writer case in presentAtLatest().
-   */
-  private readonly maxDefinedVersion = new Map<string, number>();
   /**
    * Types this instance has fetched or defined, keyed by versioned id. A
    * Type's schema is immutable once defined, so entries are never
@@ -635,6 +304,7 @@ export class Stack implements StackClient {
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
+    private readonly migrations: MigrationRegistry,
   ) {}
 
   /**
@@ -680,52 +350,13 @@ export class Stack implements StackClient {
     const stack = new Stack(
       adapter,
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
+      new MigrationRegistry(opts.migrations ?? []),
     );
-    stack.setMigrations(opts.migrations ?? []);
-    await stack.seedSystemTypes();
+    for (const type of SYSTEM_TYPE_DEFINITIONS) await stack.defineType(type);
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
     }
     return stack;
-  }
-
-  /**
-   * Fill the registry, refusing anything the walkers in presentAtLatest()
-   * and migrateAll() could not follow. Each TypeId has at most one step out,
-   * so the graph is a set of chains, and a walk that comes back to a TypeId
-   * it already passed is a cycle.
-   */
-  private setMigrations(migrations: readonly Migration[]): void {
-    for (const m of migrations) {
-      const from = parseTypeId(m.from);
-      const to = parseTypeId(m.to);
-      if (!from || !to) {
-        throw new StackMigrationError(
-          `Migration "${m.from}" → "${m.to}" must name two versioned TypeIds.`,
-        );
-      }
-      if (from.baseId === to.baseId && to.version <= from.version) {
-        throw new StackMigrationError(
-          `Migration "${m.from}" → "${m.to}" must go to a later version of its family.`,
-        );
-      }
-      if (this.migrations.has(m.from)) {
-        throw new StackMigrationError(`More than one migration from "${m.from}" was passed.`);
-      }
-      this.migrations.set(m.from, m);
-    }
-    const acyclic = new Set<TypeId>();
-    for (const start of this.migrations.keys()) {
-      const walked = new Set<TypeId>();
-      for (let at: TypeId | undefined = start; at && !acyclic.has(at); ) {
-        if (walked.has(at)) {
-          throw new StackMigrationError(`The migrations passed form a cycle through "${at}".`);
-        }
-        walked.add(at);
-        at = this.migrations.get(at)?.to;
-      }
-      for (const id of walked) acyclic.add(id);
-    }
   }
 
   /**
@@ -835,10 +466,8 @@ export class Stack implements StackClient {
       );
     }
 
-    // Register this version even on the idempotent-no-op path —
-    // presentAtLatest()'s stale-writer detection depends on it.
-    const priorMax = this.maxDefinedVersion.get(parsed.baseId) ?? 0;
-    if (parsed.version > priorMax) this.maxDefinedVersion.set(parsed.baseId, parsed.version);
+    // Even on the idempotent-no-op path below — see noteDefined().
+    this.migrations.noteDefined(parsed.baseId, parsed.version);
 
     // Shape first: the name checks and hashSchema() below both read the
     // schema as a well-formed one, and a schema off the wire is parsed
@@ -915,42 +544,6 @@ export class Stack implements StackClient {
     return isCompatible(type.schema, requiredSchema);
   }
 
-  // -------------------------------------------------------
-  // Migration registry
-  // -------------------------------------------------------
-
-  /**
-   * Find and compose a migration path from one TypeId to another.
-   * Returns null if no path exists.
-   */
-  private resolveMigrationPath(fromId: TypeId, toId: TypeId): Migration['migrate'] | null {
-    if (fromId === toId) return (content) => content;
-
-    const steps: Migration[] = [];
-    let current = fromId;
-
-    while (current !== toId) {
-      const step = this.migrations.get(current);
-      if (!step) return null;
-      steps.push(step);
-      current = step.to;
-    }
-
-    return (content) => steps.reduce((c, step) => step.migrate(c), content);
-  }
-
-  /**
-   * Find the latest registered version of a type family.
-   * Follows the migration chain from the given typeId to the end.
-   */
-  private latestTypeId(fromId: TypeId): TypeId {
-    let current = fromId;
-    for (let step = this.migrations.get(current); step; step = this.migrations.get(current)) {
-      current = step.to;
-    }
-    return current;
-  }
-
   /**
    * Eagerly migrate all records of a type family to the latest version —
    * the only way disk state changes version. Sweeps soft-deleted records
@@ -983,10 +576,10 @@ export class Stack implements StackClient {
     let skipped = 0;
 
     for (const typeId of familyTypeIds) {
-      const latestId = this.latestTypeId(typeId);
+      const latestId = this.migrations.latest(typeId);
       if (typeId === latestId) continue;
 
-      const migrateFn = this.resolveMigrationPath(typeId, latestId);
+      const migrateFn = this.migrations.path(typeId, latestId);
       if (!migrateFn) continue;
 
       const latestType = await this.getTypeCached(latestId);
@@ -1189,41 +782,6 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply the registered migration chain in memory, for presentAt:
-   * 'latest'. Never writes back. Throws StackMigrationError when the
-   * record's version can't be reconciled with what this instance has
-   * registered — the stale-writer case. See docs/spec/data-model.md
-   * § Type migrations.
-   */
-  private presentAtLatest(record: StackRecord): StackRecord {
-    const latestId = this.latestTypeId(record.typeId);
-
-    if (latestId !== record.typeId) {
-      // latestTypeId() found this by walking the same migration graph
-      // resolveMigrationPath() walks, from the same starting point, so a
-      // path is always resolvable here.
-      const migrateFn = this.resolveMigrationPath(record.typeId, latestId)!;
-      return { ...record, typeId: latestId, content: migrateFn(record.content) };
-    }
-
-    const parsed = parseTypeId(record.typeId);
-    const knownMax = parsed ? this.maxDefinedVersion.get(parsed.baseId) : undefined;
-    if (parsed && knownMax !== undefined && parsed.version !== knownMax) {
-      const direction =
-        parsed.version > knownMax
-          ? `the record is newer than this app instance understands — update the app, or pass it the missing migrations`
-          : `no migration passed to Stack.open() bridges the gap`;
-      throw new StackMigrationError(
-        `Record "${record.id}" is at "${record.typeId}", but this app instance has defined ` +
-          `up to "${parsed.baseId}@${knownMax}": ${direction}. Omit presentAt: "latest" to ` +
-          `read the record as stored.`,
-      );
-    }
-
-    return record;
-  }
-
-  /**
    * Get a record by ID, exactly as stored — no implicit migration. Pass
    * { presentAt: 'latest' } to migrate in memory; only migrateAll()
    * commits migrations to disk. A soft-deleted record answers `null` unless
@@ -1245,7 +803,7 @@ export class Stack implements StackClient {
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
     if (record.deletedAt && !opts.includeDeleted) return null;
-    return opts.presentAt === 'latest' ? this.presentAtLatest(record) : record;
+    return opts.presentAt === 'latest' ? this.migrations.presentAtLatest(record) : record;
   }
 
   /**
@@ -1834,7 +1392,7 @@ export class Stack implements StackClient {
    * deleteAttachment() and the garbage sweep use: attachment associations
    * and top-level `file-ref` content fields. An `_attachment` record's own
    * `fileId` is a plain string by design and is not one, which is why
-   * purging a metadata record reports nothing — see initSystemTypes().
+   * purging a metadata record reports nothing — see SYSTEM_TYPE_DEFINITIONS.
    */
   private async referencedFileIds(record: StackRecord): Promise<FileId[]> {
     const fromAssociations = (record.associations ?? []).flatMap((a) =>
@@ -1915,7 +1473,7 @@ export class Stack implements StackClient {
     });
 
     if (presentAt !== 'latest') return result;
-    return { ...result, records: result.records.map((r) => this.presentAtLatest(r)) };
+    return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
   }
 
   /**
@@ -3277,107 +2835,6 @@ export class Stack implements StackClient {
     if (errors.length > 0) {
       throw new StackValidationError(errors, ARGUMENTS_INVALID);
     }
-  }
-
-  private async seedSystemTypes(): Promise<void> {
-    await this.defineType({
-      id: `${SYSTEM_TYPES.CONFIG}@1`,
-      name: 'Config',
-      schema: {
-        entityId: { kind: 'string', required: true },
-        // Optional passthrough app metadata — see ConfigContent.timezone.
-        timezone: { kind: 'string' },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.ENTITY}@1`,
-      name: 'Entity',
-      schema: {
-        did: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        handle: { kind: 'string' },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.APP}@1`,
-      name: 'App',
-      schema: {
-        appId: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        version: { kind: 'string' },
-        did: { kind: 'string' },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.GROUP}@1`,
-      name: 'Group',
-      schema: {
-        name: { kind: 'string', required: true },
-        handle: { kind: 'string' },
-        stackUrl: { kind: 'string' },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.GRANT}@1`,
-      name: 'Grant',
-      schema: {
-        baseId: { kind: 'string', required: true },
-        actions: { kind: 'array', items: { kind: 'string' }, required: true },
-        // Required, and closed: a Grant's reach is spelled by its `grantee`,
-        // so a record arriving without one is refused here rather than read
-        // as a grant to every authenticated entity. The arms differ in which
-        // fields they carry, which a schema cannot express — evaluation reads
-        // the `kind` and confers nothing on one it does not recognize.
-        // See docs/spec/access-control.md § Type-level grants.
-        grantee: {
-          kind: 'object',
-          required: true,
-          properties: {
-            kind: { kind: 'string', required: true },
-            entityId: { kind: 'string' },
-            groupId: { kind: 'string' },
-            role: { kind: 'string' },
-          },
-        },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-      name: 'Attachment',
-      schema: {
-        // Deliberately `string`, not `file-ref`: referencesFileId matching
-        // (deleteAttachment()/collectAttachmentGarbage()'s reference scan) is
-        // schema-driven, so a `file-ref` fileId here would make every
-        // metadata record its own file's reference — nothing would ever be
-        // deletable or collectible. See docs/spec/attachments.md § Deleting
-        // attachments / Garbage collection.
-        fileId: { kind: 'string', required: true },
-        mimeType: { kind: 'string', required: true },
-        size: { kind: 'number', required: true },
-        filename: { kind: 'string' },
-      },
-    });
-    await this.defineType({
-      id: `${SYSTEM_TYPES.INSTALL}@1`,
-      name: 'Install',
-      schema: {
-        appId: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        version: { kind: 'string' },
-        defines: { kind: 'array', items: { kind: 'string' }, required: true },
-        requests: {
-          kind: 'array',
-          required: true,
-          items: {
-            kind: 'object',
-            properties: {
-              baseId: { kind: 'string', required: true },
-              actions: { kind: 'array', items: { kind: 'string' }, required: true },
-            },
-          },
-        },
-      },
-    });
   }
 
   /**

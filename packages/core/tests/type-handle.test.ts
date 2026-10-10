@@ -11,7 +11,7 @@ import type {
   UnlistedValue,
 } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError, StackNotFoundError } from '../src/errors.js';
-import type { StackClient } from '../src/stack/stack.js';
+import type { StackClient } from '../src/stack/client.js';
 import type { TypeId, TypeSchema } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
