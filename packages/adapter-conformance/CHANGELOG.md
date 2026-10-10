@@ -1,5 +1,16 @@
 # @haverstack/adapter-conformance
 
+## 0.11.0
+
+### Minor Changes
+
+- [#433](https://github.com/haverstack/core/pull/433) [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `enum` is a field kind: `{ kind: 'enum', values: [...] }` replaces `{ kind: 'string', enum: [...] }`. `defineType()` refuses the `enum` key on any field. `isCompatible()` now checks enums: a required enum accepts only an enum candidate whose values it lists all of, and a required `string` or `text` accepts an enum. An enum becoming a plain `string` is additive; a `string` becoming an enum needs a version bump. A typed read types an enum field as its listed values or any other string (`StoredContentOf`, `UnlistedValue`) and no longer throws on an unlisted value, since an enum can widen in place; typed writes still take only the listed values (`ContentOf`, `PatchOf`). `migration()` types both sides as `StoredContentOf`, so a step carries an unlisted value through. A typed `subscribe()` delivers a record that `migrateAll()` moves off the handle's version without its `record`, instead of throwing in the dispatcher. Conformance fixtures pin a 422 for a value outside the list and a 409 for removing values. The adapter conformance suite checks that an enum field sorts by value.
+
+### Patch Changes
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f)]:
+  - @haverstack/core@0.42.0
+
 ## 0.10.0
 
 ### Minor Changes

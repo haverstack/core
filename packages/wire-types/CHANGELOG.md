@@ -1,5 +1,22 @@
 # @haverstack/wire-types
 
+## 0.41.0
+
+### Minor Changes
+
+- [#413](https://github.com/haverstack/core/pull/413) [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackValidationError`'s message header names what was validated: record content keeps "Content validation failed", a type schema reads "Schema validation failed", and argument checks read "Invalid arguments". `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` report list errors under `associations`/`permissions`, the parameter the caller passed, rather than `changes`. `deserializeError()` keeps the header a server sent.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+### Patch Changes
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f)]:
+  - @haverstack/core@0.42.0
+
 ## 0.40.0
 
 ### Minor Changes

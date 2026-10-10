@@ -1,5 +1,40 @@
 # @haverstack/conformance-fixtures
 
+## 0.36.0
+
+### Minor Changes
+
+- [#439](https://github.com/haverstack/core/pull/439) [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Grantees are checked by one validator, whether they arrive as a permission element, in a `_grant` record, or as a `grantType()`/`listTypeGrants()`/`revokeType()` target:
+  - A permission element's grantee errors carry the failing field's path (`permissions[0].grantee.entityId` rather than `permissions[0].grantee`).
+  - A group grantee missing both `groupId` and `role` reports both problems, on every surface.
+  - A grant target's refusal is still a 400, now naming every problem after `Invalid grant target:`.
+  - Every grantee message ends with a period, like the other association messages. The `_grant` fixtures that pin these messages are updated to match.
+
+  `revokeType()` now matches a stored grant's actions as a set, so the order they were named in, or an action named twice, no longer stops a revoke from matching.
+
+- [#433](https://github.com/haverstack/core/pull/433) [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `enum` is a field kind: `{ kind: 'enum', values: [...] }` replaces `{ kind: 'string', enum: [...] }`. `defineType()` refuses the `enum` key on any field. `isCompatible()` now checks enums: a required enum accepts only an enum candidate whose values it lists all of, and a required `string` or `text` accepts an enum. An enum becoming a plain `string` is additive; a `string` becoming an enum needs a version bump. A typed read types an enum field as its listed values or any other string (`StoredContentOf`, `UnlistedValue`) and no longer throws on an unlisted value, since an enum can widen in place; typed writes still take only the listed values (`ContentOf`, `PatchOf`). `migration()` types both sides as `StoredContentOf`, so a step carries an unlisted value through. A typed `subscribe()` delivers a record that `migrateAll()` moves off the handle's version without its `record`, instead of throwing in the dispatcher. Conformance fixtures pin a 422 for a value outside the list and a 409 for removing values. The adapter conformance suite checks that an enum field sorts by value.
+
+- [#439](https://github.com/haverstack/core/pull/439) [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A record `id` using the reserved `_` prefix is now refused as `Invalid ID "<id>": uses the reserved "_" prefix.`, the same `Invalid <field> "<value>": <reason>.` shape every other record-ID refusal uses. The `error-bad-request-id-reserved-prefix` fixture pins the new wording.
+
+- [#413](https://github.com/haverstack/core/pull/413) [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackValidationError`'s message header names what was validated: record content keeps "Content validation failed", a type schema reads "Schema validation failed", and argument checks read "Invalid arguments". `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` report list errors under `associations`/`permissions`, the parameter the caller passed, rather than `changes`. `deserializeError()` keeps the header a server sent.
+
+- [#441](https://github.com/haverstack/core/pull/441) [`6d6ab03`](https://github.com/haverstack/core/commit/6d6ab0304d3323a889c0ce740b632f79217627f6) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Replace `getVersionsAfterMutateFixtures` with `getVersionsSequenceFixtures`: one sequence that reads the version history before and after a restore, a migration and an association, so the order those reads depend on is part of the data. The history now includes the version 2 snapshot a record at version 3 holds.
+
+### Patch Changes
+
+- [#439](https://github.com/haverstack/core/pull/439) [`d0b7369`](https://github.com/haverstack/core/commit/d0b7369750c40c0d5686c31ba20f95b335b6d529) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Correct the stated reason in the `error-reserved-content-key` fixture's description. The refusal and its response are unchanged.
+
+- [#440](https://github.com/haverstack/core/pull/440) [`07f1fbd`](https://github.com/haverstack/core/commit/07f1fbd9d40907700083dd535416ec2133775c44) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Split the fixtures into one module per endpoint group. The package exports are unchanged.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+- Updated dependencies [[`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2)]:
+  - @haverstack/wire-types@0.41.0
+
 ## 0.35.0
 
 ### Minor Changes

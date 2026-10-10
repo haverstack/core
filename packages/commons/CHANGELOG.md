@@ -1,5 +1,16 @@
 # @haverstack/commons
 
+## 0.37.0
+
+### Minor Changes
+
+- [#415](https://github.com/haverstack/core/pull/415) [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A type handle carries what `defineType()` takes: `typeHandle({ id, name, schema, migratesFrom })`, with `migratesFrom` given as a handle or a `TypeId`. `defineType(handle)` and a manifest's `types` take it as written. Migrations are typed values built with `migration(from, to, fn)`, where `fn` is checked as the first handle's content to the second's, and are passed to `Stack.open(adapter, { migrations })`. `migratesFrom` must name an earlier version of the same family, and `typeHandle()` and `defineType()` refuse anything else. `migration()` checks that pairing within a family and builds a step into another family without it, so an app's own type can migrate into a commons type. `Stack.open()` refuses a set of migrations it could not walk: a duplicate `from`, a malformed TypeId, a step backwards within a family, or a cycle. `registerMigration()` and `MigrationFn` are removed. `@haverstack/commons` drops `CommonsType`; its exports are plain type handles.
+
+### Patch Changes
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f)]:
+  - @haverstack/core@0.42.0
+
 ## 0.36.0
 
 ### Minor Changes

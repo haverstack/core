@@ -1,5 +1,19 @@
 # @haverstack/adapter-local
 
+## 0.41.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/blob-adapter-disk`, `@haverstack/core`, `@haverstack/record-adapter-sqlite`.
+
+### Patch Changes
+
+- [#436](https://github.com/haverstack/core/pull/436) [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.subscribeChanges()` takes `SubscribeOptions`, the same options a subscriber passes to `subscribe()`. `SubscribeChangesOptions` is gone from `@haverstack/core/adapter`; it had the same fields, and `Stack` already forwarded every one of them, the subscriber's own `onError` included. A new `MutateOptions` type in `@haverstack/core/adapter` names the options every version-bumping adapter mutation takes. `GrantContent` and `InstallRequest` are now derived from `TypeGrant`.
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f)]:
+  - @haverstack/core@0.42.0
+  - @haverstack/blob-adapter-disk@0.40.0
+  - @haverstack/record-adapter-sqlite@0.34.0
+
 ## 0.40.0
 
 ### Minor Changes
