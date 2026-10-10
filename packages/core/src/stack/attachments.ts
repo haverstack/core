@@ -29,6 +29,19 @@ import type { Stack } from './stack.js';
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Whether any record references `fileId`. A soft-deleted or unlisted record
+ * still counts — it must find its attachments intact on undelete or
+ * relisting. See docs/spec/attachments.md § Deleting attachments.
+ */
+async function isFileReferenced(stack: Stack, fileId: FileId): Promise<boolean> {
+  const { records } = await stack.query({
+    filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
+    limit: 1,
+  });
+  return records.length > 0;
+}
+
+/**
  * Non-atomic fallback for adapters that don't implement
  * deleteUnreferencedAttachmentRecords(): a concurrent associate() can
  * race between the reference check below and the deletes it guards.
@@ -38,14 +51,7 @@ export async function deleteUnreferencedAttachmentRecordsFallback(
   fileId: string,
   opts: ActorOptions = {},
 ): Promise<StackRecord[]> {
-  // A soft-deleted or unlisted record still counts as a reference — it
-  // must find its attachments intact on undelete or relisting. See
-  // docs/spec/attachments.md § Deleting attachments.
-  const refResult = await stack.query({
-    filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
-    limit: 1,
-  });
-  if (refResult.records.length > 0) {
+  if (await isFileReferenced(stack, fileId)) {
     throw new StackConflictError('Attachment is still referenced by one or more records');
   }
 
@@ -101,11 +107,7 @@ export async function collectAttachmentGarbage(
   let reclaimedBytes = 0;
 
   for (const fileId of candidateFileIds) {
-    const refResult = await stack.query({
-      filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
-      limit: 1,
-    });
-    if (refResult.records.length > 0) continue;
+    if (await isFileReferenced(stack, fileId)) continue;
 
     const meta = metaByFile.get(fileId);
     const blob = blobByFile.get(fileId);

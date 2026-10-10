@@ -226,6 +226,24 @@ function throwValidation(
   if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 }
 
+/**
+ * Every problem `content` has as a record of `typeId`: its schema, plus the
+ * rules the `_grant` and `_install` families hold their content to on top
+ * of one. Owed by every write that sets content, whatever shape it takes.
+ */
+function typedContentErrors(
+  typeId: TypeId,
+  content: Record<string, unknown>,
+  schema: TypeSchema,
+): ValidationError[] {
+  return [
+    ...validateContent(content, schema),
+    ...validateGrantee(typeId, content),
+    ...validateGrantBaseId(typeId, content),
+    ...validateInstall(typeId, content),
+  ];
+}
+
 // -------------------------------------------------------
 // Stack class
 // -------------------------------------------------------
@@ -512,8 +530,7 @@ export class Stack implements StackClient {
     if (problem) {
       throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
     }
-    const types = await this.adapter.listTypes();
-    const familyTypeIds = types.filter((t) => t.baseId === baseId).map((t) => t.id);
+    const familyTypeIds = await this.familyTypeIds([baseId]);
 
     if (familyTypeIds.length === 0) {
       throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
@@ -638,10 +655,7 @@ export class Stack implements StackClient {
     const contentErrors = [
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
-      ...validateContent(content, type.schema),
-      ...validateGrantee(typeId, content),
-      ...validateGrantBaseId(typeId, content),
-      ...validateInstall(typeId, content),
+      ...typedContentErrors(typeId, content, type.schema),
     ];
     throwValidation(contentErrors, argumentErrors);
 
@@ -796,10 +810,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertNonEmptyChangeSet(changes);
 
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
+    const existing = await this.requireRecord(id);
     checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
 
@@ -939,12 +950,7 @@ export class Stack implements StackClient {
       }
       merged = applyMergePatch(existing.content, contentPatch);
 
-      const contentErrors = [
-        ...validateContent(merged, type.schema),
-        ...validateGrantee(existing.typeId, merged),
-        ...validateGrantBaseId(existing.typeId, merged),
-        ...validateInstall(existing.typeId, merged),
-      ];
+      const contentErrors = typedContentErrors(existing.typeId, merged, type.schema);
       if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
       if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
@@ -1250,10 +1256,7 @@ export class Stack implements StackClient {
       return { record: purged, referencedFileIds: await this.referencedFileIds(purged) };
     }
 
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
+    const existing = await this.requireRecord(id);
     checkFamily(existing, opts);
     this.checkIfVersion(existing, opts.ifVersion);
     // A tombstone's references stand — undelete() must find its
@@ -1299,10 +1302,7 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
+    const existing = await this.requireRecord(id);
     checkFamily(existing, opts);
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
@@ -1371,8 +1371,7 @@ export class Stack implements StackClient {
 
     const { baseId, typeId, ...rest } = filter;
     const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
-    const types = await this.adapter.listTypes();
-    const familyTypeIds = types.filter((t) => requestedBaseIds.includes(t.baseId)).map((t) => t.id);
+    const familyTypeIds = await this.familyTypeIds(requestedBaseIds);
 
     const resolvedTypeIds =
       typeId === undefined
@@ -1383,6 +1382,15 @@ export class Stack implements StackClient {
 
     if (resolvedTypeIds.length === 0) return EMPTY_FAMILY;
     return { ...rest, typeId: resolvedTypeIds };
+  }
+
+  /**
+   * Every registered version of the named families, as concrete typeIds —
+   * resolved here because an adapter has no baseId concept of its own.
+   */
+  private async familyTypeIds(baseIds: readonly string[]): Promise<TypeId[]> {
+    const types = await this.adapter.listTypes();
+    return types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
   }
 
   // -------------------------------------------------------
@@ -1427,10 +1435,7 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
+    const existing = await this.requireRecord(id);
     // A snapshot is validated against its own stored Type, never the
     // record's current one, so only the family is held to the expectation.
     checkFamily(existing, opts);
@@ -1447,12 +1452,7 @@ export class Stack implements StackClient {
       throw new StackBadRequestError(`Unknown type: "${target.typeId}"`);
     }
 
-    const errors = [
-      ...validateContent(target.content, type.schema),
-      ...validateGrantee(target.typeId, target.content),
-      ...validateGrantBaseId(target.typeId, target.content),
-      ...validateInstall(target.typeId, target.content),
-    ];
+    const errors = typedContentErrors(target.typeId, target.content, type.schema);
     if (errors.length > 0) {
       throw new StackValidationError(errors);
     }
@@ -1512,10 +1512,7 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    const existing = await this.adapter.getRecord(id);
-    if (!existing) {
-      throw new StackNotFoundError(`Record not found: "${id}"`);
-    }
+    const existing = await this.requireRecord(id);
     this.checkIfVersion(existing, opts.ifVersion);
     return this.commitMigrationChecked(existing, toTypeId, content, opts);
   }
@@ -1549,10 +1546,7 @@ export class Stack implements StackClient {
     const errors = [
       ...validateReservedKeys(content),
       ...validateContentKeys(content),
-      ...validateContent(content, type.schema),
-      ...validateGrantee(toTypeId, content),
-      ...validateGrantBaseId(toTypeId, content),
-      ...validateInstall(toTypeId, content),
+      ...typedContentErrors(toTypeId, content, type.schema),
     ];
     if (errors.length > 0) {
       throw new StackValidationError(errors);
@@ -1691,16 +1685,6 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The `_attachment` family as concrete typeIds. Resolved here rather
-   * than in the adapter, which has no baseId concept of its own — see
-   * resolveBaseIdFilter().
-   */
-  private async attachmentTypeIds(): Promise<TypeId[]> {
-    const types = await this.adapter.listTypes();
-    return types.filter((t) => t.baseId === SYSTEM_TYPES.ATTACHMENT).map((t) => t.id);
-  }
-
-  /**
    * Delete an attachment's bytes and every _attachment metadata record for
    * it, family-wide. Throws StackConflictError if any record in the stack
    * still references the file, StackNotFoundError if neither metadata
@@ -1715,7 +1699,7 @@ export class Stack implements StackClient {
       // hands back, which are the last copies that will ever exist.
       deletedRecords = await this.adapter.deleteUnreferencedAttachmentRecords(
         fileId,
-        await this.attachmentTypeIds(),
+        await this.familyTypeIds([SYSTEM_TYPES.ATTACHMENT]),
       );
       const at = new Date();
       for (const record of deletedRecords) {
